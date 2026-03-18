@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# bstack validate — check health of all 16 skills
+set -e
+
+AGENTS_DIR="${HOME}/.agents/skills"
+CLAUDE_DIR="${HOME}/.claude/skills"
+
+SKILLS=(agentic-control-kernel control-metalayer-loop harness-engineering-playbook agent-consciousness knowledge-graph-memory prompt-library symphony symphony-forge autoany deep-dive-research-orchestrator skills skills-showcase arcan-glass next-forge alkosto-wait-optimizer content-creation)
+LAYERS=("Foundation" "Foundation" "Foundation" "Memory" "Memory" "Memory" "Orchestration" "Orchestration" "Orchestration" "Research" "Research" "Research" "Design" "Design" "Platform" "Platform")
+
+healthy=0
+missing=0
+broken=0
+
+printf "\n%-35s %-15s %-10s %s\n" "SKILL" "LAYER" "STATUS" "NOTES"
+printf "%-35s %-15s %-10s %s\n" "---" "---" "---" "---"
+
+for i in "${!SKILLS[@]}"; do
+  skill="${SKILLS[$i]}"
+  layer="${LAYERS[$i]}"
+  dir=""
+  status="MISSING"
+  notes=""
+
+  if [ -d "$AGENTS_DIR/$skill" ]; then
+    dir="$AGENTS_DIR/$skill"
+  elif [ -d "$CLAUDE_DIR/$skill" ]; then
+    dir="$CLAUDE_DIR/$skill"
+  fi
+
+  if [ -n "$dir" ]; then
+    if [ -f "$dir/SKILL.md" ]; then
+      if head -20 "$dir/SKILL.md" | grep -q "^name:"; then
+        status="OK"
+        healthy=$((healthy + 1))
+      else
+        status="WARN"
+        notes="Missing frontmatter"
+        broken=$((broken + 1))
+      fi
+    else
+      status="BROKEN"
+      notes="No SKILL.md"
+      broken=$((broken + 1))
+    fi
+  else
+    missing=$((missing + 1))
+  fi
+
+  printf "%-35s %-15s %-10s %s\n" "$skill" "$layer" "$status" "$notes"
+done
+
+echo ""
+echo "Health: $healthy/16 OK | $missing missing | $broken broken"
+[ "$missing" -gt 0 ] && echo "Run: bash scripts/bootstrap.sh"
