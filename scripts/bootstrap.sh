@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# bstack bootstrap — install all 16 Broomva Stack skills
+# bstack bootstrap — install all 24 Broomva Stack skills
 set -e
 
 AGENTS_DIR="${HOME}/.agents/skills"
@@ -25,6 +25,14 @@ declare -A SKILL_REPOS=(
   [next-forge]="broomva/symphony-forge"
   [alkosto-wait-optimizer]="broomva/alkosto-wait-optimizer-skill"
   [content-creation]="broomva/bstack"
+  [pre-mortem]="broomva/strategy-skills"
+  [braindump]="broomva/strategy-skills"
+  [morning-briefing]="broomva/strategy-skills"
+  [drift-check]="broomva/strategy-skills"
+  [strategy-critique]="broomva/strategy-skills"
+  [stakeholder-update]="broomva/strategy-skills"
+  [decision-log]="broomva/strategy-skills"
+  [weekly-review]="broomva/strategy-skills"
 )
 
 ORDERED_SKILLS=(
@@ -34,6 +42,8 @@ ORDERED_SKILLS=(
   deep-dive-research-orchestrator skills skills-showcase
   arcan-glass next-forge
   alkosto-wait-optimizer content-creation
+  pre-mortem braindump morning-briefing drift-check
+  strategy-critique stakeholder-update decision-log weekly-review
 )
 
 installed=0
@@ -41,7 +51,7 @@ skipped=0
 failed=0
 
 echo "=== bstack bootstrap ==="
-echo "Installing 16 Broomva Stack skills..."
+echo "Installing 24 Broomva Stack skills..."
 echo ""
 
 for skill in "${ORDERED_SKILLS[@]}"; do
@@ -69,5 +79,5 @@ done
 echo ""
 echo "=== bstack bootstrap complete ==="
 echo "  Installed: $installed | Skipped: $skipped | Failed: $failed"
-echo "  Total: $((installed + skipped))/16"
+echo "  Total: $((installed + skipped))/24"
 [ "$failed" -gt 0 ] && echo "  Run 'bstack validate' to diagnose issues."

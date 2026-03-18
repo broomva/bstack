@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# bstack validate — check health of all 16 skills
+# bstack validate — check health of all 24 skills
 set -e
 
 AGENTS_DIR="${HOME}/.agents/skills"
 CLAUDE_DIR="${HOME}/.claude/skills"
 
-SKILLS=(agentic-control-kernel control-metalayer-loop harness-engineering-playbook agent-consciousness knowledge-graph-memory prompt-library symphony symphony-forge autoany deep-dive-research-orchestrator skills skills-showcase arcan-glass next-forge alkosto-wait-optimizer content-creation)
-LAYERS=("Foundation" "Foundation" "Foundation" "Memory" "Memory" "Memory" "Orchestration" "Orchestration" "Orchestration" "Research" "Research" "Research" "Design" "Design" "Platform" "Platform")
+SKILLS=(agentic-control-kernel control-metalayer-loop harness-engineering-playbook agent-consciousness knowledge-graph-memory prompt-library symphony symphony-forge autoany deep-dive-research-orchestrator skills skills-showcase arcan-glass next-forge alkosto-wait-optimizer content-creation pre-mortem braindump morning-briefing drift-check strategy-critique stakeholder-update decision-log weekly-review)
+LAYERS=("Foundation" "Foundation" "Foundation" "Memory" "Memory" "Memory" "Orchestration" "Orchestration" "Orchestration" "Research" "Research" "Research" "Design" "Design" "Platform" "Platform" "Strategy" "Strategy" "Strategy" "Strategy" "Strategy" "Strategy" "Strategy" "Strategy")
 
 healthy=0
 missing=0
@@ -51,5 +51,5 @@ for i in "${!SKILLS[@]}"; do
 done
 
 echo ""
-echo "Health: $healthy/16 OK | $missing missing | $broken broken"
+echo "Health: $healthy/24 OK | $missing missing | $broken broken"
 [ "$missing" -gt 0 ] && echo "Run: bash scripts/bootstrap.sh"

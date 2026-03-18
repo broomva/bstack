@@ -3,7 +3,15 @@
 ## Layer Dependency Diagram
 
 ```
-                    ┌─────────────────────────────────┐
+                    ┌───────────────────────────────────────┐
+                    │    Strategy & Decision Intel (Layer 7) │
+                    │  pre-mortem · braindump                │
+                    │  morning-briefing · drift-check        │
+                    │  strategy-critique · stakeholder-update│
+                    │  decision-log · weekly-review          │
+                    └──────────────┬────────────────────────-┘
+                                   │ informed by
+                    ┌──────────────┴──────────────────-┐
                     │         Platform (Layer 6)       │
                     │  alkosto-wait-optimizer           │
                     │  content-creation                 │
@@ -65,3 +73,6 @@ User request
 | Research → Design | Research findings inform UI decisions | Analysis docs → arcan-glass components |
 | Design → Platform | Styled outputs serve end users | Next.js pages → Vercel deployment |
 | Platform → Foundation | Usage metrics feed control loop | Observability → setpoint adjustment |
+| Strategy → Memory | Decisions and reviews persist to vault | decision-log → knowledge-graph-memory |
+| Strategy → Research | Critiques leverage deep research | strategy-critique → deep-dive-research |
+| Strategy → Foundation | Drift checks feed governance loop | drift-check → control-metalayer setpoints |

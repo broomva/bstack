@@ -54,3 +54,4 @@ npx symphony-forge init my-project
 | Research | Deep analysis, competitive intel | "deep research on X" |
 | Design | Glass UI, production templates | "create an arcan-glass component" |
 | Platform | Decision tools, content pipeline | "optimize this decision" |
+| Strategy | Risk analysis, daily briefs, decision logs | "pre-mortem this project" |
