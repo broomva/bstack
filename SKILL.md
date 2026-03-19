@@ -1,22 +1,22 @@
 ---
 name: bstack
 description: >
-  The Broomva Stack — 24 curated agent skills forming a complete AI-native development
+  The Broomva Stack — 27 curated agent skills forming a complete AI-native development
   workflow across 7 layers: Foundation (control, governance, harness), Memory (consciousness,
   knowledge graph, prompts), Orchestration (symphony, scaffold, EGRI), Research (deep dive,
   inventory, showcase), Design (Arcan Glass, Next.js templates), Platform (decision tools,
-  content pipeline), Strategy (pre-mortem, braindump, morning-briefing, drift-check,
-  strategy-critique, stakeholder-update, decision-log, weekly-review). Bootstrap any project
-  with Broomva conventions, install all skills with one command, check status, validate health.
-  Use when: (1) setting up a new project with Broomva conventions, (2) installing the full
-  agent skills stack, (3) checking which skills are installed vs missing, (4) validating skill
-  health, (5) user says "bstack", "broomva stack", "bootstrap project", "setup broomva
-  workflow", "install all skills", "skills status".
+  content pipeline, SEO/LLMEO, brand icons), Strategy (pre-mortem, braindump, morning-briefing,
+  drift-check, strategy-critique, stakeholder-update, decision-log, weekly-review). Bootstrap
+  any project with Broomva conventions, install all skills with one command, check status,
+  validate health. Use when: (1) setting up a new project with Broomva conventions, (2)
+  installing the full agent skills stack, (3) checking which skills are installed vs missing,
+  (4) validating skill health, (5) user says "bstack", "broomva stack", "bootstrap project",
+  "setup broomva workflow", "install all skills", "skills status".
 ---
 
 # bstack — The Broomva Stack
 
-24 agent skills across 7 layers for complete AI-native development.
+27 agent skills across 7 layers for complete AI-native development.
 
 **Installing bstack is not just a skill install — it activates the full control harness.**
 
@@ -27,7 +27,7 @@ Run this first to detect current state:
 ```bash
 AGENTS_DIR="${HOME}/.agents/skills"
 CLAUDE_DIR="${HOME}/.claude/skills"
-ROSTER=(agentic-control-kernel control-metalayer-loop harness-engineering-playbook agent-consciousness knowledge-graph-memory prompt-library symphony symphony-forge autoany deep-dive-research-orchestrator skills skills-showcase arcan-glass next-forge alkosto-wait-optimizer content-creation pre-mortem braindump morning-briefing drift-check strategy-critique stakeholder-update decision-log weekly-review)
+ROSTER=(agentic-control-kernel control-metalayer-loop harness-engineering-playbook agent-consciousness knowledge-graph-memory prompt-library symphony symphony-forge autoany deep-dive-research-orchestrator skills skills-showcase arcan-glass next-forge alkosto-wait-optimizer content-creation finance-substrate seo-llmeo brand-icons pre-mortem braindump morning-briefing drift-check strategy-critique stakeholder-update decision-log weekly-review)
 INSTALLED=0; MISSING=()
 for s in "${ROSTER[@]}"; do
   if [ -d "$AGENTS_DIR/$s" ] || [ -d "$CLAUDE_DIR/$s" ]; then
@@ -36,11 +36,11 @@ for s in "${ROSTER[@]}"; do
     MISSING+=("$s")
   fi
 done
-echo "bstack: $INSTALLED/${#ROSTER[@]} skills installed (24 total)"
+echo "bstack: $INSTALLED/${#ROSTER[@]} skills installed (27 total)"
 [ ${#MISSING[@]} -gt 0 ] && echo "Missing: ${MISSING[*]}"
 ```
 
-Report the count. If all 24 present, say "bstack fully installed."
+Report the count. If all 27 present, say "bstack fully installed."
 If any missing, list them and offer the `bootstrap` command.
 
 After skill check, run the harness validation:
@@ -95,7 +95,7 @@ Triggers a complete workspace reconfiguration:
 | Orchestration | symphony, symphony-forge, autoany | Agent dispatch, scaffolding, self-improvement |
 | Research | deep-dive-research-orchestrator, skills, skills-showcase | Multi-dim research, inventory |
 | Design | arcan-glass, next-forge | Design system, production templates |
-| Platform | alkosto-wait-optimizer, content-creation | Decision tools, content pipeline |
+| Platform | alkosto-wait-optimizer, content-creation, finance-substrate, seo-llmeo, brand-icons | Decision tools, content pipeline, SEO/LLMEO, brand assets |
 | Strategy | pre-mortem, braindump, morning-briefing, drift-check, strategy-critique, stakeholder-update, decision-log, weekly-review | Strategic thinking, decision intelligence, personal productivity |
 
 ## Metalayer Integration
@@ -106,7 +106,7 @@ bstack is not just skills — it is the **measurement substrate** for the agenti
 
 | Metric | Target | How |
 |--------|--------|-----|
-| Skills installed | 24/24 | Preamble roster check |
+| Skills installed | 27/27 | Preamble roster check |
 | Governance files | 5/5 | CLAUDE.md, AGENTS.md, METALAYER.md, .control/policy.yaml, schemas/ |
 | Hooks wired | 3/3 | Stop hook, Notification hook, pre-commit hook |
 | Bridge operational | fresh < 120s | `~/.cache/broomva-bridge-stamp` mtime check |
@@ -117,7 +117,7 @@ bstack is not just skills — it is the **measurement substrate** for the agenti
 
 ```
 bstack install
-  → skills registered (24/24)
+  → skills registered (27/27)
   → hooks wired (conversation capture active)
   → control audit passing
   → every session captured to knowledge graph

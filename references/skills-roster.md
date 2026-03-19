@@ -1,6 +1,6 @@
 # bstack Skills Roster
 
-25 curated skills across 7 layers. The Broomva Stack.
+27 curated skills across 7 layers. The Broomva Stack.
 
 ## Foundation — Control & Governance
 
@@ -48,16 +48,18 @@
 | 15 | `alkosto-wait-optimizer` | `npx skills add broomva/alkosto-wait-optimizer-skill` | Probability-based decision tool for optimal waiting times. Bayesian estimation with uncertainty. |
 | 16 | `content-creation` | (bundled with bstack) | Full content pipeline: blog posts, social threads, video scripts, SEO optimization. |
 | 17 | `finance-substrate` | `npx skills add broomva/finance-substrate` | Personal finance & Colombian tax management. Bank CSV import, TRM rates, DIAN tax projection, withholdings, e-invoicing. Zero paid deps. |
+| 18 | `seo-llmeo` | `npx skills add aaron-he-zhu/seo-geo-claude-skills@technical-seo-checker` | Technical SEO audit: robots.txt, sitemap, meta tags, structured data, canonical URLs, llms.txt validation. |
+| 19 | `brand-icons` | (bundled with content-creation) | AI-generated logo/icon pipeline via nano-banana. Generates multi-size icons (favicon, PWA, Apple) from a single AI prompt. |
 
 ## Strategy & Decision Intelligence
 
 | # | Skill | Install | Description |
 |---|-------|---------|-------------|
-| 18 | `pre-mortem` | `npx skills add broomva/strategy-skills` | Assumes project failure, works backward to identify top causes, scores by likelihood × impact, outputs mitigation plan. |
-| 19 | `braindump` | `npx skills add broomva/strategy-skills` | Takes raw unstructured thoughts or transcripts, auto-files into vault folders with tags and backlinks. |
-| 20 | `morning-briefing` | `npx skills add broomva/strategy-skills` | Reads action items, priorities, and vault updates → produces a focused daily brief. |
-| 21 | `drift-check` | `npx skills add broomva/strategy-skills` | Compares stated priorities vs actual effort (git log + vault) → strategy drift report. |
-| 22 | `strategy-critique` | `npx skills add broomva/strategy-skills` | Red-team critique of a strategy doc with gaps, risks, and missing assumptions. |
-| 23 | `stakeholder-update` | `npx skills add broomva/strategy-skills` | Takes one set of facts → generates 3 versions: technical, business, customer-facing. |
-| 24 | `decision-log` | `npx skills add broomva/strategy-skills` | Captures decisions with context, alternatives, rationale → links to project doc in vault. |
-| 25 | `weekly-review` | `npx skills add broomva/strategy-skills` | Scans vault for weekly changes, surfaces what changed, flags what needs attention. |
+| 20 | `pre-mortem` | `npx skills add broomva/strategy-skills` | Assumes project failure, works backward to identify top causes, scores by likelihood × impact, outputs mitigation plan. |
+| 21 | `braindump` | `npx skills add broomva/strategy-skills` | Takes raw unstructured thoughts or transcripts, auto-files into vault folders with tags and backlinks. |
+| 22 | `morning-briefing` | `npx skills add broomva/strategy-skills` | Reads action items, priorities, and vault updates → produces a focused daily brief. |
+| 23 | `drift-check` | `npx skills add broomva/strategy-skills` | Compares stated priorities vs actual effort (git log + vault) → strategy drift report. |
+| 24 | `strategy-critique` | `npx skills add broomva/strategy-skills` | Red-team critique of a strategy doc with gaps, risks, and missing assumptions. |
+| 25 | `stakeholder-update` | `npx skills add broomva/strategy-skills` | Takes one set of facts → generates 3 versions: technical, business, customer-facing. |
+| 26 | `decision-log` | `npx skills add broomva/strategy-skills` | Captures decisions with context, alternatives, rationale → links to project doc in vault. |
+| 27 | `weekly-review` | `npx skills add broomva/strategy-skills` | Scans vault for weekly changes, surfaces what changed, flags what needs attention. |
