@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# bstack bootstrap — install all 26 Broomva Stack skills
+# bstack bootstrap — install all 27 Broomva Stack skills
 set -e
 
 AGENTS_DIR="${HOME}/.agents/skills"
@@ -27,6 +27,7 @@ declare -A SKILL_REPOS=(
   [content-creation]="broomva/bstack"
   [finance-substrate]="broomva/finance-substrate"
   [wealth-management]="broomva/wealth-management"
+  [investment-management]="broomva/investment-management"
   [seo-llmeo]="aaron-he-zhu/seo-geo-claude-skills@technical-seo-checker"
   [brand-icons]="broomva/bstack"
   [pre-mortem]="broomva/strategy-skills"
@@ -45,7 +46,7 @@ ORDERED_SKILLS=(
   symphony symphony-forge autoany
   deep-dive-research-orchestrator skills skills-showcase
   arcan-glass next-forge
-  alkosto-wait-optimizer content-creation finance-substrate wealth-management seo-llmeo brand-icons
+  alkosto-wait-optimizer content-creation finance-substrate wealth-management investment-management seo-llmeo brand-icons
   pre-mortem braindump morning-briefing drift-check
   strategy-critique stakeholder-update decision-log weekly-review
 )
@@ -55,7 +56,7 @@ skipped=0
 failed=0
 
 echo "=== bstack bootstrap ==="
-echo "Installing 28 Broomva Stack skills..."
+echo "Installing 29 Broomva Stack skills..."
 echo ""
 
 for skill in "${ORDERED_SKILLS[@]}"; do
@@ -85,3 +86,20 @@ echo "=== bstack bootstrap complete ==="
 echo "  Installed: $installed | Skipped: $skipped | Failed: $failed"
 echo "  Total: $((installed + skipped))/27"
 [ "$failed" -gt 0 ] && echo "  Run 'bstack validate' to diagnose issues."
+
+# --- Arcan skill sync ---
+# If .arcan/ exists (Arcan agent is initialized), sync skills into .arcan/skills/
+ARCAN_DIR="${PWD}/.arcan"
+if [ -d "$ARCAN_DIR" ]; then
+  SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+  if [ -f "${SCRIPT_DIR}/arcan-skills-sync.sh" ]; then
+    echo ""
+    bash "${SCRIPT_DIR}/arcan-skills-sync.sh" "$ARCAN_DIR"
+  fi
+elif [ -d "${HOME}/.agents/skills/bstack/scripts" ]; then
+  SYNC_SCRIPT="${HOME}/.agents/skills/bstack/scripts/arcan-skills-sync.sh"
+  if [ -f "$SYNC_SCRIPT" ] && [ -d "$ARCAN_DIR" ]; then
+    echo ""
+    bash "$SYNC_SCRIPT" "$ARCAN_DIR"
+  fi
+fi
