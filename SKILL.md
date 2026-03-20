@@ -110,8 +110,35 @@ bstack is not just skills — it is the **measurement substrate** for the agenti
 | Governance files | 5/5 | CLAUDE.md, AGENTS.md, METALAYER.md, .control/policy.yaml, schemas/ |
 | Hooks wired | 3/3 | Stop hook, Notification hook, pre-commit hook |
 | Bridge operational | fresh < 120s | `~/.cache/broomva-bridge-stamp` mtime check |
+| PII redaction active | yes | `_redact_pii()` in conversation-history.py runs before all markdown output |
 | Control audit | 5/5 sections | `make control-audit` exit code |
 | Conversations indexed | ≥1 session | `docs/conversations/Conversations.md` exists with entries |
+
+### PII & Secrets Redaction (S15 / G4b)
+
+The conversation bridge applies a multi-pattern redaction pass (`_redact_pii()`) to all
+content before writing markdown files. This ensures no sensitive data leaks into git history.
+
+**What gets redacted:**
+
+| Category | Examples |
+|----------|----------|
+| Email addresses | `user@example.com` → `[EMAIL_REDACTED]` |
+| API keys | OpenAI `sk-*`, GitHub `ghp_*`, Slack `xoxb-*`, Stripe `sk_live_*`, AWS `AKIA*` |
+| Tokens | JWT, Bearer tokens, SendGrid, Square |
+| Credentials | URLs with `user:pass@host`, PEM private keys |
+| Personal data | Phone numbers, SSNs, credit card numbers |
+| Secrets in .env format | `API_KEY=value` → `API_KEY=[VALUE_REDACTED]` |
+| Generic hex secrets | 64+ char hex strings |
+| GCP service accounts | `private_key` and `client_email` in JSON |
+
+**Defense in depth** — redaction works with existing layers:
+1. **PreToolUse hook (G4)**: Blocks Write/Edit to secrets files during sessions
+2. **Pre-commit hook**: Blocks staging `.env`, `credentials.json`, etc.
+3. **PII redaction (G4b)**: Sanitizes all conversation content before markdown output
+4. **Content truncation**: Messages capped at 2000 chars, 50 per session
+
+Redaction stats are printed after each bridge run for auditability.
 
 ### Self-Improvement Loop
 
@@ -119,6 +146,7 @@ bstack is not just skills — it is the **measurement substrate** for the agenti
 bstack install
   → skills registered (27/27)
   → hooks wired (conversation capture active)
+  → PII redaction active on bridge output
   → control audit passing
   → every session captured to knowledge graph
   → agent reads prior sessions on next start

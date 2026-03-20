@@ -53,3 +53,17 @@ done
 echo ""
 echo "Health: $healthy/25 OK | $missing missing | $broken broken"
 [ "$missing" -gt 0 ] && echo "Run: bash scripts/bootstrap.sh"
+
+# ── PII Redaction Check ──────────────────────────────────────────────────────
+echo ""
+echo "=== PII Redaction ==="
+BRIDGE="$(git rev-parse --show-toplevel 2>/dev/null)/scripts/conversation-history.py"
+if [ -f "$BRIDGE" ]; then
+  if grep -q "_redact_pii" "$BRIDGE"; then
+    echo "  [ok] PII redaction active in conversation bridge"
+  else
+    echo "  [FAIL] _redact_pii() not found in conversation-history.py — S15 violated"
+  fi
+else
+  echo "  [warn] conversation-history.py not found"
+fi
