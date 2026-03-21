@@ -57,7 +57,8 @@ echo "Health: $healthy/27 OK | $missing missing | $broken broken"
 # ── PII Redaction Check ──────────────────────────────────────────────────────
 echo ""
 echo "=== PII Redaction ==="
-BRIDGE="$(git rev-parse --show-toplevel 2>/dev/null)/scripts/conversation-history.py"
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+BRIDGE="$REPO_ROOT/scripts/conversation-history.py"
 if [ -f "$BRIDGE" ]; then
   if grep -q "_redact_pii" "$BRIDGE"; then
     echo "  [ok] PII redaction active in conversation bridge"
@@ -66,4 +67,37 @@ if [ -f "$BRIDGE" ]; then
   fi
 else
   echo "  [warn] conversation-history.py not found"
+fi
+
+# ── Regression Gate Check ────────────────────────────────────────────────────
+echo ""
+echo "=== Regression Testing Gate (G11) ==="
+if [ -x "$REPO_ROOT/scripts/regression-gate-hook.sh" ]; then
+  echo "  [ok] regression-gate-hook.sh (executable)"
+else
+  echo "  [FAIL] regression-gate-hook.sh missing or not executable"
+fi
+
+if [ -f "$REPO_ROOT/scripts/regression-test-map.json" ]; then
+  FEAT_COUNT=$(python3 -c "import json; print(len(json.load(open('$REPO_ROOT/scripts/regression-test-map.json')).get('features',{})))" 2>/dev/null || echo "0")
+  if [ "$FEAT_COUNT" -gt 0 ]; then
+    echo "  [ok] regression-test-map.json ($FEAT_COUNT features mapped)"
+  else
+    echo "  [warn] regression-test-map.json has 0 features — populate with file-pattern → scenario mappings"
+  fi
+else
+  echo "  [FAIL] regression-test-map.json missing"
+fi
+
+CLAUDE_SETTINGS="$REPO_ROOT/.claude/settings.json"
+if [ -f "$CLAUDE_SETTINGS" ] && grep -q "regression-gate-hook" "$CLAUDE_SETTINGS" 2>/dev/null; then
+  echo "  [ok] regression hook wired in .claude/settings.json"
+else
+  echo "  [FAIL] regression hook not wired in .claude/settings.json"
+fi
+
+if grep -q "G11" "$REPO_ROOT/.control/policy.yaml" 2>/dev/null; then
+  echo "  [ok] G11 gate defined in policy.yaml"
+else
+  echo "  [warn] G11 gate not in policy.yaml — add regression testing gate"
 fi

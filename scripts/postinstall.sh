@@ -270,6 +270,101 @@ else
   PASS=$((PASS + 1))
 fi
 
+# Create regression gate hook if missing
+if [ ! -f "$TARGET/scripts/regression-gate-hook.sh" ]; then
+  echo "  [create] scripts/regression-gate-hook.sh"
+  cat > "$TARGET/scripts/regression-gate-hook.sh" << 'RGATE'
+#!/bin/bash
+# regression-gate-hook.sh — Claude Code PreToolUse hook for E2E regression testing.
+# Intercepts git commit, analyzes staged files against regression-test-map.json,
+# and prompts Claude to run agent-browser E2E tests for affected features.
+
+EVENT=$(cat)
+TOOL_NAME=$(echo "$EVENT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_name',''))" 2>/dev/null || echo "")
+[ "$TOOL_NAME" = "Bash" ] || exit 0
+
+COMMAND=$(echo "$EVENT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('command',''))" 2>/dev/null || echo "")
+echo "$COMMAND" | grep -qE '^\s*git commit' || exit 0
+echo "$COMMAND" | grep -qE '\-\-amend|\-\-allow-empty' && exit 0
+
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
+[ -n "$REPO_ROOT" ] || exit 0
+TEST_MAP="$REPO_ROOT/scripts/regression-test-map.json"
+[ -f "$TEST_MAP" ] || exit 0
+
+# Check bypass stamp (10 min TTL)
+STAMP="$HOME/.cache/broomva-regression-stamp"
+if [ -f "$STAMP" ]; then
+  if [ "$(uname)" = "Darwin" ]; then
+    AGE=$(( $(date +%s) - $(stat -f %m "$STAMP") ))
+  else
+    AGE=$(( $(date +%s) - $(stat -c %Y "$STAMP") ))
+  fi
+  [ "$AGE" -lt 600 ] && exit 0
+fi
+
+# Skip if [skip-regression] in commit message
+echo "$COMMAND" | grep -q '\[skip-regression\]' && exit 0
+
+RESULT=$(python3 -c "
+import json, fnmatch, subprocess, sys
+staged = subprocess.check_output(['git', 'diff', '--cached', '--name-only'], cwd='$REPO_ROOT', text=True).strip().split('\n')
+staged = [f for f in staged if f]
+if not staged: sys.exit(0)
+with open('$TEST_MAP') as f:
+    m = json.load(f)
+affected = {}
+for name, feat in m.get('features', {}).items():
+    for p in feat.get('patterns', []):
+        for f in staged:
+            if fnmatch.fnmatch(f, p) or fnmatch.fnmatch(f, '*/' + p):
+                if name not in affected:
+                    affected[name] = {'url': feat.get('url',''), 'scenarios': feat.get('scenarios',[]), 'files': []}
+                if f not in affected[name]['files']:
+                    affected[name]['files'].append(f)
+if not affected: sys.exit(0)
+lines = ['Regression tests needed. Affected features:', '']
+for n, i in affected.items():
+    lines.append(f'**{n}** ({len(i[\"files\"])} files)')
+    [lines.append(f'  - {f}') for f in i['files'][:5]]
+    lines.append(f'  URL: {i[\"url\"]}')
+    lines.append('  Scenarios:')
+    [lines.append(f'    - {s}') for s in i['scenarios']]
+    lines.append('')
+lines.append('Run E2E regression tests via agent-browser before committing.')
+lines.append('To skip: include [skip-regression] in commit message.')
+print('\n'.join(lines))
+" 2>/dev/null)
+
+if [ -n "$RESULT" ]; then
+  ESCAPED=$(echo "$RESULT" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))" 2>/dev/null)
+  echo "{\"decision\": \"ask\", \"message\": $ESCAPED}"
+  exit 0
+fi
+exit 0
+RGATE
+  chmod +x "$TARGET/scripts/regression-gate-hook.sh"
+  CREATED=$((CREATED + 1))
+else
+  echo "  [ok] scripts/regression-gate-hook.sh (exists)"
+  PASS=$((PASS + 1))
+fi
+
+# Create regression test map if missing
+if [ ! -f "$TARGET/scripts/regression-test-map.json" ]; then
+  echo "  [create] scripts/regression-test-map.json (empty template)"
+  cat > "$TARGET/scripts/regression-test-map.json" << 'TESTMAP'
+{
+  "_doc": "Maps file-path glob patterns to feature areas and E2E test scenarios.",
+  "features": {}
+}
+TESTMAP
+  CREATED=$((CREATED + 1))
+else
+  echo "  [ok] scripts/regression-test-map.json (exists)"
+  PASS=$((PASS + 1))
+fi
+
 # Wire Claude Code settings.json if it doesn't have hooks
 if [ -f "$CLAUDE_SETTINGS" ]; then
   if grep -q "conversation-bridge-hook" "$CLAUDE_SETTINGS" 2>/dev/null; then
@@ -312,6 +407,11 @@ else
             "type": "command",
             "command": "$TARGET/scripts/control-gate-hook.sh",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "$TARGET/scripts/regression-gate-hook.sh",
+            "timeout": 10
           }
         ]
       }

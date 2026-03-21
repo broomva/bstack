@@ -18,7 +18,8 @@ description: >
 
 27 agent skills across 7 layers for complete AI-native development.
 
-**Installing bstack is not just a skill install — it activates the full control harness.**
+**Installing bstack is not just a skill install — it activates the full control harness,
+including context-aware E2E regression testing that gates every commit.**
 
 ## Preamble
 
@@ -62,9 +63,11 @@ Skips already-installed skills. Creates symlinks from `~/.claude/skills/` to `~/
 1. Verifies governance files exist (CLAUDE.md, AGENTS.md, METALAYER.md, `.control/policy.yaml`)
 2. Installs pre-commit hooks via `git config core.hooksPath .githooks`
 3. Validates Claude Code hooks in `.claude/settings.json` (Stop + Notification for conversation bridge)
-4. Runs conversation bridge to ensure knowledge graph indexing is active
-5. Runs `make control-audit` to verify full compliance
-6. Reports bstack-check results
+4. Wires regression gate hook (`regression-gate-hook.sh`) for context-aware E2E testing
+5. Ensures `regression-test-map.json` feature map is present
+6. Runs conversation bridge to ensure knowledge graph indexing is active
+7. Runs `make control-audit` to verify full compliance
+8. Reports bstack-check results
 
 ### `status` — Show installed vs missing + harness health
 
@@ -108,7 +111,8 @@ bstack is not just skills — it is the **measurement substrate** for the agenti
 |--------|--------|-----|
 | Skills installed | 27/27 | Preamble roster check |
 | Governance files | 5/5 | CLAUDE.md, AGENTS.md, METALAYER.md, .control/policy.yaml, schemas/ |
-| Hooks wired | 3/3 | Stop hook, Notification hook, pre-commit hook |
+| Hooks wired | 4/4 | Stop hook, PreToolUse safety gate, PreToolUse regression gate, pre-commit hook |
+| Regression gate | active | `regression-gate-hook.sh` intercepts `git commit`, maps staged files to features via `regression-test-map.json`, triggers agent-browser E2E tests |
 | Bridge operational | fresh < 120s | `~/.cache/broomva-bridge-stamp` mtime check |
 | PII redaction active | yes | `_redact_pii()` in conversation-history.py runs before all markdown output |
 | Control audit | 5/5 sections | `make control-audit` exit code |
@@ -139,6 +143,32 @@ content before writing markdown files. This ensures no sensitive data leaks into
 4. **Content truncation**: Messages capped at 2000 chars, 50 per session
 
 Redaction stats are printed after each bridge run for auditability.
+
+### Regression Testing Gate (G11)
+
+Every `git commit` is intercepted by the regression gate hook. Staged files are matched
+against `scripts/regression-test-map.json` to identify affected features. If any features
+are affected, Claude receives an "ask" decision with specific E2E scenarios to run via the
+`agent-browser` skill before the commit proceeds.
+
+**Feature areas covered:** auth, chat, models, payments, content, mcp, ui-components,
+database, landing-page, blog-content.
+
+**Flow:**
+```
+git commit → regression-gate-hook.sh fires
+  → analyzes staged files against regression-test-map.json
+  → if features affected → returns "ask" with test scenarios
+  → Claude runs agent-browser E2E tests against broomva.tech
+  → tests pass → stamp ~/.cache/broomva-regression-stamp (10 min TTL)
+  → commit proceeds
+```
+
+**Escape hatches:**
+- `[skip-regression]` in commit message bypasses the gate
+- `make regression-stamp` sets a 10-minute bypass
+- `make regression-clear` re-enables the gate
+- `make regression-map` previews affected features for staged changes
 
 ### Self-Improvement Loop
 
