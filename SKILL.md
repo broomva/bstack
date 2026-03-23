@@ -23,7 +23,25 @@ including context-aware E2E regression testing that gates every commit.**
 
 ## Preamble
 
-Run this first to detect current state:
+Run this first to check for updates and detect current state:
+
+```bash
+# ─── Update check ────────────────────────────────────────────
+_BSTACK_ROOT=""
+[ -d "$HOME/.claude/skills/bstack" ] && _BSTACK_ROOT="$HOME/.claude/skills/bstack"
+[ -z "$_BSTACK_ROOT" ] && [ -d "$HOME/.agents/skills/bstack" ] && _BSTACK_ROOT="$HOME/.agents/skills/bstack"
+_UPD=""
+if [ -n "$_BSTACK_ROOT" ] && [ -x "$_BSTACK_ROOT/bin/bstack-update-check" ]; then
+  _UPD=$("$_BSTACK_ROOT/bin/bstack-update-check" 2>/dev/null || true)
+fi
+[ -n "$_UPD" ] && echo "$_UPD" || true
+_BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
+echo "BRANCH: $_BRANCH"
+```
+
+If output shows `UPGRADE_AVAILABLE <old> <new>`: read `bstack-upgrade/SKILL.md` (relative to the bstack skill root) and follow the "Inline upgrade flow" (auto-upgrade if configured, otherwise AskUserQuestion with 4 options, write snooze state if declined). If `JUST_UPGRADED <from> <to>`: tell user "Running bstack v{to} (just updated!)" and continue.
+
+Then detect skill installation state:
 
 ```bash
 AGENTS_DIR="${HOME}/.agents/skills"
