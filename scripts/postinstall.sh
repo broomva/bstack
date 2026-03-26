@@ -424,7 +424,50 @@ SETTINGS
 fi
 echo ""
 
-# ── 4. Summary ───────────────────────────────────────────────────────────────
+# ── 4. Status line ────────────────────────────────────────────────────────────
+echo "4. Status Line"
+
+STATUSLINE_SRC="$(cd "$(dirname "$0")" && pwd)/statusline-command.sh"
+STATUSLINE_DST="$HOME/.claude/statusline-command.sh"
+
+# Install statusline script
+if [ -f "$STATUSLINE_SRC" ]; then
+  if [ -f "$STATUSLINE_DST" ] && diff -q "$STATUSLINE_SRC" "$STATUSLINE_DST" >/dev/null 2>&1; then
+    echo "  [ok] statusline-command.sh (up to date)"
+    PASS=$((PASS + 1))
+  else
+    cp "$STATUSLINE_SRC" "$STATUSLINE_DST"
+    chmod +x "$STATUSLINE_DST"
+    echo "  [install] statusline-command.sh → ~/.claude/"
+    CREATED=$((CREATED + 1))
+  fi
+else
+  echo "  [warn] statusline-command.sh not found in bstack/scripts/"
+fi
+
+# Wire statusLine into user-level settings (~/.claude/settings.json)
+USER_SETTINGS="$HOME/.claude/settings.json"
+if [ -f "$USER_SETTINGS" ]; then
+  if grep -q '"statusLine"' "$USER_SETTINGS" 2>/dev/null; then
+    echo "  [ok] statusLine wired in ~/.claude/settings.json"
+    PASS=$((PASS + 1))
+  else
+    # Inject statusLine config into existing settings.json using jq
+    if command -v jq >/dev/null 2>&1; then
+      TMP=$(mktemp)
+      jq --arg cmd "$STATUSLINE_DST" '. + {"statusLine": {"type": "command", "command": $cmd}}' "$USER_SETTINGS" > "$TMP" && mv "$TMP" "$USER_SETTINGS"
+      echo "  [wire] statusLine added to ~/.claude/settings.json"
+      CREATED=$((CREATED + 1))
+    else
+      echo "  [warn] jq not found — add statusLine to ~/.claude/settings.json manually"
+    fi
+  fi
+else
+  echo "  [skip] ~/.claude/settings.json not found (project-level only)"
+fi
+echo ""
+
+# ── 5. Summary ───────────────────────────────────────────────────────────────
 echo "========================================="
 echo "  Postinstall complete"
 echo "  Existing: $PASS | Created: $CREATED"

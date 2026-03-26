@@ -101,3 +101,35 @@ if grep -q "G11" "$REPO_ROOT/.control/policy.yaml" 2>/dev/null; then
 else
   echo "  [warn] G11 gate not in policy.yaml — add regression testing gate"
 fi
+
+# ── Status Line Check ─────────────────────────────────────────────────────────
+echo ""
+echo "=== Status Line ==="
+STATUSLINE_SCRIPT="$HOME/.claude/statusline-command.sh"
+USER_SETTINGS="$HOME/.claude/settings.json"
+
+if [ -x "$STATUSLINE_SCRIPT" ]; then
+  echo "  [ok] statusline-command.sh (installed, executable)"
+else
+  echo "  [FAIL] statusline-command.sh missing or not executable at ~/.claude/"
+fi
+
+if [ -f "$USER_SETTINGS" ] && grep -q '"statusLine"' "$USER_SETTINGS" 2>/dev/null; then
+  echo "  [ok] statusLine wired in ~/.claude/settings.json"
+else
+  echo "  [FAIL] statusLine not configured in ~/.claude/settings.json"
+fi
+
+# Check jq dependency (required by statusline)
+if command -v jq >/dev/null 2>&1; then
+  echo "  [ok] jq available (required dependency)"
+else
+  echo "  [FAIL] jq not installed — statusline requires jq"
+fi
+
+# Check bc dependency (required by statusline)
+if command -v bc >/dev/null 2>&1; then
+  echo "  [ok] bc available (required dependency)"
+else
+  echo "  [warn] bc not installed — some statusline fields will be missing"
+fi

@@ -83,9 +83,10 @@ Skips already-installed skills. Creates symlinks from `~/.claude/skills/` to `~/
 3. Validates Claude Code hooks in `.claude/settings.json` (Stop + Notification for conversation bridge)
 4. Wires regression gate hook (`regression-gate-hook.sh`) for context-aware E2E testing
 5. Ensures `regression-test-map.json` feature map is present
-6. Runs conversation bridge to ensure knowledge graph indexing is active
-7. Runs `make control-audit` to verify full compliance
-8. Reports bstack-check results
+6. Installs rich status line (`statusline-command.sh`) showing model, context, tokens, cost, duration, lines changed, cache hit ratio, rate limits
+7. Runs conversation bridge to ensure knowledge graph indexing is active
+8. Runs `make control-audit` to verify full compliance
+9. Reports bstack-check results
 
 ### `status` — Show installed vs missing + harness health
 
@@ -130,6 +131,7 @@ bstack is not just skills — it is the **measurement substrate** for the agenti
 | Skills installed | 27/27 | Preamble roster check |
 | Governance files | 5/5 | CLAUDE.md, AGENTS.md, METALAYER.md, .control/policy.yaml, schemas/ |
 | Hooks wired | 4/4 | Stop hook, PreToolUse safety gate, PreToolUse regression gate, pre-commit hook |
+| Status line | active | `~/.claude/statusline-command.sh` installed + wired in settings.json |
 | Regression gate | active | `regression-gate-hook.sh` intercepts `git commit`, maps staged files to features via `regression-test-map.json`, triggers agent-browser E2E tests |
 | Bridge operational | fresh < 120s | `~/.cache/broomva-bridge-stamp` mtime check |
 | PII redaction active | yes | `_redact_pii()` in conversation-history.py runs before all markdown output |
