@@ -72,7 +72,7 @@ Report results. If any checks fail, fix them before proceeding.
 
 ## Commands
 
-### `bootstrap` — Install all 24 skills + activate control harness
+### `bootstrap` — Install all 27 skills + activate control harness
 
 Run `scripts/bootstrap.sh` to install every skill in the roster.
 Skips already-installed skills. Creates symlinks from `~/.claude/skills/` to `~/.agents/skills/`.
@@ -101,7 +101,7 @@ Then run the full bstack-check harness validation.
 ### `revamp` — Full agent reconfiguration
 
 Triggers a complete workspace reconfiguration:
-1. Reinstall all 24 skills (force mode)
+1. Reinstall all 27 skills (force mode)
 2. Regenerate governance files from templates
 3. Rewire hooks (git pre-commit + Claude Code Stop/Notification)
 4. Force-run conversation bridge across all 9 projects
@@ -209,7 +209,7 @@ bstack install
 
 This is the EGRI loop at the workspace level:
 - **Mutable artifact**: Agent behavior, AGENTS.md rules, policy gates
-- **Immutable evaluator**: `make bstack-check` (24 skills + 5 governance + 3 hooks + bridge + audit)
+- **Immutable evaluator**: `make bstack-check` (27 skills + 5 governance + 3 hooks + bridge + audit)
 - **Promotion policy**: Changes that pass all checks get committed
 
 ## Browse
