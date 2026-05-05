@@ -98,6 +98,23 @@ Then run `make bstack-check` and report the harness health status.
 Run `scripts/validate.sh`. Verifies each skill has a valid SKILL.md with proper frontmatter.
 Then run the full bstack-check harness validation.
 
+### `doctor` — Verify primitive contract
+
+Run `scripts/doctor.sh`. Validates that the workspace's governance files comply with the bstack primitive contract:
+
+1. CLAUDE.md primitives table has all P1–P10 rows + correct count header.
+2. AGENTS.md has each primitive section (`### P1:` through `### P10:`).
+3. Primitives whose discipline is reasoning-enforced (P6 Bookkeeping, P7 CI Watcher, P10 Worktree Hygiene) have their **Reflexive Trigger Rule** subsection present.
+4. `.control/policy.yaml` has required blocks (`ci_watch:`, `ci_heal:`, `auto_merge:`).
+5. `.claude/settings.json` wires the expected hook scripts (P1, P2, P8).
+6. Each primitive's mechanism is reachable on disk (the relevant scripts/skill exists).
+
+**Always exits 0** by default — never blocks a session. Use `--strict` for CI-mode (exit 1 on any gap). Use `--quiet` to suppress passes and only show gaps.
+
+When run without arguments, prints a full passes/gaps report. Each gap includes an actionable `→ fix:` line.
+
+`bstack bootstrap` invokes `doctor` automatically as its final step, so a fresh install always confirms primitive compliance.
+
 ### `revamp` — Full agent reconfiguration
 
 Triggers a complete workspace reconfiguration:

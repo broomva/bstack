@@ -85,8 +85,20 @@ done
 echo ""
 echo "=== bstack bootstrap complete ==="
 echo "  Installed: $installed | Skipped: $skipped | Failed: $failed"
-echo "  Total: $((installed + skipped))/27"
+echo "  Total: $((installed + skipped))/30"
 [ "$failed" -gt 0 ] && echo "  Run 'bstack validate' to diagnose issues."
+
+# --- bstack doctor: verify primitive contract ---
+# Always-active step; never blocks. Surfaces gaps in AGENTS.md / CLAUDE.md /
+# .control/policy.yaml compliance with the bstack primitive contract so a
+# fresh install is immediately self-checking.
+BOOTSTRAP_SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+DOCTOR_SCRIPT="${BOOTSTRAP_SCRIPT_DIR}/doctor.sh"
+if [ -f "$DOCTOR_SCRIPT" ]; then
+  echo ""
+  echo "=== bstack doctor (primitive contract) ==="
+  bash "$DOCTOR_SCRIPT" --quiet || true
+fi
 
 # --- Arcan skill sync ---
 # If .arcan/ exists (Arcan agent is initialized), sync skills into .arcan/skills/
