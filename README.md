@@ -1,6 +1,6 @@
 # bstack — The Broomva Stack
 
-27 curated agent skills across 7 layers for AI-native development.
+28 curated agent skills across 7 layers for AI-native development.
 
 ## Quick Install
 
@@ -8,13 +8,13 @@
 npx skills add broomva/bstack
 ```
 
-This installs the meta-skill that can bootstrap all 27 skills into your project.
+This installs the meta-skill that can bootstrap all 28 skills into your project.
 
 ## Stack Layers
 
 | Layer | Skills | Purpose |
 |-------|--------|---------|
-| **Foundation** | [agentic-control-kernel](https://skills.sh/broomva/agentic-control-kernel), [control-metalayer-loop](https://skills.sh/broomva/control-metalayer-loop), [harness-engineering-playbook](https://skills.sh/broomva/harness-engineering-playbook) | Safety shields, governance, deterministic workflow |
+| **Foundation** | [agentic-control-kernel](https://skills.sh/broomva/agentic-control-kernel), [control-metalayer-loop](https://skills.sh/broomva/control-metalayer-loop), [harness-engineering-playbook](https://skills.sh/broomva/harness-engineering-playbook), [p9](https://skills.sh/broomva/p9) | Safety shields, governance, deterministic workflow, CI watcher + productive-wait |
 | **Memory & Consciousness** | [agent-consciousness](https://skills.sh/broomva/agent-consciousness), [knowledge-graph-memory](https://skills.sh/broomva/knowledge-graph-memory), [prompt-library](https://skills.sh/broomva/prompt-library) | Three-substrate consciousness, persistent context |
 | **Orchestration** | [symphony](https://skills.sh/broomva/symphony), [symphony-forge](https://skills.sh/broomva/symphony-forge), [autoany](https://skills.sh/broomva/autoany) | Agent dispatch, scaffold CLI, EGRI self-improvement |
 | **Research & Intelligence** | [deep-dive-research-orchestrator](https://skills.sh/broomva/deep-dive-research-orchestrator), [skills](https://skills.sh/broomva/skills), [skills-showcase](https://skills.sh/broomva/skills-showcase) | Multi-dimensional research, skills inventory |
@@ -26,7 +26,7 @@ This installs the meta-skill that can bootstrap all 27 skills into your project.
 
 Once installed, the skill exposes three commands:
 
-- **`bootstrap`** — Install all 27 skills via `npx skills add broomva/<skill>`
+- **`bootstrap`** — Install all 28 skills via `npx skills add broomva/<skill>`
 - **`status`** — Show which skills are installed vs missing
 - **`validate`** — Check installed skill health (valid SKILL.md with proper frontmatter)
 
