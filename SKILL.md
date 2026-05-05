@@ -102,9 +102,9 @@ Then run the full bstack-check harness validation.
 
 Run `scripts/doctor.sh`. Validates that the workspace's governance files comply with the bstack primitive contract:
 
-1. CLAUDE.md primitives table has all P1–P10 rows + correct count header.
-2. AGENTS.md has each primitive section (`### P1:` through `### P10:`).
-3. Primitives whose discipline is reasoning-enforced (P6 Bookkeeping, P7 CI Watcher, P10 Worktree Hygiene) have their **Reflexive Trigger Rule** subsection present.
+1. CLAUDE.md primitives table has all P1–P11 rows + correct count header.
+2. AGENTS.md has each primitive section (`### P1:` through `### P11:`).
+3. Primitives whose discipline is reasoning-enforced (P6 Bookkeeping, P7 CI Watcher, P10 Worktree Hygiene, P11 Empirical Feedback Loop) have their **Reflexive Trigger Rule** subsection present.
 4. `.control/policy.yaml` has required blocks (`ci_watch:`, `ci_heal:`, `auto_merge:`).
 5. `.claude/settings.json` wires the expected hook scripts (P1, P2, P8).
 6. Each primitive's mechanism is reachable on disk (the relevant scripts/skill exists).

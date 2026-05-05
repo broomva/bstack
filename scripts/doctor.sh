@@ -82,16 +82,16 @@ done
 section "2. CLAUDE.md primitives table"
 CLAUDE="$WORKSPACE/CLAUDE.md"
 if [ -f "$CLAUDE" ]; then
-    EXPECTED_COUNT=10
-    if grep -qE "^(Ten|10) irreducible building blocks" "$CLAUDE"; then
-        ok "primitive count header reads Ten/10"
+    EXPECTED_COUNT=11
+    if grep -qE "^(Eleven|11) irreducible building blocks" "$CLAUDE"; then
+        ok "primitive count header reads Eleven/11"
     else
-        ACTUAL=$(grep -oE "^(One|Two|Three|Four|Five|Six|Seven|Eight|Nine|Ten|[0-9]+) irreducible" "$CLAUDE" | head -1)
-        gap "primitive count header off (expected 'Ten irreducible'; saw '$ACTUAL')" \
+        ACTUAL=$(grep -oE "^(One|Two|Three|Four|Five|Six|Seven|Eight|Nine|Ten|Eleven|[0-9]+) irreducible" "$CLAUDE" | head -1)
+        gap "primitive count header off (expected 'Eleven irreducible'; saw '$ACTUAL')" \
             "edit CLAUDE.md → 'Bstack Core Automation Primitives' header"
     fi
 
-    for n in 1 2 3 4 5 6 7 8 9 10; do
+    for n in 1 2 3 4 5 6 7 8 9 10 11; do
         if grep -qE "^\| P$n \|" "$CLAUDE"; then
             ok "P$n row present"
         else
@@ -115,6 +115,7 @@ declare -a P_NAMES=(
     "P8: Skill Freshness"
     "P9: Branch + Worktree Janitor"
     "P10: Worktree Hygiene"
+    "P11: Empirical Feedback Loop"
 )
 if [ -f "$AGENTS" ]; then
     for entry in "${P_NAMES[@]}"; do
@@ -132,7 +133,7 @@ fi
 section "4. AGENTS.md reflexive trigger rules"
 # Primitives whose discipline is enforced via agent reasoning rather than hooks.
 # These MUST contain a Reflexive Trigger Rule subsection.
-declare -a REFLEXIVE_PRIMS=(P6 P7 P10)
+declare -a REFLEXIVE_PRIMS=(P6 P7 P10 P11)
 if [ -f "$AGENTS" ]; then
     for prim in "${REFLEXIVE_PRIMS[@]}"; do
         # Look for "P{n} is a reflex" OR "Reflexive Trigger Rule" in proximity to the prim section
