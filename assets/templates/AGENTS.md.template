@@ -134,19 +134,55 @@ The agent picks the right subset, runs as parallel watchers, and **captures evid
 5. When CI or tests fail — capture full context first before attempting a fix.
 6. At session end — produce a *dogfood receipt*.
 
+### P12: Persistent Loop Discipline (Cross-Context Restart Loop)
+
+**What**: Reflexive discipline binding every agent to *restart the context window when it rots*, while preserving state in the filesystem. Long-horizon work (>1h, the METR 80%-reliability ceiling) decays inside a single conversation as the context window passes ~100K tokens.
+
+**How**: `python3 skills/persist/scripts/persist.py iterate <PROMPT.md>` substrate. Each iteration spawns a fresh agent context; state persists in PROMPT.md + git tree + state.jsonl. Validation backpressure from compilers/tests/linters, not model self-grading.
+
+**Invariant**: state lives in the filesystem. Each iteration is a fresh subprocess. Budget: default 50 iterations / 14400s wall-clock.
+
+**Reflexive Trigger Rule**: P12 is a reflex. Apply without being prompted:
+
+1. Before any work that may exceed ~1h of unsupervised agent time — write PROMPT.md, call `persist iterate`. Don't try >1h work in-context.
+2. When session token usage crosses ~100K — restart, don't continue in the rotted context.
+3. When the same fix has been attempted ≥3 times without convergence — stop in-context; spawn fresh persist loop.
+4. When orchestrating long-horizon work — default to persist + periodic checkpoints; compose with P5 worktrees.
+5. When the user says "run this in the background for an hour" — that's persist territory.
+
+### P13: Dream Cycle Discipline (Tier-Crossing Consolidation)
+
+**What**: Reflexive discipline binding every agent to apply the **5-phase dream shape** (*gather → replay → prune → consolidate → index*) for any consolidation that crosses a cadence-tier boundary. Closes the *shadow dream* corruption mode.
+
+**How**: Reasoning-enforced. Composes with P6 (`bookkeeping replay` is the canonical reference instance) and future Life primitives (askesis T1→T2, anamnesis T2→T3, when shipped).
+
+**Invariant**: any consolidation that crosses a cadence-tier boundary MUST replay against a frozen substrate before committing. Without replay, dense lower-tier signal corrupts sparse upper-tier rules.
+
+**Reflexive Trigger Rule**: P13 is a reflex. Apply without being prompted:
+
+1. Before any consolidation that promotes lower-tier signal to upper-tier rules — verify the consolidation primitive has a replay phase.
+2. For knowledge-graph promotion — use `bookkeeping replay` (not `bookkeeping run`) for substantial promotion runs.
+3. For governance changes (L3 tier) — every PR is a dream cycle: gather (PR description), replay (worktree + CI + doctor), prune (CI failures), consolidate (squash merge), index (commit history).
+4. When designing a NEW consolidation primitive — implement the 5-phase shape from day 1; don't ship shadow-dream form.
+5. When you observe a new dream instance shipping — record it for the rule-of-three counter.
+
+The morpheus crate (shared abstraction across implementations) is deferred per rule-of-three until ≥2 dream instances ship beyond P6.
+
 ---
 
-These eleven primitives compose into the full autonomous development loop:
+These thirteen primitives compose into the full autonomous development loop:
 
 ```
 User intent → Linear ticket (P3) → Agent dispatched (P5)
   → Prior context loaded (P1) [+ P8 freshness check] [+ P10 cleanup audit]
   → Safety gates active (P2)
   → P10 worktree decision → P11 validation plan
+  → IF long-horizon → P12 persist loop with PROMPT.md + budget
   → Code written + parallel watchers (P11 log-tails) → PR created (P4)
   → CI watched + heal loop (P7)
   → P11 deploy verification (preview URL, screenshots, browser session)
   → Merge → P10 post-merge cleanup via P9 janitor → Deploy
+  → P13 dream cycle for any consolidation (P6 replay first; future Life dreams compose here)
   → P11 dogfood receipt → Session captured (P1) → Knowledge bookkept (P6)
   → System improved (EGRI)
 ```

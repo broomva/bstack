@@ -6,7 +6,7 @@ This workspace is governed by **bstack** — eleven irreducible primitives (P1�
 
 ## Bstack Core Automation Primitives
 
-Eleven irreducible building blocks that make this workspace self-operating. All are always active. Full specification in `AGENTS.md`.
+Thirteen irreducible building blocks that make this workspace self-operating. All are always active. Full specification in `AGENTS.md`.
 
 | # | Primitive | Mechanism | Invariant |
 |---|-----------|-----------|-----------|
@@ -21,6 +21,8 @@ Eleven irreducible building blocks that make this workspace self-operating. All 
 | P9 | Branch + Worktree Janitor | `make janitor` → detects squash-merged branches + dead worktrees, removes safely | Default `--dry-run`; never touches protected branches |
 | P10 | Worktree Hygiene Discipline | Reflexive rule: decide worktree-or-not before first file; keep `git status` clean; auto-run P9 janitor after every merge | A clean tree is the only reliable reset point |
 | P11 | Empirical Feedback Loop | Reflexive rule: validate by *interacting* — log-tails, browser E2E, screenshots, deploy verification, multi-level test composition | Reasoning isn't validation; interaction is |
+| P12 | Persistent Loop Discipline (`broomva/persist` skill) | Reflexive rule: cross-context restart loop — state in filesystem (PROMPT.md + git tree), each iteration spawns a fresh agent context | At long-horizon work (>1h), in-context loops decay; restart fresh, backpressure from compilers/tests |
+| P13 | Dream Cycle Discipline | Reflexive rule: any consolidation that crosses a cadence-tier boundary MUST follow the 5-phase shape (gather → replay → prune → consolidate → index) | Replay against frozen substrate is the runtime form of stop-gradient; without it, dense lower-tier signal corrupts sparse upper-tier rules |
 
 > **Naming note.** Skill names are historical and do not always match primitive numbers. P6's skill repo is `broomva/bookkeeping`. P7's skill repo is `broomva/p9` (named when it was the ninth primitive; renaming would break every `npx skills add` install). Primitive numbers are sequential identifiers in the bstack itself; skills are independent npm-style packages with stable names. `bstack doctor` checks AGENTS.md compliance with this and all other primitives.
 
