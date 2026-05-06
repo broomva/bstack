@@ -2,7 +2,7 @@
 
 ## Identity
 
-This workspace is governed by **bstack** — eleven irreducible primitives (P1–P11) that turn an agent-driven workspace into a self-operating system. The full primitive contract lives in [AGENTS.md](AGENTS.md). Run `bstack doctor` to verify compliance.
+This workspace is governed by **bstack** — thirteen irreducible primitives (P1–P13) that turn an agent-driven workspace into a self-operating system. The full primitive contract lives in [AGENTS.md](AGENTS.md). Run `bstack doctor` to verify compliance.
 
 ## Bstack Core Automation Primitives
 

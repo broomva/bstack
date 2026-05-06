@@ -8,7 +8,7 @@ This file IS the control harness for agents operating in this workspace. Reading
 
 ## Bstack Core Automation Primitives
 
-This workspace is governed by the **bstack** primitive contract — eleven irreducible building blocks. All are always active. Run `bstack doctor` to verify compliance.
+This workspace is governed by the **bstack** primitive contract — thirteen irreducible building blocks. All are always active. Run `bstack doctor` to verify compliance.
 
 ### P1: Conversation Bridge (Episodic Memory)
 
