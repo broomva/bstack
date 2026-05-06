@@ -1,7 +1,7 @@
 ---
 name: bstack
 description: |
-  The Broomva Stack — eleven irreducible primitives (P1–P11) that turn any
+  The Broomva Stack — twelve irreducible primitives (P1–P12) that turn any
   agent-driven workspace into a self-operating system, plus 28 curated skills
   that ship with the stack. The primitives are not optional features; they are
   the substrate. P1 captures every session as episodic memory. P2 gates
@@ -25,7 +25,7 @@ description: |
 
 # bstack — The Broomva Stack
 
-**Eleven irreducible primitives. Twenty-eight curated skills. One self-operating workspace.**
+**Twelve irreducible primitives. Twenty-nine curated skills. One self-operating workspace.**
 
 bstack is a *portable harness metalayer* — it composes existing skills into a binding primitive contract that the agent enforces by reasoning, the doctor enforces by checking, and the bootstrap enforces by scaffolding.
 
@@ -48,7 +48,7 @@ Then, in your agent session:
 
 ## What bstack enforces
 
-The eleven primitives. Each closes one specific failure mode that drifts into entropy in unsupervised sessions:
+The twelve primitives. Each closes one specific failure mode that drifts into entropy in unsupervised sessions:
 
 | # | Primitive | Closes |
 |---|---|---|
@@ -63,6 +63,7 @@ The eleven primitives. Each closes one specific failure mode that drifts into en
 | **P9** | Branch + Worktree Janitor | squash-merge accumulation |
 | **P10** | Worktree Hygiene Discipline | dirty-tree drift across the PR lifecycle |
 | **P11** | Empirical Feedback Loop | shipping code that compiles but doesn't work |
+| **P12** | Persistent Loop Discipline (`broomva/persist` skill) | long-horizon work decaying as the context window rots |
 
 Full reference: see [references/primitives.md](references/primitives.md).
 
@@ -137,9 +138,9 @@ Report results. If any checks fail, fix them before proceeding.
 `scripts/doctor.sh`. Seven check sections:
 
 1. Governance files exist (CLAUDE.md, AGENTS.md, .control/policy.yaml)
-2. CLAUDE.md primitives table has all P1–P11 rows + correct count header
+2. CLAUDE.md primitives table has all P1–P12 rows + correct count header
 3. AGENTS.md has each primitive section (`### P1:` through `### P11:`)
-4. Reflexive Trigger Rules present for P6, P7, P10, P11 (the reasoning-enforced primitives)
+4. Reflexive Trigger Rules present for P6, P7, P10, P11, P12 (the reasoning-enforced primitives)
 5. `.control/policy.yaml` has required blocks (`ci_watch:`, `ci_heal:`, `auto_merge:`)
 6. `.claude/settings.json` wires the expected hook scripts (P1, P2, P8)
 7. Each primitive's mechanism is reachable on disk
@@ -213,7 +214,7 @@ This is the f₃ dynamics function at L3 of the RCS hierarchy. See [references/p
 
 ## See also
 
-- [references/primitives.md](references/primitives.md) — full P1–P11 reference with reflexive triggers
+- [references/primitives.md](references/primitives.md) — full P1–P12 reference with reflexive triggers
 - [references/skills-roster.md](references/skills-roster.md) — all 28 skills with install commands
 - [references/stack-architecture.md](references/stack-architecture.md) — layer dependency diagram
 - [references/quickstart.md](references/quickstart.md) — 5-minute install walkthrough

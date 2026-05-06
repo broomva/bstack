@@ -22,6 +22,7 @@ declare -A SKILL_REPOS=(
   [control-metalayer-loop]="broomva/control-metalayer"
   [harness-engineering-playbook]="broomva/harness-engineering-skill"
   [p9]="broomva/p9"
+  [persist]="broomva/persist"
   [agent-consciousness]="broomva/control-metalayer"
   [knowledge-graph-memory]="broomva/control-metalayer"
   [prompt-library]="broomva/prompt-library"
@@ -51,7 +52,7 @@ declare -A SKILL_REPOS=(
 )
 
 ORDERED_SKILLS=(
-  agentic-control-kernel control-metalayer-loop harness-engineering-playbook p9
+  agentic-control-kernel control-metalayer-loop harness-engineering-playbook p9 persist
   agent-consciousness knowledge-graph-memory prompt-library
   symphony symphony-forge autoany
   deep-dive-research-orchestrator skills skills-showcase
@@ -66,7 +67,7 @@ skipped=0
 failed=0
 
 echo "=== bstack bootstrap ==="
-echo "Installing 30 Broomva Stack skills..."
+echo "Installing 31 Broomva Stack skills..."
 echo ""
 
 for skill in "${ORDERED_SKILLS[@]}"; do
@@ -94,7 +95,7 @@ done
 echo ""
 echo "=== bstack skills install complete ==="
 echo "  Installed: $installed | Skipped: $skipped | Failed: $failed"
-echo "  Total: $((installed + skipped))/30"
+echo "  Total: $((installed + skipped))/31"
 [ "$failed" -gt 0 ] && echo "  Run 'bstack validate' to diagnose issues."
 
 # ─── Phase 2: scaffold missing governance files ────────────────────────────
