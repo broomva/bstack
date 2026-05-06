@@ -15,6 +15,8 @@ The eleven primitives that make a workspace self-operating. This is the canonica
 - [P9 — Branch + Worktree Janitor](#p9--branch--worktree-janitor)
 - [P10 — Worktree Hygiene Discipline](#p10--worktree-hygiene-discipline)
 - [P11 — Empirical Feedback Loop](#p11--empirical-feedback-loop)
+- [P12 — Persistent Loop Discipline](#p12--persistent-loop-discipline)
+- [P13 — Dream Cycle Discipline](#p13--dream-cycle-discipline)
 - [Cohesion narrative](#cohesion-narrative)
 - [RCS L3 stability constraint](#rcs-l3-stability-constraint)
 
@@ -202,28 +204,102 @@ Mental checklist: *Did I interact with it? Did I capture evidence? Was the evide
 
 ---
 
+## P12 — Persistent Loop Discipline
+
+**Closes**: long-horizon work decaying as the context window rots past ~100K tokens (the *"Dumb Zone"*). METR's Time Horizon 1.1 (Jan 2026) puts the **80%-reliability deployable horizon at ~1h on Opus 4.6** — a 14× reliability gap vs the 14.5h 50%-horizon. Above 1h, in-context loops fail.
+
+**Skill name note**: P12's skill repo is `broomva/persist` — non-anthropomorphized rename of the pattern Geoffrey Huntley popularized as the "Ralph loop" (Jan 2026).
+
+**How**: `python3 skills/persist/scripts/persist.py iterate <PROMPT.md>` substrate. Each iteration spawns a fresh agent context. State persists in the filesystem (PROMPT.md + git tree + state.jsonl). Validation backpressure from compilers/tests/linters, not model self-grading. Five-state machine: `SPAWNED → ITERATING (self-loop) → SUCCESS | BUDGET_EXHAUSTED | ABANDONED`. Default budget: 50 iterations / 14400s wall-clock (METR's 80%-horizon ceiling).
+
+**Invariant**: state lives in the filesystem. Each iteration starts from PROMPT.md content, not conversation history. Validation backpressure is external. Each iteration is a fresh subprocess.
+
+### P12 Reflexive Trigger Rule (binding on every agent)
+
+P12 is a reflex, not a request. Apply without being prompted:
+
+1. Before any work that may exceed ~1h of unsupervised agent time — write PROMPT.md, call `persist iterate`. Don't try >1h work in-context.
+2. When session token usage crosses ~100K — restart, don't continue in the rotted context.
+3. When the same fix has been attempted ≥3 times without convergence — stop in-context; spawn fresh persist loop.
+4. When orchestrating long-horizon work — default to persist + periodic checkpoints; compose with P5 (one persist loop per worktree) and P7 (each iteration's PR uses `p9 watch`).
+5. When the user says "run this in the background for an hour" — that's persist territory.
+
+---
+
+## P13 — Dream Cycle Discipline
+
+**Closes**: the *shadow dream* corruption mode — consolidation runs that gather + consolidate + index without the **replay** phase. Without replay, dense lower-tier signal corrupts sparse upper-tier rules. Pattern documented in `research/entities/concept/multi-tier-dreaming.md` (scored 9/9, promoted 2026-04-30).
+
+**How**: Reasoning-enforced. P13 has no dedicated substrate skill — it composes with primitives that already implement the dream shape:
+
+| Tier crossing | Implementation | Status |
+|---|---|---|
+| Knowledge graph (raw → promoted entities) | P6 with `bookkeeping replay` | **Reference instance — shipped 2026-05-06** |
+| Agent traces → plans (T0→T1) | Life autonomic compression | shipped (eager / shadow form) |
+| Trace bundles → prompt/tool diffs (T1→T2) | Life askesis | designed, not yet shipped |
+| Diffs → governance amendments (T2→T3) | Life anamnesis | proposed, not yet shipped |
+
+The 5-phase canonical shape:
+
+| Phase | Function |
+|---|---|
+| **Gather** | Collect a bounded bundle of dense lower-tier signal as a frozen, addressable artifact. |
+| **Replay** | Re-execute the bundle against a *frozen substrate* — sandbox, world model, retrieval cache. |
+| **Prune** | Reject replayed signal that fails the gate: no improvement, schema violation, regression. |
+| **Consolidate** | Commit the kept signal as a sparse, structured update to the upper-tier substrate. Atomic and versioned. |
+| **Index** | Re-validate the upper-tier resource graph: reference integrity, contradiction detection, garbage-collect orphans. |
+
+Three independent observations converge on this shape — biological REM sleep, Anthropic's `/dream` skill, Physical Intelligence's knowledge-insulation training (Driess et al. 2025). The replay phase is the runtime form of stop-gradient.
+
+**Invariant**: any agent-driven consolidation that crosses a cadence-tier boundary MUST replay against a frozen substrate before committing. If a consolidation primitive doesn't have a replay phase, it's a *shadow dream* and is unsafe — the agent's job is to either (a) use the dream-cycle form, or (b) explicitly justify why this consolidation is single-tier and doesn't need replay.
+
+**Deferred per rule-of-three**: the `morpheus` crate (shared abstraction across implementations). Extract only when ≥2 dream instances ship end-to-end beyond P6+replay. Currently at 1.
+
+### P13 Reflexive Trigger Rule (binding on every agent)
+
+P13 is a reflex, not a request. Apply without being prompted:
+
+1. Before any consolidation that promotes lower-tier signal to upper-tier rules — verify the consolidation primitive has a replay phase. If not, request the replay-extension before consolidating, or document why this case is single-tier.
+2. For knowledge-graph promotion — use `bookkeeping replay` (not `bookkeeping run`) for substantial promotion runs.
+3. For governance changes (L3 tier) — every PR in this workspace is a dream cycle: gather (PR description), replay (worktree + CI + doctor), prune (CI failures, doctor gaps), consolidate (squash merge), index (commit history).
+4. When designing a NEW consolidation primitive — implement the 5-phase shape from day 1; don't ship shadow-dream form.
+5. When you observe a new dream instance shipping — record it in `multi-tier-dreaming.md` (the rule-of-three counter for morpheus extraction).
+
+---
+
 ## Cohesion narrative
 
-P11 is the **cohesion glue** for the whole stack:
+P11, P12, and P13 are structural siblings at different scales:
 
-- **P4** (PR Pipeline) and **P7** (CI Watcher) catch what CI sees; **P11** catches what CI can't.
-- **P10** (Worktree Hygiene) keeps the working tree clean enough for empirical checks to be meaningful.
-- **P6** (Bookkeeping) records the validation evidence as durable context.
-- **P1** (Conversation Bridge) preserves the dogfood receipt across sessions.
-- **P8** (Skill Freshness) ensures the validation tools the agent reaches for (gstack, agent-browser, dogfood, qa) are themselves current.
-- **P9** (Janitor) ensures cleanup state is automatic so the next P10/P11 cycle starts from zero.
+| Primitive | Discipline | Surface | Evidence | Scale |
+|---|---|---|---|---|
+| **P11** Empirical Feedback | "validate by interacting" | live deployed system | screenshots, logs, browser session | in-session (≤1h) |
+| **P12** Persistent Loop | "restart fresh when context rots" | filesystem (PROMPT.md + git) | state.jsonl + each iteration's evidence | cross-session (>1h) |
+| **P13** Dream Cycle | "consolidate by replaying" | frozen substrate | diff against frozen snapshot | tier-crossing |
 
-The eleven primitives compose into the full autonomous development loop:
+The whole stack composes:
+
+- **P4** (PR Pipeline) and **P7** (CI Watcher) catch what CI sees; **P11** catches what CI can't; **P13** catches what consolidation without replay can't.
+- **P10** (Worktree Hygiene) keeps the working tree clean enough for empirical checks to be meaningful — same shape as P13's "frozen substrate" requirement at the knowledge layer.
+- **P6** (Bookkeeping) is the first concrete implementation of P13's discipline — `bookkeeping replay` is the canonical reference dream cycle.
+- **P12** (Persist) is the substrate for long-horizon work that needs P11/P13 discipline across many iterations.
+- **P1** (Conversation Bridge) preserves dogfood receipts and dream-cycle audit trails across sessions.
+- **P8** (Skill Freshness) ensures the validation/replay tools (gstack, bookkeeping, persist) are themselves current.
+- **P9** (Janitor) ensures cleanup state is automatic so the next cycle starts from zero.
+
+The thirteen primitives compose into the full autonomous development loop:
 
 ```
 User intent → Linear ticket (P3) → Agent dispatched (P5)
   → Prior context loaded (P1) [+ P8 freshness check] [+ P10 cleanup audit]
   → Safety gates active (P2)
   → P10 worktree decision → P11 validation plan
+  → IF long-horizon → P12 persist loop with PROMPT.md + budget
   → Code written + parallel watchers (P11 log-tails) → PR created (P4)
   → CI watched + heal loop (P7)
   → P11 deploy verification (preview URL, screenshots, browser session)
   → Merge → P10 post-merge cleanup via P9 janitor → Deploy
+  → P13 dream cycle for any consolidation (P6 replay first; future Life dreams compose here)
   → P11 dogfood receipt → Session captured (P1) → Knowledge bookkept (P6)
   → System improved (EGRI)
 ```
