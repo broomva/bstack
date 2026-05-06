@@ -10,9 +10,9 @@ The eleven primitives that make a workspace self-operating. This is the canonica
 - [P4 — PR Pipeline](#p4--pr-pipeline)
 - [P5 — Parallel Agents](#p5--parallel-agents)
 - [P6 — Knowledge Bookkeeping](#p6--knowledge-bookkeeping)
-- [P7 — CI Watcher + Productive Wait](#p7--ci-watcher--productive-wait)
-- [P8 — Skill Freshness Check](#p8--skill-freshness-check)
-- [P9 — Branch + Worktree Janitor](#p9--branch--worktree-janitor)
+- [P7 — Skill Freshness Check](#p7--skill-freshness-check)
+- [P8 — Branch + Worktree Janitor](#p8--branch--worktree-janitor)
+- [P9 — CI Watcher + Productive Wait](#p9--ci-watcher--productive-wait)
 - [P10 — Worktree Hygiene Discipline](#p10--worktree-hygiene-discipline)
 - [P11 — Empirical Feedback Loop](#p11--empirical-feedback-loop)
 - [P12 — Persistent Loop Discipline](#p12--persistent-loop-discipline)
@@ -66,7 +66,7 @@ The eleven primitives that make a workspace self-operating. This is the canonica
 
 **Invariant**: never merge with failing checks. Never `--no-verify`. CI must be green on `main` at all times.
 
-**Composes with P7**: the PR pipeline is the gate; the CI watcher is the productive-wait + auto-heal layer that turns a long CI run into actionable feedback instead of dead time.
+**Composes with P9**: the PR pipeline is the gate; the CI watcher is the productive-wait + auto-heal layer that turns a long CI run into actionable feedback instead of dead time.
 
 ---
 
@@ -102,7 +102,27 @@ Mental checklist before declaring graph-dependent work done: *Did this session p
 
 ---
 
-## P7 — CI Watcher + Productive Wait
+## P7 — Skill Freshness Check
+
+**Closes**: silent rot of `npx skills add` snapshots. Skills don't auto-update; without a nudge they go stale and sessions hit `error: unrecognized arguments: --foo` from out-of-date binaries.
+
+**How**: `SessionStart` hook → `scripts/skill-freshness-hook.sh` checks the timestamp of `~/.config/broomva/p7/last-skill-update-check` (legacy `~/.config/broomva/p8/` still honored for in-place upgrades). If ≥ 7 days old (or never), prints a one-line nudge with refresh command + dismissal `touch`. Always exits 0.
+
+**Invariant**: hook always exits 0. `BROOMVA_P7_THRESHOLD_DAYS` env var configurable (default 7; legacy `BROOMVA_P8_THRESHOLD_DAYS` still honored). Dismissal: run `npx skills update -g` then `touch ~/.config/broomva/p7/last-skill-update-check`.
+
+---
+
+## P8 — Branch + Worktree Janitor
+
+**Closes**: squash-merged branches and dead worktrees accumulate. `git branch --merged` doesn't catch squash-merges (the branch tip isn't an ancestor of main).
+
+**How**: `make janitor` (wraps `scripts/branch-janitor.sh`). Walks current repo (or all workspace repos with `--scope=workspace`). For each non-protected branch matching the include pattern (`feat/*,fix/*,chore/*,docs/*` by default): runs the canonical squash-merge detection — `git commit-tree <branch-tree> -p <merge-base>` produces a synthetic commit; `git cherry origin/main <synth>` reports if its patch is in main. If yes, branch is mergeable. Worktrees whose underlying branch is gone get pruned via `git worktree remove --force`.
+
+**Invariant**: default `--dry-run` — pass `--apply` to actually delete. Never touches main, master, develop, HEAD, gh-pages, or any branch in `~/.config/broomva/p8-janitor/protected.txt` (legacy `~/.config/broomva/p9-janitor/` still honored). Currently-checked-out branch always skipped.
+
+---
+
+## P9 — CI Watcher + Productive Wait
 
 **Closes**: `sleep`-on-CI dead time. Agents losing 5–15 min/PR.
 
@@ -110,11 +130,11 @@ Mental checklist before declaring graph-dependent work done: *Did this session p
 
 **Invariant**: never `sleep` on CI. Every failure produces (a) a `state.jsonl` event, (b) a Linear ticket, or (c) both — silent state drops are forbidden (exit 99). Heal actions are scoped to files in PR diff. All setpoints (`max_concurrent_prs`, `max_attempts`, `stability_floor`, `classified_failure_types`) live in `.control/policy.yaml` and fail closed if missing.
 
-**Skill name note**: P7's skill repo is `broomva/p9` — historical name from when it was the ninth primitive.
+**Skill name**: `broomva/p9` — primitive number P9, skill name `p9`. They match.
 
-### P7 Reflexive Trigger Rule (binding on every agent)
+### P9 Reflexive Trigger Rule (binding on every agent)
 
-P7 is a reflex, not a request. Agents must invoke `p9 watch <pr> --background` without being prompted in any of these situations:
+P9 is a reflex, not a request. Agents must invoke `p9 watch <pr> --background` without being prompted in any of these situations:
 
 1. Immediately after `git push` that opens or updates a PR — within the same response, before any other tool call. The watcher must be running before the agent considers the push "done."
 2. Whenever the agent is tempted to `sleep` while CI runs — `sleep` on a CI wait is a hard ban. Pull from `p9 wait-queue pop` instead. If queue empty, do non-code productive work until bg-task notification fires.
@@ -122,26 +142,6 @@ P7 is a reflex, not a request. Agents must invoke `p9 watch <pr> --background` w
 4. When `p9 status` reports `MERGE_READY` — invoke `p9 auto-merge <pr>` rather than `gh pr merge` directly. The actuator consults `.control/policy.yaml`'s `auto_merge:` block, blocks governance-class paths automatically, and only auto-merges branch classes explicitly allowlisted.
 
 Mental checklist before declaring CI-dependent work done: *Did I push? Is there a watcher running for this PR? Am I about to `sleep` or poll? Did I drain the wait-queue while waiting?*
-
----
-
-## P8 — Skill Freshness Check
-
-**Closes**: silent rot of `npx skills add` snapshots. Skills don't auto-update; without a nudge they go stale and sessions hit `error: unrecognized arguments: --foo` from out-of-date binaries.
-
-**How**: `SessionStart` hook → `scripts/skill-freshness-hook.sh` checks the timestamp of `~/.config/broomva/p8/last-skill-update-check`. If ≥ 7 days old (or never), prints a one-line nudge with refresh command + dismissal `touch`. Always exits 0.
-
-**Invariant**: hook always exits 0. `BROOMVA_P8_THRESHOLD_DAYS` env var configurable (default 7). Dismissal: run `npx skills update -g` then `touch ~/.config/broomva/p8/last-skill-update-check`.
-
----
-
-## P9 — Branch + Worktree Janitor
-
-**Closes**: squash-merged branches and dead worktrees accumulate. `git branch --merged` doesn't catch squash-merges (the branch tip isn't an ancestor of main).
-
-**How**: `make janitor` (wraps `scripts/branch-janitor.sh`). Walks current repo (or all workspace repos with `--scope=workspace`). For each non-protected branch matching the include pattern (`feat/*,fix/*,chore/*,docs/*` by default): runs the canonical squash-merge detection — `git commit-tree <branch-tree> -p <merge-base>` produces a synthetic commit; `git cherry origin/main <synth>` reports if its patch is in main. If yes, branch is mergeable. Worktrees whose underlying branch is gone get pruned via `git worktree remove --force`.
-
-**Invariant**: default `--dry-run` — pass `--apply` to actually delete. Never touches main, master, develop, HEAD, gh-pages, or any branch in `~/.config/broomva/p9-janitor/protected.txt`. Currently-checked-out branch always skipped.
 
 ---
 
@@ -159,7 +159,7 @@ P10 is a reflex, not a request. Agents must apply the following without being pr
 
 1. Before writing the first file of any new substantial work — decide whether a worktree is needed and **state the choice in your response**. Default *yes* for new feature/spec/research, multi-file work, work that might take more than ten minutes, work that could conflict with other in-flight branches. Default *no* for typo fixes, single-file doc edits, read-only investigation, work continuing an existing branch.
 2. Before pushing to remote — run `git status` mentally; if dirty with WIP that's not part of the PR, decide: *commit-as-WIP*, *stash with reason*, or *extract to a separate branch*. Don't push past lingering uncommitted state.
-3. After PR merge — immediately run `make janitor` (P9) or `git worktree remove` + `git branch -D` directly. Never start a new work unit on top of a merged-but-uncleaned branch.
+3. After PR merge — immediately run `make janitor` (P8) or `git worktree remove` + `git branch -D` directly. Never start a new work unit on top of a merged-but-uncleaned branch.
 4. At SessionStart — when reviewing prior context, check `git worktree list` and `git branch`. If the previous session left orphan worktrees or stale merged branches, run `make janitor` *before* starting new work.
 
 Mental checklist: *Did I decide on a worktree? Is `git status` clean? Are merged branches gone? Are there orphan worktrees from prior sessions?*
@@ -221,7 +221,7 @@ P12 is a reflex, not a request. Apply without being prompted:
 1. Before any work that may exceed ~1h of unsupervised agent time — write PROMPT.md, call `persist iterate`. Don't try >1h work in-context.
 2. When session token usage crosses ~100K — restart, don't continue in the rotted context.
 3. When the same fix has been attempted ≥3 times without convergence — stop in-context; spawn fresh persist loop.
-4. When orchestrating long-horizon work — default to persist + periodic checkpoints; compose with P5 (one persist loop per worktree) and P7 (each iteration's PR uses `p9 watch`).
+4. When orchestrating long-horizon work — default to persist + periodic checkpoints; compose with P5 (one persist loop per worktree) and P9 (each iteration's PR uses `p9 watch`).
 5. When the user says "run this in the background for an hour" — that's persist territory.
 
 ---
@@ -279,26 +279,26 @@ P11, P12, and P13 are structural siblings at different scales:
 
 The whole stack composes:
 
-- **P4** (PR Pipeline) and **P7** (CI Watcher) catch what CI sees; **P11** catches what CI can't; **P13** catches what consolidation without replay can't.
+- **P4** (PR Pipeline) and **P9** (CI Watcher) catch what CI sees; **P11** catches what CI can't; **P13** catches what consolidation without replay can't.
 - **P10** (Worktree Hygiene) keeps the working tree clean enough for empirical checks to be meaningful — same shape as P13's "frozen substrate" requirement at the knowledge layer.
 - **P6** (Bookkeeping) is the first concrete implementation of P13's discipline — `bookkeeping replay` is the canonical reference dream cycle.
 - **P12** (Persist) is the substrate for long-horizon work that needs P11/P13 discipline across many iterations.
 - **P1** (Conversation Bridge) preserves dogfood receipts and dream-cycle audit trails across sessions.
-- **P8** (Skill Freshness) ensures the validation/replay tools (gstack, bookkeeping, persist) are themselves current.
-- **P9** (Janitor) ensures cleanup state is automatic so the next cycle starts from zero.
+- **P7** (Skill Freshness) ensures the validation/replay tools (gstack, bookkeeping, persist) are themselves current.
+- **P8** (Janitor) ensures cleanup state is automatic so the next cycle starts from zero.
 
 The thirteen primitives compose into the full autonomous development loop:
 
 ```
 User intent → Linear ticket (P3) → Agent dispatched (P5)
-  → Prior context loaded (P1) [+ P8 freshness check] [+ P10 cleanup audit]
+  → Prior context loaded (P1) [+ P7 freshness check] [+ P10 cleanup audit]
   → Safety gates active (P2)
   → P10 worktree decision → P11 validation plan
   → IF long-horizon → P12 persist loop with PROMPT.md + budget
   → Code written + parallel watchers (P11 log-tails) → PR created (P4)
-  → CI watched + heal loop (P7)
+  → CI watched + heal loop (P9)
   → P11 deploy verification (preview URL, screenshots, browser session)
-  → Merge → P10 post-merge cleanup via P9 janitor → Deploy
+  → Merge → P10 post-merge cleanup via P8 janitor → Deploy
   → P13 dream cycle for any consolidation (P6 replay first; future Life dreams compose here)
   → P11 dogfood receipt → Session captured (P1) → Knowledge bookkept (P6)
   → System improved (EGRI)

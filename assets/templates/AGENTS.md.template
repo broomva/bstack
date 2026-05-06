@@ -64,7 +64,23 @@ This workspace is governed by the **bstack** primitive contract — thirteen irr
 2. Before committing a synced snapshot to a public surface.
 3. At the close of any substantial work session that produced graph-relevant material.
 
-### P7: CI Watcher + Productive Wait (Event-Driven Wait Loop)
+### P7: Skill Freshness Check (Stale-Install Detector)
+
+**What**: Reports stale installed skills at SessionStart so they get refreshed before causing silent failures.
+
+**How**: SessionStart hook → `skill-freshness-hook.sh` checks the timestamp of `~/.config/broomva/p7/last-skill-update-check` (legacy `~/.config/broomva/p8/` still honored for in-place upgrades). If ≥ 7 days old, prints a one-line nudge. Always exits 0.
+
+**Invariant**: Hook always exits 0. Threshold via `BROOMVA_P7_THRESHOLD_DAYS` env var (default 7; legacy `BROOMVA_P8_THRESHOLD_DAYS` still honored). Dismiss with `npx skills update -g` then `touch ~/.config/broomva/p7/last-skill-update-check`.
+
+### P8: Branch + Worktree Janitor (Hygiene)
+
+**What**: Detects merged branches (including squash-merged) and dead worktrees, removes them safely.
+
+**How**: `make janitor` (wraps `scripts/branch-janitor.sh`). Squash-merge detection via `git commit-tree` synthetic + `git cherry`. Worktrees on dead branches pruned.
+
+**Invariant**: Default `--dry-run` — pass `--apply` to actually delete. Never touches main/master/develop/HEAD/gh-pages or branches in `~/.config/broomva/p8-janitor/protected.txt` (legacy `~/.config/broomva/p9-janitor/` still honored).
+
+### P9: CI Watcher + Productive Wait (Event-Driven Wait Loop)
 
 **What**: Replaces sleep-based CI waits with an event-driven control loop. The agent drains a context-scoped wait-queue while CI runs, classifies failures, self-heals known categories, escalates the rest.
 
@@ -72,32 +88,16 @@ This workspace is governed by the **bstack** primitive contract — thirteen irr
 
 **Invariant**: Never `sleep` on CI. Every failure produces (a) a `state.jsonl` event, (b) a Linear ticket, or (c) both — silent state drops are forbidden. Heal actions scoped to PR diff. Setpoints in `.control/policy.yaml` `ci_watch:` / `ci_heal:` blocks fail closed if missing.
 
-**Reflexive Trigger Rule**: P7 is a reflex. Agents must invoke `p9 watch <pr> --background` without being prompted in any of these situations:
+**Reflexive Trigger Rule**: P9 is a reflex. Agents must invoke `p9 watch <pr> --background` without being prompted in any of these situations:
 
 1. Immediately after `git push` opening/updating a PR.
 2. Whenever tempted to `sleep` while CI runs — hard ban.
 3. When red CI bg-task notification fires — `p9 heal --classify` first.
 4. When `p9 status` reports `MERGE_READY` — invoke `p9 auto-merge` rather than `gh pr merge` directly.
 
-### P8: Skill Freshness Check (Stale-Install Detector)
-
-**What**: Reports stale installed skills at SessionStart so they get refreshed before causing silent failures.
-
-**How**: SessionStart hook → `skill-freshness-hook.sh` checks the timestamp of `~/.config/broomva/p8/last-skill-update-check`. If ≥ 7 days old, prints a one-line nudge. Always exits 0.
-
-**Invariant**: Hook always exits 0. Threshold via `BROOMVA_P8_THRESHOLD_DAYS` env var (default 7). Dismiss with `npx skills update -g` then `touch ~/.config/broomva/p8/last-skill-update-check`.
-
-### P9: Branch + Worktree Janitor (Hygiene)
-
-**What**: Detects merged branches (including squash-merged) and dead worktrees, removes them safely.
-
-**How**: `make janitor` (wraps `scripts/branch-janitor.sh`). Squash-merge detection via `git commit-tree` synthetic + `git cherry`. Worktrees on dead branches pruned.
-
-**Invariant**: Default `--dry-run` — pass `--apply` to actually delete. Never touches main/master/develop/HEAD/gh-pages or branches in `~/.config/broomva/p9-janitor/protected.txt`.
-
 ### P10: Worktree Hygiene Discipline (Clean-Tree Reset Point)
 
-**What**: Reflexive discipline binding every agent to (a) make a deliberate worktree-or-not decision before writing the first file, (b) keep `git status` clean throughout the PR lifecycle, (c) run P9 janitor immediately after merge.
+**What**: Reflexive discipline binding every agent to (a) make a deliberate worktree-or-not decision before writing the first file, (b) keep `git status` clean throughout the PR lifecycle, (c) run P8 janitor immediately after merge.
 
 **How**: Reasoning-enforced rule, not a hook. P5 provides the *mechanism* (git worktrees); P10 provides the *discipline*.
 
@@ -107,7 +107,7 @@ This workspace is governed by the **bstack** primitive contract — thirteen irr
 
 1. Before writing the first file of any new substantial work — decide worktree-or-not, state the choice.
 2. Before pushing to remote — `git status` check; dirty WIP gets committed/stashed/extracted, never pushed past.
-3. After PR merge — immediate `make janitor` (P9).
+3. After PR merge — immediate `make janitor` (P8).
 4. At SessionStart — audit `git worktree list` + `git branch`; clean orphans before new work.
 
 ### P11: Empirical Feedback Loop (Closed-Loop Validation)
@@ -174,14 +174,14 @@ These thirteen primitives compose into the full autonomous development loop:
 
 ```
 User intent → Linear ticket (P3) → Agent dispatched (P5)
-  → Prior context loaded (P1) [+ P8 freshness check] [+ P10 cleanup audit]
+  → Prior context loaded (P1) [+ P7 freshness check] [+ P10 cleanup audit]
   → Safety gates active (P2)
   → P10 worktree decision → P11 validation plan
   → IF long-horizon → P12 persist loop with PROMPT.md + budget
   → Code written + parallel watchers (P11 log-tails) → PR created (P4)
-  → CI watched + heal loop (P7)
+  → CI watched + heal loop (P9)
   → P11 deploy verification (preview URL, screenshots, browser session)
-  → Merge → P10 post-merge cleanup via P9 janitor → Deploy
+  → Merge → P10 post-merge cleanup via P8 janitor → Deploy
   → P13 dream cycle for any consolidation (P6 replay first; future Life dreams compose here)
   → P11 dogfood receipt → Session captured (P1) → Knowledge bookkept (P6)
   → System improved (EGRI)
@@ -202,7 +202,7 @@ bstack doctor      # Verify primitive contract compliance
 bstack repair      # Fix specific gaps surfaced by doctor
 bstack status      # Show installed-vs-missing skills + harness health
 make control-audit # Full metalayer compliance audit
-make janitor       # P9 janitor (dry-run by default)
+make janitor       # P8 janitor (dry-run by default)
 ```
 
 ## Conversation Capture

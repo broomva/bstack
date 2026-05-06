@@ -7,9 +7,9 @@ description: |
   the substrate. P1 captures every session as episodic memory. P2 gates
   destructive operations. P3 tracks every work unit in Linear. P4 forces every
   change through CI. P5 isolates parallel agents in worktrees. P6 keeps the
-  knowledge graph quality-controlled. P7 replaces sleep-on-CI with productive
-  wait + classifier-evaluator self-heal. P8 nudges when installed skills go
-  stale. P9 cleans up squash-merged branches and dead worktrees. P10 binds
+  knowledge graph quality-controlled. P9 replaces sleep-on-CI with productive
+  wait + classifier-evaluator self-heal. P7 nudges when installed skills go
+  stale. P8 cleans up squash-merged branches and dead worktrees. P10 binds
   every agent to clean-tree discipline through the PR lifecycle. P11 is the
   cohesion glue — bind every agent to validate by interacting with what they
   build, not just by reasoning + lint + CI exit codes. Use bstack when:
@@ -20,7 +20,7 @@ description: |
   validate`, (6) full reconfiguration via `bstack revamp`. Triggers on
   "bstack", "broomva stack", "bootstrap project", "setup broomva workflow",
   "install all skills", "skills status", "primitive contract", "P1" through
-  "P11", "agent harness", "self-operating workspace".
+  "P13", "agent harness", "self-operating workspace".
 ---
 
 # bstack — The Broomva Stack
@@ -48,7 +48,7 @@ Then, in your agent session:
 
 ## What bstack enforces
 
-The twelve primitives. Each closes one specific failure mode that drifts into entropy in unsupervised sessions:
+The thirteen primitives. Each closes one specific failure mode that drifts into entropy in unsupervised sessions:
 
 | # | Primitive | Closes |
 |---|---|---|
@@ -58,9 +58,9 @@ The twelve primitives. Each closes one specific failure mode that drifts into en
 | **P4** | PR Pipeline | merging unreviewed code |
 | **P5** | Parallel Agents | sequential bottleneck |
 | **P6** | Knowledge Bookkeeping | knowledge graph rot |
-| **P7** | CI Watcher + Productive Wait | sleep-on-CI |
-| **P8** | Skill Freshness Check | silent rot of `npx skills add` snapshots |
-| **P9** | Branch + Worktree Janitor | squash-merge accumulation |
+| **P7** | Skill Freshness Check | silent rot of `npx skills add` snapshots |
+| **P8** | Branch + Worktree Janitor | squash-merge accumulation |
+| **P9** | CI Watcher + Productive Wait | sleep-on-CI |
 | **P10** | Worktree Hygiene Discipline | dirty-tree drift across the PR lifecycle |
 | **P11** | Empirical Feedback Loop | shipping code that compiles but doesn't work |
 | **P12** | Persistent Loop Discipline (`broomva/persist` skill) | long-horizon work decaying as the context window rots |
@@ -126,7 +126,7 @@ Report results. If any checks fail, fix them before proceeding.
    - `CLAUDE.md` (workspace invariants + RCS hierarchy + primitive table)
    - `AGENTS.md` (operational rules + per-primitive sections + reflexive triggers)
    - `.control/policy.yaml` (ci_watch / ci_heal / auto_merge / gates G1–G11)
-   - `.claude/settings.json` (P1, P2, P8 hook wiring)
+   - `.claude/settings.json` (P1, P2, P7 hook wiring)
 3. Adds `make` targets to existing Makefile (or creates one): `bstack-check`, `control-audit`, `janitor`
 4. Installs pre-commit hook (`.githooks/pre-commit`) via `git config core.hooksPath .githooks`
 5. Runs `bstack doctor` to verify primitive contract compliance
@@ -141,9 +141,9 @@ Report results. If any checks fail, fix them before proceeding.
 1. Governance files exist (CLAUDE.md, AGENTS.md, .control/policy.yaml)
 2. CLAUDE.md primitives table has all P1–P13 rows + correct count header
 3. AGENTS.md has each primitive section (`### P1:` through `### P11:`)
-4. Reflexive Trigger Rules present for P6, P7, P10, P11, P12, P13 (the reasoning-enforced primitives)
+4. Reflexive Trigger Rules present for P6, P9, P10, P11, P12, P13 (the reasoning-enforced primitives)
 5. `.control/policy.yaml` has required blocks (`ci_watch:`, `ci_heal:`, `auto_merge:`)
-6. `.claude/settings.json` wires the expected hook scripts (P1, P2, P8)
+6. `.claude/settings.json` wires the expected hook scripts (P1, P2, P7)
 7. Each primitive's mechanism is reachable on disk
 
 Modes: default (full report), `--quiet` (only gaps), `--strict` (exit 1 on gap, for CI lanes). **Always exits 0 by default.** Each gap includes an actionable `→ fix:` hint.
@@ -190,7 +190,7 @@ bstack is the *measurement substrate* for the agentic-control-kernel. The harnes
 | Bridge operational | fresh < 24h | `~/.cache/broomva-bridge-stamp` mtime |
 | Control audit | 5/5 sections | `make control-audit` exit code |
 | Conversations indexed | ≥1 session | `docs/conversations/Conversations.md` exists |
-| **Primitive contract** | **11/11** | **`bstack doctor` exit code** |
+| **Primitive contract** | **13/13** | **`bstack doctor` exit code** |
 
 ## When to use bstack
 

@@ -20,15 +20,15 @@ Each primitive closes one specific failure mode that drifts into entropy in unsu
 | **P4** | PR Pipeline | merging unreviewed code |
 | **P5** | Parallel Agents | sequential bottleneck on independent tasks |
 | **P6** | Knowledge Bookkeeping | knowledge graph rot |
-| **P7** | CI Watcher + Productive Wait | sleep-on-CI dead time |
-| **P8** | Skill Freshness Check | silent rot of `npx skills add` snapshots |
-| **P9** | Branch + Worktree Janitor | squash-merged branches and dead worktrees accumulating |
+| **P7** | Skill Freshness Check | silent rot of `npx skills add` snapshots |
+| **P8** | Branch + Worktree Janitor | squash-merged branches and dead worktrees accumulating |
+| **P9** | CI Watcher + Productive Wait | sleep-on-CI dead time |
 | **P10** | Worktree Hygiene Discipline | dirty trees and orphan worktrees compounding across sessions |
 | **P11** | Empirical Feedback Loop | shipping code that compiles but doesn't actually work when exercised |
 
 Full reference with reflexive trigger rules, invariants, and cohesion narrative: **[references/primitives.md](references/primitives.md)**.
 
-P6, P7, P10, and P11 are *reasoning-enforced* — they bind every agent through reflexive trigger rules in `AGENTS.md` rather than through hooks. The other primitives are mechanism-enforced through hooks, scripts, or CI gates.
+P6, P9, P10, and P11 are *reasoning-enforced* — they bind every agent through reflexive trigger rules in `AGENTS.md` rather than through hooks. The other primitives are mechanism-enforced through hooks, scripts, or CI gates.
 
 ## Stack layers (28 skills)
 

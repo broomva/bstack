@@ -6,20 +6,21 @@
 # Always exits 0 — never blocks a session. Reports gaps as actionable nudges.
 #
 # What it checks:
-#   1. CLAUDE.md primitives table has all P1-P10 rows + correct count
-#   2. AGENTS.md has each primitive section (### P1: through ### P10:)
+#   1. CLAUDE.md primitives table has all P1-P13 rows + correct count
+#   2. AGENTS.md has each primitive section (### P1: through ### P13:)
 #   3. AGENTS.md has the binding reflexive trigger rules for primitives
-#      that require them (P6, P7, P10 — primitives where the agent's
-#      reasoning enforces the policy, not a hook)
+#      that require them (P6, P9, P10, P11, P12, P13 — primitives where
+#      the agent's reasoning enforces the policy, not a hook)
 #   4. .control/policy.yaml has required blocks (ci_watch, ci_heal, auto_merge)
 #   5. .claude/settings.json hooks wire the expected primitive scripts
 #   6. Each primitive's mechanism is reachable on disk:
 #      - P1: scripts/conversation-bridge-hook.sh
 #      - P2: scripts/control-gate-hook.sh + .control/policy.yaml
 #      - P6: skills/bookkeeping/scripts/bookkeeping.py
-#      - P7: skills/p9/scripts/p9.py
-#      - P8: scripts/skill-freshness-hook.sh
-#      - P9: scripts/branch-janitor.sh
+#      - P7: scripts/skill-freshness-hook.sh
+#      - P8: scripts/branch-janitor.sh
+#      - P9: skills/p9/scripts/p9.py
+#      - P12: skills/persist/scripts/persist.py
 #
 # Usage:
 #   bash scripts/doctor.sh               # full report
@@ -111,9 +112,9 @@ declare -a P_NAMES=(
     "P4: PR Pipeline"
     "P5: Parallel Agent"
     "P6: Knowledge Bookkeeping"
-    "P7: CI Watcher"
-    "P8: Skill Freshness"
-    "P9: Branch + Worktree Janitor"
+    "P7: Skill Freshness"
+    "P8: Branch + Worktree Janitor"
+    "P9: CI Watcher"
     "P10: Worktree Hygiene"
     "P11: Empirical Feedback Loop"
     "P12: Persistent Loop Discipline"
@@ -135,7 +136,7 @@ fi
 section "4. AGENTS.md reflexive trigger rules"
 # Primitives whose discipline is enforced via agent reasoning rather than hooks.
 # These MUST contain a Reflexive Trigger Rule subsection.
-declare -a REFLEXIVE_PRIMS=(P6 P7 P10 P11 P12 P13)
+declare -a REFLEXIVE_PRIMS=(P6 P9 P10 P11 P12 P13)
 if [ -f "$AGENTS" ]; then
     for prim in "${REFLEXIVE_PRIMS[@]}"; do
         # Look for "P{n} is a reflex" OR "Reflexive Trigger Rule" in proximity to the prim section
@@ -148,7 +149,7 @@ if [ -f "$AGENTS" ]; then
             ok "$prim has reflexive trigger rule"
         else
             gap "$prim section in AGENTS.md missing 'Reflexive Trigger Rule' subsection" \
-                "add the binding-on-every-agent rule following P6/P7's pattern"
+                "add the binding-on-every-agent rule following P6/P9's pattern"
         fi
     done
 fi
@@ -162,7 +163,7 @@ if [ -f "$POL" ]; then
             ok "$block: block present"
         else
             gap "$block: block missing from policy.yaml" \
-                "P7 fails closed without ci_watch/ci_heal; auto-merge actuator needs auto_merge:"
+                "P9 fails closed without ci_watch/ci_heal; auto-merge actuator needs auto_merge:"
         fi
     done
 fi
@@ -179,7 +180,7 @@ HOOK_FILES=(
 HOOK_LABELS=(
     "P1 (Stop, Notification)"
     "P2 (PreToolUse)"
-    "P8 (SessionStart)"
+    "P7 (SessionStart)"
 )
 if [ -f "$SETTINGS" ]; then
     for i in "${!HOOK_FILES[@]}"; do
@@ -200,9 +201,9 @@ SCRIPT_PATHS=(
     "scripts/conversation-bridge-hook.sh"
     "scripts/control-gate-hook.sh"
     "skills/bookkeeping/scripts/bookkeeping.py"
-    "skills/p9/scripts/p9.py"
     "scripts/skill-freshness-hook.sh"
     "scripts/branch-janitor.sh"
+    "skills/p9/scripts/p9.py"
     "skills/persist/scripts/persist.py"
 )
 SCRIPT_LABELS=(P1 P2 P6 P7 P8 P9 P12)
