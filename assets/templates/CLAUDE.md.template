@@ -1,0 +1,58 @@
+# {{WORKSPACE_NAME}} — bstack-governed workspace
+
+## Identity
+
+This workspace is governed by **bstack** — eleven irreducible primitives (P1–P11) that turn an agent-driven workspace into a self-operating system. The full primitive contract lives in [AGENTS.md](AGENTS.md). Run `bstack doctor` to verify compliance.
+
+## Bstack Core Automation Primitives
+
+Eleven irreducible building blocks that make this workspace self-operating. All are always active. Full specification in `AGENTS.md`.
+
+| # | Primitive | Mechanism | Invariant |
+|---|-----------|-----------|-----------|
+| P1 | Conversation Bridge | Stop hook → JSONL → Obsidian docs → vault | Bridge stamp < 24h stale |
+| P2 | Control Gate | PreToolUse hook → `.control/policy.yaml` | G1–G4 blocking, never bypassed |
+| P3 | Linear Tickets | Every work unit tracked Backlog → Done | No significant work without a ticket |
+| P4 | PR Pipeline | Branch → PR → CI → merge → deploy | Never merge with failing checks |
+| P5 | Parallel Agents | Concurrent isolated agents via worktrees | No shared mutable file writes |
+| P6 | Knowledge Bookkeeping | `bookkeeping run` → score → promote → entity pages → synthesize | `research/entities/` never contains unscored items |
+| P7 | CI Watcher + Productive Wait | `gh pr checks --watch` via `run_in_background` → wait-queue drains → classifier + evaluator self-heal | Never `sleep` on CI; merge defers to control metalayer |
+| P8 | Skill Freshness Check | SessionStart hook → reports stale-skill nudge if last update check ≥ 7d ago | Never blocks; closes silent-rot bug for `npx skills add` snapshots |
+| P9 | Branch + Worktree Janitor | `make janitor` → detects squash-merged branches + dead worktrees, removes safely | Default `--dry-run`; never touches protected branches |
+| P10 | Worktree Hygiene Discipline | Reflexive rule: decide worktree-or-not before first file; keep `git status` clean; auto-run P9 janitor after every merge | A clean tree is the only reliable reset point |
+| P11 | Empirical Feedback Loop | Reflexive rule: validate by *interacting* — log-tails, browser E2E, screenshots, deploy verification, multi-level test composition | Reasoning isn't validation; interaction is |
+
+> **Naming note.** Skill names are historical and do not always match primitive numbers. P6's skill repo is `broomva/bookkeeping`. P7's skill repo is `broomva/p9` (named when it was the ninth primitive; renaming would break every `npx skills add` install). Primitive numbers are sequential identifiers in the bstack itself; skills are independent npm-style packages with stable names. `bstack doctor` checks AGENTS.md compliance with this and all other primitives.
+
+## Governance Stack
+
+```
+CLAUDE.md           ← Invariants (you're reading this)
+AGENTS.md           ← Operational rules + primitive contract
+.control/policy.yaml ← Setpoints, gates, profiles (machine-readable)
+```
+
+## Hooks (Claude Code Integration)
+
+This workspace registers Claude Code hooks in `.claude/settings.json`:
+
+| Event | Hook | Purpose |
+|-------|------|---------|
+| `Stop` | `conversation-bridge-hook.sh` | P1 — capture session to knowledge graph |
+| `Notification` | `conversation-bridge-hook.sh` | P1 — backup trigger for bridge |
+| `PreToolUse` | `control-gate-hook.sh` | P2 — enforce safety shields |
+| `SessionStart` | `skill-freshness-hook.sh` | P8 — nudge user when skills are stale |
+
+## Testing & Verification
+
+```bash
+bstack doctor      # Verify primitive contract compliance
+bstack repair      # Fix specific gaps
+make control-audit # Full metalayer compliance audit
+make janitor       # P9 janitor (dry-run)
+```
+
+## Conventions
+
+- **Git**: feature branches, squash merge via PR. Never force push main.
+- **Each project** in this workspace can have its own CLAUDE.md with project-specific context.

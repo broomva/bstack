@@ -1,0 +1,95 @@
+# Agentic Control Kernel — bstack workspace policy
+# Installed by `bstack bootstrap` when .control/policy.yaml is absent.
+# Customize for your workspace; bstack doctor will validate required blocks.
+
+version: "1.0"
+profile: governed  # baseline | governed | autonomous
+
+setpoints:
+  - id: S1
+    name: "gate_pass_rate"
+    target: 0.85
+    alert_below: 0.70
+    severity: blocking
+
+  - id: S2
+    name: "audit_pass_rate"
+    target: 1.0
+    alert_below: 0.95
+    severity: blocking
+
+gates:
+  governed:
+    - id: G1
+      rule: "No force-push to protected branches"
+      severity: blocking
+
+    - id: G2
+      rule: "No `git reset --hard` without backup branch"
+      severity: blocking
+
+    - id: G3
+      rule: "No `rm -rf` on protected paths"
+      severity: blocking
+
+    - id: G4
+      rule: "No staging .env, credentials, secrets"
+      severity: blocking
+
+    - id: G5
+      rule: "Verify tests pass before push"
+      severity: warn
+
+    - id: G6
+      rule: "Run smoke before commit"
+      severity: warn
+
+# === P7 CI Watcher + Productive-Wait Primitive ===
+# Required by skills/p9 (bstack P7 primitive). Fails closed if absent.
+
+ci_watch:
+  enabled: true
+  max_concurrent_prs: 1
+  isolation_tier_map:
+    research: none
+    docs: none
+    code_independent: worktree
+    code_dependent: stacked_branch
+    governance: blocked
+
+ci_heal:
+  enabled: true
+  max_attempts: 5
+  stability_floor: 0.3
+  classified_failure_types: [lint, format, test_flaky, codegen_drift, import_missing]
+  escalation_channel:
+    linear_team: BRO
+    linear_label: ci-heal-escalation
+    notify_hook: skills/p9/scripts/p9-escalate-notify.sh
+
+# === P7 Auto-merge actuator ===
+# Closes the MERGE_READY → merged gap. Default-disabled; opt-in branch class.
+
+auto_merge:
+  enabled: false
+  require_no_requested_changes: true
+  require_branch_up_to_date: true
+  merge_method: squash
+  delete_branch: true
+  rules:
+    # Governance paths ALWAYS block (matcher pre-pass enforces this regardless
+    # of rule order; listing them first protects against future reshuffles)
+    - path_touched: CLAUDE.md
+      action: require_human
+    - path_touched: AGENTS.md
+      action: require_human
+    - path_touched: METALAYER.md
+      action: require_human
+    - path_touched: .control/policy.yaml
+      action: require_human
+    # Auto-merge classes (uncomment to enable per branch pattern)
+    # - branch_pattern: "docs/*"
+    #   action: auto
+    # - branch_pattern: "research/*"
+    #   action: auto
+  default_action: notify

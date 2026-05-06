@@ -1,29 +1,74 @@
 ---
 name: bstack
-description: >
-  The Broomva Stack — 28 curated agent skills forming a complete AI-native development
-  workflow across 7 layers: Foundation (control, governance, harness), Memory (consciousness,
-  knowledge graph, prompts), Orchestration (symphony, scaffold, EGRI), Research (deep dive,
-  inventory, showcase), Design (Arcan Glass, Next.js templates), Platform (decision tools,
-  content pipeline, SEO/LLMEO, brand icons), Strategy (pre-mortem, braindump, morning-briefing,
-  drift-check, strategy-critique, stakeholder-update, decision-log, weekly-review). Bootstrap
-  any project with Broomva conventions, install all skills with one command, check status,
-  validate health. Use when: (1) setting up a new project with Broomva conventions, (2)
-  installing the full agent skills stack, (3) checking which skills are installed vs missing,
-  (4) validating skill health, (5) user says "bstack", "broomva stack", "bootstrap project",
-  "setup broomva workflow", "install all skills", "skills status".
+description: |
+  The Broomva Stack — eleven irreducible primitives (P1–P11) that turn any
+  agent-driven workspace into a self-operating system, plus 28 curated skills
+  that ship with the stack. The primitives are not optional features; they are
+  the substrate. P1 captures every session as episodic memory. P2 gates
+  destructive operations. P3 tracks every work unit in Linear. P4 forces every
+  change through CI. P5 isolates parallel agents in worktrees. P6 keeps the
+  knowledge graph quality-controlled. P7 replaces sleep-on-CI with productive
+  wait + classifier-evaluator self-heal. P8 nudges when installed skills go
+  stale. P9 cleans up squash-merged branches and dead worktrees. P10 binds
+  every agent to clean-tree discipline through the PR lifecycle. P11 is the
+  cohesion glue — bind every agent to validate by interacting with what they
+  build, not just by reasoning + lint + CI exit codes. Use bstack when:
+  (1) bootstrapping a new agent-driven workspace, (2) verifying primitive
+  compliance via `bstack doctor`, (3) repairing missing governance/hooks/policy
+  via `bstack repair`, (4) listing installed-vs-missing skills via
+  `bstack status`, (5) validating skill frontmatter health via `bstack
+  validate`, (6) full reconfiguration via `bstack revamp`. Triggers on
+  "bstack", "broomva stack", "bootstrap project", "setup broomva workflow",
+  "install all skills", "skills status", "primitive contract", "P1" through
+  "P11", "agent harness", "self-operating workspace".
 ---
 
 # bstack — The Broomva Stack
 
-28 agent skills across 7 layers for complete AI-native development.
+**Eleven irreducible primitives. Twenty-eight curated skills. One self-operating workspace.**
 
-**Installing bstack is not just a skill install — it activates the full control harness,
-including context-aware E2E regression testing that gates every commit.**
+bstack is a *portable harness metalayer* — it composes existing skills into a binding primitive contract that the agent enforces by reasoning, the doctor enforces by checking, and the bootstrap enforces by scaffolding.
 
-## Preamble
+## Quick start
 
-Run this first to check for updates and detect current state:
+Install:
+```bash
+npx skills add broomva/bstack
+```
+
+Then, in your agent session:
+```
+/bstack bootstrap     → install 28 skills + scaffold governance + wire hooks + run doctor
+/bstack doctor        → verify primitive contract compliance (always exits 0)
+/bstack repair        → fix specific gaps surfaced by doctor (asks before writing)
+/bstack status        → show which skills are installed vs missing
+/bstack validate      → check skill SKILL.md frontmatter health
+/bstack revamp        → full reconfiguration (force-reinstall + rewire + re-doctor)
+```
+
+## What bstack enforces
+
+The eleven primitives. Each closes one specific failure mode that drifts into entropy in unsupervised sessions:
+
+| # | Primitive | Closes |
+|---|---|---|
+| **P1** | Conversation Bridge | session amnesia |
+| **P2** | Control Gate | destructive ops the model didn't authorize |
+| **P3** | Linear Tickets | invisible work |
+| **P4** | PR Pipeline | merging unreviewed code |
+| **P5** | Parallel Agents | sequential bottleneck |
+| **P6** | Knowledge Bookkeeping | knowledge graph rot |
+| **P7** | CI Watcher + Productive Wait | sleep-on-CI |
+| **P8** | Skill Freshness Check | silent rot of `npx skills add` snapshots |
+| **P9** | Branch + Worktree Janitor | squash-merge accumulation |
+| **P10** | Worktree Hygiene Discipline | dirty-tree drift across the PR lifecycle |
+| **P11** | Empirical Feedback Loop | shipping code that compiles but doesn't work |
+
+Full reference: see [references/primitives.md](references/primitives.md).
+
+## Preamble (run first, every session)
+
+Detect skill installation state and update overdue skills.
 
 ```bash
 # ─── Update check ────────────────────────────────────────────
@@ -39,11 +84,10 @@ _BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
 echo "BRANCH: $_BRANCH"
 ```
 
-If output shows `UPGRADE_AVAILABLE <old> <new>`: read `bstack-upgrade/SKILL.md` (relative to the bstack skill root) and follow the "Inline upgrade flow" (auto-upgrade if configured, otherwise AskUserQuestion with 4 options, write snooze state if declined). If `JUST_UPGRADED <from> <to>`: tell user "Running bstack v{to} (just updated!)" and continue.
-
-Then detect skill installation state:
+If output shows `UPGRADE_AVAILABLE <old> <new>`: read `bstack-upgrade/SKILL.md` and follow the inline upgrade flow. If `JUST_UPGRADED <from> <to>`: tell the user "Running bstack v{to}" and continue.
 
 ```bash
+# ─── Skill roster check ──────────────────────────────────────
 AGENTS_DIR="${HOME}/.agents/skills"
 CLAUDE_DIR="${HOME}/.claude/skills"
 ROSTER=(agentic-control-kernel control-metalayer-loop harness-engineering-playbook p9 agent-consciousness knowledge-graph-memory prompt-library symphony symphony-forge autoany deep-dive-research-orchestrator skills skills-showcase arcan-glass next-forge alkosto-wait-optimizer content-creation finance-substrate seo-llmeo brand-icons pre-mortem braindump morning-briefing drift-check strategy-critique stakeholder-update decision-log weekly-review)
@@ -59,8 +103,7 @@ echo "bstack: $INSTALLED/${#ROSTER[@]} skills installed (28 total)"
 [ ${#MISSING[@]} -gt 0 ] && echo "Missing: ${MISSING[*]}"
 ```
 
-Report the count. If all 28 present, say "bstack fully installed."
-If any missing, list them and offer the `bootstrap` command.
+Report the count. If all 28 present, say "bstack fully installed." If any missing, list them and offer the `bootstrap` command.
 
 After skill check, run the harness validation:
 
@@ -72,165 +115,106 @@ Report results. If any checks fail, fix them before proceeding.
 
 ## Commands
 
-### `bootstrap` — Install all 24 skills + activate control harness
+### `bootstrap` — full install + system wire-up
 
-Run `scripts/bootstrap.sh` to install every skill in the roster.
-Skips already-installed skills. Creates symlinks from `~/.claude/skills/` to `~/.agents/skills/`.
+`scripts/bootstrap.sh` is the install/wire path. It:
 
-**After skill install, bootstrap ALSO:**
-1. Verifies governance files exist (CLAUDE.md, AGENTS.md, METALAYER.md, `.control/policy.yaml`)
-2. Installs pre-commit hooks via `git config core.hooksPath .githooks`
-3. Validates Claude Code hooks in `.claude/settings.json` (Stop + Notification for conversation bridge)
-4. Wires regression gate hook (`regression-gate-hook.sh`) for context-aware E2E testing
-5. Ensures `regression-test-map.json` feature map is present
-6. Installs rich status line (`statusline-command.sh`) showing model, context, tokens, cost, duration, lines changed, cache hit ratio, rate limits
-7. Runs conversation bridge to ensure knowledge graph indexing is active
-8. Runs `make control-audit` to verify full compliance
-9. Reports bstack-check results
+1. Installs all 28 skills via `npx skills add broomva/<skill>`
+2. **Scaffolds missing governance files** from `assets/templates/`:
+   - `CLAUDE.md` (workspace invariants + RCS hierarchy + primitive table)
+   - `AGENTS.md` (operational rules + per-primitive sections + reflexive triggers)
+   - `.control/policy.yaml` (ci_watch / ci_heal / auto_merge / gates G1–G11)
+   - `.claude/settings.json` (P1, P2, P8 hook wiring)
+3. Adds `make` targets to existing Makefile (or creates one): `bstack-check`, `control-audit`, `janitor`
+4. Installs pre-commit hook (`.githooks/pre-commit`) via `git config core.hooksPath .githooks`
+5. Runs `bstack doctor` to verify primitive contract compliance
+6. Reports a *bootstrap receipt* — what was installed, what was scaffolded, what was already present
 
-### `status` — Show installed vs missing + harness health
+**Idempotent**: never overwrites existing user customizations. If a file already exists, the bootstrap appends only the missing primitive sections / blocks / hooks, never the whole file.
 
-Re-run the preamble. For each skill show: name, layer, installed/missing.
-Then run `make bstack-check` and report the harness health status.
+### `doctor` — verify primitive contract
 
-### `validate` — Full health check
+`scripts/doctor.sh`. Seven check sections:
 
-Run `scripts/validate.sh`. Verifies each skill has a valid SKILL.md with proper frontmatter.
-Then run the full bstack-check harness validation.
+1. Governance files exist (CLAUDE.md, AGENTS.md, .control/policy.yaml)
+2. CLAUDE.md primitives table has all P1–P11 rows + correct count header
+3. AGENTS.md has each primitive section (`### P1:` through `### P11:`)
+4. Reflexive Trigger Rules present for P6, P7, P10, P11 (the reasoning-enforced primitives)
+5. `.control/policy.yaml` has required blocks (`ci_watch:`, `ci_heal:`, `auto_merge:`)
+6. `.claude/settings.json` wires the expected hook scripts (P1, P2, P8)
+7. Each primitive's mechanism is reachable on disk
 
-### `doctor` — Verify primitive contract
+Modes: default (full report), `--quiet` (only gaps), `--strict` (exit 1 on gap, for CI lanes). **Always exits 0 by default.** Each gap includes an actionable `→ fix:` hint.
 
-Run `scripts/doctor.sh`. Validates that the workspace's governance files comply with the bstack primitive contract:
+`bootstrap` invokes `doctor --quiet` automatically as its final step.
 
-1. CLAUDE.md primitives table has all P1–P11 rows + correct count header.
-2. AGENTS.md has each primitive section (`### P1:` through `### P11:`).
-3. Primitives whose discipline is reasoning-enforced (P6 Bookkeeping, P7 CI Watcher, P10 Worktree Hygiene, P11 Empirical Feedback Loop) have their **Reflexive Trigger Rule** subsection present.
-4. `.control/policy.yaml` has required blocks (`ci_watch:`, `ci_heal:`, `auto_merge:`).
-5. `.claude/settings.json` wires the expected hook scripts (P1, P2, P8).
-6. Each primitive's mechanism is reachable on disk (the relevant scripts/skill exists).
+### `repair` — apply targeted fixes
 
-**Always exits 0** by default — never blocks a session. Use `--strict` for CI-mode (exit 1 on any gap). Use `--quiet` to suppress passes and only show gaps.
+`scripts/repair.sh`. Reads the doctor's gap list, asks the user before each fix, then applies the specific repair (add missing primitive section from template, add missing policy block, wire missing hook). Idempotent. Never destructive.
 
-When run without arguments, prints a full passes/gaps report. Each gap includes an actionable `→ fix:` line.
+### `status` — installed vs missing + harness health
 
-`bstack bootstrap` invokes `doctor` automatically as its final step, so a fresh install always confirms primitive compliance.
+Re-run the preamble. For each skill show: name, layer, installed/missing. Then run `make bstack-check` and report harness health.
 
-### `revamp` — Full agent reconfiguration
+### `validate` — skill frontmatter health
 
-Triggers a complete workspace reconfiguration:
-1. Reinstall all 24 skills (force mode)
-2. Regenerate governance files from templates
-3. Rewire hooks (git pre-commit + Claude Code Stop/Notification)
-4. Force-run conversation bridge across all 9 projects
+`scripts/validate.sh`. Verifies each skill has a valid SKILL.md with proper frontmatter. Then runs the full bstack-check harness validation.
+
+### `revamp` — full agent reconfiguration
+
+`scripts/revamp.sh`. Triggers complete workspace reconfiguration:
+
+1. Reinstall all 28 skills (force mode)
+2. Regenerate governance files from templates (asks before overwriting)
+3. Rewire hooks (git pre-commit + Claude Code Stop/Notification/PreToolUse/SessionStart)
+4. Force-run conversation bridge across all projects
 5. Run full control audit
 6. Update AGENTS.md with current state
 
-## Stack Layers
+## Stack layers (28 skills)
 
-| Layer | Skills | Purpose |
-|-------|--------|---------|
-| Foundation | agentic-control-kernel, control-metalayer-loop, harness-engineering-playbook, p9 | Safety, governance, workflow, CI watcher + productive-wait |
-| Memory | agent-consciousness, knowledge-graph-memory, prompt-library | Persistence across sessions |
-| Orchestration | symphony, symphony-forge, autoany | Agent dispatch, scaffolding, self-improvement |
-| Research | deep-dive-research-orchestrator, skills, skills-showcase | Multi-dim research, inventory |
-| Design | arcan-glass, next-forge | Design system, production templates |
-| Platform | alkosto-wait-optimizer, content-creation, finance-substrate, seo-llmeo, brand-icons | Decision tools, content pipeline, SEO/LLMEO, brand assets |
-| Strategy | pre-mortem, braindump, morning-briefing, drift-check, strategy-critique, stakeholder-update, decision-log, weekly-review | Strategic thinking, decision intelligence, personal productivity |
+For the full skill roster + descriptions, see [references/skills-roster.md](references/skills-roster.md). For the layered architecture, see [references/stack-architecture.md](references/stack-architecture.md). For the full primitive contract with reflexive triggers, see [references/primitives.md](references/primitives.md).
 
-## Metalayer Integration
+## Metalayer integration
 
-bstack is not just skills — it is the **measurement substrate** for the agentic-control-kernel.
-
-### What bstack Measures
+bstack is the *measurement substrate* for the agentic-control-kernel. The harness records:
 
 | Metric | Target | How |
 |--------|--------|-----|
-| Skills installed | 28/28 | Preamble roster check |
-| Governance files | 5/5 | CLAUDE.md, AGENTS.md, METALAYER.md, .control/policy.yaml, schemas/ |
-| Hooks wired | 4/4 | Stop hook, PreToolUse safety gate, PreToolUse regression gate, pre-commit hook |
-| Status line | active | `~/.claude/statusline-command.sh` installed + wired in settings.json |
-| Regression gate | active | `regression-gate-hook.sh` intercepts `git commit`, maps staged files to features via `regression-test-map.json`, triggers agent-browser E2E tests |
-| Bridge operational | fresh < 120s | `~/.cache/broomva-bridge-stamp` mtime check |
-| PII redaction active | yes | `_redact_pii()` in conversation-history.py runs before all markdown output |
+| Skills installed | 28/28 | preamble roster |
+| Governance files | 4/4 | CLAUDE.md, AGENTS.md, METALAYER.md, .control/policy.yaml |
+| Hooks wired | 4/4 | Stop, PreToolUse safety, PreToolUse regression, pre-commit |
+| Status line | active | `~/.claude/statusline-command.sh` |
+| Bridge operational | fresh < 24h | `~/.cache/broomva-bridge-stamp` mtime |
 | Control audit | 5/5 sections | `make control-audit` exit code |
-| Conversations indexed | ≥1 session | `docs/conversations/Conversations.md` exists with entries |
+| Conversations indexed | ≥1 session | `docs/conversations/Conversations.md` exists |
+| **Primitive contract** | **11/11** | **`bstack doctor` exit code** |
 
-### PII & Secrets Redaction (S15 / G4b)
+## When to use bstack
 
-The conversation bridge applies a multi-pattern redaction pass (`_redact_pii()`) to all
-content before writing markdown files. This ensures no sensitive data leaks into git history.
+- **Setting up a new project with Broomva conventions** → `bootstrap`
+- **Validating an existing project meets the primitive contract** → `doctor`
+- **Fixing a specific gap doctor reports** → `repair`
+- **Checking skill freshness or roster completeness** → `status` or `validate`
+- **Major workspace cleanup** → `revamp`
 
-**What gets redacted:**
+## Self-evolution
 
-| Category | Examples |
-|----------|----------|
-| Email addresses | `user@example.com` → `[EMAIL_REDACTED]` |
-| API keys | OpenAI `sk-*`, GitHub `ghp_*`, Slack `xoxb-*`, Stripe `sk_live_*`, AWS `AKIA*` |
-| Tokens | JWT, Bearer tokens, SendGrid, Square |
-| Credentials | URLs with `user:pass@host`, PEM private keys |
-| Personal data | Phone numbers, SSNs, credit card numbers |
-| Secrets in .env format | `API_KEY=value` → `API_KEY=[VALUE_REDACTED]` |
-| Generic hex secrets | 64+ char hex strings |
-| GCP service accounts | `private_key` and `client_email` in JSON |
+When the agent improves a primitive, the workflow is:
 
-**Defense in depth** — redaction works with existing layers:
-1. **PreToolUse hook (G4)**: Blocks Write/Edit to secrets files during sessions
-2. **Pre-commit hook**: Blocks staging `.env`, `credentials.json`, etc.
-3. **PII redaction (G4b)**: Sanitizes all conversation content before markdown output
-4. **Content truncation**: Messages capped at 2000 chars, 50 per session
+1. Pattern observed across multiple sessions (L3 stability budget; rapid changes destabilize the system)
+2. Captured in conversation log (Stop hook — automatic via P1)
+3. Crystallized in AGENTS.md (one PR, deliberate)
+4. Enforced in `.control/policy.yaml` if mechanically gateable (one PR, deliberate)
+5. Doctor extended to check the new rule (one PR, deliberate)
+6. Future agents inherit the improvement
 
-Redaction stats are printed after each bridge run for auditability.
+This is the f₃ dynamics function at L3 of the RCS hierarchy. See [references/primitives.md](references/primitives.md) for the formal stability constraint.
 
-### Regression Testing Gate (G11)
+## See also
 
-Every `git commit` is intercepted by the regression gate hook. Staged files are matched
-against `scripts/regression-test-map.json` to identify affected features. If any features
-are affected, Claude receives an "ask" decision with specific E2E scenarios to run via the
-`agent-browser` skill before the commit proceeds.
-
-**Feature areas covered:** auth, chat, models, payments, content, mcp, ui-components,
-database, landing-page, blog-content.
-
-**Flow:**
-```
-git commit → regression-gate-hook.sh fires
-  → analyzes staged files against regression-test-map.json
-  → if features affected → returns "ask" with test scenarios
-  → Claude runs agent-browser E2E tests against broomva.tech
-  → tests pass → stamp ~/.cache/broomva-regression-stamp (10 min TTL)
-  → commit proceeds
-```
-
-**Escape hatches:**
-- `[skip-regression]` in commit message bypasses the gate
-- `make regression-stamp` sets a 10-minute bypass
-- `make regression-clear` re-enables the gate
-- `make regression-map` previews affected features for staged changes
-
-### Self-Improvement Loop
-
-```
-bstack install
-  → skills registered (28/28)
-  → hooks wired (conversation capture active)
-  → PII redaction active on bridge output
-  → control audit passing
-  → every session captured to knowledge graph
-  → agent reads prior sessions on next start
-  → agent discovers better patterns
-  → agent proposes governance updates
-  → bstack validates the update (control audit)
-  → improvement promoted (AGENTS.md / policy.yaml updated)
-  → next agent inherits the improvement
-```
-
-This is the EGRI loop at the workspace level:
-- **Mutable artifact**: Agent behavior, AGENTS.md rules, policy gates
-- **Immutable evaluator**: `make bstack-check` (24 skills + 5 governance + 3 hooks + bridge + audit)
-- **Promotion policy**: Changes that pass all checks get committed
-
-## Browse
-
-Full roster with install commands: https://broomva.tech/skills
-For architecture diagram, read `references/stack-architecture.md`.
-For first-time setup, read `references/quickstart.md`.
+- [references/primitives.md](references/primitives.md) — full P1–P11 reference with reflexive triggers
+- [references/skills-roster.md](references/skills-roster.md) — all 28 skills with install commands
+- [references/stack-architecture.md](references/stack-architecture.md) — layer dependency diagram
+- [references/quickstart.md](references/quickstart.md) — 5-minute install walkthrough
+- [bstack-upgrade/SKILL.md](bstack-upgrade/SKILL.md) — version-upgrade flow
