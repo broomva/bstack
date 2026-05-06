@@ -1,9 +1,18 @@
 #!/usr/bin/env bash
-# bstack bootstrap — install all 27 Broomva Stack skills
+# bstack bootstrap — install all 28 Broomva Stack skills + scaffold governance + wire hooks
+#
+# Three phases:
+#   1. Skill install: npx skills add for each ROSTER entry
+#   2. Workspace scaffold: install missing CLAUDE.md / AGENTS.md / .control/policy.yaml
+#      from assets/templates/ (idempotent — never overwrites existing files)
+#   3. Hooks wire-up: merge bstack hooks into .claude/settings.json (additive only)
+#
+# After completion, runs `bstack doctor --quiet` to verify primitive contract.
 set -e
 
 AGENTS_DIR="${HOME}/.agents/skills"
 CLAUDE_DIR="${HOME}/.claude/skills"
+WORKSPACE_DIR="${BROOMVA_WORKSPACE:-$PWD}"
 
 mkdir -p "$AGENTS_DIR" "$CLAUDE_DIR"
 
@@ -83,21 +92,115 @@ for skill in "${ORDERED_SKILLS[@]}"; do
 done
 
 echo ""
-echo "=== bstack bootstrap complete ==="
+echo "=== bstack skills install complete ==="
 echo "  Installed: $installed | Skipped: $skipped | Failed: $failed"
 echo "  Total: $((installed + skipped))/30"
 [ "$failed" -gt 0 ] && echo "  Run 'bstack validate' to diagnose issues."
 
-# --- bstack doctor: verify primitive contract ---
-# Always-active step; never blocks. Surfaces gaps in AGENTS.md / CLAUDE.md /
-# .control/policy.yaml compliance with the bstack primitive contract so a
-# fresh install is immediately self-checking.
+# ─── Phase 2: scaffold missing governance files ────────────────────────────
+# Idempotent: never overwrites existing files. Only installs when absent.
+echo ""
+echo "=== bstack governance scaffold ==="
 BOOTSTRAP_SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SKILL_ROOT="$(cd "$BOOTSTRAP_SCRIPT_DIR/.." && pwd)"
+TEMPLATES_DIR="$SKILL_ROOT/assets/templates"
+WORKSPACE_NAME="$(basename "$WORKSPACE_DIR")"
+
+scaffolded=0
+preserved=0
+
+scaffold_governance_file() {
+    local target="$1"
+    local template="$2"
+    if [ -f "$WORKSPACE_DIR/$target" ]; then
+        echo "  [keep] $target (existing — preserved)"
+        preserved=$((preserved + 1))
+        return
+    fi
+    if [ ! -f "$TEMPLATES_DIR/$template" ]; then
+        echo "  [skip] $target (template missing in skill: $template)"
+        return
+    fi
+    mkdir -p "$WORKSPACE_DIR/$(dirname "$target")"
+    sed "s/{{WORKSPACE_NAME}}/$WORKSPACE_NAME/g" \
+        "$TEMPLATES_DIR/$template" > "$WORKSPACE_DIR/$target"
+    echo "  [scaffold] $target ← assets/templates/$template"
+    scaffolded=$((scaffolded + 1))
+}
+
+scaffold_governance_file "CLAUDE.md" "CLAUDE.md.template"
+scaffold_governance_file "AGENTS.md" "AGENTS.md.template"
+scaffold_governance_file ".control/policy.yaml" "policy.yaml.template"
+
+echo "  scaffolded: $scaffolded | preserved: $preserved"
+
+# ─── Phase 3: wire missing hooks into .claude/settings.json ────────────────
+# Idempotent: never overwrites existing hook entries. Only adds missing ones.
+echo ""
+echo "=== bstack hooks wire-up ==="
+SETTINGS_FILE="$WORKSPACE_DIR/.claude/settings.json"
+if [ ! -f "$SETTINGS_FILE" ]; then
+    echo "  [scaffold] .claude/settings.json ← assets/templates/settings.json.snippet"
+    mkdir -p "$WORKSPACE_DIR/.claude"
+    sed "s|\${BROOMVA_WORKSPACE}|$WORKSPACE_DIR|g" \
+        "$TEMPLATES_DIR/settings.json.snippet" > "$SETTINGS_FILE"
+elif command -v python3 >/dev/null 2>&1; then
+    # Use python3 to merge missing hooks without overwriting existing ones
+    python3 - <<PYEOF
+import json
+import sys
+from pathlib import Path
+
+settings_path = Path("$SETTINGS_FILE")
+template_path = Path("$TEMPLATES_DIR/settings.json.snippet")
+workspace = "$WORKSPACE_DIR"
+
+current = json.loads(settings_path.read_text())
+template = json.loads(template_path.read_text().replace("\${BROOMVA_WORKSPACE}", workspace))
+
+# Drop the _comment if present
+template.pop("_comment", None)
+
+current.setdefault("hooks", {})
+added = 0
+for event, blocks in template.get("hooks", {}).items():
+    current_blocks = current["hooks"].setdefault(event, [])
+    for block in blocks:
+        for hook in block.get("hooks", []):
+            cmd = hook.get("command")
+            # Check if any existing hook for this event references the same script
+            already = any(
+                any(h.get("command", "").endswith(Path(cmd).name)
+                    for h in cb.get("hooks", []))
+                for cb in current_blocks
+            )
+            if already:
+                print(f"  [keep] {event}: {Path(cmd).name} (already wired)")
+            else:
+                # Append a new block for this hook
+                new_block = {"hooks": [hook]}
+                if "matcher" in block:
+                    new_block["matcher"] = block["matcher"]
+                current_blocks.append(new_block)
+                print(f"  [wire] {event}: {Path(cmd).name} (P{hook.get('_bstack_primitive', '?')})")
+                added += 1
+
+settings_path.write_text(json.dumps(current, indent=2) + "\n")
+print(f"  added: {added} new hook(s)")
+PYEOF
+else
+    echo "  [skip] python3 not available; cannot merge into existing settings.json"
+    echo "  manual: see assets/templates/settings.json.snippet"
+fi
+
+# ─── Phase 4: bstack doctor verification ───────────────────────────────────
+# Always-active step; never blocks. Surfaces gaps in AGENTS.md / CLAUDE.md /
+# .control/policy.yaml compliance with the bstack primitive contract.
 DOCTOR_SCRIPT="${BOOTSTRAP_SCRIPT_DIR}/doctor.sh"
 if [ -f "$DOCTOR_SCRIPT" ]; then
   echo ""
   echo "=== bstack doctor (primitive contract) ==="
-  bash "$DOCTOR_SCRIPT" --quiet || true
+  BROOMVA_WORKSPACE="$WORKSPACE_DIR" bash "$DOCTOR_SCRIPT" --quiet || true
 fi
 
 # --- Arcan skill sync ---

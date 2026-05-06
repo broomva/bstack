@@ -1,0 +1,76 @@
+{
+  "_comment": "bstack-managed hooks — bootstrap merges these into your existing .claude/settings.json. Does NOT overwrite existing entries; only adds missing ones.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${BROOMVA_WORKSPACE}/scripts/skill-freshness-hook.sh",
+            "timeout": 5,
+            "_bstack_primitive": "P8"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${BROOMVA_WORKSPACE}/scripts/conversation-bridge-hook.sh",
+            "timeout": 5,
+            "_bstack_primitive": "P1"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${BROOMVA_WORKSPACE}/scripts/conversation-bridge-hook.sh",
+            "timeout": 5,
+            "_bstack_primitive": "P1"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${BROOMVA_WORKSPACE}/scripts/control-gate-hook.sh",
+            "timeout": 5,
+            "_bstack_primitive": "P2"
+          }
+        ]
+      },
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${BROOMVA_WORKSPACE}/scripts/control-gate-hook.sh",
+            "timeout": 5,
+            "_bstack_primitive": "P2"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${BROOMVA_WORKSPACE}/scripts/control-gate-hook.sh",
+            "timeout": 5,
+            "_bstack_primitive": "P2"
+          }
+        ]
+      }
+    ]
+  }
+}

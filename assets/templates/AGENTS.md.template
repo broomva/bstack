@@ -1,0 +1,201 @@
+# {{WORKSPACE_NAME}} — Agent Guidelines
+
+## Self-Meta Definition
+
+This file IS the control harness for agents operating in this workspace. Reading this file is not optional — it is the first action an agent takes. The rules here are enforced by pre-commit hooks, Claude Code hooks, and the control audit (`make control-audit`).
+
+**If you are an agent reading this**: you are part of a self-improving system. Your session will be captured, indexed, and used to improve future agents. The bstack consciousness substrate is always active.
+
+## Bstack Core Automation Primitives
+
+This workspace is governed by the **bstack** primitive contract — eleven irreducible building blocks. All are always active. Run `bstack doctor` to verify compliance.
+
+### P1: Conversation Bridge (Episodic Memory)
+
+**What**: Every Claude Code session is automatically captured as a structured Obsidian doc with YAML frontmatter, tool calls, conversation threads, files touched, and wikilinks.
+
+**How**: Stop hook → `conversation-bridge-hook.sh` → JSONL transcript parsed → written to `*/docs/conversations/` → symlinked into your Obsidian vault.
+
+**Invariant**: Bridge stamp at `~/.cache/broomva-bridge-stamp` < 24h stale. If stale, the agent is silently amnesic — fix immediately.
+
+### P2: Control Gate (Safety Shield)
+
+**What**: PreToolUse hook intercepts destructive shell ops before execution.
+
+**How**: `control-gate-hook.sh` evaluates pending tool calls against `.control/policy.yaml` gates G1–G11. Blocks force-pushes, secret commits, `rm -rf` on protected paths, `git reset --hard` without backup, etc.
+
+**Invariant**: G1–G4 are blocking and cannot be overridden. G5–G6 are soft warnings.
+
+### P3: Linear Tickets (Work Tracking)
+
+**What**: Every unit of work maps to a Linear ticket; state transitions Backlog → Todo → In Progress → Done track real progress.
+
+**How**: Linear MCP — agents call `save_issue` directly.
+
+**Invariant**: No significant work without a ticket. Don't mark Done until merged + verified.
+
+### P4: PR Pipeline (CI/CD Gate)
+
+**What**: All code changes flow through PRs with automated CI checks before merging.
+
+**How**: branch → `gh pr create` → CI runs (lint/typecheck/security/preview) → merge when green → production deploy triggers.
+
+**Invariant**: Never merge with failing checks. Never `--no-verify`.
+
+### P5: Parallel Agent Dispatch (Concurrent Execution)
+
+**What**: Independent work streams execute concurrently via isolated agents (worktrees or background processes).
+
+**How**: `git worktree add` per agent. Multiple `Agent` tool calls in one message run concurrently. Communicate through git branches and Linear tickets, not shared state.
+
+**Invariant**: Agents must not write to the same files. Branch naming unique per agent. Results merge to main only after verification.
+
+### P6: Knowledge Bookkeeping (Knowledge Graph Maintenance)
+
+**What**: Every knowledge item entering the graph is scored, promoted, and lint-validated through a 7-stage pipeline.
+
+**How**: `bookkeeping run` → Ingest → Score → Scatter → Resolve → Promote → Synthesize → Lint. Items < 2/9 discarded. Items ≥ 7 fast-path promote.
+
+**Invariant**: `research/entities/` never contains unscored items. All entity pages must pass lint.
+
+**Reflexive Trigger Rule**: Bookkeeping is a reflex. Agents must invoke `bookkeeping.py run` without being prompted in any of these situations:
+
+1. Before committing a feature/page that reads from the graph.
+2. Before committing a synced snapshot to a public surface.
+3. At the close of any substantial work session that produced graph-relevant material.
+
+### P7: CI Watcher + Productive Wait (Event-Driven Wait Loop)
+
+**What**: Replaces sleep-based CI waits with an event-driven control loop. The agent drains a context-scoped wait-queue while CI runs, classifies failures, self-heals known categories, escalates the rest.
+
+**How**: `python3 skills/p9/scripts/p9.py watch <pr> --background` spawns `gh pr checks --watch` via `run_in_background`. While watcher runs, agent pulls work via `p9 wait-queue pop`. On bg-task notification: `p9 status` then green → `p9 merge-ready` → metalayer authorizes; red → `p9 heal --classify`.
+
+**Invariant**: Never `sleep` on CI. Every failure produces (a) a `state.jsonl` event, (b) a Linear ticket, or (c) both — silent state drops are forbidden. Heal actions scoped to PR diff. Setpoints in `.control/policy.yaml` `ci_watch:` / `ci_heal:` blocks fail closed if missing.
+
+**Reflexive Trigger Rule**: P7 is a reflex. Agents must invoke `p9 watch <pr> --background` without being prompted in any of these situations:
+
+1. Immediately after `git push` opening/updating a PR.
+2. Whenever tempted to `sleep` while CI runs — hard ban.
+3. When red CI bg-task notification fires — `p9 heal --classify` first.
+4. When `p9 status` reports `MERGE_READY` — invoke `p9 auto-merge` rather than `gh pr merge` directly.
+
+### P8: Skill Freshness Check (Stale-Install Detector)
+
+**What**: Reports stale installed skills at SessionStart so they get refreshed before causing silent failures.
+
+**How**: SessionStart hook → `skill-freshness-hook.sh` checks the timestamp of `~/.config/broomva/p8/last-skill-update-check`. If ≥ 7 days old, prints a one-line nudge. Always exits 0.
+
+**Invariant**: Hook always exits 0. Threshold via `BROOMVA_P8_THRESHOLD_DAYS` env var (default 7). Dismiss with `npx skills update -g` then `touch ~/.config/broomva/p8/last-skill-update-check`.
+
+### P9: Branch + Worktree Janitor (Hygiene)
+
+**What**: Detects merged branches (including squash-merged) and dead worktrees, removes them safely.
+
+**How**: `make janitor` (wraps `scripts/branch-janitor.sh`). Squash-merge detection via `git commit-tree` synthetic + `git cherry`. Worktrees on dead branches pruned.
+
+**Invariant**: Default `--dry-run` — pass `--apply` to actually delete. Never touches main/master/develop/HEAD/gh-pages or branches in `~/.config/broomva/p9-janitor/protected.txt`.
+
+### P10: Worktree Hygiene Discipline (Clean-Tree Reset Point)
+
+**What**: Reflexive discipline binding every agent to (a) make a deliberate worktree-or-not decision before writing the first file, (b) keep `git status` clean throughout the PR lifecycle, (c) run P9 janitor immediately after merge.
+
+**How**: Reasoning-enforced rule, not a hook. P5 provides the *mechanism* (git worktrees); P10 provides the *discipline*.
+
+**Invariant**: After every PR merge, both worktree (if any) and branch are gone. Before new substantial work, `git status` is clean (or explicitly noted).
+
+**Reflexive Trigger Rule**: P10 is a reflex. Agents must apply the following without being prompted:
+
+1. Before writing the first file of any new substantial work — decide worktree-or-not, state the choice.
+2. Before pushing to remote — `git status` check; dirty WIP gets committed/stashed/extracted, never pushed past.
+3. After PR merge — immediate `make janitor` (P9).
+4. At SessionStart — audit `git worktree list` + `git branch`; clean orphans before new work.
+
+### P11: Empirical Feedback Loop (Closed-Loop Validation)
+
+**What**: Reflexive discipline binding every agent to *validate by interacting* with what they build — not just by reasoning + lint + CI exit codes. Multi-modal (logs, screenshots, video, audio), multi-level (smoke, unit, integration, regression, E2E, deploy verification).
+
+**How**: Composition of existing tools and skills:
+- Server logs → `run_in_background` tailing dev server output
+- Browser E2E → `gstack` (fast headless) / `agent-browser`
+- Visual diff → `before-and-after` skill
+- Smoke / unit / integration / regression → project test runners + `qa` / `dogfood`
+- Deploy verification → Vercel preview URL → screenshot via `gstack`
+
+The agent picks the right subset, runs as parallel watchers, and **captures evidence**.
+
+**Invariant**: Before claiming any work *complete*, the agent has interacted with the deployed/running version (or stated explicitly why interaction wasn't possible). The interaction is captured and surfaced in the response. *Reasoning isn't validation; interaction is.*
+
+**Reflexive Trigger Rule**: P11 is a reflex. Agents must apply the following without being prompted:
+
+1. Before writing the first file of substantial work — identify validation surfaces. State the validation plan as a contract.
+2. During development of work touching a running process — keep at least one log-tail or watcher in `run_in_background`.
+3. Before claiming complete — exercise the change end-to-end. Capture multi-modal evidence.
+4. After deploy — capture deployed-state evidence. *Compile-time success is not deploy-time correctness.*
+5. When CI or tests fail — capture full context first before attempting a fix.
+6. At session end — produce a *dogfood receipt*.
+
+---
+
+These eleven primitives compose into the full autonomous development loop:
+
+```
+User intent → Linear ticket (P3) → Agent dispatched (P5)
+  → Prior context loaded (P1) [+ P8 freshness check] [+ P10 cleanup audit]
+  → Safety gates active (P2)
+  → P10 worktree decision → P11 validation plan
+  → Code written + parallel watchers (P11 log-tails) → PR created (P4)
+  → CI watched + heal loop (P7)
+  → P11 deploy verification (preview URL, screenshots, browser session)
+  → Merge → P10 post-merge cleanup via P9 janitor → Deploy
+  → P11 dogfood receipt → Session captured (P1) → Knowledge bookkept (P6)
+  → System improved (EGRI)
+```
+
+## Conventions
+
+- **Git**: feature branches, squash merge via PR. Never force push main.
+- **OSS**: every public repo must have `README.md`, MIT `LICENSE`, and GitHub topics.
+- **Skills**: every skill repo must have `SKILL.md` at root with frontmatter (`name`, `description`).
+
+## Harness Commands
+
+From workspace root:
+
+```bash
+bstack doctor      # Verify primitive contract compliance
+bstack repair      # Fix specific gaps surfaced by doctor
+bstack status      # Show installed-vs-missing skills + harness health
+make control-audit # Full metalayer compliance audit
+make janitor       # P9 janitor (dry-run by default)
+```
+
+## Conversation Capture
+
+Every Claude Code session under this workspace is automatically captured via P1. Session docs land in `*/docs/conversations/`, symlinked into your vault.
+
+## Agent Boundaries
+
+- **Read anything** in the workspace to understand context.
+- **Write only** within the project you're tasked with.
+- **Cross-project changes** require explicit user approval.
+- **Secrets**: Never commit `.env`, credentials, or API keys.
+- **Destructive git**: Never force push, reset --hard, or delete branches without asking.
+- **PRs are checkpoints**: Create PRs for review, don't merge directly without CI green.
+
+## Self-Improvement (EGRI Integration)
+
+bstack supports EGRI (Evaluator-Governed Recursive Improvement):
+
+- **Mutable artifact**: Agent behavior (conversation patterns, tool selection, code quality)
+- **Immutable evaluator**: `bstack doctor` + `make control-audit`
+- **Promotion policy**: Improvements that pass all gates get incorporated into AGENTS.md/policy.yaml
+- **Rollback**: Git history is the safety net
+
+When an agent discovers a better pattern:
+
+1. Validate it works (run harness commands)
+2. Document in conversation log (automatic via hook)
+3. If significant, propose update to AGENTS.md or `.control/policy.yaml`
+4. Future agents inherit the improvement
+
+The L3 stability budget (λ₃ ≈ 0.006) constrains how rapidly governance can change. Observe patterns across multiple sessions before crystallizing rules.
