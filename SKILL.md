@@ -7,8 +7,10 @@ description: |
   the substrate. P1 captures every session as episodic memory. P2 gates
   destructive operations. P3 tracks every work unit in Linear. P4 forces every
   change through CI. P5 isolates parallel agents in worktrees. P6 keeps the
-  knowledge graph quality-controlled. P9 replaces sleep-on-CI with productive
-  wait + classifier-evaluator self-heal. P7 nudges when installed skills go
+  knowledge graph quality-controlled. P9 is the productive-wait optimizer —
+  drains a context-scoped queue while a blocking operation (PR CI, deploy,
+  build, long index) runs; classifier + evaluator self-heal red CI is the
+  reference implementation. P7 nudges when installed skills go
   stale. P8 cleans up squash-merged branches and dead worktrees. P10 binds
   every agent to clean-tree discipline through the PR lifecycle. P11 is the
   cohesion glue — bind every agent to validate by interacting with what they
@@ -60,7 +62,7 @@ The thirteen primitives. Each closes one specific failure mode that drifts into 
 | **P6** | Knowledge Bookkeeping | knowledge graph rot |
 | **P7** | Skill Freshness Check | silent rot of `npx skills add` snapshots |
 | **P8** | Branch + Worktree Janitor | squash-merge accumulation |
-| **P9** | CI Watcher + Productive Wait | sleep-on-CI |
+| **P9** | Productive Wait (`broomva/p9` skill) | sleep-on-wait dead time (CI, deploys, builds — PR CI is the reference impl) |
 | **P10** | Worktree Hygiene Discipline | dirty-tree drift across the PR lifecycle |
 | **P11** | Empirical Feedback Loop | shipping code that compiles but doesn't work |
 | **P12** | Persistent Loop Discipline (`broomva/persist` skill) | long-horizon work decaying as the context window rots |

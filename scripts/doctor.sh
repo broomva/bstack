@@ -114,7 +114,7 @@ declare -a P_NAMES=(
     "P6: Knowledge Bookkeeping"
     "P7: Skill Freshness"
     "P8: Branch + Worktree Janitor"
-    "P9: CI Watcher"
+    "P9: Productive Wait"
     "P10: Worktree Hygiene"
     "P11: Empirical Feedback Loop"
     "P12: Persistent Loop Discipline"

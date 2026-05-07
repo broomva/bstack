@@ -22,7 +22,7 @@ Each primitive closes one specific failure mode that drifts into entropy in unsu
 | **P6** | Knowledge Bookkeeping | knowledge graph rot |
 | **P7** | Skill Freshness Check | silent rot of `npx skills add` snapshots |
 | **P8** | Branch + Worktree Janitor | squash-merged branches and dead worktrees accumulating |
-| **P9** | CI Watcher + Productive Wait | sleep-on-CI dead time |
+| **P9** | Productive Wait (`broomva/p9` skill) | sleep-on-wait dead time (CI, deploys, builds — PR CI is the canonical case) |
 | **P10** | Worktree Hygiene Discipline | dirty trees and orphan worktrees compounding across sessions |
 | **P11** | Empirical Feedback Loop | shipping code that compiles but doesn't actually work when exercised |
 

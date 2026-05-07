@@ -12,7 +12,7 @@ The eleven primitives that make a workspace self-operating. This is the canonica
 - [P6 — Knowledge Bookkeeping](#p6--knowledge-bookkeeping)
 - [P7 — Skill Freshness Check](#p7--skill-freshness-check)
 - [P8 — Branch + Worktree Janitor](#p8--branch--worktree-janitor)
-- [P9 — CI Watcher + Productive Wait](#p9--ci-watcher--productive-wait)
+- [P9 — Productive Wait](#p9--productive-wait)
 - [P10 — Worktree Hygiene Discipline](#p10--worktree-hygiene-discipline)
 - [P11 — Empirical Feedback Loop](#p11--empirical-feedback-loop)
 - [P12 — Persistent Loop Discipline](#p12--persistent-loop-discipline)
@@ -122,26 +122,35 @@ Mental checklist before declaring graph-dependent work done: *Did this session p
 
 ---
 
-## P9 — CI Watcher + Productive Wait
+## P9 — Productive Wait
 
-**Closes**: `sleep`-on-CI dead time. Agents losing 5–15 min/PR.
+**Closes**: `sleep`-on-wait dead time. Agents lose 5–15 min per blocking operation — CI checks, deploy verifications, builds, long-running indexing operations. The primitive is *productive wait*: convert the block into work on the next priority.
 
-**How**: `python3 skills/p9/scripts/p9.py watch <pr> --background` spawns `gh pr checks --watch` via `run_in_background`. While the watcher runs, agent drains a context-scoped queue (`session > memory > graph > docs > linear`). On bg-task notification, agent reads `p9 status` → on green, `p9 merge-ready` → defer to control metalayer for authorization. On red, `p9 heal --classify` → if classified+evaluator-positive, apply heal (PR-diff scope only) and start new watch. Auto-merge actuator (`p9 auto-merge`) consults `.control/policy.yaml`'s `auto_merge:` block with governance-paths-always-block safety pre-pass.
+**How (general primitive)**: spawn the blocking-wait observer via `run_in_background` so the agent gets an event-driven notification on completion. While the observer runs, the agent drains a context-scoped priority queue (`session > memory > graph > docs > linear`). On notification, classify the result and either advance or self-heal.
 
-**Invariant**: never `sleep` on CI. Every failure produces (a) a `state.jsonl` event, (b) a Linear ticket, or (c) both — silent state drops are forbidden (exit 99). Heal actions are scoped to files in PR diff. All setpoints (`max_concurrent_prs`, `max_attempts`, `stability_floor`, `classified_failure_types`) live in `.control/policy.yaml` and fail closed if missing.
+**Reference implementation — PR CI**: `python3 skills/p9/scripts/p9.py watch <pr> --background` spawns `gh pr checks --watch`. On bg-task notification, agent reads `p9 status` → on green, `p9 merge-ready` → defer to control metalayer for authorization. On red, `p9 heal --classify` → if classified+evaluator-positive, apply heal (PR-diff scope only) and start a new watch. Auto-merge actuator (`p9 auto-merge`) consults `.control/policy.yaml`'s `auto_merge:` block with governance-paths-always-block safety pre-pass.
+
+**Other waits the primitive applies to** (today: handled by direct check; on the roadmap to wire into `p9`):
+
+- **Push-triggered dev/staging/prod deploys** — when the trigger isn't a PR (e.g., main-branch deploy on push), p9 currently only tracks PRs. Today's workaround: do a single direct check on the deploy URL/log after `git push`. Do *not* `sleep` waiting for the deploy; pull the next item from the wait-queue. Tracked as a P9 extension.
+- **Long-running test suites / build pipelines** — same shape; observer is whatever produces the completion event (CLI exit code, webhook, log line).
+- **External index / sync operations** — same shape, longer time horizons.
+
+**Invariant**: never `sleep` on a blocking wait. Every failure produces (a) a `state.jsonl` event, (b) a Linear ticket, or (c) both — silent state drops are forbidden (exit 99). Heal actions are scoped to files in PR diff (where applicable). All setpoints (`max_concurrent_prs`, `max_attempts`, `stability_floor`, `classified_failure_types`) live in `.control/policy.yaml` and fail closed if missing.
 
 **Skill name**: `broomva/p9` — primitive number P9, skill name `p9`. They match.
 
 ### P9 Reflexive Trigger Rule (binding on every agent)
 
-P9 is a reflex, not a request. Agents must invoke `p9 watch <pr> --background` without being prompted in any of these situations:
+P9 is a reflex, not a request. Agents must apply *productive-wait discipline* without being prompted in any of these situations:
 
-1. Immediately after `git push` that opens or updates a PR — within the same response, before any other tool call. The watcher must be running before the agent considers the push "done."
-2. Whenever the agent is tempted to `sleep` while CI runs — `sleep` on a CI wait is a hard ban. Pull from `p9 wait-queue pop` instead. If queue empty, do non-code productive work until bg-task notification fires.
-3. When a watcher's bg-task notification reports red CI — invoke `p9 heal <pr> --classify` *before* re-pushing a fix or asking the user. If classified, apply the heal command (PR-diff scope only) and start a new watch. If unclassified, escalate via Linear and surface the failure.
-4. When `p9 status` reports `MERGE_READY` — invoke `p9 auto-merge <pr>` rather than `gh pr merge` directly. The actuator consults `.control/policy.yaml`'s `auto_merge:` block, blocks governance-class paths automatically, and only auto-merges branch classes explicitly allowlisted.
+1. **Immediately after `git push` that opens or updates a PR** — invoke `p9 watch <pr> --background` within the same response, before any other tool call. The watcher must be running before the agent considers the push "done."
+2. **After `git push` that triggers a non-PR deploy** (e.g., a push to `main` that fires a deploy hook) — p9 doesn't track non-PR triggers yet. Do *one* direct check on the deploy result after kicking off the next high-priority work; never `sleep` waiting for it.
+3. **Whenever the agent is tempted to `sleep` while a blocking operation runs** — hard ban. Pull from `p9 wait-queue pop` instead. If the queue is empty, do non-code productive work (research adjacent entities, validate doc cross-refs) until the bg-task notification fires.
+4. **When a watcher's bg-task notification reports red CI** — invoke `p9 heal <pr> --classify` *before* re-pushing a fix or asking the user. If classified, apply the heal command (PR-diff scope only) and start a new watch. If unclassified, escalate via Linear and surface the failure.
+5. **When `p9 status` reports `MERGE_READY`** — invoke `p9 auto-merge <pr>` rather than `gh pr merge` directly. The actuator consults `.control/policy.yaml`'s `auto_merge:` block, blocks governance-class paths automatically, and only auto-merges branch classes explicitly allowlisted.
 
-Mental checklist before declaring CI-dependent work done: *Did I push? Is there a watcher running for this PR? Am I about to `sleep` or poll? Did I drain the wait-queue while waiting?*
+Mental checklist before declaring wait-dependent work done: *What blocking operation am I waiting on? Is it a PR (use `p9 watch`) or a non-PR trigger (single direct check + drain queue)? Am I about to `sleep` or poll? Did I drain the wait-queue while waiting?*
 
 ---
 

@@ -80,20 +80,23 @@ This workspace is governed by the **bstack** primitive contract — thirteen irr
 
 **Invariant**: Default `--dry-run` — pass `--apply` to actually delete. Never touches main/master/develop/HEAD/gh-pages or branches in `~/.config/broomva/p8-janitor/protected.txt` (legacy `~/.config/broomva/p9-janitor/` still honored).
 
-### P9: CI Watcher + Productive Wait (Event-Driven Wait Loop)
+### P9: Productive Wait (Wait-Optimizer / Event-Driven Wait Loop)
 
-**What**: Replaces sleep-based CI waits with an event-driven control loop. The agent drains a context-scoped wait-queue while CI runs, classifies failures, self-heals known categories, escalates the rest.
+**What**: A wait optimizer. Convert any blocking external operation (PR CI, push-triggered deploys, builds, long-running indexing) into work on the next priority. PR CI is the canonical implementation; the primitive is broader.
 
-**How**: `python3 skills/p9/scripts/p9.py watch <pr> --background` spawns `gh pr checks --watch` via `run_in_background`. While watcher runs, agent pulls work via `p9 wait-queue pop`. On bg-task notification: `p9 status` then green → `p9 merge-ready` → metalayer authorizes; red → `p9 heal --classify`.
+**How (PR CI canonical)**: `python3 skills/p9/scripts/p9.py watch <pr> --background` spawns `gh pr checks --watch` via `run_in_background`. While watcher runs, agent pulls work via `p9 wait-queue pop`. On bg-task notification: `p9 status` then green → `p9 merge-ready` → metalayer authorizes; red → `p9 heal --classify`.
 
-**Invariant**: Never `sleep` on CI. Every failure produces (a) a `state.jsonl` event, (b) a Linear ticket, or (c) both — silent state drops are forbidden. Heal actions scoped to PR diff. Setpoints in `.control/policy.yaml` `ci_watch:` / `ci_heal:` blocks fail closed if missing.
+**How (non-PR waits — today: manual)**: For waits without PR (push-triggered deploys, external builds, long index ops), p9 doesn't track yet. Do *one* direct check on completion after kicking off next-priority work; never `sleep`.
 
-**Reflexive Trigger Rule**: P9 is a reflex. Agents must invoke `p9 watch <pr> --background` without being prompted in any of these situations:
+**Invariant**: Never `sleep` on a blocking wait. Every failure produces (a) a `state.jsonl` event, (b) a Linear ticket, or (c) both — silent state drops are forbidden. Heal actions scoped to PR diff. Setpoints in `.control/policy.yaml` `ci_watch:` / `ci_heal:` blocks fail closed if missing.
 
-1. Immediately after `git push` opening/updating a PR.
-2. Whenever tempted to `sleep` while CI runs — hard ban.
-3. When red CI bg-task notification fires — `p9 heal --classify` first.
-4. When `p9 status` reports `MERGE_READY` — invoke `p9 auto-merge` rather than `gh pr merge` directly.
+**Reflexive Trigger Rule**: P9 is a reflex. Agents must apply *productive-wait discipline* without being prompted in any of these situations:
+
+1. Immediately after `git push` opening/updating a PR — `p9 watch <pr> --background`.
+2. After `git push` triggering a non-PR deploy — single direct check after next-priority work; never sleep.
+3. Whenever tempted to `sleep` while a blocking operation runs — hard ban; pull from `p9 wait-queue pop`.
+4. When red CI bg-task notification fires — `p9 heal --classify` first.
+5. When `p9 status` reports `MERGE_READY` — invoke `p9 auto-merge` rather than `gh pr merge` directly.
 
 ### P10: Worktree Hygiene Discipline (Clean-Tree Reset Point)
 
