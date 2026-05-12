@@ -202,6 +202,55 @@ bstack is the *measurement substrate* for the agentic-control-kernel. The harnes
 - **Checking skill freshness or roster completeness** → `status` or `validate`
 - **Major workspace cleanup** → `revamp`
 
+## Prompts as a shared knowledge surface
+
+bstack treats the broomva.tech prompts library as a *shared knowledge surface across agents*, not a private repository. Two things every bstack workspace gets from it:
+
+1. **Reusable directives** — versioned, parameterized prompts (`code-review-agent`, `deep-research-agent`, `ai-native-platform-architect`, `bstack-control-harness-bootstrap`, etc.) that any agent can pull and apply.
+2. **An evaluation engine** — every pull and every completion writes a typed row to `prompt_invocation`. Source attribution (`web|cli|skill|api`), latency, tokens, cost, and explicit user feedback all flow into the eval surface at `broomva.tech/api/metrics/*`.
+
+### Reflexive rule (mandatory)
+
+When the user asks for a known pattern (code review, deep research, platform redesign, harness bootstrap, etc.) **AND** the pattern exists in the library, reach for it instead of writing from scratch. The five-step mandate is non-negotiable:
+
+```bash
+# 1. Tag the session
+export BROOMVA_SOURCE=skill
+
+# 2. Pull — captures invocation_id on stderr
+broomva prompts pull <slug> --json 2>&1 | tee /tmp/broomva-last.json
+
+# 3. Use the prompt body as instructions for the work
+
+# 4. MANDATORY after completing the work
+broomva prompts complete <invocation_id> \
+  --status completed --model <name> \
+  --latency-ms <ms> --tokens-in <n> --tokens-out <m>
+
+# 5. Optional — capture explicit user feedback
+broomva prompts feedback <invocation_id> --slug <slug> --signal up --text "..."
+```
+
+Skipping step 4 means the row stays `pulled` and the eval engine can't learn from your run. The 24h sweeper eventually flips it to `abandoned` — a quality signal, not a useful run.
+
+### Discovery
+
+```bash
+broomva prompts list --metrics --sort skill_invokes   # most-invoked first
+broomva prompts list --category agent-instructions    # filtered
+broomva prompts get <slug> --raw                      # body only
+```
+
+### Composition with the primitive contract
+
+- **P1** captures the invocation id in the conversation log — backpointer from the session to the eval engine.
+- **P4** ties PR-review prompt invocations to merge outcomes — measurable pass rates per prompt version.
+- **P6** promotes synthesis-worthy prompts to entity pages in `research/entities/` (the library is the runtime registry; the knowledge graph is the crystallized form).
+- **P11** completing the invocation with real `tokens_in/out`, `latency_ms`, `error_message` is the same discipline as P11: validate with measurable outcomes.
+- **P13** the eval engine's evolving rankings are a dream-tier substrate; per-run telemetry is the dense lower-tier signal.
+
+Full integration guide with discovery patterns, traps, and per-primitive composition: [references/prompts-integration.md](references/prompts-integration.md).
+
 ## Self-evolution
 
 When the agent improves a primitive, the workflow is:
@@ -218,6 +267,7 @@ This is the f₃ dynamics function at L3 of the RCS hierarchy. See [references/p
 ## See also
 
 - [references/primitives.md](references/primitives.md) — full P1–P13 reference with reflexive triggers
+- [references/prompts-integration.md](references/prompts-integration.md) — when/how to leverage the broomva.tech prompts library (5-step auto-tracing mandate, discovery, common traps)
 - [references/skills-roster.md](references/skills-roster.md) — all 28 skills with install commands
 - [references/stack-architecture.md](references/stack-architecture.md) — layer dependency diagram
 - [references/quickstart.md](references/quickstart.md) — 5-minute install walkthrough
