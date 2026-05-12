@@ -1,35 +1,53 @@
 ---
 name: bstack
 description: |
-  The Broomva Stack — thirteen irreducible primitives (P1–P13) that turn any
-  agent-driven workspace into a self-operating system, plus 28 curated skills
+  The Broomva Stack — sixteen irreducible primitives (P1–P16) that turn any
+  agent-driven workspace into a self-operating system, plus 29 curated skills
   that ship with the stack. The primitives are not optional features; they are
   the substrate. P1 captures every session as episodic memory. P2 gates
   destructive operations. P3 tracks every work unit in Linear. P4 forces every
   change through CI. P5 isolates parallel agents in worktrees. P6 keeps the
-  knowledge graph quality-controlled. P9 is the productive-wait optimizer —
-  drains a context-scoped queue while a blocking operation (PR CI, deploy,
-  build, long index) runs; classifier + evaluator self-heal red CI is the
-  reference implementation. P7 nudges when installed skills go
-  stale. P8 cleans up squash-merged branches and dead worktrees. P10 binds
-  every agent to clean-tree discipline through the PR lifecycle. P11 is the
-  cohesion glue — bind every agent to validate by interacting with what they
-  build, not just by reasoning + lint + CI exit codes. Use bstack when:
-  (1) bootstrapping a new agent-driven workspace, (2) verifying primitive
-  compliance via `bstack doctor`, (3) repairing missing governance/hooks/policy
-  via `bstack repair`, (4) listing installed-vs-missing skills via
-  `bstack status`, (5) validating skill frontmatter health via `bstack
-  validate`, (6) full reconfiguration via `bstack revamp`. Triggers on
-  "bstack", "broomva stack", "bootstrap project", "setup broomva workflow",
-  "install all skills", "skills status", "primitive contract", "P1" through
-  "P13", "agent harness", "self-operating workspace".
+  knowledge graph quality-controlled. P7 nudges when installed skills go
+  stale. P8 cleans up squash-merged branches and dead worktrees. P9 is the
+  productive-wait optimizer — drains a context-scoped queue while a
+  blocking operation (PR CI, deploy, build, long index) runs; classifier +
+  evaluator self-heal red CI is the reference implementation. P10 binds
+  every agent to
+  clean-tree discipline through the PR lifecycle. P11 is the cohesion glue —
+  bind every agent to validate by interacting with what they build, not just
+  by reasoning + lint + CI exit codes. P12 is the long-horizon discipline —
+  cross-context restart loop. P13 is the dream-cycle discipline — replay
+  against frozen substrate before consolidating. P14 binds every agent to
+  enumerate the dep-chain explicitly before write. P15 binds every plan to a
+  fresh state snapshot. P16 is the meta-primitive — the rule-of-three
+  crystallization loop that produces every other primitive. The canonical
+  mode of operation on top of the substrate is broomva/autonomous (Layer-1
+  operating mode that fires every reflex without further prompting). Use
+  bstack when: (1) bootstrapping a new agent-driven workspace,
+  (2) verifying primitive compliance via `bstack doctor`, (3) repairing
+  missing governance/hooks/policy via `bstack repair`, (4) listing
+  installed-vs-missing skills via `bstack status`, (5) validating skill
+  frontmatter health via `bstack validate`, (6) full reconfiguration via
+  `bstack revamp`. Triggers on "bstack", "broomva stack", "bootstrap
+  project", "setup broomva workflow", "install all skills", "skills status",
+  "primitive contract", "P1" through "P16", "agent harness",
+  "self-operating workspace".
 ---
 
 # bstack — The Broomva Stack
 
-**Thirteen irreducible primitives. Twenty-nine curated skills. One self-operating workspace.**
+**Sixteen irreducible primitives. Twenty-nine curated skills. One canonical operating mode. One self-operating workspace.**
 
-bstack is a *portable harness metalayer* — it composes existing skills into a binding primitive contract that the agent enforces by reasoning, the doctor enforces by checking, and the bootstrap enforces by scaffolding.
+bstack is a *portable harness metalayer* — it composes existing skills into a binding primitive contract that the agent enforces by reasoning, the doctor enforces by checking, the bootstrap enforces by scaffolding, and the **canonical operating mode** (`broomva/autonomous`) enforces in execution.
+
+## Substrate vs Mode
+
+bstack ships two complementary layers:
+
+- **Substrate** (this skill, `/bstack`): the 16 primitives + 29 skills + governance + hooks + `.control/policy.yaml`. This is what `/bstack bootstrap` installs. The substrate is the *capability* — what's available in the workspace.
+- **Mode** (`broomva/autonomous`): the canonical *behavior* that runs on top of the substrate. When the user says "go" / "proceed" / "be autonomous", `/autonomous` fires the 19-reflex pipeline that uses every primitive in sequence.
+
+Installing the substrate without the mode = the workspace has primitives but no entry point to engage them. Invoking the mode without the substrate = wishful thinking. Compounded: `/bstack bootstrap` installs the substrate, then `/autonomous` is the standing operating mode for substantive work units.
 
 ## Quick start
 
@@ -50,7 +68,7 @@ Then, in your agent session:
 
 ## What bstack enforces
 
-The thirteen primitives. Each closes one specific failure mode that drifts into entropy in unsupervised sessions:
+The sixteen primitives. Each closes one specific failure mode that drifts into entropy in unsupervised sessions:
 
 | # | Primitive | Closes |
 |---|---|---|
@@ -67,8 +85,13 @@ The thirteen primitives. Each closes one specific failure mode that drifts into 
 | **P11** | Empirical Feedback Loop | shipping code that compiles but doesn't work |
 | **P12** | Persistent Loop Discipline (`broomva/persist` skill) | long-horizon work decaying as the context window rots |
 | **P13** | Dream Cycle Discipline | tier-crossing consolidation corrupting upper-tier rules without replay (the *shadow dream* failure mode) |
+| **P14** | Dependency-Chain Reasoning Discipline | "think deeply through chain of dependencies" becoming a ritual phrase without concrete upstream/downstream enumeration |
+| **P15** | State-Snapshot Before Action | plans built on stale state (uncommitted work, in-flight PRs, stale deploys) |
+| **P16** | Crystallization Discipline (the Bstack Engine) | recurring valuable patterns living only in the user's head — never promoted to skill/primitive/policy infrastructure |
 
 Full reference: see [references/primitives.md](references/primitives.md).
+
+**Canonical operating mode**: `broomva/autonomous` — when the user says "go" / "proceed" / "be autonomous" / "automerge" / any bare execution directive, `/autonomous` fires the 19-reflex pipeline that exercises every primitive above in the right sequence. Substrate without mode is dormant; mode without substrate is wishful. Compounded, they produce a self-operating workspace.
 
 ## Preamble (run first, every session)
 
@@ -94,7 +117,7 @@ If output shows `UPGRADE_AVAILABLE <old> <new>`: read `bstack-upgrade/SKILL.md` 
 # ─── Skill roster check ──────────────────────────────────────
 AGENTS_DIR="${HOME}/.agents/skills"
 CLAUDE_DIR="${HOME}/.claude/skills"
-ROSTER=(agentic-control-kernel control-metalayer-loop harness-engineering-playbook p9 agent-consciousness knowledge-graph-memory prompt-library symphony symphony-forge autoany deep-dive-research-orchestrator skills skills-showcase arcan-glass next-forge alkosto-wait-optimizer content-creation finance-substrate seo-llmeo brand-icons pre-mortem braindump morning-briefing drift-check strategy-critique stakeholder-update decision-log weekly-review)
+ROSTER=(autonomous agentic-control-kernel control-metalayer-loop harness-engineering-playbook p9 agent-consciousness knowledge-graph-memory prompt-library symphony symphony-forge autoany deep-dive-research-orchestrator skills skills-showcase arcan-glass next-forge alkosto-wait-optimizer content-creation finance-substrate seo-llmeo brand-icons pre-mortem braindump morning-briefing drift-check strategy-critique stakeholder-update decision-log weekly-review)
 INSTALLED=0; MISSING=()
 for s in "${ROSTER[@]}"; do
   if [ -d "$AGENTS_DIR/$s" ] || [ -d "$CLAUDE_DIR/$s" ]; then
@@ -103,11 +126,11 @@ for s in "${ROSTER[@]}"; do
     MISSING+=("$s")
   fi
 done
-echo "bstack: $INSTALLED/${#ROSTER[@]} skills installed (28 total)"
+echo "bstack: $INSTALLED/${#ROSTER[@]} skills installed (29 total)"
 [ ${#MISSING[@]} -gt 0 ] && echo "Missing: ${MISSING[*]}"
 ```
 
-Report the count. If all 28 present, say "bstack fully installed." If any missing, list them and offer the `bootstrap` command.
+Report the count. If all 29 present, say "bstack fully installed." If any missing, list them and offer the `bootstrap` command.
 
 After skill check, run the harness validation:
 
@@ -123,34 +146,38 @@ Report results. If any checks fail, fix them before proceeding.
 
 `scripts/bootstrap.sh` is the install/wire path. It:
 
-1. Installs all 28 skills via `npx skills add broomva/<skill>`
+1. Installs all 29 skills via `npx skills add broomva/<skill>` — `broomva/autonomous` is the first in the roster (canonical operating mode)
 2. **Scaffolds missing governance files** from `assets/templates/`:
-   - `CLAUDE.md` (workspace invariants + RCS hierarchy + primitive table)
-   - `AGENTS.md` (operational rules + per-primitive sections + reflexive triggers)
+   - `CLAUDE.md` (workspace invariants + RCS hierarchy + primitive table P1–P16 + §Ritual vs Substance)
+   - `AGENTS.md` (operational rules + per-primitive sections + reflexive triggers for all reasoning-enforced primitives)
    - `.control/policy.yaml` (ci_watch / ci_heal / auto_merge / gates G1–G11)
    - `.claude/settings.json` (P1, P2, P7 hook wiring)
-3. Adds `make` targets to existing Makefile (or creates one): `bstack-check`, `control-audit`, `janitor`
+3. Adds `make` targets to existing Makefile (or creates one): `bstack-check`, `control-audit`, `janitor`, `bstack-primitive-lint` (G-L3-1), `bstack-rule-of-three` (G-L3-2), `bstack-l3-trust` (combined L3 gates)
 4. Installs pre-commit hook (`.githooks/pre-commit`) via `git config core.hooksPath .githooks`
-5. Runs `bstack doctor` to verify primitive contract compliance
+5. Runs `bstack doctor` to verify primitive contract compliance + `make bstack-l3-trust` to verify L3 gates pass
 6. Reports a *bootstrap receipt* — what was installed, what was scaffolded, what was already present
+7. **Recommends invoking `/autonomous` for the user's next substantive work unit** — the substrate is installed; the canonical mode is ready to engage
 
 **Idempotent**: never overwrites existing user customizations. If a file already exists, the bootstrap appends only the missing primitive sections / blocks / hooks, never the whole file.
 
+**Self-application**: when `/bstack bootstrap` is invoked in an existing workspace, the bootstrap itself runs under `/autonomous` discipline — state snapshot, dep-chain trace, validation plan, PR pipeline. The bootstrap that installs the discipline embodies the contract it ships.
+
 ### `doctor` — verify primitive contract
 
-`scripts/doctor.sh`. Seven check sections:
+`scripts/doctor.sh`. Eight check sections:
 
 1. Governance files exist (CLAUDE.md, AGENTS.md, .control/policy.yaml)
-2. CLAUDE.md primitives table has all P1–P13 rows + correct count header
-3. AGENTS.md has each primitive section (`### P1:` through `### P11:`)
-4. Reflexive Trigger Rules present for P6, P9, P10, P11, P12, P13 (the reasoning-enforced primitives)
+2. CLAUDE.md primitives table has all P1–P16 rows + correct count header ("Sixteen irreducible…")
+3. AGENTS.md has each primitive section (`### P1:` through `### P16:`)
+4. Reflexive Trigger Rules present for P6, P9, P10, P11, P12, P13, P14, P15, P16 (the reasoning-enforced primitives)
 5. `.control/policy.yaml` has required blocks (`ci_watch:`, `ci_heal:`, `auto_merge:`)
 6. `.claude/settings.json` wires the expected hook scripts (P1, P2, P7)
 7. Each primitive's mechanism is reachable on disk
+8. **L3 trust gates pass** — runs `make bstack-l3-trust` if the target exists; reports G-L3-1 + G-L3-2 results; surfaces any structural/ rule-of-three violations as gaps
 
 Modes: default (full report), `--quiet` (only gaps), `--strict` (exit 1 on gap, for CI lanes). **Always exits 0 by default.** Each gap includes an actionable `→ fix:` hint.
 
-`bootstrap` invokes `doctor --quiet` automatically as its final step.
+`bootstrap` invokes `doctor --quiet` automatically as its final step. The L3 trust gate (check 8) is the *substrate-level* equivalent of the new mode's anti-rationalization layer — both close the failure mode where governance evolves without machine-checkable evidence behind it.
 
 ### `repair` — apply targeted fixes
 
