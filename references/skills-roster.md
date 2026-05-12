@@ -16,7 +16,7 @@
 |---|-------|---------|-------------|
 | 4 | `agent-consciousness` | `npx skills add broomva/control-metalayer` | Three-substrate persistence: governance + knowledge graph + episodic memory. Progressive crystallization pathway. |
 | 5 | `knowledge-graph-memory` | `npx skills add broomva/control-metalayer` | Conversation logs to Obsidian knowledge graph bridge. Generates per-session docs with frontmatter and wikilinks. |
-| 6 | `prompt-library` | `npx skills add broomva/prompt-library` | Versioned prompts with OAuth-authenticated write API. Pull, push, update, delete via CLI or broomva.tech. |
+| 6 | `prompt-library` | `npx skills add broomva/prompt-library` | Shared knowledge surface across agents. Versioned prompts + an evaluation engine: every pull/completion writes a typed `prompt_invocation` row with source attribution (`web\|cli\|skill\|api`), latency, tokens, cost, and feedback. The `broomva` Rust CLI (`broomva prompts pull/list/complete/feedback`) is the runtime; the broomva-cli skill carries the auto-tracing mandate. See [prompts-integration.md](prompts-integration.md). |
 
 ## Orchestration
 

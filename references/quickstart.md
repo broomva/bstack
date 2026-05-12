@@ -71,7 +71,7 @@ make regression-clear
 | Layer | What you get | First command to try |
 |-------|-------------|---------------------|
 | Foundation | Safety gates, harness commands, regression testing, AGENTS.md | "bootstrap control metalayer" |
-| Memory | Cross-session context, prompt library | "save this as a prompt" |
+| Memory | Cross-session context, prompt library (shared knowledge surface + eval engine) | "use the code-review-agent prompt on this diff" |
 | Orchestration | Agent dispatch, self-improvement, hive mode | "symphony init" |
 | Research | Deep analysis, competitive intel | "deep research on X" |
 | Design | Glass UI, production templates | "create an arcan-glass component" |
