@@ -477,3 +477,22 @@ else
   echo "  Control harness already fully wired"
 fi
 echo "========================================="
+
+# ── 6. First-time setup hint ─────────────────────────────────────────────────
+# If the init marker is missing, the user hasn't run the onboarding wizard
+# on this machine. Hint them at it — don't auto-invoke since postinstall
+# runs non-interactively as part of `npx skills add`, and the wizard
+# expects either user prompts or agent-driven AskUserQuestion for inputs.
+BSTACK_MARKER="${BROOMVA_STATE_DIR:-$HOME/.config/broomva/bstack}/initialized"
+ONBOARD_SH="$(dirname "$0")/onboard.sh"
+if [ ! -f "$BSTACK_MARKER" ]; then
+  echo ""
+  echo "  ─── First-time setup detected ─────────────────"
+  echo "  bstack hasn't been onboarded on this machine yet."
+  echo ""
+  echo "  In Claude Code: open a session — the bstack preamble"
+  echo "                  will guide you through the wizard."
+  echo "  In a shell:     bash $ONBOARD_SH"
+  echo "  ───────────────────────────────────────────────"
+  echo ""
+fi

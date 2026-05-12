@@ -95,7 +95,7 @@ Full reference: see [references/primitives.md](references/primitives.md).
 
 ## Preamble (run first, every session)
 
-Detect skill installation state and update overdue skills.
+Detect skill installation state, update overdue skills, and check for first-time setup.
 
 ```bash
 # ─── Update check ────────────────────────────────────────────
@@ -109,9 +109,23 @@ fi
 [ -n "$_UPD" ] && echo "$_UPD" || true
 _BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
 echo "BRANCH: $_BRANCH"
+
+# ─── First-time setup check ──────────────────────────────────
+# If the init marker is missing, bstack hasn't been onboarded on this
+# machine. Recommend the wizard. In Claude Code, the agent should follow
+# the `## Onboarding` section below to ask the user the 4 wizard
+# questions interactively via the AskUserQuestion tool.
+_BSTACK_MARKER="${BROOMVA_STATE_DIR:-$HOME/.config/broomva/bstack}/initialized"
+if [ ! -f "$_BSTACK_MARKER" ]; then
+  echo "ONBOARDING: bstack not yet initialized on this machine."
+  echo "  → In Claude Code: agent will guide you (see ## Onboarding section)."
+  echo "  → In a shell: run \`bash $_BSTACK_ROOT/scripts/onboard.sh\`"
+fi
 ```
 
 If output shows `UPGRADE_AVAILABLE <old> <new>`: read `bstack-upgrade/SKILL.md` and follow the inline upgrade flow. If `JUST_UPGRADED <from> <to>`: tell the user "Running bstack v{to}" and continue.
+
+If the preamble printed `ONBOARDING: bstack not yet initialized`: jump to the **`## Onboarding`** section below before running any other bstack command. New users get a guided 4-question wizard; returning users skip this automatically once the marker exists.
 
 ```bash
 # ─── Skill roster check ──────────────────────────────────────
@@ -139,6 +153,72 @@ cd ~/broomva && make bstack-check 2>&1
 ```
 
 Report results. If any checks fail, fix them before proceeding.
+
+## Onboarding (first-time setup wizard)
+
+When the preamble reports `ONBOARDING: bstack not yet initialized`, run the guided wizard. There are **two paths** — same underlying script (`scripts/onboard.sh`), different drivers.
+
+### Path A: In Claude Code (agent-driven via AskUserQuestion)
+
+When in a Claude Code session, the agent collects the 4 wizard inputs through `AskUserQuestion` calls (so the user answers in chat), then invokes `scripts/onboard.sh` with the collected flags. **No `read -r` prompts in the user's terminal** — the agent IS the input mechanism.
+
+The 4 questions (with defaults shown to the user):
+
+1. **Workspace path** — `$HOME/broomva` (default). Where bstack scaffolds governance files.
+2. **Profile** — `personal` / `enterprise` / `autonomous-strict`. Determines gate strictness:
+   - `personal` — relaxed; solo dev / experimentation
+   - `enterprise` — strict, audit-friendly
+   - `autonomous-strict` — gates-are-trust principle; L3 auto-merge **enabled** (requires G-L3-* gates in CI)
+3. **Life Agent OS integration** — `install` / `skip`. Whether to also install `life-os` + `arcan` binaries.
+4. **Auto-merge policy for governance paths** — `human-required` / `trust-gates`:
+   - `human-required` — safe default until G-L3-1/G-L3-2 are wired into CI
+   - `trust-gates` — L3 paths auto-merge when L3 trust gates pass
+
+After collecting the four answers, the agent invokes:
+
+```bash
+bash "$_BSTACK_ROOT/scripts/onboard.sh" \
+  --workspace="$A1" \
+  --profile="$A2" \
+  --life="$A3" \
+  --auto-merge="$A4" \
+  --skip-prompts
+```
+
+The script persists choices to `~/.bstack/config.yaml` via `bin/bstack-config`, runs `scripts/bootstrap.sh` against the chosen workspace, and writes the init marker at `~/.config/broomva/bstack/initialized`. The agent then reports the onboarding receipt (workspace + profile + life + auto-merge + bootstrap status) to the user and recommends `/autonomous` as the next move.
+
+**If `AskUserQuestion` is unavailable** (running outside Claude Code): fall through to Path B.
+
+### Path B: In a shell (interactive `read -r` prompts)
+
+```bash
+bash $_BSTACK_ROOT/scripts/onboard.sh
+```
+
+The script prompts for the same 4 questions via `read -r`. Same downstream effect: config persisted, bootstrap run, marker written.
+
+### Idempotency + re-running
+
+- Once `~/.config/broomva/bstack/initialized` exists, subsequent `onboard.sh` invocations exit 0 immediately (no prompts, no bootstrap).
+- Re-run with `--force` to redo the wizard.
+- Run `--dry-run` to preview choices without persisting.
+
+### Receipt schema (the marker file)
+
+The init marker is a YAML-style flat file at `~/.config/broomva/bstack/initialized`:
+
+```yaml
+# bstack initialization marker
+onboarded_at: 2026-05-12T22:49:44Z
+workspace: /Users/foo/broomva
+profile: personal
+life: skip
+auto_merge: human-required
+bstack_repo: /Users/foo/.agents/skills/bstack
+bootstrap_status: ok           # ok | failed | skipped
+```
+
+Future sessions inspect this for state. `bootstrap_status: failed` is captured transparently — the user knows bootstrap needs follow-up without losing the wizard answers.
 
 ## Commands
 
