@@ -1,7 +1,7 @@
 ---
 name: bstack
 description: |
-  The Broomva Stack — sixteen irreducible primitives (P1–P16) that turn any
+  The Broomva Stack — eighteen irreducible primitives (P1–P18) that turn any
   agent-driven workspace into a self-operating system, plus 29 curated skills
   that ship with the stack. The primitives are not optional features; they are
   the substrate. P1 captures every session as episodic memory. P2 gates
@@ -20,23 +20,27 @@ description: |
   against frozen substrate before consolidating. P14 binds every agent to
   enumerate the dep-chain explicitly before write. P15 binds every plan to a
   fresh state snapshot. P16 is the meta-primitive — the rule-of-three
-  crystallization loop that produces every other primitive. The canonical
-  mode of operation on top of the substrate is broomva/autonomous (Layer-1
-  operating mode that fires every reflex without further prompting). Use
-  bstack when: (1) bootstrapping a new agent-driven workspace,
-  (2) verifying primitive compliance via `bstack doctor`, (3) repairing
-  missing governance/hooks/policy via `bstack repair`, (4) listing
-  installed-vs-missing skills via `bstack status`, (5) validating skill
-  frontmatter health via `bstack validate`, (6) full reconfiguration via
-  `bstack revamp`. Triggers on "bstack", "broomva stack", "bootstrap
-  project", "setup broomva workflow", "install all skills", "skills status",
-  "primitive contract", "P1" through "P16", "agent harness",
-  "self-operating workspace".
+  crystallization loop that produces every other primitive. P17 routes every
+  substantive user input through a typed lens (`role/x` intake) — domain
+  context loads from `roles/<name>.md` registry, P5 fan-out becomes a typed
+  graph. P18 binds the format of every produced documentation artifact to
+  its audience — markdown for LLM-loaded surfaces, HTML for human deliverables
+  (specs, plans, reports, design exploration). The canonical mode of
+  operation on top of the substrate is broomva/autonomous (Layer-1 operating
+  mode that fires every reflex without further prompting). Use bstack when:
+  (1) bootstrapping a new agent-driven workspace, (2) verifying primitive
+  compliance via `bstack doctor`, (3) repairing missing governance/hooks/
+  policy via `bstack repair`, (4) listing installed-vs-missing skills via
+  `bstack status`, (5) validating skill frontmatter health via
+  `bstack validate`, (6) full reconfiguration via `bstack revamp`. Triggers
+  on "bstack", "broomva stack", "bootstrap project", "setup broomva
+  workflow", "install all skills", "skills status", "primitive contract",
+  "P1" through "P18", "agent harness", "self-operating workspace".
 ---
 
 # bstack — The Broomva Stack
 
-**Sixteen irreducible primitives. Twenty-nine curated skills. One canonical operating mode. One self-operating workspace.**
+**Eighteen irreducible primitives. Twenty-nine curated skills. One canonical operating mode. One self-operating workspace.**
 
 bstack is a *portable harness metalayer* — it composes existing skills into a binding primitive contract that the agent enforces by reasoning, the doctor enforces by checking, the bootstrap enforces by scaffolding, and the **canonical operating mode** (`broomva/autonomous`) enforces in execution.
 
@@ -88,10 +92,12 @@ The sixteen primitives. Each closes one specific failure mode that drifts into e
 | **P14** | Dependency-Chain Reasoning Discipline | "think deeply through chain of dependencies" becoming a ritual phrase without concrete upstream/downstream enumeration |
 | **P15** | State-Snapshot Before Action | plans built on stale state (uncommitted work, in-flight PRs, stale deploys) |
 | **P16** | Crystallization Discipline (the Bstack Engine) | recurring valuable patterns living only in the user's head — never promoted to skill/primitive/policy infrastructure |
+| **P17** | Lens-Routed Request Articulation (`broomva/role-x` skill, planned) | flat-dispatch fan-out failing to load domain context; agents performing tasks without the typed lens (legal review vs design vs research) that shapes the correct quality_bar |
+| **P18** | Format-Follows-Audience Discipline | markdown-by-default for everything regardless of audience; long specs nobody reads; ASCII pseudo-diagrams + unicode-color-approximation when SVG-in-HTML is the correct primitive |
 
 Full reference: see [references/primitives.md](references/primitives.md).
 
-**Canonical operating mode**: `broomva/autonomous` — when the user says "go" / "proceed" / "be autonomous" / "automerge" / any bare execution directive, `/autonomous` fires the 19-reflex pipeline that exercises every primitive above in the right sequence. Substrate without mode is dormant; mode without substrate is wishful. Compounded, they produce a self-operating workspace.
+**Canonical operating mode**: `broomva/autonomous` — when the user says "go" / "proceed" / "be autonomous" / "automerge" / any bare execution directive, `/autonomous` fires the 20-reflex pipeline that exercises every primitive above in the right sequence. Substrate without mode is dormant; mode without substrate is wishful. Compounded, they produce a self-operating workspace.
 
 ## Preamble (run first, every session)
 
