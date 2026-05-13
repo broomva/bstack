@@ -1,7 +1,7 @@
 ---
 name: bstack
 description: |
-  The Broomva Stack — eighteen irreducible primitives (P1–P18) that turn any
+  The Broomva Stack — nineteen irreducible primitives (P1–P19) that turn any
   agent-driven workspace into a self-operating system, plus 29 curated skills
   that ship with the stack. The primitives are not optional features; they are
   the substrate. P1 captures every session as episodic memory. P2 gates
@@ -25,9 +25,13 @@ description: |
   context loads from `roles/<name>.md` registry, P5 fan-out becomes a typed
   graph. P18 binds the format of every produced documentation artifact to
   its audience — markdown for LLM-loaded surfaces, HTML for human deliverables
-  (specs, plans, reports, design exploration). The canonical mode of
-  operation on top of the substrate is broomva/autonomous (Layer-1 operating
-  mode that fires every reflex without further prompting). Use bstack when:
+  (specs, plans, reports, design exploration). P19 names the autonomous-
+  continuation family (the 2×2 of /goal | P7 watcher | /loop | P12 persist)
+  and the selection discipline — pick the right mechanism for the work
+  shape; compose dynamically; never return control mid-arc when a mechanism
+  would keep it closed. The canonical mode of operation on top of the
+  substrate is broomva/autonomous (Layer-1 operating mode that fires every
+  reflex without further prompting). Use bstack when:
   (1) bootstrapping a new agent-driven workspace, (2) verifying primitive
   compliance via `bstack doctor`, (3) repairing missing governance/hooks/
   policy via `bstack repair`, (4) listing installed-vs-missing skills via
@@ -35,12 +39,12 @@ description: |
   `bstack validate`, (6) full reconfiguration via `bstack revamp`. Triggers
   on "bstack", "broomva stack", "bootstrap project", "setup broomva
   workflow", "install all skills", "skills status", "primitive contract",
-  "P1" through "P18", "agent harness", "self-operating workspace".
+  "P1" through "P19", "agent harness", "self-operating workspace".
 ---
 
 # bstack — The Broomva Stack
 
-**Eighteen irreducible primitives. Twenty-nine curated skills. One canonical operating mode. One self-operating workspace.**
+**Nineteen irreducible primitives. Twenty-nine curated skills. One canonical operating mode. One self-operating workspace.**
 
 bstack is a *portable harness metalayer* — it composes existing skills into a binding primitive contract that the agent enforces by reasoning, the doctor enforces by checking, the bootstrap enforces by scaffolding, and the **canonical operating mode** (`broomva/autonomous`) enforces in execution.
 
@@ -94,6 +98,7 @@ The sixteen primitives. Each closes one specific failure mode that drifts into e
 | **P16** | Crystallization Discipline (the Bstack Engine) | recurring valuable patterns living only in the user's head — never promoted to skill/primitive/policy infrastructure |
 | **P17** | Lens-Routed Request Articulation (`broomva/role-x` skill, planned) | flat-dispatch fan-out failing to load domain context; agents performing tasks without the typed lens (legal review vs design vs research) that shapes the correct quality_bar |
 | **P18** | Format-Follows-Audience Discipline | markdown-by-default for everything regardless of audience; long specs nobody reads; ASCII pseudo-diagrams + unicode-color-approximation when SVG-in-HTML is the correct primitive |
+| **P19** | Orchestration-Mechanism Selection Discipline | implicit between-reflex handoffs ("continue please"); using wrong mechanism for work shape (/goal on >1h work, persist on 30-min task, /loop on event wait); the autonomous arc broken by missing-mechanism failure |
 
 Full reference: see [references/primitives.md](references/primitives.md).
 

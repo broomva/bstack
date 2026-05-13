@@ -6,12 +6,12 @@
 # Always exits 0 — never blocks a session. Reports gaps as actionable nudges.
 #
 # What it checks:
-#   1. CLAUDE.md primitives table has all P1-P18 rows + correct count
-#   2. AGENTS.md has each primitive section (### P1: through ### P18:)
+#   1. CLAUDE.md primitives table has all P1-P19 rows + correct count
+#   2. AGENTS.md has each primitive section (### P1: through ### P19:)
 #   3. AGENTS.md has the binding reflexive trigger rules for primitives
 #      that require them (P6, P9, P10, P11, P12, P13, P14, P15, P16, P17,
-#      P18 — primitives where the agent's reasoning enforces the policy,
-#      not a hook)
+#      P18, P19 — primitives where the agent's reasoning enforces the
+#      policy, not a hook)
 #   4. .control/policy.yaml has required blocks (ci_watch, ci_heal, auto_merge)
 #   5. .claude/settings.json hooks wire the expected primitive scripts
 #   6. Each primitive's mechanism is reachable on disk:
@@ -88,16 +88,16 @@ done
 section "2. CLAUDE.md primitives table"
 CLAUDE="$WORKSPACE/CLAUDE.md"
 if [ -f "$CLAUDE" ]; then
-    EXPECTED_COUNT=18
-    if grep -qE "^(Eighteen|18) irreducible building blocks" "$CLAUDE"; then
-        ok "primitive count header reads Eighteen/18"
+    EXPECTED_COUNT=19
+    if grep -qE "^(Nineteen|19) irreducible building blocks" "$CLAUDE"; then
+        ok "primitive count header reads Nineteen/19"
     else
         ACTUAL=$(grep -oE "^(One|Two|Three|Four|Five|Six|Seven|Eight|Nine|Ten|Eleven|Twelve|Thirteen|Fourteen|Fifteen|Sixteen|Seventeen|Eighteen|Nineteen|Twenty|[0-9]+) irreducible" "$CLAUDE" | head -1)
-        gap "primitive count header off (expected 'Eighteen irreducible'; saw '$ACTUAL')" \
+        gap "primitive count header off (expected 'Nineteen irreducible'; saw '$ACTUAL')" \
             "edit CLAUDE.md → 'Bstack Core Automation Primitives' header"
     fi
 
-    for n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18; do
+    for n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19; do
         if grep -qE "^\| P$n \|" "$CLAUDE"; then
             ok "P$n row present"
         else
@@ -129,6 +129,7 @@ declare -a P_NAMES=(
     "P16: Crystallization Discipline"
     "P17: Lens-Routed Request Articulation"
     "P18: Format-Follows-Audience Discipline"
+    "P19: Orchestration-Mechanism Selection"
 )
 if [ -f "$AGENTS" ]; then
     for entry in "${P_NAMES[@]}"; do
@@ -146,7 +147,7 @@ fi
 section "4. AGENTS.md reflexive trigger rules"
 # Primitives whose discipline is enforced via agent reasoning rather than hooks.
 # These MUST contain a Reflexive Trigger Rule subsection.
-declare -a REFLEXIVE_PRIMS=(P6 P9 P10 P11 P12 P13 P14 P15 P16 P17 P18)
+declare -a REFLEXIVE_PRIMS=(P6 P9 P10 P11 P12 P13 P14 P15 P16 P17 P18 P19)
 if [ -f "$AGENTS" ]; then
     for prim in "${REFLEXIVE_PRIMS[@]}"; do
         # Look for "P{n} is a reflex" OR "Reflexive Trigger Rule" in proximity to the prim section
