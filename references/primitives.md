@@ -351,6 +351,40 @@ P13 is a reflex, not a request. Apply without being prompted:
 
 ---
 
+## P19 — Orchestration-Mechanism Selection Discipline
+
+**Closes**: Implicit between-reflex handoffs ("continue please"); using the wrong mechanism for the work shape; the autonomous arc broken by missing-mechanism failure. Before P19, mechanism selection was implicit and agents defaulted to returning control to the user between reflexes — the exact ritual the `/autonomous` skill was created to resist.
+
+**How**: At pre-flight, before any substantive autonomous work, apply the **2×2 decision matrix**:
+
+|  | Within session | Across sessions |
+|---|---|---|
+| **External trigger** (event-driven) | **P7** `p9 watch --background` (CI/deploy/build) | **P12** `persist iterate PROMPT.md` (cross-context-rot, >1h) |
+| **Internal trigger** (condition or time) | **`/goal <condition>`** (Haiku evaluator per turn) | **`/loop <interval>`** (Claude Code time-trigger) |
+
+Decision logic:
+
+1. Verifiable end state + bounded session + condition fits 4000 chars → `/goal <pipeline-completion-condition>`
+2. External completion event blocking (CI, deploy, build) → P7 `p9 watch --background` + drain wait-queue
+3. Time-triggered recurring routine → `/loop <interval> <slash-command>`
+4. >1h work OR cross-session OR context window approaching ~100K → P12 `persist iterate PROMPT.md` with budget
+
+**Composition is dynamic**: P12 iterations can invoke `/goal` for sub-tasks. `/goal`-driven sessions fire P7 watchers when CI is blocking. `/loop`-scheduled sessions can spawn P12 for the long-horizon piece. The orchestration tree grows by which mechanism owns which level of the work.
+
+**Invariant**: No autonomous-continuation work without (a) an explicit mechanism choice surfaced in the response, and (b) a one-line justification matched to the 2×2 quadrant. Returning control mid-arc is the failure mode P19 prevents — there's a mechanism for every work shape, pick one.
+
+### P19 Reflexive Trigger Rule (binding on every agent)
+
+1. **Pre-flight of substantive autonomous work** — state chosen mechanism + cite 2×2 quadrant.
+2. **Before returning control mid-arc** — verify no mechanism would keep the arc closed.
+3. **At mechanism boundary crossings** (goal hits >1h, context ~100K) — explicit transition, not drift.
+4. **When composing mechanisms** — surface the composition tree, don't compose silently.
+5. **Tempted to type "continue please" / wait for user prompts** — STOP. That's the ritual P19 makes impossible.
+
+**Origin**: Claude Code `/goal` shipped May 2026 (`code.claude.com/docs/en/goal`) — completes the 2×2 by adding the internal-condition/in-session corner. Five+ instances logged in `bstack-engine.md` candidate ledger.
+
+---
+
 ## Cohesion narrative
 
 P11, P12, and P13 are structural siblings at different scales:
