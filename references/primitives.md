@@ -276,6 +276,81 @@ P13 is a reflex, not a request. Apply without being prompted:
 
 ---
 
+## P14 — Dependency-Chain Reasoning Discipline
+
+**Closes**: "think deeply through chain of dependencies" becoming a ritual phrase the agent acknowledges and then ignores; cascading breakage from changes that didn't trace downstream consumers.
+
+**How**: Before any substantive write, agent enumerates concrete upstream (files, functions, types, contracts, deployed state this depends on) and concrete downstream (consumers, tests, CI gates, docs, in-flight PRs depending on this). Enumeration lives in the response or PR body — not the agent's head. File paths and function names, not vibes-level "I considered dependencies."
+
+**Invariant**: No substantive write without a dep-chain enumeration in the response (or explicit "trivial change, single-file, no enumeration needed" carve-out with reason).
+
+---
+
+## P15 — State-Snapshot Before Action
+
+**Closes**: Plans built on stale state — re-solving solved problems, conflicting with parallel work, missing in-flight PRs.
+
+**How**: Before any plan, the agent surfaces `git status`, current branch, ahead/behind vs base, in-flight PRs (`gh pr list`), Linear ticket state for adjacent project, last bookkeeping run, last conversation-bridge run, last deploy state. The snapshot is part of the planning response, not deferred.
+
+**Invariant**: Plans built on un-stated state are forbidden. Snapshot is the cheapest reflex in the pipeline.
+
+---
+
+## P16 — Crystallization Discipline (the Bstack Engine)
+
+**Closes**: Recurring valuable patterns living only in the user's head — never promoted to skill / SKILL.md / AGENTS.md section / `.control/policy.yaml` gate.
+
+**How**: The rule-of-three loop. Pattern recurs ≥3 times across sessions → propose promotion to skill / primitive / policy gate, gated by four conditions: ≥3 instances, concrete mechanism, stated invariant, stated failure mode. Candidate ledger lives in `research/entities/pattern/bstack-engine.md`.
+
+**Invariant**: No primitive promoted to P-N status without all four gates satisfied. Aesthetic preferences are recorded but NOT promoted. P1–P15 are *outputs* of this loop; P16 names the loop itself.
+
+---
+
+## P17 — Lens-Routed Request Articulation
+
+**Closes**: Flat-dispatch fan-out; agents performing tasks without the typed lens (legal review vs design vs research) that shapes the correct quality_bar. The naive-persona pattern ("act as a senior engineer") was debunked by 2026 PRISM/Zheng research (MMLU drops 71.6% → 66.3%).
+
+**How**: Every substantive user input passes through `role/x` intake. Select lens(es) from `roles/<name>.md` registry by scoring signals (paths + prompt_keywords + branch + Linear labels, threshold ≥2). Load substantive context (files, conventions, domain checklist via `extends:` chain). Decide mode (`augment` / `rewrite` / `decompose`). P5 fan-out becomes a typed graph. `roles/_meta.md` is always loaded.
+
+**Invariant**: No `act as X` persona rewrites — lenses load substantive context only. Lens selection is logged. Mode decision is surfaced unless `augment`. `decompose` requires user approval before P5 dispatch. New lenses promote to `status: active` only after per-lens rule-of-three (≥ 3 positive-outcome uses).
+
+**Skill repo**: `broomva/role-x` (planned). Workspace ships `roles/` registry + governance; skill repo will own the executable surface.
+
+---
+
+## P18 — Format-Follows-Audience Discipline
+
+**Closes**: Markdown-by-default for everything regardless of audience — long specs nobody reads, ASCII pseudo-diagrams when SVG would do, unicode-color-approximation when CSS would work. The format-default-failure mode where the agent produces more+longer markdown that humans bounce off past ~100 lines.
+
+**How**: Format follows audience. At the moment of producing any documentation artifact, apply the audience test:
+
+| Surface | Audience | Format |
+|---|---|---|
+| `SKILL.md`, `AGENTS.md`, `CLAUDE.md`, primitive contracts, `.control/policy.yaml` | LLM (system-prompt-loaded) | markdown |
+| In-source comments (Rust `///`, TS JSDoc, Python `"""`) | both | language-native |
+| `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md` | both (humans via GitHub render) | markdown |
+| Entity pages in `research/entities/`, synthesis notes in `research/notes/` | LLM (bookkeeping pipeline loads) | markdown |
+| Specs, plans, ADRs in `docs/specs/`, `docs/plans/`, `docs/adrs/` | human | **HTML** with diagrams, mockups, code snippets |
+| PR explainers | human reviewer | **HTML** with annotated diff, color-coded findings |
+| Reports, retrospectives, research syntheses for sharing | human leadership/team | **HTML** with SVG diagrams, embedded code |
+| Design explorations | human | **HTML** with sliders, knobs, side-by-side, copy-as-prompt |
+| Brainstorming outputs | human | **HTML** grid of variants with tradeoff labels |
+| Custom editing interfaces | human (throwaway tools) | **HTML** purpose-built per task |
+
+**Invariant**: Format follows audience, not habit. Every produced artifact > 50 lines OR with visual/interactive content has its format chosen by the audience test. ASCII pseudo-diagrams, unicode-color-approximation, and >100-line markdown specs without HTML companion are explicit anti-patterns. The 2-4× HTML generation cost is paid only on artifacts a human will actually read.
+
+### P18 Reflexive Trigger Rule (binding on every agent)
+
+1. Before producing any spec / plan / ADR / design exploration — default HTML. Path: `docs/specs/YYYY-MM-DD-<topic>.html`, etc.
+2. Before producing a PR description for a substantive change (>200 LOC OR public API OR multi-file) — produce HTML PR-explainer artifact alongside the markdown body.
+3. Before producing any report, retrospective, or research synthesis intended for human consumption — HTML with embedded SVG diagrams.
+4. When tempted to ASCII-diagram, unicode-color, or hand-draw structure in markdown — STOP. SVG inside HTML is the correct primitive.
+5. When editing `SKILL.md`, `AGENTS.md`, `CLAUDE.md`, `README.md`, `CHANGELOG.md`, primitive contracts, or LLM-loaded surfaces — markdown is correct.
+
+**Origin**: trq212 (Claude Code team), *The Unreasonable Effectiveness of HTML* (May 2026). Five+ instances logged in `bstack-engine.md` candidate ledger (rule-of-three gate passes).
+
+---
+
 ## Cohesion narrative
 
 P11, P12, and P13 are structural siblings at different scales:
