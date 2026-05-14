@@ -2,29 +2,56 @@
 
 ## Identity
 
-This workspace is governed by **bstack** — thirteen irreducible primitives (P1–P13) that turn an agent-driven workspace into a self-operating system. The full primitive contract lives in [AGENTS.md](AGENTS.md). Run `bstack doctor` to verify compliance.
+This workspace is governed by **bstack** — nineteen irreducible primitives (P1–P19) that turn an agent-driven workspace into a self-operating system. The full primitive contract lives in [AGENTS.md](AGENTS.md). Run `bstack doctor` to verify compliance.
 
 ## Bstack Core Automation Primitives
 
-Thirteen irreducible building blocks that make this workspace self-operating. All are always active. Full specification in `AGENTS.md`.
+Nineteen irreducible building blocks that make this workspace self-operating. All are always active. Full specification in `AGENTS.md`.
+
+Each primitive carries a **short name** for agent prose. When referencing a primitive in responses, PR bodies, commit messages, or comments, use the `Name (Pn)` form — *"applying Snapshot (P15)"*, *"via Dep-Chain (P14)"*, *"running Bookkeeping (P6)"* — not bare `Pn`. The number is the canonical identifier; the short name is the human-readable handle.
+
+**Short-name index**: Bridge (P1) · Gate (P2) · Tickets (P3) · Pipeline (P4) · Fanout (P5) · Bookkeeping (P6) · Freshness (P7) · Janitor (P8) · Wait (P9) · Hygiene (P10) · Empirical (P11) · Persist (P12) · Dream (P13) · Dep-Chain (P14) · Snapshot (P15) · Crystallize (P16) · Lens (P17) · Audience (P18) · Orchestrate (P19).
 
 | # | Primitive | Mechanism | Invariant |
 |---|-----------|-----------|-----------|
-| P1 | Conversation Bridge | Stop hook → JSONL → Obsidian docs → vault | Bridge stamp < 24h stale |
-| P2 | Control Gate | PreToolUse hook → `.control/policy.yaml` | G1–G4 blocking, never bypassed |
-| P3 | Linear Tickets | Every work unit tracked Backlog → Done | No significant work without a ticket |
-| P4 | PR Pipeline | Branch → PR → CI → merge → deploy | Never merge with failing checks |
-| P5 | Parallel Agents | Concurrent isolated agents via worktrees | No shared mutable file writes |
-| P6 | Knowledge Bookkeeping | `bookkeeping run` → score → promote → entity pages → synthesize | `research/entities/` never contains unscored items |
-| P7 | Skill Freshness Check | SessionStart hook → reports stale-skill nudge if last update check ≥ 7d ago | Never blocks; closes silent-rot bug for `npx skills add` snapshots |
-| P8 | Branch + Worktree Janitor | `make janitor` → detects squash-merged branches + dead worktrees, removes safely | Default `--dry-run`; never touches protected branches |
-| P9 | Productive Wait (`broomva/p9` skill) | wait-queue drains while a blocking operation runs (PR CI is the reference impl: `gh pr checks --watch` via `run_in_background` → classifier + evaluator self-heal). For non-PR waits (push-triggered deploys, builds), do a single direct check after kicking off next-priority work. | Never `sleep` on a blocking wait; merge defers to control metalayer |
-| P10 | Worktree Hygiene Discipline | Reflexive rule: decide worktree-or-not before first file; keep `git status` clean; auto-run P8 janitor after every merge | A clean tree is the only reliable reset point |
-| P11 | Empirical Feedback Loop | Reflexive rule: validate by *interacting* — log-tails, browser E2E, screenshots, deploy verification, multi-level test composition | Reasoning isn't validation; interaction is |
-| P12 | Persistent Loop Discipline (`broomva/persist` skill) | Reflexive rule: cross-context restart loop — state in filesystem (PROMPT.md + git tree), each iteration spawns a fresh agent context | At long-horizon work (>1h), in-context loops decay; restart fresh, backpressure from compilers/tests |
-| P13 | Dream Cycle Discipline | Reflexive rule: any consolidation that crosses a cadence-tier boundary MUST follow the 5-phase shape (gather → replay → prune → consolidate → index) | Replay against frozen substrate is the runtime form of stop-gradient; without it, dense lower-tier signal corrupts sparse upper-tier rules |
+| P1 | **Bridge** — Conversation Bridge | Stop hook → JSONL → Obsidian docs → vault | Bridge stamp < 24h stale |
+| P2 | **Gate** — Control Gate | PreToolUse hook → `.control/policy.yaml` | G1–G4 blocking, never bypassed |
+| P3 | **Tickets** — Linear Tickets | Every work unit tracked Backlog → Done | No significant work without a ticket |
+| P4 | **Pipeline** — PR Pipeline | Branch → PR → CI → merge → deploy | Never merge with failing checks |
+| P5 | **Fanout** — Parallel Agents | Concurrent isolated agents via worktrees | No shared mutable file writes |
+| P6 | **Bookkeeping** — Knowledge Bookkeeping | `bookkeeping run` → score → promote → entity pages → synthesize | `research/entities/` never contains unscored items |
+| P7 | **Freshness** — Skill Freshness Check | SessionStart hook → reports stale-skill nudge if last update check ≥ 7d ago | Never blocks; closes silent-rot bug for `npx skills add` snapshots |
+| P8 | **Janitor** — Branch + Worktree Janitor | `make janitor` → detects squash-merged branches + dead worktrees, removes safely | Default `--dry-run`; never touches protected branches |
+| P9 | **Wait** — Productive Wait (`broomva/p9` skill) | wait-queue drains while a blocking operation runs (PR CI is the reference impl: `gh pr checks --watch` via `run_in_background` → classifier + evaluator self-heal). For non-PR waits (push-triggered deploys, builds), do a single direct check after kicking off next-priority work. | Never `sleep` on a blocking wait; merge defers to control metalayer |
+| P10 | **Hygiene** — Worktree Hygiene Discipline | Reflexive rule: decide worktree-or-not before first file; keep `git status` clean; auto-run P8 janitor after every merge | A clean tree is the only reliable reset point |
+| P11 | **Empirical** — Empirical Feedback Loop | Reflexive rule: validate by *interacting* — log-tails, browser E2E, screenshots, deploy verification, multi-level test composition | Reasoning isn't validation; interaction is |
+| P12 | **Persist** — Persistent Loop Discipline (`broomva/persist` skill) | Reflexive rule: cross-context restart loop — state in filesystem (PROMPT.md + git tree), each iteration spawns a fresh agent context | At long-horizon work (>1h), in-context loops decay; restart fresh, backpressure from compilers/tests |
+| P13 | **Dream** — Dream Cycle Discipline | Reflexive rule: any consolidation that crosses a cadence-tier boundary MUST follow the 5-phase shape (gather → replay → prune → consolidate → index) | Replay against frozen substrate is the runtime form of stop-gradient; without it, dense lower-tier signal corrupts sparse upper-tier rules |
+| P14 | **Dep-Chain** — Dependency-Chain Reasoning Discipline | Reflexive rule: before any substantive write, enumerate upstream (files, functions, types, contracts, deployed state this depends on) and downstream (consumers, tests, CI gates, docs, in-flight PRs depending on this). Concrete file paths + function names in the response or PR body — not in the agent's head. | "Think deeply through chain of dependencies" without a concrete enumeration step is ritual. P14 makes it machine-checkable. |
+| P15 | **Snapshot** — State-Snapshot Before Action | Reflexive rule: before any plan, the agent surfaces `git status` + branch + ahead/behind, in-flight PRs (`gh pr list`), Linear ticket state, bookkeeping/bridge freshness, last deploy state. The snapshot is *part of* the planning response — not deferred. | Plans built on stale state fail silently. P15 makes state-checking a cheap reflex, not a request the user has to make. |
+| P16 | **Crystallize** — Crystallization Discipline (the Bstack Engine) | Meta-primitive — the loop that produces every other primitive. Pattern recurs ≥3 times across sessions → propose promotion to skill / SKILL.md / AGENTS.md section / `.control/policy.yaml` gate, gated by the four conditions: ≥3 instances, concrete mechanism, stated invariant, stated failure mode. | The crystallization loop must run inside the workspace, not in the user's head. P1–P15 are *outputs* of this loop. |
+| P17 | **Lens** — Lens-Routed Request Articulation (`broomva/role-x` skill) | Reflexive rule: every substantive user input passes through `role/x` intake — select lens(es) from `roles/<name>.md` registry by scoring signals, load substantive context, decide mode (`augment` / `rewrite` / `decompose`); P5 fan-out becomes typed graph. | No `act as X` persona rewrites — lenses load substantive context only. Lens selection is logged. Mode decision is surfaced unless `augment`. |
+| P18 | **Audience** — Format-Follows-Audience Discipline | Reflexive rule: format follows audience. Agent-readable (LLM, system-prompt loaded, in-repo reference) → **markdown**. Human-readable (decisions, review, exploration) → **HTML**. Both (README, CHANGELOG, GitHub-browseable) → markdown (GitHub renders). ASCII pseudo-diagrams + unicode-color-approximation + >100-line markdown specs without HTML companion are explicit anti-patterns. Specs/plans/ADRs land in `docs/specs/`, `docs/plans/`, `docs/adrs/` as `.html`. | Format follows audience, not habit. Markdown's expressiveness ceiling means humans bounce off agent-produced specs at ~100 lines; HTML's information density carries the load. The 2-4× HTML generation cost is paid only on artifacts a human will actually read. |
+| P19 | **Orchestrate** — Orchestration-Mechanism Selection Discipline | At pre-flight of substantive autonomous work, apply 2×2 (within-session/across-session × external-event/internal-condition) to map work shape to mechanism: `/goal <condition>` (internal+in-session), Wait (P9) `p9 watch --background` (external+in-session), `/loop <interval>` (internal+across-session), Persist (P12) `persist iterate PROMPT.md` (external+across-session). Compose dynamically. | No autonomous-continuation work without explicit mechanism choice + 2×2 quadrant citation. "Continue please" / waiting for user prompts mid-arc is ritual and forbidden. |
 
-> **Naming note.** Primitive numbers and skill repo names line up except for P6 — its skill repo is `broomva/bookkeeping` (named for the function). P9's skill repo is `broomva/p9` and that's the same number — they match. Primitive numbers are sequential identifiers in the bstack itself; skills are independent npm-style packages. `bstack doctor` checks AGENTS.md compliance with the full primitive contract.
+> **Naming note.** Skill repo names are stable and don't always match primitive numbers. P6's skill repo is `broomva/bookkeeping` (named for the function). P9's skill repo is `broomva/p9` — Wait was historically the ninth primitive, so the name matches. Renaming any skill repo would break every `npx skills add` install, so skill names stay; primitive numbers are sequential identifiers in the bstack itself.
+
+## Plugin Skill Precedence
+
+Bstack primitives (P1–P19) and bstack-native skills (`/autonomous`, `/shape`, `/persist`, `/ship`, `/bookkeeping`, `/p9`, etc.) **supersede** plugin skills (`superpowers:*`, `pr-review-toolkit:*`, `codex:*`) wherever they conflict. Plugin skills carry no weight when they collide with workspace governance — the `superpowers:using-superpowers` skill itself encodes this priority: *"User's explicit instructions … highest priority. … If CLAUDE.md says X and a skill says Y, follow the user's instructions."*
+
+The most common collision: plugin skills that mandate user interaction before action (notably `superpowers:brainstorming`'s discovery interview, and the meta-rule that prompts the agent to invoke a skill "even if 1% might apply"). The bstack answer is **context-first, user-extract last**:
+
+1. Before any "interview the user" plugin skill fires, perform **Dep-Chain (P14)** + **Snapshot (P15)** over:
+   - Workspace memory files (auto-memory directory)
+   - `research/entities/{concept,pattern,tool,person,project}/` — knowledge graph (grep by topic before asking)
+   - `docs/` (per-project) — architecture, specs, plans, conversations
+   - Task-mentioned files (CV, spec, ticket body, PR diff)
+2. Synthesize what's known from those sources.
+3. **Ask the user only for irreducible residuals** — facts that genuinely cannot be derived from disk.
+4. If steps 1–2 fully determine the task, the plugin interview is skipped; proceed to execution.
+
+This is a precedence rule, not a new primitive — P14 + P15 already exist; this clarifies that plugin-skill rituals do not override them. The failure mode it shuts down is the "form-fill ritual" — agent asks N+ clarifying questions about facts already curated in the workspace's memory files and knowledge graph.
 
 ## Governance Stack
 
@@ -40,10 +67,10 @@ This workspace registers Claude Code hooks in `.claude/settings.json`:
 
 | Event | Hook | Purpose |
 |-------|------|---------|
-| `Stop` | `conversation-bridge-hook.sh` | P1 — capture session to knowledge graph |
-| `Notification` | `conversation-bridge-hook.sh` | P1 — backup trigger for bridge |
-| `PreToolUse` | `control-gate-hook.sh` | P2 — enforce safety shields |
-| `SessionStart` | `skill-freshness-hook.sh` | P7 — nudge user when skills are stale |
+| `Stop` | `conversation-bridge-hook.sh` | Bridge (P1) — capture session to knowledge graph |
+| `Notification` | `conversation-bridge-hook.sh` | Bridge (P1) — backup trigger for bridge |
+| `PreToolUse` | `control-gate-hook.sh` | Gate (P2) — enforce safety shields |
+| `SessionStart` | `skill-freshness-hook.sh` | Freshness (P7) — nudge user when skills are stale |
 
 ## Testing & Verification
 
@@ -51,10 +78,21 @@ This workspace registers Claude Code hooks in `.claude/settings.json`:
 bstack doctor      # Verify primitive contract compliance
 bstack repair      # Fix specific gaps
 make control-audit # Full metalayer compliance audit
-make janitor       # P8 janitor (dry-run)
+make janitor       # Janitor (P8) dry-run
 ```
 
 ## Conventions
 
 - **Git**: feature branches, squash merge via PR. Never force push main.
 - **Each project** in this workspace can have its own CLAUDE.md with project-specific context.
+
+## Self-Documenting Standards
+
+When modifying skills, architecture docs, or governance files:
+
+1. **Threshold consistency**: A scoring cutoff, layer count, or primitive count changed in one file must be updated in ALL files that reference it. `SKILL.md` is the authoritative source; other files defer to it.
+2. **Cross-reference integrity**: Adding a new entity type, status value, or pipeline stage requires updating both the schema/rubric AND the template files that use them.
+3. **Primitive count**: Adding a primitive (P-N+1) requires bumping the count in this file's "Bstack Core Automation Primitives" header, adding the table row here, adding the section in `AGENTS.md`, and updating the composition-loop diagram. Run `bstack doctor` after changes to verify lockstep.
+4. **Verification**: After modifying this file or any skill, run `bstack doctor` to confirm consistency.
+
+These rules are enforced by agent reasoning + `bstack doctor`, not hooks. The agent reads them and applies them; the doctor surfaces gaps.

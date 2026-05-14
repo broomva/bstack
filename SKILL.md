@@ -57,7 +57,7 @@ bstack is a *portable harness metalayer* — it composes existing skills into a 
 
 bstack ships two complementary layers:
 
-- **Substrate** (this skill, `/bstack`): the 16 primitives + 29 skills + governance + hooks + `.control/policy.yaml`. This is what `/bstack bootstrap` installs. The substrate is the *capability* — what's available in the workspace.
+- **Substrate** (this skill, `/bstack`): the 19 primitives + 29 skills + governance + hooks + `.control/policy.yaml`. This is what `/bstack bootstrap` installs. The substrate is the *capability* — what's available in the workspace.
 - **Mode** (`broomva/autonomous`): the canonical *behavior* that runs on top of the substrate. When the user says "go" / "proceed" / "be autonomous", `/autonomous` fires the 19-reflex pipeline that uses every primitive in sequence.
 
 Installing the substrate without the mode = the workspace has primitives but no entry point to engage them. Invoking the mode without the substrate = wishful thinking. Compounded: `/bstack bootstrap` installs the substrate, then `/autonomous` is the standing operating mode for substantive work units.
