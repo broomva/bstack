@@ -9,18 +9,19 @@
 #   1. CLAUDE.md primitives table has all P1-P20 rows + correct count
 #   2. AGENTS.md has each primitive section (### P1: through ### P20:)
 #   3. AGENTS.md has the binding reflexive trigger rules for primitives
-#      that require them (P6, P9, P10, P11, P12, P13, P14, P15, P16, P17,
+#      that require them (P6, P7, P10, P11, P12, P13, P14, P15, P16, P17,
 #      P18, P19, P20 — primitives where the agent's reasoning enforces
-#      the policy, not a hook)
+#      the policy, not a hook; P7 = CI Watcher / Productive Wait,
+#      P8 = Skill Freshness hook, P9 = Janitor make-target)
 #   4. .control/policy.yaml has required blocks (ci_watch, ci_heal, auto_merge)
 #   5. .claude/settings.json hooks wire the expected primitive scripts
 #   6. Each primitive's mechanism is reachable on disk:
 #      - P1: scripts/conversation-bridge-hook.sh
 #      - P2: scripts/control-gate-hook.sh + .control/policy.yaml
 #      - P6: skills/bookkeeping/scripts/bookkeeping.py
-#      - P7: scripts/skill-freshness-hook.sh
-#      - P8: scripts/branch-janitor.sh
-#      - P9: skills/p9/scripts/p9.py
+#      - P7: skills/p9/scripts/p9.py (Productive Wait — skill name historical)
+#      - P8: scripts/skill-freshness-hook.sh
+#      - P9: scripts/branch-janitor.sh
 #      - P12: skills/persist/scripts/persist.py
 #   7. (continued — each primitive's mechanism)
 #   8. L3 trust gates (G-L3-1 + G-L3-2) pass via scripts/bstack-primitive-lint.py
@@ -117,9 +118,9 @@ declare -a P_NAMES=(
     "P4: PR Pipeline"
     "P5: Parallel Agent"
     "P6: Knowledge Bookkeeping"
-    "P7: Skill Freshness"
-    "P8: Branch + Worktree Janitor"
-    "P9: Productive Wait"
+    "P7: CI Watcher + Productive Wait"
+    "P8: Skill Freshness"
+    "P9: Branch + Worktree Janitor"
     "P10: Worktree Hygiene"
     "P11: Empirical Feedback Loop"
     "P12: Persistent Loop Discipline"
@@ -135,7 +136,11 @@ declare -a P_NAMES=(
 if [ -f "$AGENTS" ]; then
     for entry in "${P_NAMES[@]}"; do
         prefix="${entry%%:*}"   # e.g. "P1"
-        if grep -qE "^### $prefix:" "$AGENTS"; then
+        # Accept either:
+        #   ### P1: Title                  (original bstack format)
+        #   ### P1 — Label: Title          (extended format with categorical label)
+        # Trailing word-boundary ensures P1 doesn't match P10/P11/P12.
+        if grep -qE "^### $prefix(:| —)" "$AGENTS"; then
             ok "section $prefix present"
         else
             gap "AGENTS.md missing '### $entry' section" \
@@ -148,12 +153,15 @@ fi
 section "4. AGENTS.md reflexive trigger rules"
 # Primitives whose discipline is enforced via agent reasoning rather than hooks.
 # These MUST contain a Reflexive Trigger Rule subsection.
-declare -a REFLEXIVE_PRIMS=(P6 P9 P10 P11 P12 P13 P14 P15 P16 P17 P18 P19 P20)
+# Note: workspace canonical numbering — P7 = Productive Wait (reasoning-enforced),
+# P8 = Skill Freshness (hook-enforced), P9 = Janitor (mechanism-only).
+declare -a REFLEXIVE_PRIMS=(P6 P7 P10 P11 P12 P13 P14 P15 P16 P17 P18 P19 P20)
 if [ -f "$AGENTS" ]; then
     for prim in "${REFLEXIVE_PRIMS[@]}"; do
-        # Look for "P{n} is a reflex" OR "Reflexive Trigger Rule" in proximity to the prim section
+        # Look for "P{n} is a reflex" OR "Reflexive Trigger Rule" in proximity to the prim section.
+        # Accept either '### P{n}: Title' or '### P{n} — Label: Title' header format.
         if awk -v p="$prim" '
-            /^### / { in_sec = ($0 ~ "^### "p":") }
+            /^### / { in_sec = ($0 ~ "^### "p"(:| —)") }
             in_sec && /Reflexive Trigger Rule/ { found = 1 }
             in_sec && / is a reflex/ { found = 1 }
             END { exit (found ? 0 : 1) }
@@ -213,9 +221,9 @@ SCRIPT_PATHS=(
     "scripts/conversation-bridge-hook.sh"
     "scripts/control-gate-hook.sh"
     "skills/bookkeeping/scripts/bookkeeping.py"
+    "skills/p9/scripts/p9.py"
     "scripts/skill-freshness-hook.sh"
     "scripts/branch-janitor.sh"
-    "skills/p9/scripts/p9.py"
     "skills/persist/scripts/persist.py"
 )
 SCRIPT_LABELS=(P1 P2 P6 P7 P8 P9 P12)

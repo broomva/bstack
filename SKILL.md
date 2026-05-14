@@ -7,12 +7,12 @@ description: |
   the substrate. P1 captures every session as episodic memory. P2 gates
   destructive operations. P3 tracks every work unit in Linear. P4 forces every
   change through CI. P5 isolates parallel agents in worktrees. P6 keeps the
-  knowledge graph quality-controlled. P7 nudges when installed skills go
-  stale. P8 cleans up squash-merged branches and dead worktrees. P9 is the
-  productive-wait optimizer — drains a context-scoped queue while a
-  blocking operation (PR CI, deploy, build, long index) runs; classifier +
-  evaluator self-heal red CI is the reference implementation. P10 binds
-  every agent to
+  knowledge graph quality-controlled. P7 is the productive-wait optimizer
+  (`broomva/p9` skill — historical name) — drains a context-scoped queue
+  while a blocking operation (PR CI, deploy, build, long index) runs;
+  classifier + evaluator self-heal red CI is the reference implementation.
+  P8 nudges when installed skills go stale. P9 cleans up squash-merged
+  branches and dead worktrees. P10 binds every agent to
   clean-tree discipline through the PR lifecycle. P11 is the cohesion glue —
   bind every agent to validate by interacting with what they build, not just
   by reasoning + lint + CI exit codes. P12 is the long-horizon discipline —
@@ -57,7 +57,7 @@ bstack is a *portable harness metalayer* — it composes existing skills into a 
 
 bstack ships two complementary layers:
 
-- **Substrate** (this skill, `/bstack`): the 16 primitives + 29 skills + governance + hooks + `.control/policy.yaml`. This is what `/bstack bootstrap` installs. The substrate is the *capability* — what's available in the workspace.
+- **Substrate** (this skill, `/bstack`): the 19 primitives + 29 skills + governance + hooks + `.control/policy.yaml`. This is what `/bstack bootstrap` installs. The substrate is the *capability* — what's available in the workspace.
 - **Mode** (`broomva/autonomous`): the canonical *behavior* that runs on top of the substrate. When the user says "go" / "proceed" / "be autonomous", `/autonomous` fires the 19-reflex pipeline that uses every primitive in sequence.
 
 Installing the substrate without the mode = the workspace has primitives but no entry point to engage them. Invoking the mode without the substrate = wishful thinking. Compounded: `/bstack bootstrap` installs the substrate, then `/autonomous` is the standing operating mode for substantive work units.
@@ -91,9 +91,9 @@ The sixteen primitives. Each closes one specific failure mode that drifts into e
 | **P4** | PR Pipeline | merging unreviewed code |
 | **P5** | Parallel Agents | sequential bottleneck |
 | **P6** | Knowledge Bookkeeping | knowledge graph rot |
-| **P7** | Skill Freshness Check | silent rot of `npx skills add` snapshots |
-| **P8** | Branch + Worktree Janitor | squash-merge accumulation |
-| **P9** | Productive Wait (`broomva/p9` skill) | sleep-on-wait dead time (CI, deploys, builds — PR CI is the reference impl) |
+| **P7** | CI Watcher + Productive Wait (`broomva/p9` skill — historical name) | sleep-on-wait dead time (CI, deploys, builds — PR CI is the reference impl) |
+| **P8** | Skill Freshness Check | silent rot of `npx skills add` snapshots |
+| **P9** | Branch + Worktree Janitor | squash-merge accumulation |
 | **P10** | Worktree Hygiene Discipline | dirty-tree drift across the PR lifecycle |
 | **P11** | Empirical Feedback Loop | shipping code that compiles but doesn't work |
 | **P12** | Persistent Loop Discipline (`broomva/persist` skill) | long-horizon work decaying as the context window rots |

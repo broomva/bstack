@@ -10,9 +10,9 @@ The eleven primitives that make a workspace self-operating. This is the canonica
 - [P4 — PR Pipeline](#p4--pr-pipeline)
 - [P5 — Parallel Agents](#p5--parallel-agents)
 - [P6 — Knowledge Bookkeeping](#p6--knowledge-bookkeeping)
-- [P7 — Skill Freshness Check](#p7--skill-freshness-check)
-- [P8 — Branch + Worktree Janitor](#p8--branch--worktree-janitor)
-- [P9 — Productive Wait](#p9--productive-wait)
+- [P7 — CI Watcher + Productive Wait](#p7--ci-watcher--productive-wait)
+- [P8 — Skill Freshness Check](#p8--skill-freshness-check)
+- [P9 — Branch + Worktree Janitor](#p9--branch--worktree-janitor)
 - [P10 — Worktree Hygiene Discipline](#p10--worktree-hygiene-discipline)
 - [P11 — Empirical Feedback Loop](#p11--empirical-feedback-loop)
 - [P12 — Persistent Loop Discipline](#p12--persistent-loop-discipline)
@@ -102,55 +102,55 @@ Mental checklist before declaring graph-dependent work done: *Did this session p
 
 ---
 
-## P7 — Skill Freshness Check
-
-**Closes**: silent rot of `npx skills add` snapshots. Skills don't auto-update; without a nudge they go stale and sessions hit `error: unrecognized arguments: --foo` from out-of-date binaries.
-
-**How**: `SessionStart` hook → `scripts/skill-freshness-hook.sh` checks the timestamp of `~/.config/broomva/p7/last-skill-update-check` (legacy `~/.config/broomva/p8/` still honored for in-place upgrades). If ≥ 7 days old (or never), prints a one-line nudge with refresh command + dismissal `touch`. Always exits 0.
-
-**Invariant**: hook always exits 0. `BROOMVA_P7_THRESHOLD_DAYS` env var configurable (default 7; legacy `BROOMVA_P8_THRESHOLD_DAYS` still honored). Dismissal: run `npx skills update -g` then `touch ~/.config/broomva/p7/last-skill-update-check`.
-
----
-
-## P8 — Branch + Worktree Janitor
-
-**Closes**: squash-merged branches and dead worktrees accumulate. `git branch --merged` doesn't catch squash-merges (the branch tip isn't an ancestor of main).
-
-**How**: `make janitor` (wraps `scripts/branch-janitor.sh`). Walks current repo (or all workspace repos with `--scope=workspace`). For each non-protected branch matching the include pattern (`feat/*,fix/*,chore/*,docs/*` by default): runs the canonical squash-merge detection — `git commit-tree <branch-tree> -p <merge-base>` produces a synthetic commit; `git cherry origin/main <synth>` reports if its patch is in main. If yes, branch is mergeable. Worktrees whose underlying branch is gone get pruned via `git worktree remove --force`.
-
-**Invariant**: default `--dry-run` — pass `--apply` to actually delete. Never touches main, master, develop, HEAD, gh-pages, or any branch in `~/.config/broomva/p8-janitor/protected.txt` (legacy `~/.config/broomva/p9-janitor/` still honored). Currently-checked-out branch always skipped.
-
----
-
-## P9 — Productive Wait
+## P7 — CI Watcher + Productive Wait
 
 **Closes**: `sleep`-on-wait dead time. Agents lose 5–15 min per blocking operation — CI checks, deploy verifications, builds, long-running indexing operations. The primitive is *productive wait*: convert the block into work on the next priority.
 
 **How (general primitive)**: spawn the blocking-wait observer via `run_in_background` so the agent gets an event-driven notification on completion. While the observer runs, the agent drains a context-scoped priority queue (`session > memory > graph > docs > linear`). On notification, classify the result and either advance or self-heal.
 
-**Reference implementation — PR CI**: `python3 skills/p9/scripts/p9.py watch <pr> --background` spawns `gh pr checks --watch`. On bg-task notification, agent reads `p9 status` → on green, `p9 merge-ready` → defer to control metalayer for authorization. On red, `p9 heal --classify` → if classified+evaluator-positive, apply heal (PR-diff scope only) and start a new watch. Auto-merge actuator (`p9 auto-merge`) consults `.control/policy.yaml`'s `auto_merge:` block with governance-paths-always-block safety pre-pass.
+**Reference implementation — PR CI**: `python3 skills/p9/scripts/p9.py watch <pr> --background` spawns `gh pr checks --watch`. On bg-task notification, agent reads `p9 status` → on green, `p9 merge-ready` → defer to control metalayer for authorization. On red, `p9 heal --classify` → if classified+evaluator-positive, apply heal (PR-diff scope only) and start a new watch. Auto-merge actuator (`p9 auto-merge`) consults `.control/policy.yaml`'s `auto_merge:` block.
 
 **Other waits the primitive applies to** (today: handled by direct check; on the roadmap to wire into `p9`):
 
-- **Push-triggered dev/staging/prod deploys** — when the trigger isn't a PR (e.g., main-branch deploy on push), p9 currently only tracks PRs. Today's workaround: do a single direct check on the deploy URL/log after `git push`. Do *not* `sleep` waiting for the deploy; pull the next item from the wait-queue. Tracked as a P9 extension.
+- **Push-triggered dev/staging/prod deploys** — when the trigger isn't a PR (e.g., main-branch deploy on push), p9 currently only tracks PRs. Today's workaround: do a single direct check on the deploy URL/log after `git push`. Do *not* `sleep` waiting for the deploy; pull the next item from the wait-queue. Tracked as a P7 extension.
 - **Long-running test suites / build pipelines** — same shape; observer is whatever produces the completion event (CLI exit code, webhook, log line).
 - **External index / sync operations** — same shape, longer time horizons.
 
 **Invariant**: never `sleep` on a blocking wait. Every failure produces (a) a `state.jsonl` event, (b) a Linear ticket, or (c) both — silent state drops are forbidden (exit 99). Heal actions are scoped to files in PR diff (where applicable). All setpoints (`max_concurrent_prs`, `max_attempts`, `stability_floor`, `classified_failure_types`) live in `.control/policy.yaml` and fail closed if missing.
 
-**Skill name**: `broomva/p9` — primitive number P9, skill name `p9`. They match.
+**Skill name**: `broomva/p9` — historical name (was the 9th primitive when first crystallized; renaming would break every `npx skills add broomva/p9` install). Primitive number is now P7; skill repo name is stable at `p9`. The `broomva/p9` SKILL.md is the canonical implementation.
 
-### P9 Reflexive Trigger Rule (binding on every agent)
+### P7 Reflexive Trigger Rule (binding on every agent)
 
-P9 is a reflex, not a request. Agents must apply *productive-wait discipline* without being prompted in any of these situations:
+P7 is a reflex, not a request. Agents must apply *productive-wait discipline* without being prompted in any of these situations:
 
 1. **Immediately after `git push` that opens or updates a PR** — invoke `p9 watch <pr> --background` within the same response, before any other tool call. The watcher must be running before the agent considers the push "done."
 2. **After `git push` that triggers a non-PR deploy** (e.g., a push to `main` that fires a deploy hook) — p9 doesn't track non-PR triggers yet. Do *one* direct check on the deploy result after kicking off the next high-priority work; never `sleep` waiting for it.
 3. **Whenever the agent is tempted to `sleep` while a blocking operation runs** — hard ban. Pull from `p9 wait-queue pop` instead. If the queue is empty, do non-code productive work (research adjacent entities, validate doc cross-refs) until the bg-task notification fires.
 4. **When a watcher's bg-task notification reports red CI** — invoke `p9 heal <pr> --classify` *before* re-pushing a fix or asking the user. If classified, apply the heal command (PR-diff scope only) and start a new watch. If unclassified, escalate via Linear and surface the failure.
-5. **When `p9 status` reports `MERGE_READY`** — invoke `p9 auto-merge <pr>` rather than `gh pr merge` directly. The actuator consults `.control/policy.yaml`'s `auto_merge:` block, blocks governance-class paths automatically, and only auto-merges branch classes explicitly allowlisted.
+5. **When `p9 status` reports `MERGE_READY`** — invoke `p9 auto-merge <pr>` rather than `gh pr merge` directly. The actuator consults `.control/policy.yaml`'s `auto_merge:` block; per the gates-are-trust principle, governance-class paths auto-merge when L3 trust gates pass (no special-case bypass).
 
 Mental checklist before declaring wait-dependent work done: *What blocking operation am I waiting on? Is it a PR (use `p9 watch`) or a non-PR trigger (single direct check + drain queue)? Am I about to `sleep` or poll? Did I drain the wait-queue while waiting?*
+
+---
+
+## P8 — Skill Freshness Check
+
+**Closes**: silent rot of `npx skills add` snapshots. Skills don't auto-update; without a nudge they go stale and sessions hit `error: unrecognized arguments: --foo` from out-of-date binaries.
+
+**How**: `SessionStart` hook → `scripts/skill-freshness-hook.sh` checks the timestamp of `~/.config/broomva/p8/last-skill-update-check` (legacy `~/.config/broomva/p7/` still honored for in-place upgrades). If ≥ 7 days old (or never), prints a one-line nudge with refresh command + dismissal `touch`. Always exits 0.
+
+**Invariant**: hook always exits 0. `BROOMVA_P8_THRESHOLD_DAYS` env var configurable (default 7; legacy `BROOMVA_P7_THRESHOLD_DAYS` still honored). Dismissal: run `npx skills update -g` then `touch ~/.config/broomva/p8/last-skill-update-check`.
+
+---
+
+## P9 — Branch + Worktree Janitor
+
+**Closes**: squash-merged branches and dead worktrees accumulate. `git branch --merged` doesn't catch squash-merges (the branch tip isn't an ancestor of main).
+
+**How**: `make janitor` (wraps `scripts/branch-janitor.sh`). Walks current repo (or all workspace repos with `--scope=workspace`). For each non-protected branch matching the include pattern (`feat/*,fix/*,chore/*,docs/*` by default): runs the canonical squash-merge detection — `git commit-tree <branch-tree> -p <merge-base>` produces a synthetic commit; `git cherry origin/main <synth>` reports if its patch is in main. If yes, branch is mergeable. Worktrees whose underlying branch is gone get pruned via `git worktree remove --force`.
+
+**Invariant**: default `--dry-run` — pass `--apply` to actually delete. Never touches main, master, develop, HEAD, gh-pages, or any branch in `~/.config/broomva/p9-janitor/protected.txt` (legacy `~/.config/broomva/p8-janitor/` still honored). Currently-checked-out branch always skipped.
 
 ---
 
