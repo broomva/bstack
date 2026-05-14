@@ -8,11 +8,11 @@ This file IS the control harness for agents operating in this workspace. Reading
 
 ## Bstack Core Automation Primitives
 
-This workspace is governed by the **bstack** primitive contract — nineteen irreducible building blocks. All are always active. Run `bstack doctor` to verify compliance.
+This workspace is governed by the **bstack** primitive contract — twenty irreducible building blocks. All are always active. Run `bstack doctor` to verify compliance.
 
 Each primitive carries a **short name** for agent prose. When referencing a primitive in responses, PR bodies, commit messages, or comments, use the `Name (Pn)` form — *"applying Snapshot (P15)"*, *"via Dep-Chain (P14)"*, *"running Bookkeeping (P6)"* — not bare `Pn`. The number is the canonical identifier; the short name is the human-readable handle.
 
-**Short-name index**: Bridge (P1) · Gate (P2) · Tickets (P3) · Pipeline (P4) · Fanout (P5) · Bookkeeping (P6) · Freshness (P7) · Janitor (P8) · Wait (P9) · Hygiene (P10) · Empirical (P11) · Persist (P12) · Dream (P13) · Dep-Chain (P14) · Snapshot (P15) · Crystallize (P16) · Lens (P17) · Audience (P18) · Orchestrate (P19).
+**Short-name index**: Bridge (P1) · Gate (P2) · Tickets (P3) · Pipeline (P4) · Fanout (P5) · Bookkeeping (P6) · Freshness (P7) · Janitor (P8) · Wait (P9) · Hygiene (P10) · Empirical (P11) · Persist (P12) · Dream (P13) · Dep-Chain (P14) · Snapshot (P15) · Crystallize (P16) · Lens (P17) · Audience (P18) · Orchestrate (P19) · Cross-Review (P20).
 
 ### P1 — Bridge: Conversation Bridge (Episodic Memory)
 
@@ -313,9 +313,33 @@ Compositions are dynamic: Persist iterations can invoke `/goal` for sub-tasks; `
 4. When composing mechanisms — surface the composition tree, don't compose silently.
 5. Tempted to type "continue please" or wait for user prompts — STOP. That's the ritual P19 makes impossible.
 
+### P20 — Cross-Review: Cross-Model Adversarial Review Gate
+
+**What**: Names the rule that *the writer cannot be the final judge*. Before substantive PRs merge, fire a cross-model adversarial gate. Single-model planning + implementing + reviewing reproduces the model's systematic biases — what cross-model-agents research calls *slop* (over-engineered abstractions, unnecessary wrappers, template-paste patterns).
+
+**How**: Three strata, ordered by strength:
+
+| Strata | Mechanism | When |
+|---|---|---|
+| **A** True cross-vendor | `codex exec -m gpt-5.4` reads diff + scores | Codex CLI installed |
+| **B** Cross-context same-model | Fresh `Agent` subagent under devil's-advocate brief | Always available |
+| **C** Composed existing skills | `superpowers:constructive-dissent`, `devils-advocate`, `pr-review-toolkit:*`, `critique`, `premortem`, `plan-*-review` | Always — the toolkit P20 makes mandatory |
+
+Scoring: anti-slop ≥7/10 to pass; max 3 fix rounds; verdict logged in PR comments. Implementation: `broomva/cross-review` skill. The gate fires *before* P4 auto-merge — not after merge as code review.
+
+**Invariant**: Substantive PRs (>200 LOC OR public API change OR multi-file OR governance-class) cannot merge without cross-model adversarial verdict ≥7/10. Self-review by the writing model is forbidden as the *sole* verdict.
+
+**Reflexive Trigger Rule**: P20 is a reflex. Apply without being prompted:
+
+1. Before pushing substantive PRs — fire the gate (Strata A if Codex, else B+C). Score + verdict precede merge.
+2. When verdict <7 — fix → rescore. Max 3 rounds. Round 3 failure → escalate to user.
+3. When the writer is the only model in the loop — STOP. Strata B at minimum is mandatory.
+4. When tempted to skip P20 because "small PR" — threshold is *substantive* (>200 LOC OR public API OR multi-file OR governance). Trivial (typo, single-file doc) exempt.
+5. P20 sits between Empirical (P11) validation and Pipeline (P4) auto-merge — does not replace either.
+
 ---
 
-These nineteen primitives compose into the full autonomous development loop:
+These twenty primitives compose into the full autonomous development loop:
 
 ```
 User intent → Lens (P17) intake → Snapshot (P15) → Orchestrate (P19) mechanism choice → Tickets (P3) → Fanout (P5) dispatch
@@ -326,6 +350,7 @@ User intent → Lens (P17) intake → Snapshot (P15) → Orchestrate (P19) mecha
   → Code written + Empirical (P11) parallel watchers → PR via Pipeline (P4)
   → Wait (P9) CI watch + heal loop
   → Empirical (P11) deploy verification (preview URL, screenshots, browser session)
+  → Cross-Review (P20) gate (Strata A or B+C, ≥7/10) → if pass, Pipeline (P4) auto-merge eligible
   → Merge → Hygiene (P10) post-merge cleanup via Janitor (P8) → Deploy
   → Dream (P13) for any consolidation (Bookkeeping (P6) replay first)
   → Empirical (P11) dogfood receipt → Session captured via Bridge (P1) → Knowledge via Bookkeeping (P6)
