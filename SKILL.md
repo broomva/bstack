@@ -142,7 +142,7 @@ If the preamble printed `ONBOARDING: bstack not yet initialized`: jump to the **
 # ─── Skill roster check ──────────────────────────────────────
 AGENTS_DIR="${HOME}/.agents/skills"
 CLAUDE_DIR="${HOME}/.claude/skills"
-ROSTER=(autonomous agentic-control-kernel control-metalayer-loop harness-engineering-playbook p9 agent-consciousness knowledge-graph-memory prompt-library symphony symphony-forge autoany deep-dive-research-orchestrator skills skills-showcase arcan-glass next-forge alkosto-wait-optimizer content-creation finance-substrate seo-llmeo brand-icons pre-mortem braindump morning-briefing drift-check strategy-critique stakeholder-update decision-log weekly-review)
+ROSTER=(autonomous agentic-control-kernel control-metalayer-loop harness-engineering-playbook p9 agent-consciousness knowledge-graph-memory prompt-library symphony symphony-forge autoany deep-dive-research-orchestrator skills skills-showcase arcan-glass next-forge alkosto-wait-optimizer content-creation finance-substrate seo-llmeo brand-icons pre-mortem braindump morning-briefing drift-check strategy-critique stakeholder-update decision-log weekly-review role-x)
 INSTALLED=0; MISSING=()
 for s in "${ROSTER[@]}"; do
   if [ -d "$AGENTS_DIR/$s" ] || [ -d "$CLAUDE_DIR/$s" ]; then
@@ -151,11 +151,11 @@ for s in "${ROSTER[@]}"; do
     MISSING+=("$s")
   fi
 done
-echo "bstack: $INSTALLED/${#ROSTER[@]} skills installed (29 total)"
+echo "bstack: $INSTALLED/${#ROSTER[@]} skills installed (30 total)"
 [ ${#MISSING[@]} -gt 0 ] && echo "Missing: ${MISSING[*]}"
 ```
 
-Report the count. If all 29 present, say "bstack fully installed." If any missing, list them and offer the `bootstrap` command.
+Report the count. If all 30 present, say "bstack fully installed." If any missing, list them and offer the `bootstrap` command.
 
 After skill check, run the harness validation:
 
@@ -237,7 +237,7 @@ Future sessions inspect this for state. `bootstrap_status: failed` is captured t
 
 `scripts/bootstrap.sh` is the install/wire path. It:
 
-1. Installs all 29 skills via `npx skills add broomva/<skill>` — `broomva/autonomous` is the first in the roster (canonical operating mode)
+1. Installs all 30 skills via `npx skills add broomva/<skill>` — `broomva/autonomous` is the first in the roster (canonical operating mode)
 2. **Scaffolds missing governance files** from `assets/templates/`:
    - `CLAUDE.md` (workspace invariants + RCS hierarchy + primitive table P1–P16 + §Ritual vs Substance)
    - `AGENTS.md` (operational rules + per-primitive sections + reflexive triggers for all reasoning-enforced primitives)
