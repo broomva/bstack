@@ -1,8 +1,8 @@
 ---
 name: bstack
 description: |
-  The Broomva Stack — nineteen irreducible primitives (P1–P19) that turn any
-  agent-driven workspace into a self-operating system, plus 29 curated skills
+  The Broomva Stack — twenty irreducible primitives (P1–P20) that turn any
+  agent-driven workspace into a self-operating system, plus 30 curated skills
   that ship with the stack. The primitives are not optional features; they are
   the substrate. P1 captures every session as episodic memory. P2 gates
   destructive operations. P3 tracks every work unit in Linear. P4 forces every
@@ -29,9 +29,14 @@ description: |
   continuation family (the 2×2 of /goal | P7 watcher | /loop | P12 persist)
   and the selection discipline — pick the right mechanism for the work
   shape; compose dynamically; never return control mid-arc when a mechanism
-  would keep it closed. The canonical mode of operation on top of the
-  substrate is broomva/autonomous (Layer-1 operating mode that fires every
-  reflex without further prompting). Use bstack when:
+  would keep it closed. P20 is the cross-model adversarial review gate —
+  the writer cannot be the final judge; before substantive PRs merge, fire
+  a different-evaluator gate (Codex CLI cross-vendor / fresh subagent /
+  composed adversarial-review skills); anti-slop ≥7/10, max 3 fix rounds,
+  verdict logged in PR (skill: broomva/cross-review). The canonical mode
+  of operation on top of the substrate is broomva/autonomous (Layer-1
+  operating mode that fires every reflex without further prompting). Use
+  bstack when:
   (1) bootstrapping a new agent-driven workspace, (2) verifying primitive
   compliance via `bstack doctor`, (3) repairing missing governance/hooks/
   policy via `bstack repair`, (4) listing installed-vs-missing skills via
@@ -39,12 +44,12 @@ description: |
   `bstack validate`, (6) full reconfiguration via `bstack revamp`. Triggers
   on "bstack", "broomva stack", "bootstrap project", "setup broomva
   workflow", "install all skills", "skills status", "primitive contract",
-  "P1" through "P19", "agent harness", "self-operating workspace".
+  "P1" through "P20", "agent harness", "self-operating workspace".
 ---
 
 # bstack — The Broomva Stack
 
-**Nineteen irreducible primitives. Twenty-nine curated skills. One canonical operating mode. One self-operating workspace.**
+**Twenty irreducible primitives. Thirty curated skills. One canonical operating mode. One self-operating workspace.**
 
 bstack is a *portable harness metalayer* — it composes existing skills into a binding primitive contract that the agent enforces by reasoning, the doctor enforces by checking, the bootstrap enforces by scaffolding, and the **canonical operating mode** (`broomva/autonomous`) enforces in execution.
 
@@ -99,6 +104,7 @@ The sixteen primitives. Each closes one specific failure mode that drifts into e
 | **P17** | Lens-Routed Request Articulation (`broomva/role-x` skill, planned) | flat-dispatch fan-out failing to load domain context; agents performing tasks without the typed lens (legal review vs design vs research) that shapes the correct quality_bar |
 | **P18** | Format-Follows-Audience Discipline | markdown-by-default for everything regardless of audience; long specs nobody reads; ASCII pseudo-diagrams + unicode-color-approximation when SVG-in-HTML is the correct primitive |
 | **P19** | Orchestration-Mechanism Selection Discipline | implicit between-reflex handoffs ("continue please"); using wrong mechanism for work shape (/goal on >1h work, persist on 30-min task, /loop on event wait); the autonomous arc broken by missing-mechanism failure |
+| **P20** | Cross-Model Adversarial Review Gate (`broomva/cross-review` skill) | same-model echo chamber; writer self-validates own work; AI slop (over-engineered abstractions, template-paste, unnecessary wrappers) merged because no different evaluator scored ≥7/10 |
 
 Full reference: see [references/primitives.md](references/primitives.md).
 
@@ -142,7 +148,7 @@ If the preamble printed `ONBOARDING: bstack not yet initialized`: jump to the **
 # ─── Skill roster check ──────────────────────────────────────
 AGENTS_DIR="${HOME}/.agents/skills"
 CLAUDE_DIR="${HOME}/.claude/skills"
-ROSTER=(autonomous agentic-control-kernel control-metalayer-loop harness-engineering-playbook p9 agent-consciousness knowledge-graph-memory prompt-library symphony symphony-forge autoany deep-dive-research-orchestrator skills skills-showcase arcan-glass next-forge alkosto-wait-optimizer content-creation finance-substrate seo-llmeo brand-icons pre-mortem braindump morning-briefing drift-check strategy-critique stakeholder-update decision-log weekly-review role-x)
+ROSTER=(autonomous cross-review agentic-control-kernel control-metalayer-loop harness-engineering-playbook p9 agent-consciousness knowledge-graph-memory prompt-library symphony symphony-forge autoany deep-dive-research-orchestrator skills skills-showcase arcan-glass next-forge alkosto-wait-optimizer content-creation finance-substrate seo-llmeo brand-icons pre-mortem braindump morning-briefing drift-check strategy-critique stakeholder-update decision-log weekly-review role-x)
 INSTALLED=0; MISSING=()
 for s in "${ROSTER[@]}"; do
   if [ -d "$AGENTS_DIR/$s" ] || [ -d "$CLAUDE_DIR/$s" ]; then
