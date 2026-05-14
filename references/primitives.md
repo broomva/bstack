@@ -385,6 +385,34 @@ Decision logic:
 
 ---
 
+## P20 — Cross-Model Adversarial Review Gate
+
+**Closes**: Same-model echo chamber. The model that wrote the code cannot be the final judge of the code. Single-model planning + implementing + reviewing reproduces the model's own systematic biases — what `cross-model-agents` calls *slop* (over-engineered abstractions, unnecessary wrappers, template-paste patterns).
+
+**How**: Before any substantive PR merges, fire a cross-model adversarial gate. Three strata, ordered by strength:
+
+| Strata | Mechanism | When |
+|---|---|---|
+| **A** True cross-vendor | `codex exec -m gpt-5.4` reads diff + scores | Codex CLI installed |
+| **B** Cross-context same-model | Fresh `Agent` subagent under devil's-advocate brief | Always available |
+| **C** Composed existing skills | `superpowers:constructive-dissent`, `devils-advocate`, `pr-review-toolkit:*` (×5), `critique`, `premortem`, `plan-*-review` | Always — the toolkit P20 makes mandatory |
+
+Scoring: anti-slop ≥ 7/10 to pass; max 3 fix rounds; verdict logged in PR comments + Linear ticket. Implementation: `broomva/cross-review` skill.
+
+**Invariant**: substantive PRs (>200 LOC OR public API change OR multi-file OR governance-class) cannot merge without cross-model adversarial verdict ≥ 7/10. Self-review by the writing model is forbidden as the *sole* verdict. The gate fires *before* P4 auto-merge — not after merge as code review.
+
+### P20 Reflexive Trigger Rule (binding on every agent)
+
+1. **Before pushing substantive PRs** — fire the gate (Strata A if Codex, else B+C). Score + verdict precede push.
+2. **When verdict < 7** — fix → rescore. Max 3 rounds. Round 3 failure → escalate to user.
+3. **When the writer is the only model in the loop** — STOP. Strata B at minimum is mandatory.
+4. **When tempted to skip P20 because "small PR"** — threshold is *substantive* (>200 LOC OR public API OR multi-file OR governance). Trivial PRs (typo fix, single-file doc) exempt; everything else fires.
+5. **Composition** — P20 sits between P11 (validation) and P4 (auto-merge); does not replace either. PR-comment loop (autonomous Step 17) is downstream of P20.
+
+**Origin**: [Dallionking/cross-model-agents](https://github.com/Dallionking/cross-model-agents) (May 2026) — 31-agent bidirectional Claude↔Codex review system with anti-slop scoring + pipeline hooks. P20 absorbs the *discipline* (cross-model gate as mandatory) while composing with existing bstack skills. Six+ instances logged in `bstack-engine.md` candidate ledger.
+
+---
+
 ## Cohesion narrative
 
 P11, P12, and P13 are structural siblings at different scales:
