@@ -135,7 +135,10 @@ declare -a P_NAMES=(
 if [ -f "$AGENTS" ]; then
     for entry in "${P_NAMES[@]}"; do
         prefix="${entry%%:*}"   # e.g. "P1"
-        if grep -qE "^### $prefix:" "$AGENTS"; then
+        # Accept both legacy `### Pn:` and short-name `### Pn — Short: Long` formats.
+        # The `[: ]` class matches a single char (colon or space) right after the
+        # primitive number, which uniquely distinguishes Pn from Pn+10.
+        if grep -qE "^### $prefix[: ]" "$AGENTS"; then
             ok "section $prefix present"
         else
             gap "AGENTS.md missing '### $entry' section" \
@@ -151,9 +154,10 @@ section "4. AGENTS.md reflexive trigger rules"
 declare -a REFLEXIVE_PRIMS=(P6 P9 P10 P11 P12 P13 P14 P15 P16 P17 P18 P19 P20)
 if [ -f "$AGENTS" ]; then
     for prim in "${REFLEXIVE_PRIMS[@]}"; do
-        # Look for "P{n} is a reflex" OR "Reflexive Trigger Rule" in proximity to the prim section
+        # Look for "P{n} is a reflex" OR "Reflexive Trigger Rule" in proximity to the prim section.
+        # Accept both legacy `### Pn:` and short-name `### Pn — Short: Long` formats.
         if awk -v p="$prim" '
-            /^### / { in_sec = ($0 ~ "^### "p":") }
+            /^### / { in_sec = ($0 ~ "^### "p"[: ]") }
             in_sec && /Reflexive Trigger Rule/ { found = 1 }
             in_sec && / is a reflex/ { found = 1 }
             END { exit (found ? 0 : 1) }
