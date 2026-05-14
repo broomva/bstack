@@ -219,7 +219,8 @@ assert_eq "Scaffold-and-doctor: no missing primitive sections" "$PRIMSEC_GAPS" "
 # this PR ships the detector. Once the realignment lands, flip this back
 # to a hard assertion.
 #
-# TODO(bstack#TBD): after template P7-P9 realignment, change this to:
+# TODO (follow-up PR after this one merges): after template P7-P9 realignment
+# branch `feat/bstack-template-realign-p7-p9-fail-mode-flip`, change this to:
 #   assert_eq "Scaffold-and-doctor: no missing reflexive trigger rules" "$REFLEX_GAPS" "0"
 if [ "$REFLEX_GAPS" -gt 0 ]; then
     echo "  [warn] Scaffold-and-doctor: $REFLEX_GAPS missing reflexive trigger rule(s) — pre-existing template drift; tracked in follow-up PR. Detector working; fix not in this PR."

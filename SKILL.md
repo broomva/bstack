@@ -71,7 +71,7 @@ npx skills add broomva/bstack
 
 Then, in your agent session:
 ```
-/bstack bootstrap     → install 28 skills + scaffold governance + wire hooks + run doctor
+/bstack bootstrap     → install 30 skills + scaffold governance + wire hooks + run doctor
 /bstack doctor        → verify primitive contract compliance (always exits 0)
 /bstack repair        → fix specific gaps surfaced by doctor (asks before writing)
 /bstack status        → show which skills are installed vs missing
@@ -245,7 +245,7 @@ Future sessions inspect this for state. `bootstrap_status: failed` is captured t
 
 1. Installs all 30 skills via `npx skills add broomva/<skill>` — `broomva/autonomous` is the first in the roster (canonical operating mode)
 2. **Scaffolds missing governance files** from `assets/templates/`:
-   - `CLAUDE.md` (workspace invariants + RCS hierarchy + primitive table P1–P16 + §Ritual vs Substance)
+   - `CLAUDE.md` (workspace invariants + RCS hierarchy + primitive table P1–P20 + §Ritual vs Substance)
    - `AGENTS.md` (operational rules + per-primitive sections + reflexive triggers for all reasoning-enforced primitives)
    - `.control/policy.yaml` (ci_watch / ci_heal / auto_merge / gates G1–G11)
    - `.claude/settings.json` (P1, P2, P7 hook wiring)
@@ -292,14 +292,14 @@ Re-run the preamble. For each skill show: name, layer, installed/missing. Then r
 
 `scripts/revamp.sh`. Triggers complete workspace reconfiguration:
 
-1. Reinstall all 28 skills (force mode)
+1. Reinstall all 30 skills (force mode)
 2. Regenerate governance files from templates (asks before overwriting)
 3. Rewire hooks (git pre-commit + Claude Code Stop/Notification/PreToolUse/SessionStart)
 4. Force-run conversation bridge across all projects
 5. Run full control audit
 6. Update AGENTS.md with current state
 
-## Stack layers (28 skills)
+## Stack layers (30 skills)
 
 For the full skill roster + descriptions, see [references/skills-roster.md](references/skills-roster.md). For the layered architecture, see [references/stack-architecture.md](references/stack-architecture.md). For the full primitive contract with reflexive triggers, see [references/primitives.md](references/primitives.md).
 
@@ -392,7 +392,7 @@ This is the f₃ dynamics function at L3 of the RCS hierarchy. See [references/p
 
 - [references/primitives.md](references/primitives.md) — full P1–P20 reference with reflexive triggers
 - [references/prompts-integration.md](references/prompts-integration.md) — when/how to leverage the broomva.tech prompts library (5-step auto-tracing mandate, discovery, common traps)
-- [references/skills-roster.md](references/skills-roster.md) — all 28 skills with install commands
+- [references/skills-roster.md](references/skills-roster.md) — all 30 skills with install commands
 - [references/stack-architecture.md](references/stack-architecture.md) — layer dependency diagram
 - [references/quickstart.md](references/quickstart.md) — 5-minute install walkthrough
 - [bstack-upgrade/SKILL.md](bstack-upgrade/SKILL.md) — version-upgrade flow
