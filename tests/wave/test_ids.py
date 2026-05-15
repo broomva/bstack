@@ -20,9 +20,11 @@ class WaveIdTest(unittest.TestCase):
         self.assertLess(unix_a, unix_b)
 
     def test_uniqueness_in_burst(self):
+        # Burst sized for ~0.3% birthday collision in 65k slot (token_hex(2))
+        # within one unix-second. 100 would flake at ~7.6%.
         from scripts.wave import mint_wave_id
-        ids = {mint_wave_id() for _ in range(100)}
-        self.assertEqual(len(ids), 100)
+        ids = {mint_wave_id() for _ in range(20)}
+        self.assertEqual(len(ids), 20)
 
 
 class SlugDerivationTest(unittest.TestCase):
