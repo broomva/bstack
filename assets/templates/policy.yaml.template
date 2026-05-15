@@ -87,9 +87,122 @@ auto_merge:
       action: require_human
     - path_touched: .control/policy.yaml
       action: require_human
+    # === Indirect-prompt-injection defense — editor-config paths (2026-05-15) ===
+    # Spec: specs/2026-05-15-indirect-prompt-injection-defense.md §4 Tier 1.
+    # Rationale: every documented incident in 2024-2026 that turned indirect prompt
+    # injection into RCE pivoted through a silent write to one of these paths:
+    #   - .vscode/tasks.json + .vscode/settings.json  (CVE-2025-53773 Copilot YOLO-Mode;
+    #                                                   blockchain-C2 gist 2026-05-06)
+    #   - .cursor/mcp.json                            (CurXecute CVE-2025-54135; MCPoison
+    #                                                   CVE-2025-54136)
+    #   - .claude/settings.json                       (Claudy Day Claude.ai exfil)
+    #   - .gitignore (removal)                        (blockchain-C2 gist stage 5)
+    - path_touched: .vscode/*
+      action: require_human
+    - path_touched: .cursor/*
+      action: require_human
+    - path_touched: .idea/*
+      action: require_human
+    - path_touched: .continue/*
+      action: require_human
+    - path_touched: .aider/*
+      action: require_human
+    - path_touched: .claude/settings.json
+      action: require_human
+    - path_touched: .gitignore
+      action: require_human
     # Auto-merge classes (uncomment to enable per branch pattern)
     # - branch_pattern: "docs/*"
     #   action: auto
     # - branch_pattern: "research/*"
     #   action: auto
   default_action: notify
+
+# === Indirect-prompt-injection defense — PreToolUse write gate (2026-05-15) ===
+# Spec: specs/2026-05-15-indirect-prompt-injection-defense.md §4 Tier 1.
+# Consumed by ~/broomva/scripts/check-file-write-safety.py (workspace-side, ships
+# as PR #2 against broomva/workspace). This block defines the schema; the runtime
+# is a separate concern. Schema lands first so the runtime can pin to a stable
+# contract.
+#
+# Three sub-blocks:
+#   write_gate.content_patterns: regex refusal on dangerous content substrings.
+#   write_gate.magic_bytes_check: refuses files whose extension claims one type but
+#                                 whose magic bytes are script/executable.
+#   write_gate.gitignore_modification: refuses .gitignore edits that REMOVE patterns
+#                                       (additions are normal; removals enable silent
+#                                       commits of malicious files).
+#
+# Default state: enabled. Override per-workspace by setting
+#   write_gate.enabled: false  in .control/policy.yaml — but the bstack-doctor
+# command will warn loudly when this is off.
+
+write_gate:
+  enabled: true
+  content_patterns:
+    # Each pattern is a Python `re` regex matched against the file content being
+    # written or edited. severity=blocking refuses the write with exit code 8
+    # (analogue to the marketing-shape detector in broomva/social-intelligence
+    # PR #2 — same refuse-to-send substrate pattern). severity=warn logs but
+    # allows.
+    - pattern: "runOn:\\s*folderOpen"
+      severity: blocking
+      rationale: "VS Code autoexec primitive. Universal trigger across Jamf Threat Labs Dec 2025 North Korea campaign, Tenable/ThreatLocker advisories, mihai-r-lupu blockchain-C2 gist 2026-05-06. https://github.com/microsoft/vscode/issues/309406"
+    - pattern: "task\\.allowAutomaticTasks:\\s*true"
+      severity: blocking
+      rationale: "VS Code autoexec-bypass key — blockchain-C2 gist used this exact setting to skip the 'Do you want to allow automatic tasks?' confirmation"
+    - pattern: "chat\\.tools\\.autoApprove:\\s*true"
+      severity: blocking
+      rationale: "GitHub Copilot YOLO-Mode (CVE-2025-53773, CVSS 7.8) — prompt injection writes this exact key to .vscode/settings.json then shell-exec auto-approves"
+    - pattern: "--dangerously-skip-permissions"
+      severity: blocking
+      rationale: "Claude Code unsafe-flag bypass — used by Nx s1ngularity (CISA-advisory) postinstall scripts to weaponize AI CLIs as recon"
+    - pattern: "api\\.trongrid\\.io|fullnode\\.mainnet\\.aptoslabs|bsc-dataseed\\.binance|bsc-rpc\\.publicnode"
+      severity: blocking
+      rationale: "Public-blockchain RPCs in non-blockchain code = dead-drop C2 signal (blockchain-C2 gist used TRON for XOR key + Aptos + BSC fallback)"
+    - pattern: "child_process\\.spawn\\([^)]*detached:\\s*true"
+      severity: warn
+      rationale: "Detached spawn in JS/TS = persistence primitive (blockchain-C2 gist Layer 4 used this to keep payload alive after parent exits)"
+  magic_bytes_check:
+    enabled: true
+    # Maps a forbidden file-extension family to a list of magic-byte / start-of-content
+    # signatures that MUST NOT appear at the file head. Catches the font-file-with-JS
+    # disguise from the blockchain-C2 gist (stage 4).
+    #
+    # Signatures are matched against the first 256 bytes of content (utf-8 decoded for
+    # text-style sigs; raw bytes for binary sigs). String signatures match literally.
+    rules:
+      - extension_match: [".woff2", ".woff", ".ttf", ".otf", ".eot"]
+        forbid_signatures_starting_with:
+          - "function"
+          - "(function"
+          - "const "
+          - "var "
+          - "let "
+          - "import "
+          - "module.exports"
+          - "#!/"
+        rationale: "Font file with script content = blockchain-C2 stage 4 (fa-solid-400.woff2 disguise)"
+      - extension_match: [".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp", ".ico"]
+        forbid_signatures_starting_with:
+          - "function"
+          - "(function"
+          - "<?php"
+          - "<script"
+          - "#!/"
+        rationale: "Image file with script content = steganography/disguise class"
+      - extension_match: [".txt", ".md", ".json", ".yaml", ".yml", ".toml", ".ini"]
+        forbid_signatures_starting_with:
+          - "MZ"
+          - "\\x7fELF"
+          - "\\xca\\xfe\\xba\\xbe"
+          - "\\xfe\\xed\\xfa"
+        rationale: "Text/config file with PE/ELF/Mach-O magic = binary disguise class"
+  gitignore_modification:
+    enabled: true
+    removed_patterns_require_human: true
+    # Modifications that ADD patterns to .gitignore are normal and unaffected.
+    # Modifications that REMOVE patterns trigger require_human because removing
+    # e.g. `.vscode/*` from .gitignore enables silent commit of attacker-injected
+    # editor config (blockchain-C2 gist stage 5).
+    rationale: "blockchain-C2 gist (mihai-r-lupu 2026-05-06) explicitly removed .vscode/* from .gitignore to enable committing the malicious tasks.json"
