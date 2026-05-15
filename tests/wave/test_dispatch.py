@@ -50,7 +50,11 @@ class DispatchTest(unittest.TestCase):
             os.environ["BSTACK_WAVE_CACHE_DIR"] = td + "/cache"
             stub = Path(td) / "fake-claude.sh"
             stub.write_text(
-                "#!/bin/sh\necho \"$@\" >> " + td + "/fake-calls.log\nexit 0\n")
+                "#!/bin/sh\n"
+                "if [ \"$1\" = --bg ]; then flag=1; else flag=0; fi\n"
+                "echo \"CALLED bg=$flag\" >> " + td + "/fake-calls.log\n"
+                "exit 0\n"
+            )
             stub.chmod(0o755)
             os.environ["BSTACK_WAVE_CLAUDE_BIN"] = str(stub)
             repo = _init_repo(Path(td))
@@ -66,9 +70,13 @@ class DispatchTest(unittest.TestCase):
             self.assertTrue((wave_dirs[0] / "manifest.json").exists())
             self.assertTrue((Path(td) / "wt-a").exists())
             self.assertTrue((Path(td) / "wt-b").exists())
+            # Give the (instantly-exiting) stubs a moment to write the log.
+            import time
+            time.sleep(0.5)
             calls = Path(td + "/fake-calls.log").read_text().strip().splitlines()
             self.assertEqual(len(calls), 2)
-            self.assertIn("--bg", calls[0])
+            self.assertIn("bg=1", calls[0])
+            self.assertIn("bg=1", calls[1])
 
     def test_validation_failure_aborts_pre_worktree(self):
         from scripts.wave import main

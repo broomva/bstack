@@ -532,36 +532,21 @@ def _cmd_dispatch(args) -> int:
     wd.mkdir(parents=True, exist_ok=True)
 
     plan_entries: list[PlanEntry] = []
-    procs: list[subprocess.Popen] = []
     repo_root = entries[0]["repo_root"]
     for e in entries:
         wt = Path(e["worktree"])
         _create_worktree(Path(e["repo_root"]), wt, e["branch"], e["base"])
         prompt = _build_prompt(wave_id, e["slug"], Path(e["plan_path"]), wt)
-        # Write the prompt to WAVE_PROMPT.md inside the worktree so the agent
-        # can resume from disk (P12 pattern). Pass only the filename on the CLI
-        # so there are no embedded newlines in the argv (tests rely on this).
-        prompt_file = wt / "WAVE_PROMPT.md"
-        prompt_file.write_text(prompt, encoding="utf-8")
         proc = subprocess.Popen(
-            [_claude_binary(), "--bg", str(prompt_file)],
+            [_claude_binary(), "--bg", prompt],
             cwd=str(wt),
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
-        procs.append(proc)
         plan_entries.append(PlanEntry(
             slug=e["slug"], plan_path=e["plan_path"], worktree=e["worktree"],
             branch=e["branch"], base=e["base"], linear=e.get("linear"),
             agent_pid=proc.pid, launched_at=_utc_now_iso(),
         ))
-    # Wait briefly for each launcher to exit (claude --bg detaches immediately;
-    # stubs used in tests also exit quickly). This prevents resource warnings and
-    # ensures stub test artefacts are flushed before the caller inspects them.
-    for proc in procs:
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            pass  # Long-running agent; detach and move on.
 
     write_manifest(wd, Manifest(
         wave_id=wave_id, name=args.name, created_at=_utc_now_iso(),
