@@ -14,7 +14,12 @@
 #      the policy, not a hook; P7 = CI Watcher / Productive Wait,
 #      P8 = Skill Freshness hook, P9 = Janitor make-target)
 #   4. .control/policy.yaml has required blocks (ci_watch, ci_heal, auto_merge)
-#   5. .claude/settings.json hooks wire the expected primitive scripts
+#   5. .claude/settings.json hooks wire the expected primitive scripts:
+#      - P1: scripts/conversation-bridge-hook.sh (Stop + Notification)
+#      - P2: scripts/control-gate-hook.sh (PreToolUse — Bash/Write/Edit)
+#      - P8: scripts/skill-freshness-hook.sh (SessionStart)
+#      - P17: ~/.agents/skills/role-x/scripts/role-x-intake-hook.sh (UserPromptSubmit)
+#      - P17: ~/.agents/skills/role-x/scripts/role-x-coverage-hook.sh (SessionStart)
 #   6. Each primitive's mechanism is reachable on disk:
 #      - P1: scripts/conversation-bridge-hook.sh
 #      - P2: scripts/control-gate-hook.sh + .control/policy.yaml
@@ -23,6 +28,7 @@
 #      - P8: scripts/skill-freshness-hook.sh
 #      - P9: scripts/branch-janitor.sh
 #      - P12: skills/persist/scripts/persist.py
+#      - P17: ~/.agents/skills/role-x/scripts/{role-x.py,role-x-{intake,coverage}-hook.sh}
 #   7. (continued — each primitive's mechanism)
 #   8. L3 trust gates (G-L3-1 + G-L3-2) pass via scripts/bstack-primitive-lint.py
 #      and scripts/bstack-rule-of-three.py; broomva/autonomous skill installed
@@ -196,11 +202,15 @@ HOOK_FILES=(
     "conversation-bridge-hook.sh"
     "control-gate-hook.sh"
     "skill-freshness-hook.sh"
+    "role-x-intake-hook.sh"
+    "role-x-coverage-hook.sh"
 )
 HOOK_LABELS=(
     "P1 (Stop, Notification)"
     "P2 (PreToolUse)"
-    "P7 (SessionStart)"
+    "P8 (SessionStart)"
+    "P17 (UserPromptSubmit)"
+    "P17 (SessionStart)"
 )
 if [ -f "$SETTINGS" ]; then
     for i in "${!HOOK_FILES[@]}"; do
@@ -210,7 +220,7 @@ if [ -f "$SETTINGS" ]; then
             ok "$hk wired ($label)"
         else
             gap "$hk not wired in .claude/settings.json ($label)" \
-                "add the hook entry per AGENTS.md primitive spec"
+                "add the hook entry per AGENTS.md primitive spec — run 'bstack repair' or 'bstack bootstrap' to wire from assets/templates/settings.json.snippet"
         fi
     done
 fi
