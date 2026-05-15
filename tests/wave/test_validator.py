@@ -67,3 +67,15 @@ class ValidatorTest(unittest.TestCase):
             with self.assertRaises(WaveError) as ctx:
                 validate_plans([pa])
             self.assertIn("dirty", str(ctx.exception).lower())
+
+    def test_dirty_non_plan_file_in_plans_dir_rejected(self):
+        """Regression: a non-plan untracked file in plans/ must still trigger dirty."""
+        from scripts.wave import validate_plans, WaveError
+        with tempfile.TemporaryDirectory() as td:
+            repo = _init_repo(Path(td))
+            pa = _put_plan(repo, "a", "../wt-a", "feat/a")
+            # An unrelated uncommitted file inside the SAME plans/ dir
+            (repo / "plans" / "random-uncommitted.txt").write_text("noise\n")
+            with self.assertRaises(WaveError) as ctx:
+                validate_plans([pa])
+            self.assertIn("dirty", str(ctx.exception).lower())

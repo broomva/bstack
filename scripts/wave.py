@@ -281,35 +281,24 @@ def _find_repo_root(start: Path) -> Path:
 def _git_is_clean(repo: Path, exclude_paths: set[Path] | None = None) -> bool:
     """Return True if repo has no uncommitted changes (ignoring plan files under validation)."""
     r = subprocess.run(
-        ["git", "-C", str(repo), "status", "--porcelain"],
+        ["git", "-C", str(repo), "status", "--porcelain", "--untracked-files=all"],
         check=True, capture_output=True, text=True,
     )
     if not r.stdout.strip():
         return True
-    if exclude_paths:
-        repo_resolved = repo.resolve()
-        for line in r.stdout.splitlines():
-            if not line.strip():
-                continue
-            # porcelain format: "XY path" or "XY path -> path"
-            rel = line[3:].strip().rstrip("/").split(" -> ")[-1].rstrip("/")
-            abs_path = (repo_resolved / rel).resolve()
-            # Check if this path is one of our plan files, or a parent dir of them
-            excluded = False
-            for ep in exclude_paths:
-                try:
-                    ep.relative_to(abs_path)
-                    excluded = True
-                    break
-                except ValueError:
-                    pass
-                if abs_path == ep:
-                    excluded = True
-                    break
-            if not excluded:
-                return False
-        return True
-    return False
+    if not exclude_paths:
+        return False
+    repo_resolved = repo.resolve()
+    excludes_resolved = {Path(p).resolve() for p in exclude_paths}
+    for line in r.stdout.splitlines():
+        if not line.strip():
+            continue
+        # porcelain format: "XY path" or "XY path -> path"
+        rel = line[3:].strip().split(" -> ")[-1]
+        abs_path = (repo_resolved / rel).resolve()
+        if abs_path not in excludes_resolved:
+            return False
+    return True
 
 
 def validate_plans(plan_paths: list[Path]) -> list[dict]:
