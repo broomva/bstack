@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# bstack-wave — parallel sub-phase dispatch for Claude Code agent view.
+#
+# Thin shim that dispatches to scripts/wave.py. Mirrors the bstack-config
+# shim pattern. Forwards argv unchanged.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+WAVE_PY="$SCRIPT_DIR/scripts/wave.py"
+
+if [ ! -f "$WAVE_PY" ]; then
+  echo "bstack-wave: scripts/wave.py not found at $WAVE_PY" >&2
+  exit 1
+fi
+
+exec python3 "$WAVE_PY" "$@"
