@@ -1,5 +1,5 @@
 {
-  "_comment": "bstack-managed hooks — bootstrap merges these into your existing .claude/settings.json. Does NOT overwrite existing entries; only adds missing ones.",
+  "_comment": "bstack-managed hooks — bootstrap merges these into your existing .claude/settings.json. Does NOT overwrite existing entries; only adds missing ones. ${BROOMVA_WORKSPACE} is replaced with the workspace root; ${BROOMVA_HOME} is replaced with $HOME (where npx skills add -g installs).",
   "hooks": {
     "SessionStart": [
       {
@@ -9,6 +9,24 @@
             "command": "${BROOMVA_WORKSPACE}/scripts/skill-freshness-hook.sh",
             "timeout": 5,
             "_bstack_primitive": "P8"
+          },
+          {
+            "type": "command",
+            "command": "${BROOMVA_HOME}/.agents/skills/role-x/scripts/role-x-coverage-hook.sh",
+            "timeout": 5,
+            "_bstack_primitive": "P17"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${BROOMVA_HOME}/.agents/skills/role-x/scripts/role-x-intake-hook.sh",
+            "timeout": 5,
+            "_bstack_primitive": "P17"
           }
         ]
       }
