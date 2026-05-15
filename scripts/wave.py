@@ -292,6 +292,61 @@ def _cmd_status(args) -> int:
     return 0
 
 
+def list_waves() -> list[dict]:
+    """Return list of {wave_id, name, created_at, plans, summary} for each wave dir."""
+    root = cache_dir()
+    if not root.exists():
+        return []
+    out = []
+    for entry in sorted(root.iterdir()):
+        if not entry.is_dir() or not entry.name.startswith("wave_"):
+            continue
+        try:
+            m = read_manifest(entry)
+        except WaveError:
+            continue
+        state = read_wave_state(entry)
+        summary = {"total": len(m.plans), "merged": 0, "open_pr": 0,
+                   "in_progress": 0, "failed": 0}
+        for plan in m.plans:
+            ev = state.get(plan.slug, {}).get("event", "pending")
+            if ev == "pr_merged":
+                summary["merged"] += 1
+            elif ev == "pr_opened":
+                summary["open_pr"] += 1
+            elif ev == "failed":
+                summary["failed"] += 1
+            else:
+                summary["in_progress"] += 1
+        out.append({
+            "wave_id": m.wave_id,
+            "name": m.name,
+            "created_at": m.created_at,
+            "plans": len(m.plans),
+            "summary": summary,
+        })
+    return out
+
+
+def _cmd_list(args) -> int:
+    waves = list_waves()
+    if not waves:
+        print("(no waves)")
+        return 0
+    for w in waves:
+        s = w["summary"]
+        bits = []
+        if s["merged"]: bits.append(f"{s['merged']} merged")
+        if s["open_pr"]: bits.append(f"{s['open_pr']} open PR")
+        if s["in_progress"]: bits.append(f"{s['in_progress']} in-progress")
+        if s["failed"]: bits.append(f"{s['failed']} failed")
+        state = " · ".join(bits) if bits else "no events"
+        name = w["name"] or "—"
+        print(f"{w['wave_id']:<28} {name:<24} {w['created_at']:<22} "
+              f"{w['plans']} plan(s) · {state}")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="bstack wave")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -313,6 +368,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             _cmd_report(args)
         if args.cmd == "status":
             return _cmd_status(args)
+        if args.cmd == "list":
+            return _cmd_list(args)
     except WaveError as exc:
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(1)
