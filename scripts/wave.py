@@ -7,11 +7,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import secrets
 import sys
 import time
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
@@ -150,6 +152,35 @@ def read_manifest(wave_dir: Path) -> Manifest:
     )
 
 
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def cache_dir() -> Path:
+    """Root of wave state. Overridable via $BSTACK_WAVE_CACHE_DIR for tests."""
+    override = os.environ.get("BSTACK_WAVE_CACHE_DIR")
+    if override:
+        return Path(override)
+    return Path.home() / ".cache" / "bstack" / "wave"
+
+
+def wave_dir(wave_id: str) -> Path:
+    return cache_dir() / wave_id
+
+
+def append_status_event(wd: Path, slug: str, event: str, extras: dict) -> None:
+    """Append one JSON line to <slug>.status.jsonl. Validates slug exists in manifest."""
+    m = read_manifest(wd)
+    slugs = {p.slug for p in m.plans}
+    if slug not in slugs:
+        raise WaveError(f"slug {slug!r} not in manifest of wave {m.wave_id}")
+    payload = {"ts": _utc_now_iso(), "event": event}
+    payload.update(extras)
+    jl = wd / f"{slug}.status.jsonl"
+    with jl.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(payload) + "\n")
+
+
 def mint_wave_id() -> str:
     """Return wave_<unix-seconds>_<4-char-base36-random>.
 
@@ -166,14 +197,43 @@ def derive_slug(plan_path: Path) -> str:
     return _DATE_PREFIX.sub("", name)
 
 
+def _cmd_report(args) -> int:
+    wd = wave_dir(args.wave)
+    if not wd.exists():
+        raise WaveError(f"wave {args.wave} not found at {wd}")
+    extras: dict = {}
+    for k in ("branch", "head", "pr", "phase", "reason", "task"):
+        v = getattr(args, k, None)
+        if v is not None:
+            extras[k] = v
+    merge_sha = getattr(args, "merge_sha", None)  # argparse maps --merge-sha
+    if merge_sha is not None:
+        extras["merge_sha"] = merge_sha
+    append_status_event(wd, args.plan, args.event, extras)
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="bstack wave")
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("dispatch")
     sub.add_parser("status")
     sub.add_parser("list")
-    sub.add_parser("report")
+
+    rp = sub.add_parser("report")
+    rp.add_argument("--wave", required=True)
+    rp.add_argument("--plan", required=True)
+    rp.add_argument("--event", required=True)
+    for k in ("branch", "head", "pr", "merge-sha", "phase", "reason", "task"):
+        rp.add_argument(f"--{k}", default=None)
+
     args = parser.parse_args(argv)
+    try:
+        if args.cmd == "report":
+            _cmd_report(args)
+    except WaveError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(1)
     raise SystemExit(0)
 
 
