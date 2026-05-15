@@ -238,6 +238,16 @@ for i in "${!SCRIPT_PATHS[@]}"; do
     fi
 done
 
+# P19 mechanism: bstack wave subcommand
+_WAVE_BIN="$WORKSPACE/bin/bstack-wave"
+_WAVE_PY="$WORKSPACE/scripts/wave.py"
+if [ -x "$_WAVE_BIN" ] && [ -f "$_WAVE_PY" ]; then
+  ok "P19 mechanism: bin/bstack-wave + scripts/wave.py present"
+else
+  gap "P19 mechanism: bin/bstack-wave or scripts/wave.py missing" \
+      "install/rebuild from bstack repo HEAD"
+fi
+
 # ── L3 trust gates (G-L3-1 + G-L3-2) ───────────────────────────────────────
 section "8. L3 trust gates"
 L3_PRIMITIVE_LINT="$WORKSPACE/scripts/bstack-primitive-lint.py"

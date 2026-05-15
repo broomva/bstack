@@ -77,6 +77,9 @@ Then, in your agent session:
 /bstack status        → show which skills are installed vs missing
 /bstack validate      → check skill SKILL.md frontmatter health
 /bstack revamp        → full reconfiguration (force-reinstall + rewire + re-doctor)
+/bstack wave dispatch <plan...>   → atomic parallel-agent dispatch from N plan files
+/bstack wave status <wave-id>     → forensic per-wave state table
+/bstack wave list                 → all waves with summary state
 ```
 
 ## What bstack enforces
@@ -107,6 +110,8 @@ The sixteen primitives. Each closes one specific failure mode that drifts into e
 | **P20** | Cross-Model Adversarial Review Gate (`broomva/cross-review` skill) | same-model echo chamber; writer self-validates own work; AI slop (over-engineered abstractions, template-paste, unnecessary wrappers) merged because no different evaluator scored ≥7/10 |
 
 Full reference: see [references/primitives.md](references/primitives.md).
+
+> **`bstack wave` (new in this version).** Fills the parallel × across-session × external-event cell of P19's (Orchestrate) mechanism cube. Use it when you have N independent plan files that can run in parallel without shared mutable file writes (P5). Each plan's frontmatter declares its `worktree` and `branch`; the wrapper validates atomically, creates worktrees, and launches one `claude --bg` per plan. State lives in `~/.cache/bstack/wave/<wave-id>/` (P12 filesystem-as-state). See the design at `docs/superpowers/specs/2026-05-13-bstack-wave-design.md` (workspace repo) for the full primitive coalescence map.
 
 **Canonical operating mode**: `broomva/autonomous` — when the user says "go" / "proceed" / "be autonomous" / "automerge" / any bare execution directive, `/autonomous` fires the 20-reflex pipeline that exercises every primitive above in the right sequence. Substrate without mode is dormant; mode without substrate is wishful. Compounded, they produce a self-operating workspace.
 
