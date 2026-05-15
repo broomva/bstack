@@ -430,7 +430,10 @@ def _cmd_list(args) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="bstack wave")
     sub = parser.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("dispatch")
+    dp = sub.add_parser("dispatch")
+    dp.add_argument("plans", nargs="+", type=Path)
+    dp.add_argument("--name", default=None)
+    dp.add_argument("--dry-run", action="store_true")
     sp = sub.add_parser("status")
     sp.add_argument("wave_id")
     sub.add_parser("list")
@@ -444,6 +447,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     try:
+        if args.cmd == "dispatch":
+            rc = _cmd_dispatch(args)
+            raise SystemExit(rc)
         if args.cmd == "report":
             _cmd_report(args)
         if args.cmd == "status":
@@ -454,6 +460,117 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(1)
     raise SystemExit(0)
+
+
+def _claude_binary() -> str:
+    return os.environ.get("BSTACK_WAVE_CLAUDE_BIN") or "claude"
+
+
+def _ensure_claude_on_path() -> None:
+    bin_name = _claude_binary()
+    if os.path.isabs(bin_name):
+        if not os.access(bin_name, os.X_OK):
+            raise WaveError(f"{bin_name} is not executable")
+        return
+    for d in os.environ.get("PATH", "").split(os.pathsep):
+        cand = Path(d) / bin_name
+        if cand.exists() and os.access(cand, os.X_OK):
+            return
+    raise WaveError(
+        f"{bin_name!r} not found on PATH. Install Claude Code or set "
+        f"BSTACK_WAVE_CLAUDE_BIN to a stub for testing.")
+
+
+def _create_worktree(repo: Path, worktree: Path, branch: str, base: str) -> None:
+    if worktree.exists():
+        head = subprocess.run(
+            ["git", "-C", str(worktree), "rev-parse", "--abbrev-ref", "HEAD"],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        if head != branch:
+            raise WaveError(
+                f"worktree {worktree} exists but on {head}, expected {branch}")
+        if not _git_is_clean(worktree):
+            raise WaveError(f"worktree {worktree} exists but is dirty")
+        return
+    subprocess.run(
+        ["git", "-C", str(repo), "worktree", "add", str(worktree),
+         "-b", branch, base],
+        check=True, capture_output=True, text=True,
+    )
+
+
+def _build_prompt(wave_id: str, slug: str, plan_path: Path, worktree: Path) -> str:
+    return (
+        f"Worktree: {worktree}\n"
+        f"You are already inside this worktree; do not re-enter or recreate it.\n"
+        f"Plan: {plan_path}\n"
+        f"Wave: {wave_id}\n"
+        f"Plan-slug: {slug}\n\n"
+        f"Use the superpowers:subagent-driven-development skill to execute the plan "
+        f"task-by-task.\n\n"
+        f"Report lifecycle events by shelling out:\n"
+        f"  bstack wave report --wave {wave_id} --plan {slug} --event started\n"
+        f"  bstack wave report --wave {wave_id} --plan {slug} --event branch_pushed --branch <name> --head <sha>\n"
+        f"  bstack wave report --wave {wave_id} --plan {slug} --event pr_opened --pr <url>\n"
+        f"  bstack wave report --wave {wave_id} --plan {slug} --event pr_merged --merge-sha <sha>\n"
+        f"  bstack wave report --wave {wave_id} --plan {slug} --event failed --phase <where> --reason <why>\n"
+    )
+
+
+def _cmd_dispatch(args) -> int:
+    entries = validate_plans(args.plans)  # atomic; raises on first failure
+    if args.dry_run:
+        print(f"would dispatch wave with {len(entries)} plan(s):")
+        for e in entries:
+            print(f"  {e['slug']:<28} {e['branch']:<28} {e['worktree']}")
+        return 0
+    _ensure_claude_on_path()
+
+    wave_id = mint_wave_id()
+    wd = wave_dir(wave_id)
+    wd.mkdir(parents=True, exist_ok=True)
+
+    plan_entries: list[PlanEntry] = []
+    procs: list[subprocess.Popen] = []
+    repo_root = entries[0]["repo_root"]
+    for e in entries:
+        wt = Path(e["worktree"])
+        _create_worktree(Path(e["repo_root"]), wt, e["branch"], e["base"])
+        prompt = _build_prompt(wave_id, e["slug"], Path(e["plan_path"]), wt)
+        # Write the prompt to WAVE_PROMPT.md inside the worktree so the agent
+        # can resume from disk (P12 pattern). Pass only the filename on the CLI
+        # so there are no embedded newlines in the argv (tests rely on this).
+        prompt_file = wt / "WAVE_PROMPT.md"
+        prompt_file.write_text(prompt, encoding="utf-8")
+        proc = subprocess.Popen(
+            [_claude_binary(), "--bg", str(prompt_file)],
+            cwd=str(wt),
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        procs.append(proc)
+        plan_entries.append(PlanEntry(
+            slug=e["slug"], plan_path=e["plan_path"], worktree=e["worktree"],
+            branch=e["branch"], base=e["base"], linear=e.get("linear"),
+            agent_pid=proc.pid, launched_at=_utc_now_iso(),
+        ))
+    # Wait briefly for each launcher to exit (claude --bg detaches immediately;
+    # stubs used in tests also exit quickly). This prevents resource warnings and
+    # ensures stub test artefacts are flushed before the caller inspects them.
+    for proc in procs:
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass  # Long-running agent; detach and move on.
+
+    write_manifest(wd, Manifest(
+        wave_id=wave_id, name=args.name, created_at=_utc_now_iso(),
+        repo_root=repo_root, plans=plan_entries,
+    ))
+    print(f"Wave {wave_id} launched ({len(plan_entries)} agents).")
+    print(f"Watch dashboard:  claude agents")
+    print(f"Forensic state:   bstack wave status {wave_id}")
+    return 0
 
 
 if __name__ == "__main__":
