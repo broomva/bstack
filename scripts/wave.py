@@ -10,6 +10,7 @@ import json
 import os
 import re
 import secrets
+import subprocess
 import sys
 import time
 from dataclasses import asdict, dataclass, field
@@ -266,6 +267,96 @@ def derive_slug(plan_path: Path) -> str:
     """Slug = filename without date prefix and .md extension."""
     name = Path(plan_path).stem  # strips .md
     return _DATE_PREFIX.sub("", name)
+
+
+def _find_repo_root(start: Path) -> Path:
+    """Walk up from start to find the nearest .git directory. Return its parent."""
+    p = Path(start).resolve()
+    for candidate in (p, *p.parents):
+        if (candidate / ".git").exists():
+            return candidate
+    raise WaveError(f"no git repo above {start}")
+
+
+def _git_is_clean(repo: Path, exclude_paths: set[Path] | None = None) -> bool:
+    """Return True if repo has no uncommitted changes (ignoring plan files under validation)."""
+    r = subprocess.run(
+        ["git", "-C", str(repo), "status", "--porcelain"],
+        check=True, capture_output=True, text=True,
+    )
+    if not r.stdout.strip():
+        return True
+    if exclude_paths:
+        repo_resolved = repo.resolve()
+        for line in r.stdout.splitlines():
+            if not line.strip():
+                continue
+            # porcelain format: "XY path" or "XY path -> path"
+            rel = line[3:].strip().rstrip("/").split(" -> ")[-1].rstrip("/")
+            abs_path = (repo_resolved / rel).resolve()
+            # Check if this path is one of our plan files, or a parent dir of them
+            excluded = False
+            for ep in exclude_paths:
+                try:
+                    ep.relative_to(abs_path)
+                    excluded = True
+                    break
+                except ValueError:
+                    pass
+                if abs_path == ep:
+                    excluded = True
+                    break
+            if not excluded:
+                return False
+        return True
+    return False
+
+
+def validate_plans(plan_paths: list[Path]) -> list[dict]:
+    """Atomic pre-launch validation. Returns a list of resolved entries.
+
+    Raises WaveError on first failure. Nothing is created or launched.
+    """
+    if not plan_paths:
+        raise WaveError("no plans provided")
+
+    entries: list[dict] = []
+    seen_branches: dict[str, Path] = {}
+    seen_worktrees: dict[str, Path] = {}
+    seen_repos: set[Path] = set()
+    resolved_plan_paths: set[Path] = set()
+
+    for pp in plan_paths:
+        pp = Path(pp).resolve()
+        resolved_plan_paths.add(pp)
+        fm = parse_plan_frontmatter(pp)
+        repo_root = _find_repo_root(pp.parent)
+        worktree_abs = (repo_root / fm["worktree"]).resolve()
+        branch = fm["branch"]
+        if branch in seen_branches:
+            raise WaveError(
+                f"duplicate branch {branch!r} in {pp} and {seen_branches[branch]}")
+        seen_branches[branch] = pp
+        if str(worktree_abs) in seen_worktrees:
+            raise WaveError(
+                f"duplicate worktree {worktree_abs} in {pp} and "
+                f"{seen_worktrees[str(worktree_abs)]}")
+        seen_worktrees[str(worktree_abs)] = pp
+        seen_repos.add(repo_root)
+        entries.append({
+            "plan_path": str(pp),
+            "repo_root": str(repo_root),
+            "worktree": str(worktree_abs),
+            "branch": branch,
+            "base": fm.get("base", "main"),
+            "slug": fm.get("slug") or derive_slug(pp),
+            "linear": fm.get("linear"),
+        })
+
+    for repo in seen_repos:
+        if not _git_is_clean(repo, exclude_paths=resolved_plan_paths):
+            raise WaveError(f"source repo {repo} is dirty; refuse to start wave")
+    return entries
 
 
 def _cmd_report(args) -> int:
