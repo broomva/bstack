@@ -6,10 +6,12 @@ Stdlib-only. See docs/superpowers/specs/2026-05-13-bstack-wave-design.md.
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import secrets
 import sys
 import time
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Sequence
 
@@ -84,6 +86,68 @@ def parse_plan_frontmatter(plan_path: Path) -> dict[str, str]:
             raise WaveError(f"{p}: wave.{required} is required")
 
     return out
+
+
+MANIFEST_SCHEMA_VERSION = 1
+
+
+@dataclass
+class PlanEntry:
+    slug: str
+    plan_path: str
+    worktree: str
+    branch: str
+    base: str
+    linear: str | None
+    agent_pid: int | None
+    launched_at: str | None
+
+
+@dataclass
+class Manifest:
+    wave_id: str
+    name: str | None
+    created_at: str
+    repo_root: str
+    plans: list[PlanEntry] = field(default_factory=list)
+
+
+def write_manifest(wave_dir: Path, m: Manifest) -> None:
+    wave_dir.mkdir(parents=True, exist_ok=True)
+    data = {
+        "schema_version": MANIFEST_SCHEMA_VERSION,
+        "wave_id": m.wave_id,
+        "name": m.name,
+        "created_at": m.created_at,
+        "repo_root": m.repo_root,
+        "plans": [asdict(p) for p in m.plans],
+    }
+    (wave_dir / "manifest.json").write_text(
+        json.dumps(data, indent=2, sort_keys=False) + "\n", encoding="utf-8"
+    )
+
+
+def read_manifest(wave_dir: Path) -> Manifest:
+    mf = wave_dir / "manifest.json"
+    if not mf.exists():
+        raise WaveError(f"no manifest.json in {wave_dir}")
+    try:
+        data = json.loads(mf.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise WaveError(f"{mf}: invalid JSON: {exc}") from exc
+    sv = data.get("schema_version")
+    if sv != MANIFEST_SCHEMA_VERSION:
+        raise WaveError(
+            f"{mf}: unknown schema_version={sv} (expected {MANIFEST_SCHEMA_VERSION})"
+        )
+    plans = [PlanEntry(**p) for p in data.get("plans", [])]
+    return Manifest(
+        wave_id=data["wave_id"],
+        name=data.get("name"),
+        created_at=data["created_at"],
+        repo_root=data["repo_root"],
+        plans=plans,
+    )
 
 
 def mint_wave_id() -> str:
