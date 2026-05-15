@@ -181,6 +181,77 @@ def append_status_event(wd: Path, slug: str, event: str, extras: dict) -> None:
         fh.write(json.dumps(payload) + "\n")
 
 
+def read_wave_state(wd: Path) -> dict[str, dict]:
+    """Return {slug: last_event_dict}. Slugs with no JSONL get {'event': 'pending'}."""
+    m = read_manifest(wd)
+    out: dict[str, dict] = {}
+    for plan in m.plans:
+        jl = wd / f"{plan.slug}.status.jsonl"
+        if not jl.exists():
+            out[plan.slug] = {"event": "pending"}
+            continue
+        last = None
+        for line in jl.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                last = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+        out[plan.slug] = last or {"event": "pending"}
+    return out
+
+
+def _pr_number(pr_url: str) -> str:
+    url = pr_url or ""
+    # Prefer explicit /pull/<n> pattern (GitHub URLs)
+    m = re.search(r"/pull/(\d+)", url)
+    if m:
+        return f"#{m.group(1)}"
+    # Fall back to trailing numeric path segment (e.g. https://x/1218)
+    m = re.search(r"/(\d+)$", url)
+    if m:
+        return f"#{m.group(1)}"
+    return url or "—"
+
+
+def render_status_table(wd: Path) -> str:
+    """Render the human-readable status table including reflexive suggestions."""
+    m = read_manifest(wd)
+    state = read_wave_state(wd)
+    rows: list[tuple[str, str, str, str, str]] = []
+    open_prs: list[str] = []
+    all_merged = True
+    any_event = False
+    for plan in m.plans:
+        s = state.get(plan.slug, {"event": "pending"})
+        ev = s.get("event", "pending")
+        if ev != "pending":
+            any_event = True
+        if ev != "pr_merged":
+            all_merged = False
+        pr = _pr_number(s.get("pr", ""))
+        rows.append((plan.slug, plan.branch, plan.linear or "—", ev, pr))
+        if ev == "pr_opened" and s.get("pr"):
+            open_prs.append(s["pr"])
+    lines = [f"{m.wave_id} ({m.name or '—'}) — created {m.created_at}", ""]
+    lines.append(f"  {'SLUG':<28} {'BRANCH':<28} {'LINEAR':<10} {'LAST EVENT':<16} {'PR'}")
+    for slug, branch, linear, ev, pr in rows:
+        lines.append(f"  {slug:<28} {branch:<28} {linear:<10} {ev:<16} {pr}")
+    lines.append("")
+    if open_prs:
+        lines.append("Suggestions:")
+        for pr in open_prs:
+            num = _pr_number(pr).lstrip("#")
+            lines.append(f"  • {pr} is open — run: p9 watch {num} --background")
+    if all_merged and any_event:
+        lines.append("Suggestions:")
+        lines.append("  • All slugs merged — run: make janitor && "
+                     "python3 skills/bookkeeping/scripts/bookkeeping.py run")
+    return "\n".join(lines)
+
+
 def mint_wave_id() -> str:
     """Return wave_<unix-seconds>_<4-char-base36-random>.
 
@@ -213,11 +284,20 @@ def _cmd_report(args) -> int:
     return 0
 
 
+def _cmd_status(args) -> int:
+    wd = wave_dir(args.wave_id)
+    if not wd.exists():
+        raise WaveError(f"wave {args.wave_id} not found at {wd}")
+    print(render_status_table(wd))
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="bstack wave")
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("dispatch")
-    sub.add_parser("status")
+    sp = sub.add_parser("status")
+    sp.add_argument("wave_id")
     sub.add_parser("list")
 
     rp = sub.add_parser("report")
@@ -231,6 +311,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.cmd == "report":
             _cmd_report(args)
+        if args.cmd == "status":
+            return _cmd_status(args)
     except WaveError as exc:
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(1)
