@@ -325,7 +325,7 @@ Compositions are dynamic: Persist iterations can invoke `/goal` for sub-tasks; `
 | **B** Cross-context same-model | Fresh `Agent` subagent under devil's-advocate brief | Always available |
 | **C** Composed existing skills | `superpowers:constructive-dissent`, `devils-advocate`, `pr-review-toolkit:*`, `critique`, `premortem`, `plan-*-review` | Always — the toolkit P20 makes mandatory |
 
-Scoring: anti-slop ≥7/10 to pass; max 3 fix rounds; verdict logged in PR comments. Implementation: `broomva/cross-review` skill. The gate fires *before* P4 auto-merge — not after merge as code review.
+Scoring: anti-slop ≥7/10 to pass; max 3 fix rounds; verdict logged in PR comments + Linear ticket (if workspace uses Linear). Implementation: `broomva/cross-review` skill. The gate fires *before* P4 auto-merge — not after merge as code review.
 
 **Invariant**: Substantive PRs (>200 LOC OR public API change OR multi-file OR governance-class) cannot merge without cross-model adversarial verdict ≥7/10. Self-review by the writing model is forbidden as the *sole* verdict.
 

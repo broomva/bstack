@@ -57,8 +57,8 @@ bstack is a *portable harness metalayer* — it composes existing skills into a 
 
 bstack ships two complementary layers:
 
-- **Substrate** (this skill, `/bstack`): the 19 primitives + 29 skills + governance + hooks + `.control/policy.yaml`. This is what `/bstack bootstrap` installs. The substrate is the *capability* — what's available in the workspace.
-- **Mode** (`broomva/autonomous`): the canonical *behavior* that runs on top of the substrate. When the user says "go" / "proceed" / "be autonomous", `/autonomous` fires the 19-reflex pipeline that uses every primitive in sequence.
+- **Substrate** (this skill, `/bstack`): the 20 primitives + 30 skills + governance + hooks + `.control/policy.yaml`. This is what `/bstack bootstrap` installs. The substrate is the *capability* — what's available in the workspace.
+- **Mode** (`broomva/autonomous`): the canonical *behavior* that runs on top of the substrate. When the user says "go" / "proceed" / "be autonomous", `/autonomous` fires the 20-reflex pipeline that uses every primitive in sequence.
 
 Installing the substrate without the mode = the workspace has primitives but no entry point to engage them. Invoking the mode without the substrate = wishful thinking. Compounded: `/bstack bootstrap` installs the substrate, then `/autonomous` is the standing operating mode for substantive work units.
 
@@ -71,7 +71,7 @@ npx skills add broomva/bstack
 
 Then, in your agent session:
 ```
-/bstack bootstrap     → install 28 skills + scaffold governance + wire hooks + run doctor
+/bstack bootstrap     → install 30 skills + scaffold governance + wire hooks + run doctor
 /bstack doctor        → verify primitive contract compliance (always exits 0)
 /bstack repair        → fix specific gaps surfaced by doctor (asks before writing)
 /bstack status        → show which skills are installed vs missing
@@ -81,7 +81,7 @@ Then, in your agent session:
 
 ## What bstack enforces
 
-The sixteen primitives. Each closes one specific failure mode that drifts into entropy in unsupervised sessions:
+The twenty primitives. Each closes one specific failure mode that drifts into entropy in unsupervised sessions:
 
 | # | Primitive | Closes |
 |---|---|---|
@@ -245,7 +245,7 @@ Future sessions inspect this for state. `bootstrap_status: failed` is captured t
 
 1. Installs all 30 skills via `npx skills add broomva/<skill>` — `broomva/autonomous` is the first in the roster (canonical operating mode)
 2. **Scaffolds missing governance files** from `assets/templates/`:
-   - `CLAUDE.md` (workspace invariants + RCS hierarchy + primitive table P1–P16 + §Ritual vs Substance)
+   - `CLAUDE.md` (workspace invariants + RCS hierarchy + primitive table P1–P20 + §Ritual vs Substance)
    - `AGENTS.md` (operational rules + per-primitive sections + reflexive triggers for all reasoning-enforced primitives)
    - `.control/policy.yaml` (ci_watch / ci_heal / auto_merge / gates G1–G11)
    - `.claude/settings.json` (P1, P2, P7 hook wiring)
@@ -264,9 +264,9 @@ Future sessions inspect this for state. `bootstrap_status: failed` is captured t
 `scripts/doctor.sh`. Eight check sections:
 
 1. Governance files exist (CLAUDE.md, AGENTS.md, .control/policy.yaml)
-2. CLAUDE.md primitives table has all P1–P16 rows + correct count header ("Sixteen irreducible…")
-3. AGENTS.md has each primitive section (`### P1:` through `### P16:`)
-4. Reflexive Trigger Rules present for P6, P9, P10, P11, P12, P13, P14, P15, P16 (the reasoning-enforced primitives)
+2. CLAUDE.md primitives table has all P1–P20 rows + correct count header ("Twenty irreducible…")
+3. AGENTS.md has each primitive section (`### P1:` or `### P1 — Short: Long` format through `### P20`)
+4. Reflexive Trigger Rules present for P6, P9, P10, P11, P12, P13, P14, P15, P16, P17, P18, P19, P20 (the reasoning-enforced primitives)
 5. `.control/policy.yaml` has required blocks (`ci_watch:`, `ci_heal:`, `auto_merge:`)
 6. `.claude/settings.json` wires the expected hook scripts (P1, P2, P7)
 7. Each primitive's mechanism is reachable on disk
@@ -292,14 +292,14 @@ Re-run the preamble. For each skill show: name, layer, installed/missing. Then r
 
 `scripts/revamp.sh`. Triggers complete workspace reconfiguration:
 
-1. Reinstall all 28 skills (force mode)
+1. Reinstall all 30 skills (force mode)
 2. Regenerate governance files from templates (asks before overwriting)
 3. Rewire hooks (git pre-commit + Claude Code Stop/Notification/PreToolUse/SessionStart)
 4. Force-run conversation bridge across all projects
 5. Run full control audit
 6. Update AGENTS.md with current state
 
-## Stack layers (28 skills)
+## Stack layers (30 skills)
 
 For the full skill roster + descriptions, see [references/skills-roster.md](references/skills-roster.md). For the layered architecture, see [references/stack-architecture.md](references/stack-architecture.md). For the full primitive contract with reflexive triggers, see [references/primitives.md](references/primitives.md).
 
@@ -316,7 +316,7 @@ bstack is the *measurement substrate* for the agentic-control-kernel. The harnes
 | Bridge operational | fresh < 24h | `~/.cache/broomva-bridge-stamp` mtime |
 | Control audit | 5/5 sections | `make control-audit` exit code |
 | Conversations indexed | ≥1 session | `docs/conversations/Conversations.md` exists |
-| **Primitive contract** | **13/13** | **`bstack doctor` exit code** |
+| **Primitive contract** | **20/20** | **`bstack doctor` exit code** |
 
 ## When to use bstack
 
@@ -390,9 +390,9 @@ This is the f₃ dynamics function at L3 of the RCS hierarchy. See [references/p
 
 ## See also
 
-- [references/primitives.md](references/primitives.md) — full P1–P13 reference with reflexive triggers
+- [references/primitives.md](references/primitives.md) — full P1–P20 reference with reflexive triggers
 - [references/prompts-integration.md](references/prompts-integration.md) — when/how to leverage the broomva.tech prompts library (5-step auto-tracing mandate, discovery, common traps)
-- [references/skills-roster.md](references/skills-roster.md) — all 28 skills with install commands
+- [references/skills-roster.md](references/skills-roster.md) — all 30 skills with install commands
 - [references/stack-architecture.md](references/stack-architecture.md) — layer dependency diagram
 - [references/quickstart.md](references/quickstart.md) — 5-minute install walkthrough
 - [bstack-upgrade/SKILL.md](bstack-upgrade/SKILL.md) — version-upgrade flow

@@ -168,6 +168,73 @@ assert_contains "CLAUDE.md.template has Plugin Skill Precedence section" \
 assert_contains "AGENTS.md.template has Plugin Skill Precedence section" \
     "$AGENTS_TPL_TEXT" "## Plugin Skill Precedence"
 
+# ── 7. Scaffold-and-doctor compliance ──────────────────────────────────
+# The REAL guardrail: scaffold a workspace from the templates, then run
+# doctor.sh against it. This catches the failure mode where templates are
+# internally consistent (count, table, index — checks 1-6 above) but use a
+# heading format doctor.sh's regex doesn't recognize. That bug surfaced on
+# the P20 cross-review of this very PR's first pass and motivated this
+# assertion: lockstep-vs-validator, not just lockstep-vs-self.
+echo ""
+echo "=== Scaffold-and-doctor compliance ==="
+
+SCAFFOLD_DIR="$(mktemp -d)"
+trap 'rm -rf "$SCAFFOLD_DIR"' EXIT
+
+# Mirror what scripts/bootstrap.sh's scaffold_governance_file() does.
+mkdir -p "$SCAFFOLD_DIR/.control" "$SCAFFOLD_DIR/.claude" "$SCAFFOLD_DIR/scripts"
+WSNAME="$(basename "$SCAFFOLD_DIR")"
+sed "s/{{WORKSPACE_NAME}}/$WSNAME/g" "$CLAUDE_TPL" > "$SCAFFOLD_DIR/CLAUDE.md"
+sed "s/{{WORKSPACE_NAME}}/$WSNAME/g" "$AGENTS_TPL" > "$SCAFFOLD_DIR/AGENTS.md"
+sed "s|\${BROOMVA_WORKSPACE}|$SCAFFOLD_DIR|g" \
+    "$BSTACK_REPO/assets/templates/settings.json.snippet" > "$SCAFFOLD_DIR/.claude/settings.json"
+cp "$BSTACK_REPO/assets/templates/policy.yaml.template" "$SCAFFOLD_DIR/.control/policy.yaml"
+
+# Doctor checks mechanism reachability — placeholder scripts so those checks
+# don't false-positive unrelated to template content.
+touch "$SCAFFOLD_DIR/scripts/conversation-bridge-hook.sh"
+touch "$SCAFFOLD_DIR/scripts/control-gate-hook.sh"
+touch "$SCAFFOLD_DIR/scripts/skill-freshness-hook.sh"
+touch "$SCAFFOLD_DIR/scripts/branch-janitor.sh"
+chmod +x "$SCAFFOLD_DIR/scripts/"*.sh
+git -C "$SCAFFOLD_DIR" init -q >/dev/null 2>&1
+
+DOCTOR_OUT="$SCAFFOLD_DIR/.doctor.out"
+BROOMVA_WORKSPACE="$SCAFFOLD_DIR" bash "$DOCTOR_SH" --quiet > "$DOCTOR_OUT" 2>&1 || true
+
+# Count only template-content gaps: primitive sections + reflexive rules.
+# Other gaps (skill repos on disk, .control blocks, etc.) are not template concerns.
+PRIMSEC_GAPS="$(grep -cE "AGENTS\.md missing '### P[0-9]+" "$DOCTOR_OUT" || true)"
+REFLEX_GAPS="$(grep -cE "missing 'Reflexive Trigger Rule'" "$DOCTOR_OUT" || true)"
+PRIMSEC_GAPS="${PRIMSEC_GAPS:-0}"
+REFLEX_GAPS="${REFLEX_GAPS:-0}"
+
+assert_eq "Scaffold-and-doctor: no missing primitive sections" "$PRIMSEC_GAPS" "0"
+
+# Reflexive trigger rules: detection in WARN mode pending a separate PR to
+# realign template P7/P8/P9 ordering to match doctor.sh REFLEXIVE_PRIMS +
+# references/primitives.md (workspace canonical: P7=Wait, P8=Freshness,
+# P9=Janitor). The templates currently have P7=Freshness/P8=Janitor/P9=Wait
+# (pre-existing drift introduced by #16). The next PR fixes the templates;
+# this PR ships the detector. Once the realignment lands, flip this back
+# to a hard assertion.
+#
+# TODO (follow-up PR after this one merges): after template P7-P9 realignment
+# branch `feat/bstack-template-realign-p7-p9-fail-mode-flip`, change this to:
+#   assert_eq "Scaffold-and-doctor: no missing reflexive trigger rules" "$REFLEX_GAPS" "0"
+if [ "$REFLEX_GAPS" -gt 0 ]; then
+    echo "  [warn] Scaffold-and-doctor: $REFLEX_GAPS missing reflexive trigger rule(s) — pre-existing template drift; tracked in follow-up PR. Detector working; fix not in this PR."
+else
+    echo "  [ok] Scaffold-and-doctor: no missing reflexive trigger rules: $REFLEX_GAPS"
+    PASS=$((PASS + 1))
+fi
+
+if [ "$PRIMSEC_GAPS" != "0" ] || [ "$REFLEX_GAPS" != "0" ]; then
+    echo ""
+    echo "  [doctor output excerpt — first 30 lines]"
+    head -30 "$DOCTOR_OUT" | sed 's/^/    /'
+fi
+
 # ── Summary ──────────────────────────────────────────────────────────────
 echo ""
 echo "=== Lockstep test summary ==="
