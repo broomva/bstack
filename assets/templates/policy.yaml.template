@@ -44,8 +44,8 @@ gates:
       rule: "Run smoke before commit"
       severity: warn
 
-# === P7 CI Watcher + Productive-Wait Primitive ===
-# Required by skills/p9 (bstack P7 primitive). Fails closed if absent.
+# === P9 CI Watcher + Productive-Wait Primitive ===
+# Required by skills/p9 (bstack P9 primitive — name matches number). Fails closed if absent.
 
 ci_watch:
   enabled: true
@@ -67,7 +67,7 @@ ci_heal:
     linear_label: ci-heal-escalation
     notify_hook: skills/p9/scripts/p9-escalate-notify.sh
 
-# === P7 Auto-merge actuator ===
+# === P9 Auto-merge actuator ===
 # Closes the MERGE_READY → merged gap. Default-disabled; opt-in branch class.
 
 auto_merge:
