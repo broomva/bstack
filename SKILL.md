@@ -108,6 +108,14 @@ The twenty primitives. Each closes one specific failure mode that drifts into en
 
 Full reference: see [references/primitives.md](references/primitives.md).
 
+### Naming convention for agent prose (binding on every agent)
+
+Each primitive carries a **short name** for use in agent prose. When referencing a primitive in responses, PR bodies, commit messages, code comments, knowledge-graph entries, or any human-readable surface, use the **`Name (Pn)`** form — *"applying Snapshot (P15)"*, *"via Dep-Chain (P14)"*, *"running Bookkeeping (P6)"* — not bare `P15` / `P14` / `P6`. The number is the canonical identifier (stable across renames); the name is the human-readable handle. First mention in a response uses the full form; subsequent mentions in the same response may drop to bare `Name` ("Snapshot showed clean state") but never to bare `Pn`. Anchors, section IDs (`#p15-state-snapshot-before-action`), and primitive-count headers ("Twenty irreducible primitives") stay numeric — URL stability and arithmetic respectively. Failure mode: bare `Pn` makes responses read as numeric soup; cross-session readers can't decode the reference without a lookup. The Short-name index below is the recall key.
+
+**Short-name index** (canonical numbering): Bridge (P1) · Gate (P2) · Tickets (P3) · Pipeline (P4) · Fanout (P5) · Bookkeeping (P6) · Wait (P7) · Freshness (P8) · Janitor (P9) · Hygiene (P10) · Empirical (P11) · Persist (P12) · Dream (P13) · Dep-Chain (P14) · Snapshot (P15) · Crystallize (P16) · Lens (P17) · Audience (P18) · Orchestrate (P19) · Cross-Review (P20).
+
+**Canonical statement** lives in workspace `CLAUDE.md` §Bstack Core Automation Primitives and workspace `AGENTS.md` near line 93. This SKILL.md restates the rule so it's visible at the entry point where `/bstack` loads.
+
 **Canonical operating mode**: `broomva/autonomous` — when the user says "go" / "proceed" / "be autonomous" / "automerge" / any bare execution directive, `/autonomous` fires the 20-reflex pipeline that exercises every primitive above in the right sequence. Substrate without mode is dormant; mode without substrate is wishful. Compounded, they produce a self-operating workspace.
 
 ## Preamble (run first, every session)
