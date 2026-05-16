@@ -9,30 +9,33 @@
 #   1. CLAUDE.md primitives table has all P1-P20 rows + correct count
 #   2. AGENTS.md has each primitive section (### P1: through ### P20:)
 #   3. AGENTS.md has the binding reflexive trigger rules for primitives
-#      that require them (P6, P7, P10, P11, P12, P13, P14, P15, P16, P17,
+#      that require them (P6, P9, P10, P11, P12, P13, P14, P15, P16, P17,
 #      P18, P19, P20 — primitives where the agent's reasoning enforces
-#      the policy, not a hook; P7 = CI Watcher / Productive Wait,
-#      P8 = Skill Freshness hook, P9 = Janitor make-target)
+#      the policy, not a hook; P7 = Skill Freshness hook,
+#      P8 = Janitor make-target, P9 = CI Watcher / Productive Wait)
 #   4. .control/policy.yaml has required blocks (ci_watch, ci_heal, auto_merge)
 #   5. .claude/settings.json hooks wire the expected primitive scripts:
 #      - P1: scripts/conversation-bridge-hook.sh (Stop + Notification)
 #      - P2: scripts/control-gate-hook.sh (PreToolUse — Bash/Write/Edit)
-#      - P8: scripts/skill-freshness-hook.sh (SessionStart)
+#      - P7: scripts/skill-freshness-hook.sh (SessionStart)
 #      - P17: ~/.agents/skills/role-x/scripts/role-x-intake-hook.sh (UserPromptSubmit)
 #      - P17: ~/.agents/skills/role-x/scripts/role-x-coverage-hook.sh (SessionStart)
 #   6. Each primitive's mechanism is reachable on disk:
 #      - P1: scripts/conversation-bridge-hook.sh
 #      - P2: scripts/control-gate-hook.sh + .control/policy.yaml
 #      - P6: skills/bookkeeping/scripts/bookkeeping.py
-#      - P7: skills/p9/scripts/p9.py (Productive Wait — skill name historical)
-#      - P8: scripts/skill-freshness-hook.sh
-#      - P9: scripts/branch-janitor.sh
+#      - P7: scripts/skill-freshness-hook.sh
+#      - P8: scripts/branch-janitor.sh
+#      - P9: skills/p9/scripts/p9.py (Productive Wait — skill repo name matches primitive number)
 #      - P12: skills/persist/scripts/persist.py
 #      - P17: ~/.agents/skills/role-x/scripts/{role-x.py,role-x-{intake,coverage}-hook.sh}
 #   7. (continued — each primitive's mechanism)
 #   8. L3 trust gates (G-L3-1 + G-L3-2) pass via scripts/bstack-primitive-lint.py
 #      and scripts/bstack-rule-of-three.py; broomva/autonomous skill installed
 #      (the canonical operating mode on top of the substrate)
+#   9. Naming convention propagation — Name (Pn) rule + Short-name index
+#      present in CLAUDE.md + AGENTS.md (the LLM-loaded surfaces). Index has
+#      exactly 20 entries (one per primitive).
 #
 # Usage:
 #   bash scripts/doctor.sh               # full report
@@ -124,9 +127,9 @@ declare -a P_NAMES=(
     "P4: PR Pipeline"
     "P5: Parallel Agent"
     "P6: Knowledge Bookkeeping"
-    "P7: CI Watcher + Productive Wait"
-    "P8: Skill Freshness"
-    "P9: Branch + Worktree Janitor"
+    "P7: Skill Freshness"
+    "P8: Branch + Worktree Janitor"
+    "P9: CI Watcher + Productive Wait"
     "P10: Worktree Hygiene"
     "P11: Empirical Feedback Loop"
     "P12: Persistent Loop Discipline"
@@ -159,9 +162,10 @@ fi
 section "4. AGENTS.md reflexive trigger rules"
 # Primitives whose discipline is enforced via agent reasoning rather than hooks.
 # These MUST contain a Reflexive Trigger Rule subsection.
-# Note: workspace canonical numbering — P7 = Productive Wait (reasoning-enforced),
-# P8 = Skill Freshness (hook-enforced), P9 = Janitor (mechanism-only).
-declare -a REFLEXIVE_PRIMS=(P6 P7 P10 P11 P12 P13 P14 P15 P16 P17 P18 P19 P20)
+# Note: workspace canonical numbering — P7 = Skill Freshness (hook-enforced),
+# P8 = Janitor (mechanism-only), P9 = Productive Wait (reasoning-enforced,
+# skill name `broomva/p9` matches primitive number).
+declare -a REFLEXIVE_PRIMS=(P6 P9 P10 P11 P12 P13 P14 P15 P16 P17 P18 P19 P20)
 if [ -f "$AGENTS" ]; then
     for prim in "${REFLEXIVE_PRIMS[@]}"; do
         # Look for "P{n} is a reflex" OR "Reflexive Trigger Rule" in proximity to the prim section.
@@ -208,7 +212,7 @@ HOOK_FILES=(
 HOOK_LABELS=(
     "P1 (Stop, Notification)"
     "P2 (PreToolUse)"
-    "P8 (SessionStart)"
+    "P7 (SessionStart)"
     "P17 (UserPromptSubmit)"
     "P17 (SessionStart)"
 )
@@ -231,9 +235,9 @@ SCRIPT_PATHS=(
     "scripts/conversation-bridge-hook.sh"
     "scripts/control-gate-hook.sh"
     "skills/bookkeeping/scripts/bookkeeping.py"
-    "skills/p9/scripts/p9.py"
     "scripts/skill-freshness-hook.sh"
     "scripts/branch-janitor.sh"
+    "skills/p9/scripts/p9.py"
     "skills/persist/scripts/persist.py"
 )
 SCRIPT_LABELS=(P1 P2 P6 P7 P8 P9 P12)
@@ -284,6 +288,41 @@ else
     gap "broomva/autonomous skill not installed" \
         "install the canonical operating mode: npx skills add broomva/autonomous"
 fi
+
+# ── 9. Naming convention propagation ────────────────────────────────────────
+# The `Name (Pn)` rule must be present in the LLM-loaded surfaces (CLAUDE.md +
+# AGENTS.md). The Short-name index must enumerate exactly 20 primitives. Closes
+# the failure mode where agents revert to bare `Pn` in prose because the rule
+# was buried in only one document.
+section "9. Naming convention propagation (Name (Pn) rule)"
+EXPECTED_INDEX_COUNT=20
+for f in CLAUDE.md AGENTS.md; do
+    fp="$WORKSPACE/$f"
+    [ -f "$fp" ] || continue
+
+    # 9a. Naming rule present (the binding instruction in prose)
+    if grep -qE "use the .*Name \(Pn\). form" "$fp" 2>/dev/null; then
+        ok "$f restates the Name (Pn) naming rule"
+    else
+        gap "$f missing the Name (Pn) naming rule in prose" \
+            "add §Naming convention paragraph (see bstack/SKILL.md naming-convention block)"
+    fi
+
+    # 9b. Short-name index present + has 20 entries
+    if grep -qE '^\*\*Short-name index\*\*' "$fp" 2>/dev/null; then
+        idx_line="$(grep -E '^\*\*Short-name index\*\*' "$fp" | head -1)"
+        idx_entries="$(echo "$idx_line" | grep -oE '\(P[0-9]+\)' | wc -l | tr -d ' ')"
+        if [ "$idx_entries" = "$EXPECTED_INDEX_COUNT" ]; then
+            ok "$f Short-name index has $EXPECTED_INDEX_COUNT entries"
+        else
+            gap "$f Short-name index has $idx_entries entries (expected $EXPECTED_INDEX_COUNT)" \
+                "the Short-name index must list every primitive once; add or remove entries to match"
+        fi
+    else
+        gap "$f missing **Short-name index** line" \
+            "add the canonical short-name index after the naming rule"
+    fi
+done
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
