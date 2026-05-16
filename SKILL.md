@@ -7,12 +7,12 @@ description: |
   the substrate. P1 captures every session as episodic memory. P2 gates
   destructive operations. P3 tracks every work unit in Linear. P4 forces every
   change through CI. P5 isolates parallel agents in worktrees. P6 keeps the
-  knowledge graph quality-controlled. P7 is the productive-wait optimizer
-  (`broomva/p9` skill — historical name) — drains a context-scoped queue
-  while a blocking operation (PR CI, deploy, build, long index) runs;
-  classifier + evaluator self-heal red CI is the reference implementation.
-  P8 nudges when installed skills go stale. P9 cleans up squash-merged
-  branches and dead worktrees. P10 binds every agent to
+  knowledge graph quality-controlled. P7 nudges when installed skills go
+  stale. P8 cleans up squash-merged branches and dead worktrees. P9 is the
+  productive-wait optimizer (`broomva/p9` skill — name matches primitive
+  number) — drains a context-scoped queue while a blocking operation (PR
+  CI, deploy, build, long index) runs; classifier + evaluator self-heal
+  red CI is the reference implementation. P10 binds every agent to
   clean-tree discipline through the PR lifecycle. P11 is the cohesion glue —
   bind every agent to validate by interacting with what they build, not just
   by reasoning + lint + CI exit codes. P12 is the long-horizon discipline —
@@ -26,7 +26,7 @@ description: |
   graph. P18 binds the format of every produced documentation artifact to
   its audience — markdown for LLM-loaded surfaces, HTML for human deliverables
   (specs, plans, reports, design exploration). P19 names the autonomous-
-  continuation family (the 2×2 of /goal | P7 watcher | /loop | P12 persist)
+  continuation family (the 2×2 of /goal | P9 watcher | /loop | P12 persist)
   and the selection discipline — pick the right mechanism for the work
   shape; compose dynamically; never return control mid-arc when a mechanism
   would keep it closed. P20 is the cross-model adversarial review gate —
@@ -91,9 +91,9 @@ The twenty primitives. Each closes one specific failure mode that drifts into en
 | **P4** | PR Pipeline | merging unreviewed code |
 | **P5** | Parallel Agents | sequential bottleneck |
 | **P6** | Knowledge Bookkeeping | knowledge graph rot |
-| **P7** | CI Watcher + Productive Wait (`broomva/p9` skill — historical name) | sleep-on-wait dead time (CI, deploys, builds — PR CI is the reference impl) |
-| **P8** | Skill Freshness Check | silent rot of `npx skills add` snapshots |
-| **P9** | Branch + Worktree Janitor | squash-merge accumulation |
+| **P7** | Skill Freshness Check | silent rot of `npx skills add` snapshots |
+| **P8** | Branch + Worktree Janitor | squash-merge accumulation |
+| **P9** | CI Watcher + Productive Wait (`broomva/p9` skill — name matches number) | sleep-on-wait dead time (CI, deploys, builds — PR CI is the reference impl) |
 | **P10** | Worktree Hygiene Discipline | dirty-tree drift across the PR lifecycle |
 | **P11** | Empirical Feedback Loop | shipping code that compiles but doesn't work |
 | **P12** | Persistent Loop Discipline (`broomva/persist` skill) | long-horizon work decaying as the context window rots |
@@ -112,9 +112,9 @@ Full reference: see [references/primitives.md](references/primitives.md).
 
 Each primitive carries a **short name** for use in agent prose. When referencing a primitive in responses, PR bodies, commit messages, code comments, knowledge-graph entries, or any human-readable surface, use the **`Name (Pn)`** form — *"applying Snapshot (P15)"*, *"via Dep-Chain (P14)"*, *"running Bookkeeping (P6)"* — not bare `P15` / `P14` / `P6`. The number is the canonical identifier (stable across renames); the name is the human-readable handle. First mention in a response uses the full form; subsequent mentions in the same response may drop to bare `Name` ("Snapshot showed clean state") but never to bare `Pn`. Anchors, section IDs (`#p15-state-snapshot-before-action`), and primitive-count headers ("Twenty irreducible primitives") stay numeric — URL stability and arithmetic respectively. Failure mode: bare `Pn` makes responses read as numeric soup; cross-session readers can't decode the reference without a lookup. The Short-name index below is the recall key.
 
-**Short-name index** (canonical numbering): Bridge (P1) · Gate (P2) · Tickets (P3) · Pipeline (P4) · Fanout (P5) · Bookkeeping (P6) · Wait (P7) · Freshness (P8) · Janitor (P9) · Hygiene (P10) · Empirical (P11) · Persist (P12) · Dream (P13) · Dep-Chain (P14) · Snapshot (P15) · Crystallize (P16) · Lens (P17) · Audience (P18) · Orchestrate (P19) · Cross-Review (P20).
+**Short-name index** (canonical numbering): Bridge (P1) · Gate (P2) · Tickets (P3) · Pipeline (P4) · Fanout (P5) · Bookkeeping (P6) · Freshness (P7) · Janitor (P8) · Wait (P9) · Hygiene (P10) · Empirical (P11) · Persist (P12) · Dream (P13) · Dep-Chain (P14) · Snapshot (P15) · Crystallize (P16) · Lens (P17) · Audience (P18) · Orchestrate (P19) · Cross-Review (P20).
 
-**Canonical statement** lives in workspace `CLAUDE.md` §Bstack Core Automation Primitives and workspace `AGENTS.md` near line 93. This SKILL.md restates the rule so it's visible at the entry point where `/bstack` loads.
+**Canonical statement** lives in workspace `CLAUDE.md` §Bstack Core Automation Primitives and workspace `AGENTS.md` near line 93. This SKILL.md restates the rule so it's visible at the entry point where `/bstack` loads. **Note**: Wait sits at P9 to match the `broomva/p9` skill repo name — the primitive number and the skill name are intentionally aligned. Skill repos that don't carry a number (e.g., `broomva/bookkeeping` = P6, `broomva/persist` = P12) take their name from the function, not the number; carrying a numeric skill name is a commitment to keep that number stable.
 
 **Canonical operating mode**: `broomva/autonomous` — when the user says "go" / "proceed" / "be autonomous" / "automerge" / any bare execution directive, `/autonomous` fires the 20-reflex pipeline that exercises every primitive above in the right sequence. Substrate without mode is dormant; mode without substrate is wishful. Compounded, they produce a self-operating workspace.
 
