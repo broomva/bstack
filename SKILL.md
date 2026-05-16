@@ -114,7 +114,9 @@ Each primitive carries a **short name** for use in agent prose. When referencing
 
 **Short-name index** (canonical numbering): Bridge (P1) · Gate (P2) · Tickets (P3) · Pipeline (P4) · Fanout (P5) · Bookkeeping (P6) · Freshness (P7) · Janitor (P8) · Wait (P9) · Hygiene (P10) · Empirical (P11) · Persist (P12) · Dream (P13) · Dep-Chain (P14) · Snapshot (P15) · Crystallize (P16) · Lens (P17) · Audience (P18) · Orchestrate (P19) · Cross-Review (P20).
 
-**Canonical statement** lives in workspace `CLAUDE.md` §Bstack Core Automation Primitives and workspace `AGENTS.md` near line 93. This SKILL.md restates the rule so it's visible at the entry point where `/bstack` loads. **Note**: Wait sits at P9 to match the `broomva/p9` skill repo name — the primitive number and the skill name are intentionally aligned. Skill repos that don't carry a number (e.g., `broomva/bookkeeping` = P6, `broomva/persist` = P12) take their name from the function, not the number; carrying a numeric skill name is a commitment to keep that number stable.
+**Canonical statement** lives in workspace `CLAUDE.md` §Bstack Core Automation Primitives and workspace `AGENTS.md` near line 93. This SKILL.md restates the rule so it's visible at the entry point where `/bstack` loads.
+
+**Skill-name ↔ primitive-number alignment**: when a skill repo carries a numeric name (e.g., `broomva/p9` for Wait at P9), the primitive numbering commits to keeping that number stable — renaming a skill repo would break every `npx skills add broomva/p9` install. Skill repos with functional names (`broomva/bookkeeping` = P6, `broomva/persist` = P12) take their name from the function, not the number.
 
 **Canonical operating mode**: `broomva/autonomous` — when the user says "go" / "proceed" / "be autonomous" / "automerge" / any bare execution directive, `/autonomous` fires the 20-reflex pipeline that exercises every primitive above in the right sequence. Substrate without mode is dormant; mode without substrate is wishful. Compounded, they produce a self-operating workspace.
 
