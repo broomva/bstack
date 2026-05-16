@@ -1,6 +1,24 @@
 # bstack — Primitive Contract Reference
 
-The eleven primitives that make a workspace self-operating. This is the canonical detail; SKILL.md keeps a pointer for the agent to load this file when needed.
+The twenty primitives that make a workspace self-operating. This is the canonical detail; SKILL.md keeps a pointer for the agent to load this file when needed.
+
+## Naming convention for agent prose (binding on every agent)
+
+Each primitive carries a **short name** for use in agent prose. When referencing a primitive in responses, PR bodies, commit messages, code comments, knowledge-graph entries, or any human-readable surface, use the **`Name (Pn)`** form — *"applying Snapshot (P15)"*, *"via Dep-Chain (P14)"*, *"running Bookkeeping (P6)"* — not bare `P15` / `P14` / `P6`.
+
+- **Number** is the canonical identifier (stable across renames; used in anchors, tests, primitive-count headers).
+- **Name** is the human-readable handle (used in prose, PR titles/bodies, commits, responses, knowledge-graph entries).
+- First mention in a response uses the full `Name (Pn)` form. Subsequent mentions in the same response may drop to bare `Name` ("Snapshot showed clean state") — but never to bare `Pn`.
+- Anchors / section IDs (`#p15-state-snapshot-before-action`) stay numeric for URL stability.
+- Arithmetic headers ("Twenty irreducible primitives") stay numeric — the count is the point.
+
+**Failure mode this closes**: responses peppered with bare `P15` / `P6` / `P19` read as numeric soup. Cross-session readers (and the user) can't decode the reference without a lookup. Bare numbers are the ritual form of "I am using primitives" without the substance of "you can read what I'm doing." The Short-name index is the recall key — when used in `Name (Pn)` form, the name carries the meaning and the number anchors it.
+
+**Short-name index** (canonical numbering): Bridge (P1) · Gate (P2) · Tickets (P3) · Pipeline (P4) · Fanout (P5) · Bookkeeping (P6) · Wait (P7) · Freshness (P8) · Janitor (P9) · Hygiene (P10) · Empirical (P11) · Persist (P12) · Dream (P13) · Dep-Chain (P14) · Snapshot (P15) · Crystallize (P16) · Lens (P17) · Audience (P18) · Orchestrate (P19) · Cross-Review (P20).
+
+**Canonical statement** lives in workspace `CLAUDE.md` §Bstack Core Automation Primitives and workspace `AGENTS.md` near line 93. This file restates the rule so it's visible when an agent loads the primitives reference directly.
+
+---
 
 ## Table of contents
 
