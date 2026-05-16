@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.2.1 — 2026-05-16
+
+### Drop legacy fallback shims from the 0.2.0 renumber
+
+The legacy env vars (`BROOMVA_P8_HOME`, `BROOMVA_P9_JANITOR_HOME`,
+`BROOMVA_P8_THRESHOLD_DAYS`) and config-dir fallbacks (`~/.config/broomva/p8/`,
+`~/.config/broomva/p9-janitor/`) that 0.2.0 added "for in-place upgrades" are
+removed. The canonical paths (`p7/`, `p8-janitor/`) and env vars
+(`BROOMVA_P7_HOME`, `BROOMVA_P8_JANITOR_HOME`, `BROOMVA_P7_THRESHOLD_DAYS`) are
+the only paths/vars the scripts honor. The legacy-callout prose is stripped
+from every governance and substrate document.
+
+**Migration for users upgrading from < 0.2.1**: one-time `mv` of any existing
+state into the canonical location:
+
+```bash
+[ -d ~/.config/broomva/p8 ] && mv ~/.config/broomva/p8 ~/.config/broomva/p7
+[ -d ~/.config/broomva/p9-janitor ] && mv ~/.config/broomva/p9-janitor ~/.config/broomva/p8-janitor
+```
+
+After migration: the freshness stamp + janitor `protected.txt` are read from
+the canonical paths. No shims in the codebase.
+
 ## 0.2.0 — 2026-05-16
 
 ### Primitive renumber: Wait moves back to P9 (skill-name↔primitive-number alignment)
@@ -21,12 +44,9 @@ became ambiguous (was it about the *skill* or the *primitive number*?). The
 2026-05-16 renumber restores alignment so Wait = P9 = `broomva/p9` — primitive
 number, primitive name, and skill repo name all agree.
 
-**Migration**: legacy paths kept working via fallback in `skill-freshness-hook.sh`
-(reads `~/.config/broomva/p7/` canonically, falls back to `~/.config/broomva/p8/`)
-and `branch-janitor.sh` (reads `~/.config/broomva/p8-janitor/` canonically, falls
-back to `~/.config/broomva/p9-janitor/`). Legacy env vars `BROOMVA_P8_HOME` and
-`BROOMVA_P9_JANITOR_HOME` still honored for in-place upgrades; canonical names
-are now `BROOMVA_P7_HOME` and `BROOMVA_P8_JANITOR_HOME`.
+**Migration**: 0.2.0 shipped with legacy fallbacks for in-place upgrades from
+the interim numbering. **0.2.1 removes those fallbacks** — see the 0.2.1 entry
+above for the one-time `mv` users on the interim numbering should run.
 
 ### Naming convention rule propagated to bstack-loaded surfaces
 

@@ -72,9 +72,9 @@ Each primitive carries a **short name** for agent prose. When referencing a prim
 
 **What**: Reports stale installed skills at SessionStart so they get refreshed before causing silent failures.
 
-**How**: SessionStart hook → `skill-freshness-hook.sh` checks the timestamp of `~/.config/broomva/p7/last-skill-update-check` (legacy `~/.config/broomva/p8/` still honored for in-place upgrades). If ≥ 7 days old, prints a one-line nudge. Always exits 0.
+**How**: SessionStart hook → `skill-freshness-hook.sh` checks the timestamp of `~/.config/broomva/p7/last-skill-update-check`. If ≥ 7 days old, prints a one-line nudge. Always exits 0.
 
-**Invariant**: Hook always exits 0. Threshold via `BROOMVA_P7_THRESHOLD_DAYS` env var (default 7; legacy `BROOMVA_P8_THRESHOLD_DAYS` still honored). Dismiss with `npx skills update -g` then `touch ~/.config/broomva/p7/last-skill-update-check`.
+**Invariant**: Hook always exits 0. Threshold via `BROOMVA_P7_THRESHOLD_DAYS` env var (default 7). Dismiss with `npx skills update -g` then `touch ~/.config/broomva/p7/last-skill-update-check`.
 
 ### P8 — Janitor: Branch + Worktree Janitor (Hygiene)
 
@@ -82,7 +82,7 @@ Each primitive carries a **short name** for agent prose. When referencing a prim
 
 **How**: `make janitor` (wraps `scripts/branch-janitor.sh`). Squash-merge detection via `git commit-tree` synthetic + `git cherry`. Worktrees on dead branches pruned.
 
-**Invariant**: Default `--dry-run` — pass `--apply` to actually delete. Never touches main/master/develop/HEAD/gh-pages or branches in `~/.config/broomva/p8-janitor/protected.txt` (legacy `~/.config/broomva/p9-janitor/` still honored).
+**Invariant**: Default `--dry-run` — pass `--apply` to actually delete. Never touches main/master/develop/HEAD/gh-pages or branches in `~/.config/broomva/p8-janitor/protected.txt`.
 
 ### P9 — Wait: Productive Wait (Wait-Optimizer / Event-Driven Wait Loop)
 

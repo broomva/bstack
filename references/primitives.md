@@ -126,9 +126,9 @@ Mental checklist before declaring graph-dependent work done: *Did this session p
 
 **Closes**: silent rot of `npx skills add` snapshots. Skills don't auto-update; without a nudge they go stale and sessions hit `error: unrecognized arguments: --foo` from out-of-date binaries.
 
-**How**: `SessionStart` hook → `scripts/skill-freshness-hook.sh` checks the timestamp of `~/.config/broomva/p7/last-skill-update-check` (legacy `~/.config/broomva/p8/` still honored for in-place upgrades from the interim P8-Freshness numbering). If ≥ 7 days old (or never), prints a one-line nudge with refresh command + dismissal `touch`. Always exits 0.
+**How**: `SessionStart` hook → `scripts/skill-freshness-hook.sh` checks the timestamp of `~/.config/broomva/p7/last-skill-update-check`. If ≥ 7 days old (or never), prints a one-line nudge with refresh command + dismissal `touch`. Always exits 0.
 
-**Invariant**: hook always exits 0. `BROOMVA_P7_THRESHOLD_DAYS` env var configurable (default 7; legacy `BROOMVA_P8_THRESHOLD_DAYS` still honored). Dismissal: run `npx skills update -g` then `touch ~/.config/broomva/p7/last-skill-update-check`.
+**Invariant**: hook always exits 0. `BROOMVA_P7_THRESHOLD_DAYS` env var configurable (default 7). Dismissal: run `npx skills update -g` then `touch ~/.config/broomva/p7/last-skill-update-check`.
 
 ---
 
@@ -138,7 +138,7 @@ Mental checklist before declaring graph-dependent work done: *Did this session p
 
 **How**: `make janitor` (wraps `scripts/branch-janitor.sh`). Walks current repo (or all workspace repos with `--scope=workspace`). For each non-protected branch matching the include pattern (`feat/*,fix/*,chore/*,docs/*` by default): runs the canonical squash-merge detection — `git commit-tree <branch-tree> -p <merge-base>` produces a synthetic commit; `git cherry origin/main <synth>` reports if its patch is in main. If yes, branch is mergeable. Worktrees whose underlying branch is gone get pruned via `git worktree remove --force`.
 
-**Invariant**: default `--dry-run` — pass `--apply` to actually delete. Never touches main, master, develop, HEAD, gh-pages, or any branch in `~/.config/broomva/p8-janitor/protected.txt` (legacy `~/.config/broomva/p9-janitor/` still honored for in-place upgrades from the interim P9-Janitor numbering). Currently-checked-out branch always skipped.
+**Invariant**: default `--dry-run` — pass `--apply` to actually delete. Never touches main, master, develop, HEAD, gh-pages, or any branch in `~/.config/broomva/p8-janitor/protected.txt`. Currently-checked-out branch always skipped.
 
 ---
 
@@ -158,7 +158,7 @@ Mental checklist before declaring graph-dependent work done: *Did this session p
 
 **Invariant**: never `sleep` on a blocking wait. Every failure produces (a) a `state.jsonl` event, (b) a Linear ticket, or (c) both — silent state drops are forbidden (exit 99). Heal actions are scoped to files in PR diff (where applicable). All setpoints (`max_concurrent_prs`, `max_attempts`, `stability_floor`, `classified_failure_types`) live in `.control/policy.yaml` and fail closed if missing.
 
-**Skill name**: `broomva/p9` — name matches primitive number. Wait has been the 9th primitive since first crystallization; an interim renumber moved it to P7 in 2026-04 to anchor implementation against `BROOMVA_P8_*` freshness vars, but the skill repo name stayed `p9` for `npx skills add` backward compatibility — which broke the Name (P9) recall key and produced "numeric soup" in agent prose (e.g., the P9-is-Reflexive memory feedback file ambiguously referred to *the skill*, not the *primitive number*). The 2026-05-16 renumber restored alignment: Wait = P9 = `broomva/p9` skill name. The `broomva/p9` SKILL.md is the canonical implementation.
+**Skill name**: `broomva/p9` — name matches primitive number. When a skill repo carries a numeric name, the primitive numbering commits to keeping that number stable (renaming a skill repo would break every `npx skills add broomva/p9` install). The `broomva/p9` SKILL.md is the canonical implementation.
 
 ### P9 Reflexive Trigger Rule (binding on every agent)
 
