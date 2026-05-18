@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.7.0 — 2026-05-18
+
+### Companion skill auto-install (Phase 4 of substrate completion)
+
+The 31-skill companion roster is now a canonical YAML file with a `bstack skills` subcommand that installs, checks, and lists. Closes the install-the-roster gap — previously the bash `ROSTER=(...)` array in `SKILL.md` was *checked* but never *installed*.
+
+- **NEW** `references/companion-skills.yaml` — **canonical companion-skill roster** (31 skills). Per entry: `name`, `repo`, `category`, optional `primitive` (P-id this skill embodies), optional `required` flag, `introduced_in`, `description`. Single source of truth.
+- **NEW** `schemas/companion-skills.v1.json` — JSON Schema for the roster YAML.
+- **NEW** `bin/bstack-skills` — roster manager subcommand dispatcher:
+  - `bstack skills install [--all] [--interactive] [--required-only] [--dry-run]` — installs missing (or all) skills via `npx --yes skills add <repo>`. Idempotent default (skip already-installed). `--dry-run` shows what would happen. `--required-only` installs the `required: true` subset only (fast onboarding path).
+  - `bstack skills status [--json]` — text or JSON output of installed/missing/total + per-skill version (reads `~/.agents/skills/<name>/VERSION` or `SKILL.md` frontmatter).
+  - `bstack skills list [--json] [--required-only]` — print declared roster without touching filesystem.
+- **EDIT** `bin/bstack` — register `skills` subcommand + new help entry under `Observability:`.
+- **NEW** `tests/skills-roster.test.sh` — 8 fixture-based tests covering: YAML validation, list count, `--required-only` filter, list `--json` shape, status text + JSON, install `--dry-run` non-invocation, install with mock-npx invocation tracking. Added to vetted CI suite.
+
+### Env overrides
+
+- `BSTACK_SKILLS_YAML` — override roster YAML path (test fixtures)
+- `BSTACK_NPX_CMD` — override the `npx --yes skills add` invocation (test mocks)
+- `BSTACK_DIR` — override bstack root
+
+### Closes gaps from substrate completion spec §4
+
+- **4.3.1** — 31 companion skills checked but not auto-installed → `bstack skills install` shipped
+- **4.4.4** — ROSTER count drift ("27" descriptor vs 31 array entries) → canonical YAML resolves; `SKILL.md` ROSTER stays in place for backward compat (broomva.tech install script depends on it; CI lint catches drift in future phase)
+
+### Out of scope (deferred)
+
+- `references/primitives.md` regen from `primitives.yaml` (Phase 3 deferred to follow-up — same pattern applies here for `SKILL.md` ROSTER ↔ `companion-skills.yaml`)
+- `bstack onboard --json <answers>` for pre-filled onboarding (mentioned in Phase 4 spec but separable; will land in 0.7.1 if needed)
+- `scripts/bootstrap.sh` calling `bstack skills install --suggest` automatically — current behavior is informational (status + list); auto-install on first-time setup would surprise users. Deferred to Phase 5 doctor-extensions PR which can add a confirm-and-install flow.
+
+### SLO targets (introduced)
+
+- `bstack skills install` (clean machine, 31 skills): p50 < 60s, p99 < 180s (network bound)
+- `bstack skills status` (filesystem-only): p50 < 200ms, p99 < 500ms
+- `bstack skills list`: p50 < 100ms, p99 < 300ms (YAML parse only)
+
+Spec reference: §6 Phase 4 of [specs/2026-05-18-substrate-completion.md](specs/2026-05-18-substrate-completion.md).
+
 ## 0.6.0 — 2026-05-18
 
 ### Schema versioning + canonical primitive registry (Phase 3 of substrate completion)

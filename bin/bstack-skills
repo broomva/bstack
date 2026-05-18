@@ -1,0 +1,275 @@
+#!/usr/bin/env bash
+# bstack-skills — companion-skill roster manager (Phase 4, v0.7.0).
+#
+# Reads references/companion-skills.yaml (canonical roster, validated by
+# schemas/companion-skills.v1.json) and provides install / status / list
+# subcommands. Skill installations delegate to `npx skills add <repo>` —
+# bstack does not bundle skill source, only the roster + installer wrapper.
+#
+# Subcommands:
+#   install [--all] [--interactive] [--required-only] [--dry-run]
+#   status  [--json]
+#   list    [--json] [--required-only]
+#   help | --help
+#
+# `install` semantics:
+#   default              install only MISSING skills (idempotent)
+#   --all                re-install every skill (force refresh)
+#   --required-only      install only skills with `required: true`
+#   --interactive        prompt per skill before install
+#   --dry-run            print what would be installed, do nothing
+#
+# `status` lists each skill with installed/missing + per-skill version
+# (read from ~/.agents/skills/<name>/VERSION if present).
+#
+# Env overrides:
+#   BSTACK_DIR              override bstack root
+#   BSTACK_SKILLS_YAML      override roster YAML path
+#   BSTACK_NPX_CMD          override `npx --yes skills add` invocation
+#                           (test fixtures use this to mock installs)
+#
+# SLO targets:
+#   status:                 p50 < 200ms, p99 < 500ms (filesystem-only)
+#   install (cold, 31 skills): p50 < 60s, p99 < 180s (network bound)
+set -euo pipefail
+
+BSTACK_DIR="${BSTACK_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
+ROSTER_YAML="${BSTACK_SKILLS_YAML:-$BSTACK_DIR/references/companion-skills.yaml}"
+NPX_CMD="${BSTACK_NPX_CMD:-npx --yes skills add}"
+
+usage() {
+    cat <<'EOF'
+bstack-skills — companion-skill roster manager
+
+Subcommands:
+  install [--all] [--interactive] [--required-only] [--dry-run]
+                                 Install missing (or all) skills via npx
+  status [--json]                Show installed/missing roster summary
+  list [--json] [--required-only] List declared roster
+  help | --help                  This message
+
+Examples:
+  bstack skills install
+  bstack skills install --required-only
+  bstack skills install --dry-run
+  bstack skills status --json
+EOF
+}
+
+# Discover installed skill directory roots.
+skill_search_paths() {
+    local p
+    for p in "$HOME/.agents/skills" "$HOME/.claude/skills"; do
+        [ -d "$p" ] && echo "$p"
+    done
+}
+
+# Probe whether a skill is installed (directory or symlink exists in any search path).
+is_installed() {
+    local name="$1" p
+    while IFS= read -r p; do
+        [ -e "$p/$name" ] && return 0
+    done < <(skill_search_paths)
+    return 1
+}
+
+# Get installed version of a skill, "?" when unknown.
+installed_version() {
+    local name="$1" p
+    while IFS= read -r p; do
+        if [ -f "$p/$name/VERSION" ]; then
+            tr -d '[:space:]' < "$p/$name/VERSION"
+            return 0
+        fi
+        if [ -f "$p/$name/SKILL.md" ]; then
+            local v
+            v=$(grep -E '^version:' "$p/$name/SKILL.md" 2>/dev/null | head -1 | awk '{print $2}' | tr -d '"' | tr -d "'")
+            if [ -n "$v" ]; then
+                echo "$v"
+                return 0
+            fi
+        fi
+    done < <(skill_search_paths)
+    echo "?"
+}
+
+# Parse the roster YAML → emit one TSV row per skill: name<TAB>repo<TAB>category<TAB>required
+parse_roster() {
+    if [ ! -f "$ROSTER_YAML" ]; then
+        echo "bstack-skills: roster YAML not found at $ROSTER_YAML" >&2
+        return 1
+    fi
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "bstack-skills: python3 required to parse roster" >&2
+        return 1
+    fi
+    python3 - "$ROSTER_YAML" <<'PYEOF'
+import sys, yaml
+data = yaml.safe_load(open(sys.argv[1]))
+for s in data.get("skills", []):
+    print(f"{s['name']}\t{s['repo']}\t{s.get('category','')}\t{'true' if s.get('required') else 'false'}\t{s.get('primitive','')}\t{s.get('description','')}")
+PYEOF
+}
+
+cmd_list() {
+    local json=0 required_only=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json=1; shift ;;
+            --required-only) required_only=1; shift ;;
+            *) shift ;;
+        esac
+    done
+    if [ "$json" = "1" ]; then
+        python3 - "$ROSTER_YAML" "$required_only" <<'PYEOF'
+import sys, yaml, json
+data = yaml.safe_load(open(sys.argv[1]))
+ro = sys.argv[2] == "1"
+skills = [s for s in data.get("skills", []) if (not ro) or s.get("required")]
+print(json.dumps({"count": len(skills), "skills": skills}, indent=2))
+PYEOF
+        return 0
+    fi
+    local n r c req prim desc count=0
+    while IFS=$'\t' read -r n r c req prim desc; do
+        if [ "$required_only" = "1" ] && [ "$req" != "true" ]; then continue; fi
+        count=$((count + 1))
+        local req_marker=""
+        [ "$req" = "true" ] && req_marker=" [required]"
+        local prim_marker=""
+        [ -n "$prim" ] && prim_marker=" ($prim)"
+        printf "  %-32s %s%s%s\n" "$n" "$r" "$req_marker" "$prim_marker"
+    done < <(parse_roster)
+    echo ""
+    echo "  ─────────────────────────────────────"
+    echo "  $count skills declared"
+}
+
+cmd_status() {
+    local json=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json=1; shift ;;
+            *) shift ;;
+        esac
+    done
+
+    local installed=0 missing=0 missing_names=()
+    if [ "$json" = "1" ]; then
+        local entries=()
+        local n r c req prim desc
+        while IFS=$'\t' read -r n r c req prim desc; do
+            local ver state
+            if is_installed "$n"; then
+                installed=$((installed + 1))
+                state="installed"
+                ver=$(installed_version "$n")
+            else
+                missing=$((missing + 1))
+                missing_names+=("$n")
+                state="missing"
+                ver="null"
+            fi
+            entries+=("{\"name\":\"$n\",\"repo\":\"$r\",\"required\":$req,\"state\":\"$state\",\"version\":\"$ver\"}")
+        done < <(parse_roster)
+        printf '{"installed":%d,"missing":%d,"total":%d,"skills":[%s]}\n' \
+            "$installed" "$missing" "$((installed + missing))" \
+            "$(IFS=','; echo "${entries[*]}")"
+        return 0
+    fi
+
+    printf "%-32s %-12s %s\n" "Skill" "State" "Version"
+    printf "%-32s %-12s %s\n" "───────────────" "───────" "───────"
+    local n r c req prim desc
+    while IFS=$'\t' read -r n r c req prim desc; do
+        if is_installed "$n"; then
+            installed=$((installed + 1))
+            printf "  %-30s %s%-12s%s %s\n" "$n" $'\033[32m' "installed" $'\033[0m' "$(installed_version "$n")"
+        else
+            missing=$((missing + 1))
+            missing_names+=("$n")
+            local marker="missing"
+            [ "$req" = "true" ] && marker="missing*"
+            printf "  %-30s %s%-12s%s\n" "$n" $'\033[33m' "$marker" $'\033[0m'
+        fi
+    done < <(parse_roster)
+    echo ""
+    echo "  ─────────────────────────────────────"
+    printf "  %d/%d installed" "$installed" "$((installed + missing))"
+    if [ "$missing" -gt 0 ]; then
+        printf ", %d missing\n" "$missing"
+        echo "  Run \`bstack skills install\` to install missing."
+        echo "  (* = required for full substrate compliance)"
+    else
+        printf "\n  All declared skills installed.\n"
+    fi
+}
+
+cmd_install() {
+    local all=0 interactive=0 required_only=0 dry_run=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --all)           all=1; shift ;;
+            --interactive)   interactive=1; shift ;;
+            --required-only) required_only=1; shift ;;
+            --dry-run)       dry_run=1; shift ;;
+            *) echo "install: unknown flag '$1'" >&2; return 2 ;;
+        esac
+    done
+
+    local installed=0 skipped=0 attempted=0 failed=0
+    local n r c req prim desc
+    while IFS=$'\t' read -r n r c req prim desc; do
+        if [ "$required_only" = "1" ] && [ "$req" != "true" ]; then
+            continue
+        fi
+        if [ "$all" = "0" ] && is_installed "$n"; then
+            skipped=$((skipped + 1))
+            continue
+        fi
+        attempted=$((attempted + 1))
+        if [ "$dry_run" = "1" ]; then
+            echo "  [dry-run] would install $n ($r)"
+            continue
+        fi
+        if [ "$interactive" = "1" ]; then
+            read -r -p "  Install $n ($r)? [y/N] " reply
+            if [ "${reply:-N}" != "y" ] && [ "${reply:-N}" != "Y" ]; then
+                echo "    [skip] declined"
+                skipped=$((skipped + 1))
+                continue
+            fi
+        fi
+        echo "  [install] $n ($r)..."
+        # shellcheck disable=SC2086
+        if $NPX_CMD "$r" >/dev/null 2>&1; then
+            installed=$((installed + 1))
+            echo "    ✓ installed"
+        else
+            failed=$((failed + 1))
+            echo "    ✗ failed (check network + permissions)"
+        fi
+    done < <(parse_roster)
+
+    echo ""
+    echo "  ─────────────────────────────────────"
+    if [ "$dry_run" = "1" ]; then
+        echo "  [dry-run] $attempted skill(s) would be installed"
+    else
+        echo "  Installed: $installed, skipped: $skipped, failed: $failed"
+    fi
+    [ "$failed" -gt 0 ] && return 1
+    return 0
+}
+
+case "${1:-}" in
+    install)            shift; cmd_install "$@" ;;
+    status)             shift; cmd_status "$@" ;;
+    list)               shift; cmd_list "$@" ;;
+    -h|--help|help|"")  usage ;;
+    *)
+        echo "bstack-skills: unknown subcommand '$1'" >&2
+        usage >&2
+        exit 2
+        ;;
+esac
