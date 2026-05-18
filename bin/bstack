@@ -38,6 +38,9 @@ Config + state:
 Orchestration:
   wave <subcommand>               P19 parallel sub-phase dispatch.
 
+Observability:
+  metrics collect|observe         Setpoint measurement pipeline (≥ 0.4.0).
+
 Release (maintainers):
   release tag                     Tag the current VERSION and create the
                                   matching GitHub Release from CHANGELOG.
@@ -185,6 +188,7 @@ case "$cmd" in
     config)                 exec "$BIN_DIR/bstack-config" "$@" ;;
     update-check)           exec "$BIN_DIR/bstack-update-check" "$@" ;;
     wave)                   exec "$BIN_DIR/bstack-wave" "$@" ;;
+    metrics)                exec "$BIN_DIR/bstack-metrics" "$@" ;;
     release)
         sub="${1:-}"
         [ $# -gt 0 ] && shift
