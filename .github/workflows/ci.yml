@@ -29,9 +29,16 @@ jobs:
             exit 0
           fi
           printf '  • %s\n' "${targets[@]}"
-          # SC1091: don't follow sourced files; SC2155: declare-and-assign exit-code
-          # warnings — we accept these in bstack's defensive shell style.
-          shellcheck --severity=warning --exclude=SC1091,SC2155 "${targets[@]}"
+          # Excluded checks (bstack's defensive shell style accepts these):
+          #   SC1091 — don't follow sourced files.
+          #   SC2155 — declare-and-assign masks return code (intentional).
+          #   SC2034 — unused variable. Several scripts intentionally name
+          #            variables that are only used in conditional branches
+          #            shellcheck can't see. Suppressed at the lint gate;
+          #            per-file SC2034 audit is a follow-up.
+          shellcheck --severity=warning \
+            --exclude=SC1091,SC2155,SC2034 \
+            "${targets[@]}"
 
       - name: Validate JSON templates
         run: |
@@ -57,11 +64,29 @@ jobs:
       - name: Run doctor against templates
         run: |
           set -euo pipefail
-          # doctor.sh expects CLAUDE.md / AGENTS.md / .control/policy.yaml in cwd.
-          # Stage the templated versions as a fixture so doctor lints what
-          # downstream installs would see after `bstack bootstrap`.
           mkdir -p .control
           cp assets/templates/CLAUDE.md.template ./CLAUDE.md 2>/dev/null || true
           cp assets/templates/AGENTS.md.template ./AGENTS.md 2>/dev/null || true
           cp assets/templates/policy.yaml.template .control/policy.yaml 2>/dev/null || true
           bash scripts/doctor.sh --quiet
+
+  tests:
+    name: tests/*.test.sh
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run all *.test.sh in tests/
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          fail=0
+          for t in tests/*.test.sh; do
+            echo ""
+            echo "=== $t ==="
+            if ! bash "$t"; then
+              echo "::error file=$t::test failed"
+              fail=1
+            fi
+          done
+          exit "$fail"

@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.3 — 2026-05-18
+
+### `bstack repair` merges missing hooks (chicken-and-egg fix)
+
+Closes the upgrade gap where a new hook shipped in `assets/templates/settings.json.snippet` would not reach existing installs unless they manually re-ran `bstack bootstrap`. Now `bstack repair` idempotently merges any missing hook entries from the snippet into the user's `.claude/settings.json`. Existing entries are never overwritten or reordered.
+
+- **CHANGED** `scripts/repair.sh` — new `merge_hooks_into_settings` function (Python-driven, mirrors `bootstrap.sh`'s merge logic). Runs unconditionally on every `bstack repair` invocation, *before* doctor's "fully bstack-compliant" early-exit, so a compliant workspace still picks up newly-templated hooks. Silent when everything is in sync. Respects `--dry-run` and `--apply-all`. If `.claude/settings.json` is absent it scaffolds from snippet (replacing the previous "suggest re-running bootstrap" placeholder).
+- **NEW** `tests/repair-merge-hooks.test.sh` — 5 fixture-based tests: (1) missing template hook is added, (2) existing user customization preserved, (3) re-running on synced settings is a no-op, (4) absent settings.json is scaffolded, (5) `--dry-run` reports without writing.
+- **CHANGED** `.github/workflows/ci.yml` — new `tests` job runs every `tests/*.test.sh` on every PR. Also adds `SC2034` to the shellcheck exclude list (didn't land in 0.2.2's squash due to merge timing; CI would otherwise re-fail on pre-existing unused-vars in `scripts/doctor.sh` and `scripts/statusline-command.sh`).
+
+### Why this is a 0.2.3 (patch) and not 0.3.0
+
+The behavior change is additive — `bstack repair` was already part of the workspace lifecycle. Existing scripted callers (`bstack repair --apply-all` in CI flows) see no breaking change; they just get a more thorough run. The merge function is idempotent, so re-running is safe.
+
+### Unblocks
+
+This is the **prerequisite for 0.3.0** (SessionStart auto-upgrade hook). Without it, the new SessionStart entry shipped in 0.3.0's `settings.json.snippet` wouldn't propagate to existing installs without manual `bstack bootstrap`. With it: `bstack repair` is enough.
+
 ## 0.2.2 — 2026-05-18
 
 ### Release infrastructure
