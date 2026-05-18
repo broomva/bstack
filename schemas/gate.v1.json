@@ -1,0 +1,57 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/broomva/bstack/blob/main/schemas/gate.v1.json",
+  "title": "bstack gate v1",
+  "description": "Schema for a single gate declared in .control/policy.yaml. Hard gates block agent actions (pattern or runtime_check); soft gates are advisory.",
+  "type": "object",
+  "required": ["id", "rule"],
+  "additionalProperties": true,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^G[0-9]+[a-z]?$",
+      "description": "Stable identifier (G<n>, optionally with a sub-letter for variants — e.g. G4b)."
+    },
+    "rule": {
+      "type": "string",
+      "description": "Human-readable rule statement (one line)."
+    },
+    "pattern": {
+      "type": "string",
+      "description": "Regex matched against Bash commands by control-gate-hook on PreToolUse. Mutually exclusive with runtime_check."
+    },
+    "enforcement": {
+      "type": "object",
+      "description": "Structured enforcement metadata (preferred over top-level pattern in newer gates).",
+      "properties": {
+        "type": { "enum": ["pattern", "runtime_check", "advisory"] },
+        "spec": { "type": "string", "description": "Regex, function name, or null for advisory." }
+      }
+    },
+    "severity": {
+      "enum": ["blocking", "informational", "advisory", "warn", "soft"],
+      "description": "blocking | informational | advisory canonical; `warn` and `soft` are v1-era synonyms preserved for backward compat. Schema v2 will enforce canonical names only."
+    },
+    "measurement": {
+      "type": "string",
+      "description": "How compliance is measured (e.g. `PreToolUse hook blocks matching Bash commands`)."
+    },
+    "bypass_audit": {
+      "type": "boolean",
+      "description": "If true, attempts to bypass (e.g. --no-verify) are logged to ~/.bstack/gate-audit.jsonl."
+    },
+    "profiles": {
+      "type": "array",
+      "items": { "enum": ["baseline", "governed", "autonomous"] },
+      "description": "Which profiles activate this gate. Empty = all profiles."
+    },
+    "introduced_in": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "deprecated_in": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    }
+  }
+}

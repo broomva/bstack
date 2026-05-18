@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.6.0 — 2026-05-18
+
+### Schema versioning + canonical primitive registry (Phase 3 of substrate completion)
+
+The substrate's declarative surfaces (`.control/policy.yaml`, primitive metadata) are now schema-versioned. Workspaces can be validated against the bstack contract via `bstack doctor` (extended) — and migrations are framework-ready for future v2.
+
+- **NEW** `schemas/setpoint.v1.json` — single setpoint shape (id pattern, target, alert bands, severity, owner, introduced_in).
+- **NEW** `schemas/gate.v1.json` — single gate shape (id, rule, pattern, enforcement, severity, profiles, bypass_audit).
+- **NEW** `schemas/primitives.v1.json` — primitive registry shape (id, short_name, mechanism, invariant, failure_mode, rule_of_three, skill_repo, introduced_in).
+- **NEW** `schemas/policy.v1.json` — full `.control/policy.yaml` shape composing setpoint + gate via `$ref`.
+- **NEW** `references/primitives.yaml` — **canonical machine-readable registry of all 20 primitives**. Single source of truth. Validates against `primitives.v1.json`. Each entry carries id, short_name, mechanism.type + .spec, invariant, failure_mode, introduced_in.
+- **NEW** `assets/templates/METALAYER.md.template` — bstack-shipped METALAYER template scaffolded by `bstack bootstrap`. Was previously workspace-only; closes Gap 4.1.4 from the substrate completion spec.
+- **NEW** `scripts/migrate.sh` — schema migration framework. `v1 → v1` is identity (no-op); future `vN → vN+1` migrations registered via dispatch table. Backs up policy.yaml to `.bak.<epoch>` before any structural change. Respects `--dry-run` and `--apply-all`.
+- **CHANGED** `scripts/doctor.sh` — new **Section 10: schema validation**. Validates `references/primitives.yaml` against `primitives.v1.json` and workspace `.control/policy.yaml` against `policy.v1.json` (with `$ref` resolver). Degrades gracefully when `python3` / `jsonschema` / `PyYAML` are absent.
+- **NEW** `tests/schema-validation.test.sh` — 8 fixture-based tests: all 4 schemas valid draft-07, primitives.yaml validates, policy.yaml.template validates, invalid setpoint/gate/primitive rejected, migrate.sh v1→v1 no-op, migrate.sh `--dry-run` is non-mutating. Added to vetted CI suite.
+
+### Backward-compat consideration
+
+The current `policy.yaml.template` uses `severity: warn` and (in some downstream workspaces) `severity: soft`. To accept these in v1 without breaking existing workspaces, both schemas list them as v1-era synonyms (canonical: `informational` and `advisory`). Schema v2 will enforce canonical names — a migration in `scripts/migrate.sh` will rename automatically.
+
+### What's NOT included this PR
+
+- `references/primitives.md` auto-generation from `primitives.yaml` — deferred to a follow-up. The YAML is the canonical machine-readable source; the prose `.md` remains hand-written for now. Generator could be added in v0.6.1 if drift becomes an issue.
+- `validate-release.yml` schema-check extension — `bstack doctor` Section 10 covers the local check; a CI-side gate is deferred to Phase 5 (doctor extensions in CI lane).
+
+### Closes gaps from the substrate completion spec
+
+- 4.1.4 — `METALAYER.md` workspace-only → now templated
+- 4.4.2 — no policy.yaml schema → 4 schemas shipped
+- 4.4.3 — no deprecation path for retired primitives → `deprecated_in` / `retired_in` fields added
+- 4.6.1 — contracts not formalized as schemas → 4 schemas formalize 4 of the 8 contracts (Setpoint, Gate, Primitive, Plant-via-policy.yaml)
+
+### SLO targets (introduced)
+
+- `bstack doctor` schema validation: p99 < 2s (4 schemas, ~20 primitives, 15 setpoints, 11 gates).
+- `scripts/migrate.sh` v1→v1 identity: p99 < 200ms.
+- CI schema validation step: p99 < 5s.
+
+Spec reference: §6 Phase 3 of [specs/2026-05-18-substrate-completion.md](specs/2026-05-18-substrate-completion.md).
+
 ## 0.5.0 — 2026-05-18
 
 ### Substrate status surface (Phase 2 of substrate completion)

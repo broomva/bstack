@@ -1,0 +1,72 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/broomva/bstack/blob/main/schemas/setpoint.v1.json",
+  "title": "bstack setpoint v1",
+  "description": "Schema for a single setpoint declared in .control/policy.yaml. Setpoints are target values + alert bands the substrate measures via scripts/metrics/measure-S<n>.sh.",
+  "type": "object",
+  "required": ["id", "name", "severity"],
+  "additionalProperties": true,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^S[0-9]+$",
+      "description": "Stable identifier (S<n>). Required for cross-reference."
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "description": "snake_case name (e.g. `gate_pass_rate`, `bridge_freshness_seconds`)."
+    },
+    "target": {
+      "anyOf": [
+        { "type": "number" },
+        { "type": "boolean" },
+        { "type": "null" }
+      ],
+      "description": "Desired value. Null when target is per-plant or unset."
+    },
+    "alert_below": {
+      "type": "number",
+      "description": "Threshold: value < alert_below triggers an alert at this setpoint's severity."
+    },
+    "alert_above": {
+      "type": "number",
+      "description": "Threshold: value > alert_above triggers an alert at this setpoint's severity."
+    },
+    "measurement": {
+      "anyOf": [
+        { "type": "string", "description": "Human-readable description of how to measure (legacy free-form)." },
+        {
+          "type": "object",
+          "required": ["type", "spec"],
+          "properties": {
+            "type": { "enum": ["command", "function", "file_check", "otel_gauge", "script"] },
+            "spec": { "type": "string", "description": "Command line, function name, file path, or otel metric." }
+          }
+        }
+      ]
+    },
+    "unit": {
+      "type": "string",
+      "description": "Free-form unit (e.g. `count`, `seconds`, `ratio`, `bool`)."
+    },
+    "severity": {
+      "enum": ["blocking", "informational", "advisory", "warn", "soft"],
+      "description": "blocking: out-of-target violations block work. informational (alias `warn`): surface but do not block. advisory (alias `soft`): agent guidance only. `warn` and `soft` are v1-era synonyms preserved for backward compat; canonical names will be enforced in schema v2."
+    },
+    "owner": {
+      "enum": ["substrate", "user", "agent"],
+      "description": "Who is responsible for restoring the setpoint when it drifts."
+    },
+    "introduced_in": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "description": "bstack version that introduced this setpoint."
+    },
+    "deprecated_in": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "description": "bstack version that deprecated this setpoint (if any)."
+    }
+  }
+}
