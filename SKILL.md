@@ -7,12 +7,12 @@ description: |
   the substrate. P1 captures every session as episodic memory. P2 gates
   destructive operations. P3 tracks every work unit in Linear. P4 forces every
   change through CI. P5 isolates parallel agents in worktrees. P6 keeps the
-  knowledge graph quality-controlled. P7 is the productive-wait optimizer
-  (`broomva/p9` skill — historical name) — drains a context-scoped queue
-  while a blocking operation (PR CI, deploy, build, long index) runs;
-  classifier + evaluator self-heal red CI is the reference implementation.
-  P8 nudges when installed skills go stale. P9 cleans up squash-merged
-  branches and dead worktrees. P10 binds every agent to
+  knowledge graph quality-controlled. P7 nudges when installed skills go
+  stale. P8 cleans up squash-merged branches and dead worktrees. P9 is the
+  productive-wait optimizer (`broomva/p9` skill — name matches primitive
+  number) — drains a context-scoped queue while a blocking operation (PR
+  CI, deploy, build, long index) runs; classifier + evaluator self-heal
+  red CI is the reference implementation. P10 binds every agent to
   clean-tree discipline through the PR lifecycle. P11 is the cohesion glue —
   bind every agent to validate by interacting with what they build, not just
   by reasoning + lint + CI exit codes. P12 is the long-horizon discipline —
@@ -26,7 +26,7 @@ description: |
   graph. P18 binds the format of every produced documentation artifact to
   its audience — markdown for LLM-loaded surfaces, HTML for human deliverables
   (specs, plans, reports, design exploration). P19 names the autonomous-
-  continuation family (the 2×2 of /goal | P7 watcher | /loop | P12 persist)
+  continuation family (the 2×2 of /goal | P9 watcher | /loop | P12 persist)
   and the selection discipline — pick the right mechanism for the work
   shape; compose dynamically; never return control mid-arc when a mechanism
   would keep it closed. P20 is the cross-model adversarial review gate —
@@ -57,8 +57,8 @@ bstack is a *portable harness metalayer* — it composes existing skills into a 
 
 bstack ships two complementary layers:
 
-- **Substrate** (this skill, `/bstack`): the 19 primitives + 29 skills + governance + hooks + `.control/policy.yaml`. This is what `/bstack bootstrap` installs. The substrate is the *capability* — what's available in the workspace.
-- **Mode** (`broomva/autonomous`): the canonical *behavior* that runs on top of the substrate. When the user says "go" / "proceed" / "be autonomous", `/autonomous` fires the 19-reflex pipeline that uses every primitive in sequence.
+- **Substrate** (this skill, `/bstack`): the 20 primitives + 30 skills + governance + hooks + `.control/policy.yaml`. This is what `/bstack bootstrap` installs. The substrate is the *capability* — what's available in the workspace.
+- **Mode** (`broomva/autonomous`): the canonical *behavior* that runs on top of the substrate. When the user says "go" / "proceed" / "be autonomous", `/autonomous` fires the 20-reflex pipeline that uses every primitive in sequence.
 
 Installing the substrate without the mode = the workspace has primitives but no entry point to engage them. Invoking the mode without the substrate = wishful thinking. Compounded: `/bstack bootstrap` installs the substrate, then `/autonomous` is the standing operating mode for substantive work units.
 
@@ -71,7 +71,7 @@ npx skills add broomva/bstack
 
 Then, in your agent session:
 ```
-/bstack bootstrap     → install 28 skills + scaffold governance + wire hooks + run doctor
+/bstack bootstrap     → install 30 skills + scaffold governance + wire hooks + run doctor
 /bstack doctor        → verify primitive contract compliance (always exits 0)
 /bstack repair        → fix specific gaps surfaced by doctor (asks before writing)
 /bstack status        → show which skills are installed vs missing
@@ -84,7 +84,7 @@ Then, in your agent session:
 
 ## What bstack enforces
 
-The sixteen primitives. Each closes one specific failure mode that drifts into entropy in unsupervised sessions:
+The twenty primitives. Each closes one specific failure mode that drifts into entropy in unsupervised sessions:
 
 | # | Primitive | Closes |
 |---|---|---|
@@ -94,9 +94,9 @@ The sixteen primitives. Each closes one specific failure mode that drifts into e
 | **P4** | PR Pipeline | merging unreviewed code |
 | **P5** | Parallel Agents | sequential bottleneck |
 | **P6** | Knowledge Bookkeeping | knowledge graph rot |
-| **P7** | CI Watcher + Productive Wait (`broomva/p9` skill — historical name) | sleep-on-wait dead time (CI, deploys, builds — PR CI is the reference impl) |
-| **P8** | Skill Freshness Check | silent rot of `npx skills add` snapshots |
-| **P9** | Branch + Worktree Janitor | squash-merge accumulation |
+| **P7** | Skill Freshness Check | silent rot of `npx skills add` snapshots |
+| **P8** | Branch + Worktree Janitor | squash-merge accumulation |
+| **P9** | CI Watcher + Productive Wait (`broomva/p9` skill — name matches number) | sleep-on-wait dead time (CI, deploys, builds — PR CI is the reference impl) |
 | **P10** | Worktree Hygiene Discipline | dirty-tree drift across the PR lifecycle |
 | **P11** | Empirical Feedback Loop | shipping code that compiles but doesn't work |
 | **P12** | Persistent Loop Discipline (`broomva/persist` skill) | long-horizon work decaying as the context window rots |
@@ -111,7 +111,17 @@ The sixteen primitives. Each closes one specific failure mode that drifts into e
 
 Full reference: see [references/primitives.md](references/primitives.md).
 
-> **`bstack wave` (new in this version).** Fills the parallel × across-session × external-event cell of P19's (Orchestrate) mechanism cube. Use it when you have N independent plan files that can run in parallel without shared mutable file writes (P5). Each plan's frontmatter declares its `worktree` and `branch`; the wrapper validates atomically, creates worktrees, and launches one `claude --bg` per plan. State lives in `~/.cache/bstack/wave/<wave-id>/` (P12 filesystem-as-state). See the design at `docs/superpowers/specs/2026-05-13-bstack-wave-design.md` (workspace repo) for the full primitive coalescence map.
+### Naming convention for agent prose (binding on every agent)
+
+Each primitive carries a **short name** for use in agent prose. When referencing a primitive in responses, PR bodies, commit messages, code comments, knowledge-graph entries, or any human-readable surface, use the **`Name (Pn)`** form — *"applying Snapshot (P15)"*, *"via Dep-Chain (P14)"*, *"running Bookkeeping (P6)"* — not bare `P15` / `P14` / `P6`. The number is the canonical identifier (stable across renames); the name is the human-readable handle. First mention in a response uses the full form; subsequent mentions in the same response may drop to bare `Name` ("Snapshot showed clean state") but never to bare `Pn`. Anchors, section IDs (`#p15-state-snapshot-before-action`), and primitive-count headers ("Twenty irreducible primitives") stay numeric — URL stability and arithmetic respectively. Failure mode: bare `Pn` makes responses read as numeric soup; cross-session readers can't decode the reference without a lookup. The Short-name index below is the recall key.
+
+**Short-name index** (canonical numbering): Bridge (P1) · Gate (P2) · Tickets (P3) · Pipeline (P4) · Fanout (P5) · Bookkeeping (P6) · Freshness (P7) · Janitor (P8) · Wait (P9) · Hygiene (P10) · Empirical (P11) · Persist (P12) · Dream (P13) · Dep-Chain (P14) · Snapshot (P15) · Crystallize (P16) · Lens (P17) · Audience (P18) · Orchestrate (P19) · Cross-Review (P20).
+
+**Canonical statement** lives in workspace `CLAUDE.md` §Bstack Core Automation Primitives and workspace `AGENTS.md` near line 93. This SKILL.md restates the rule so it's visible at the entry point where `/bstack` loads.
+
+**Skill-name ↔ primitive-number alignment**: when a skill repo carries a numeric name (e.g., `broomva/p9` for Wait at P9), the primitive numbering commits to keeping that number stable — renaming a skill repo would break every `npx skills add broomva/p9` install. Skill repos with functional names (`broomva/bookkeeping` = P6, `broomva/persist` = P12) take their name from the function, not the number.
+
+> **`bstack wave` (new in this version).** Fills the N>1 × across-session × external-trigger cell of Orchestrate (P19)'s mechanism cube. Use it when you have N independent plan files that can run in parallel without shared mutable file writes (Fanout (P5)). Each plan's frontmatter declares its `worktree` and `branch`; the wrapper validates atomically, creates worktrees, and launches one `claude --bg` per plan. State lives in `~/.cache/bstack/wave/<wave-id>/` (Persist (P12) filesystem-as-state). See the design at `docs/superpowers/specs/2026-05-13-bstack-wave-design.md` (workspace repo) for the full primitive coalescence map.
 
 **Canonical operating mode**: `broomva/autonomous` — when the user says "go" / "proceed" / "be autonomous" / "automerge" / any bare execution directive, `/autonomous` fires the 20-reflex pipeline that exercises every primitive above in the right sequence. Substrate without mode is dormant; mode without substrate is wishful. Compounded, they produce a self-operating workspace.
 
@@ -250,7 +260,7 @@ Future sessions inspect this for state. `bootstrap_status: failed` is captured t
 
 1. Installs all 30 skills via `npx skills add broomva/<skill>` — `broomva/autonomous` is the first in the roster (canonical operating mode)
 2. **Scaffolds missing governance files** from `assets/templates/`:
-   - `CLAUDE.md` (workspace invariants + RCS hierarchy + primitive table P1–P16 + §Ritual vs Substance)
+   - `CLAUDE.md` (workspace invariants + RCS hierarchy + primitive table P1–P20 + §Ritual vs Substance)
    - `AGENTS.md` (operational rules + per-primitive sections + reflexive triggers for all reasoning-enforced primitives)
    - `.control/policy.yaml` (ci_watch / ci_heal / auto_merge / gates G1–G11)
    - `.claude/settings.json` (P1, P2, P7 hook wiring)
@@ -269,9 +279,9 @@ Future sessions inspect this for state. `bootstrap_status: failed` is captured t
 `scripts/doctor.sh`. Eight check sections:
 
 1. Governance files exist (CLAUDE.md, AGENTS.md, .control/policy.yaml)
-2. CLAUDE.md primitives table has all P1–P16 rows + correct count header ("Sixteen irreducible…")
-3. AGENTS.md has each primitive section (`### P1:` through `### P16:`)
-4. Reflexive Trigger Rules present for P6, P9, P10, P11, P12, P13, P14, P15, P16 (the reasoning-enforced primitives)
+2. CLAUDE.md primitives table has all P1–P20 rows + correct count header ("Twenty irreducible…")
+3. AGENTS.md has each primitive section (`### P1:` or `### P1 — Short: Long` format through `### P20`)
+4. Reflexive Trigger Rules present for P6, P9, P10, P11, P12, P13, P14, P15, P16, P17, P18, P19, P20 (the reasoning-enforced primitives)
 5. `.control/policy.yaml` has required blocks (`ci_watch:`, `ci_heal:`, `auto_merge:`)
 6. `.claude/settings.json` wires the expected hook scripts (P1, P2, P7)
 7. Each primitive's mechanism is reachable on disk
@@ -297,14 +307,14 @@ Re-run the preamble. For each skill show: name, layer, installed/missing. Then r
 
 `scripts/revamp.sh`. Triggers complete workspace reconfiguration:
 
-1. Reinstall all 28 skills (force mode)
+1. Reinstall all 30 skills (force mode)
 2. Regenerate governance files from templates (asks before overwriting)
 3. Rewire hooks (git pre-commit + Claude Code Stop/Notification/PreToolUse/SessionStart)
 4. Force-run conversation bridge across all projects
 5. Run full control audit
 6. Update AGENTS.md with current state
 
-## Stack layers (28 skills)
+## Stack layers (30 skills)
 
 For the full skill roster + descriptions, see [references/skills-roster.md](references/skills-roster.md). For the layered architecture, see [references/stack-architecture.md](references/stack-architecture.md). For the full primitive contract with reflexive triggers, see [references/primitives.md](references/primitives.md).
 
@@ -321,7 +331,7 @@ bstack is the *measurement substrate* for the agentic-control-kernel. The harnes
 | Bridge operational | fresh < 24h | `~/.cache/broomva-bridge-stamp` mtime |
 | Control audit | 5/5 sections | `make control-audit` exit code |
 | Conversations indexed | ≥1 session | `docs/conversations/Conversations.md` exists |
-| **Primitive contract** | **13/13** | **`bstack doctor` exit code** |
+| **Primitive contract** | **20/20** | **`bstack doctor` exit code** |
 
 ## When to use bstack
 
@@ -395,9 +405,9 @@ This is the f₃ dynamics function at L3 of the RCS hierarchy. See [references/p
 
 ## See also
 
-- [references/primitives.md](references/primitives.md) — full P1–P13 reference with reflexive triggers
+- [references/primitives.md](references/primitives.md) — full P1–P20 reference with reflexive triggers
 - [references/prompts-integration.md](references/prompts-integration.md) — when/how to leverage the broomva.tech prompts library (5-step auto-tracing mandate, discovery, common traps)
-- [references/skills-roster.md](references/skills-roster.md) — all 28 skills with install commands
+- [references/skills-roster.md](references/skills-roster.md) — all 30 skills with install commands
 - [references/stack-architecture.md](references/stack-architecture.md) — layer dependency diagram
 - [references/quickstart.md](references/quickstart.md) — 5-minute install walkthrough
 - [bstack-upgrade/SKILL.md](bstack-upgrade/SKILL.md) — version-upgrade flow

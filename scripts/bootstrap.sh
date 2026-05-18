@@ -143,7 +143,8 @@ SETTINGS_FILE="$WORKSPACE_DIR/.claude/settings.json"
 if [ ! -f "$SETTINGS_FILE" ]; then
     echo "  [scaffold] .claude/settings.json ← assets/templates/settings.json.snippet"
     mkdir -p "$WORKSPACE_DIR/.claude"
-    sed "s|\${BROOMVA_WORKSPACE}|$WORKSPACE_DIR|g" \
+    sed -e "s|\${BROOMVA_WORKSPACE}|$WORKSPACE_DIR|g" \
+        -e "s|\${BROOMVA_HOME}|$HOME|g" \
         "$TEMPLATES_DIR/settings.json.snippet" > "$SETTINGS_FILE"
 elif command -v python3 >/dev/null 2>&1; then
     # Use python3 to merge missing hooks without overwriting existing ones
@@ -155,9 +156,14 @@ from pathlib import Path
 settings_path = Path("$SETTINGS_FILE")
 template_path = Path("$TEMPLATES_DIR/settings.json.snippet")
 workspace = "$WORKSPACE_DIR"
+home = "$HOME"
+
+raw = template_path.read_text()
+raw = raw.replace("\${BROOMVA_WORKSPACE}", workspace)
+raw = raw.replace("\${BROOMVA_HOME}", home)
 
 current = json.loads(settings_path.read_text())
-template = json.loads(template_path.read_text().replace("\${BROOMVA_WORKSPACE}", workspace))
+template = json.loads(raw)
 
 # Drop the _comment if present
 template.pop("_comment", None)
@@ -183,7 +189,7 @@ for event, blocks in template.get("hooks", {}).items():
                 if "matcher" in block:
                     new_block["matcher"] = block["matcher"]
                 current_blocks.append(new_block)
-                print(f"  [wire] {event}: {Path(cmd).name} (P{hook.get('_bstack_primitive', '?')})")
+                print(f"  [wire] {event}: {Path(cmd).name} ({hook.get('_bstack_primitive', 'P?')})")
                 added += 1
 
 settings_path.write_text(json.dumps(current, indent=2) + "\n")
