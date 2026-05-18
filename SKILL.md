@@ -67,6 +67,8 @@ The twenty primitives. Each closes one specific failure mode that drifts into en
 
 Full reference: see [references/primitives.md](references/primitives.md).
 
+**Roadmap to v1.0.0** — the architectural contracts, gap catalog, and 9-phase closure plan from v0.3.1 onwards live in [`specs/2026-05-18-substrate-completion.md`](specs/2026-05-18-substrate-completion.md) (canonical) and [`references/substrate-completion-overview.md`](references/substrate-completion-overview.md) (agent-readable summary). Every future bstack release through v1.0.0 references this spec for "what does done look like".
+
 ### Naming convention for agent prose (binding on every agent)
 
 Each primitive carries a **short name** for use in agent prose. When referencing a primitive in responses, PR bodies, commit messages, code comments, knowledge-graph entries, or any human-readable surface, use the **`Name (Pn)`** form — *"applying Snapshot (P15)"*, *"via Dep-Chain (P14)"*, *"running Bookkeeping (P6)"* — not bare `P15` / `P14` / `P6`. The number is the canonical identifier (stable across renames); the name is the human-readable handle. First mention in a response uses the full form; subsequent mentions in the same response may drop to bare `Name` ("Snapshot showed clean state") but never to bare `Pn`. Anchors, section IDs (`#p15-state-snapshot-before-action`), and primitive-count headers ("Twenty irreducible primitives") stay numeric — URL stability and arithmetic respectively. Failure mode: bare `Pn` makes responses read as numeric soup; cross-session readers can't decode the reference without a lookup. The Short-name index below is the recall key.
