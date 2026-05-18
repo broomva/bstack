@@ -1,0 +1,99 @@
+name: Release on merge
+
+# Auto-tag + auto-publish GitHub Release whenever VERSION changes on main.
+# Composes with validate-release.yml (PR gate) so this workflow trusts that
+# the merged VERSION is semver, monotonic, and matched by a CHANGELOG section.
+#
+# Idempotent: if `vX.Y.Z` already exists (e.g. tagged manually before this
+# workflow shipped) the run skips silently — no overwrite, no duplicate.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - VERSION
+
+permissions:
+  contents: write   # tag push + gh release create
+
+concurrency:
+  group: release-on-merge
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Tag + GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history so we can check existing tags
+
+      - name: Read VERSION
+        id: version
+        run: |
+          set -euo pipefail
+          v="$(tr -d '[:space:]' < VERSION)"
+          if ! printf '%s' "$v" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error file=VERSION::not semver X.Y.Z: '$v'"
+            exit 1
+          fi
+          echo "  version=$v"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "tag=v$v"   >> "$GITHUB_OUTPUT"
+
+      - name: Check existing tag
+        id: tag_check
+        run: |
+          set -euo pipefail
+          tag="${{ steps.version.outputs.tag }}"
+          if git rev-parse "$tag" >/dev/null 2>&1; then
+            echo "  $tag already exists — skipping release."
+            echo "exists=true"  >> "$GITHUB_OUTPUT"
+          else
+            echo "  $tag is new — will create."
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Extract release notes from CHANGELOG
+        if: steps.tag_check.outputs.exists == 'false'
+        id: notes
+        run: |
+          set -euo pipefail
+          v="${{ steps.version.outputs.version }}"
+          awk -v ver="$v" '
+            $0 ~ "^## " ver "( |$)" { flag=1; next }
+            flag && /^## / { exit }
+            flag { print }
+          ' CHANGELOG.md > /tmp/release-notes.md
+          if [ ! -s /tmp/release-notes.md ]; then
+            echo "::error file=CHANGELOG.md::no '## $v' section found"
+            exit 1
+          fi
+          # Title = first `### ` heading inside the section, else fall back to vX.Y.Z.
+          title=$(awk '/^### / { sub(/^### /, ""); print; exit }' /tmp/release-notes.md)
+          [ -z "$title" ] && title="${{ steps.version.outputs.tag }}"
+          echo "  title=$title"
+          # Multi-line outputs need the heredoc form.
+          {
+            echo "title<<EOT"
+            echo "$title"
+            echo "EOT"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Tag + create GitHub Release
+        if: steps.tag_check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${{ steps.version.outputs.tag }}"
+          title="${{ steps.notes.outputs.title }}"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$tag" -m "$tag — $title"
+          git push origin "$tag"
+          gh release create "$tag" \
+            --title "$tag — $title" \
+            --notes-file /tmp/release-notes.md
+          echo "  ✓ released $tag"

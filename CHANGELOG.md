@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.1 — 2026-05-18
+
+### Auto-release on merge-to-main
+
+Closes the last manual step in the release workflow. When a PR bumping VERSION merges to main, GitHub Actions now tags `vX.Y.Z` and creates the GitHub Release automatically — using the matching `## X.Y.Z` section of `CHANGELOG.md` as the release body.
+
+- **NEW** `.github/workflows/release.yml` — triggers on `push: branches: [main]` with `paths: [VERSION]`. Reads VERSION, checks if `vX.Y.Z` already exists (idempotent: skips silently if so), extracts the matching CHANGELOG section, creates the annotated tag, pushes it, and runs `gh release create`. The release title is the first `### ` heading inside the section, falling back to the tag. Composes with `validate-release.yml` (PR gate) so this workflow trusts that the merged VERSION is semver, monotonic, and has a CHANGELOG section.
+- **CHANGED** `bin/bstack` `release tag` — the clean-tree precondition now only blocks on **modified or staged tracked files**. Untracked files (e.g. workspace-level `.agents/`, `skills-lock.json`, scratch artifacts) no longer prevent the manual helper from running, so it works in a normal development checkout. The error message now lists the offending paths instead of saying "dirty" with no detail.
+
+### Self-validation
+
+This release validates itself: when this PR merges, `release.yml` fires for the first time and creates v0.3.1 automatically — no manual tag or `gh release create` needed.
+
 ## 0.3.0 — 2026-05-18
 
 ### SessionStart auto-upgrade (push-to-main → live-on-next-session)
