@@ -97,6 +97,7 @@ jobs:
           # ship green.
           VETTED=(
             tests/repair-merge-hooks.test.sh
+            tests/metrics-pipeline.test.sh
           )
           fail=0
           for t in "${VETTED[@]}"; do

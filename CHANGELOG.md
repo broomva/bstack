@@ -1,5 +1,70 @@
 # Changelog
 
+## 0.4.0 — 2026-05-18
+
+### Setpoint measurement pipeline (Phase 1 of substrate completion)
+
+The first measurable substrate. Every setpoint declared in `.control/policy.yaml` that the substrate can compute now has a measurement script, and a new top-level CLI surfaces them.
+
+- **NEW** `bin/bstack-metrics` — the measurement dispatcher.
+  - `bstack metrics collect [--no-cache] [--json]` — runs every `scripts/metrics/measure-S<n>.sh` discovered in the bstack install, aggregates outputs into `~/.bstack/metrics/latest.json` under `{generated_at, setpoints}`. TTL-cached (default 60s).
+  - `bstack metrics observe <S-id>` — single-setpoint JSON to stdout. Useful for `--setpoint` queries in Phase 2's `bstack status`.
+  - Per-script timeout: 2s (configurable via `BSTACK_METRICS_TIMEOUT`). Failing scripts produce `{value: null, error: <kind>}` rather than blocking the whole run.
+- **NEW** `scripts/metrics/measure-S<n>.sh` — six substrate-measurable setpoints from `.control/policy.yaml`:
+  - `S10 bstack_skills_installed` — union count under `~/.agents/skills` + `~/.claude/skills`.
+  - `S11 governance_files_present` — checks CLAUDE.md + AGENTS.md + METALAYER.md + .control/policy.yaml + schemas/. Reports missing list.
+  - `S12 hooks_wired` — pre-commit + Stop hook + PreToolUse hook. Reports present/missing arrays.
+  - `S13 bridge_freshness_seconds` — mtime of `~/.cache/broomva-bridge-stamp`. `null` with `error: stamp-missing` when never run.
+  - `S14 conversation_sessions_indexed` — count of `docs/conversations/session-*.md`.
+  - `S15 pii_redaction_active` — greps `_redact_pii`/`redact_pii`/`redactPII` in the workspace bridge script. Returns `1` (true) or `0` (false).
+- **EDIT** `bin/bstack` — register `metrics` subcommand in the dispatcher. New `Observability:` section in `bstack --help`.
+- **NEW** `tests/metrics-pipeline.test.sh` — 7 fixture-based tests covering: aggregate shape, single-setpoint observe, TTL cache honored, --no-cache bypass, per-script JSON validity + id matching, missing-script error, top-level JSON output shape. Added to vetted CI suite.
+- **EDIT** `VERSION` → `0.4.0`.
+
+### Output contract
+
+Each `measure-S<n>.sh` emits one line of JSON on stdout matching:
+
+```json
+{
+  "id": "S<n>",
+  "name": "<snake_case_setpoint_name>",
+  "value": <number|bool|null>,
+  "target": <number|null>,
+  "alert_below": <number>,   // OR alert_above
+  "severity": "blocking" | "informational",
+  "unit": "count" | "seconds" | "bool" | "ratio",
+  "... optional fields ..."
+}
+```
+
+The aggregate `latest.json` wraps these in:
+
+```json
+{
+  "generated_at": "<iso8601>",
+  "setpoints": {
+    "S10": { ... },
+    "S11": { ... },
+    "...": { ... }
+  }
+}
+```
+
+This shape is informal in v0.4.0 and formalized via JSON Schema in v0.6.0 (Phase 3).
+
+### Out of scope (Phase 1)
+
+S1, S2, S4, S5, S6, S7, S8, S9 — measurement requires substrate-external infrastructure (CI history, EGRI runtime, shield instrumentation). They're simply absent from the metrics output until later phases stand up the supporting telemetry. Their presence in `policy.yaml` remains declarative.
+
+### SLO targets (introduced this release)
+
+- `bstack metrics collect` (full, cold): p50 < 2s, p99 < 5s
+- `bstack metrics observe <S-id>` (single): p50 < 200ms, p99 < 1s
+- Per-script timeout: 2s, fail-soft to structured error
+
+Spec reference: §6 Phase 1 of [specs/2026-05-18-substrate-completion.md](specs/2026-05-18-substrate-completion.md).
+
 ## 0.3.1 — 2026-05-18
 
 ### Auto-release on merge-to-main

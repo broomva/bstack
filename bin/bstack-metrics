@@ -1,0 +1,172 @@
+#!/usr/bin/env bash
+# bstack-metrics — substrate measurement pipeline (Phase 1, v0.4.0).
+#
+# Reads each `scripts/metrics/measure-S<n>.sh` discovered in the bstack
+# install, executes it with a 2s timeout, and aggregates the JSON outputs
+# into ~/.bstack/metrics/latest.json. Setpoints without a measurement
+# script are simply absent from the output (Phase 1 deliberately implements
+# only the measurable subset; Phase 3 formalizes the full schema).
+#
+# Subcommands:
+#   collect [--no-cache] [--json]   — run all measurements, write latest.json
+#   observe <S-id>                  — print one setpoint's JSON to stdout
+#   help | --help                   — this message
+#
+# Per-script output contract:
+#   stdout: single line of JSON matching
+#     { "id": "S<n>", "value": <number|bool|null>, ...optional fields }
+#   exit 0 on success; non-zero or timeout → recorded as `error`.
+#
+# Env overrides:
+#   BSTACK_DIR             — override auto-detected bstack root
+#   BSTACK_METRICS_DIR     — override ~/.bstack/metrics/
+#   BSTACK_METRICS_TTL     — cache TTL in seconds (default 60)
+#   BSTACK_METRICS_TIMEOUT — per-script timeout in seconds (default 2)
+#   BROOMVA_WORKSPACE      — pass-through to measure scripts
+#
+# SLO targets (per spec §7.3):
+#   collect (full): p50 < 2s, p99 < 5s
+#   observe (single): p50 < 200ms, p99 < 1s
+set -euo pipefail
+
+BSTACK_DIR="${BSTACK_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
+METRICS_DIR="${BSTACK_METRICS_DIR:-$HOME/.bstack/metrics}"
+LATEST="$METRICS_DIR/latest.json"
+TTL="${BSTACK_METRICS_TTL:-60}"
+TIMEOUT_S="${BSTACK_METRICS_TIMEOUT:-2}"
+SCRIPTS_DIR="$BSTACK_DIR/scripts/metrics"
+
+mkdir -p "$METRICS_DIR"
+
+usage() {
+    cat <<'EOF'
+bstack-metrics — substrate setpoint measurement pipeline
+
+Subcommands:
+  collect [--no-cache] [--json]   Run all measure-S<n>.sh, write latest.json
+  observe <S-id>                  Print one setpoint's JSON
+  help | --help                   This message
+
+Examples:
+  bstack metrics collect
+  bstack metrics collect --no-cache --json
+  bstack metrics observe S13
+EOF
+}
+
+now_iso() {
+    date -u +%FT%TZ
+}
+
+# Portable file mtime → epoch seconds.
+mtime_epoch() {
+    local f="$1"
+    if stat -f %m "$f" >/dev/null 2>&1; then
+        stat -f %m "$f"
+    else
+        stat -c %Y "$f"
+    fi
+}
+
+# Run one measure script with timeout. Always returns a single JSON line.
+# Args: setpoint_id, script_path
+run_measure() {
+    local sid="$1" script="$2"
+    local raw status
+    raw="$(timeout "${TIMEOUT_S}s" bash "$script" 2>/dev/null || true)"
+    status=$?
+    if [ -z "$raw" ]; then
+        printf '{"id":"%s","value":null,"error":"empty-output","computed_at":"%s"}\n' \
+            "$sid" "$(now_iso)"
+        return 0
+    fi
+    if echo "$raw" | jq -e . >/dev/null 2>&1; then
+        # Ensure the id field matches the discovered id (script wins if absent).
+        echo "$raw" | jq -c --arg sid "$sid" --arg now "$(now_iso)" \
+            '. + {id: (.id // $sid), computed_at: (.computed_at // $now)}'
+    else
+        printf '{"id":"%s","value":null,"error":"invalid-json","raw":%s,"computed_at":"%s"}\n' \
+            "$sid" "$(printf '%s' "$raw" | head -c 200 | jq -Rs .)" "$(now_iso)"
+    fi
+}
+
+# `bstack metrics collect`
+cmd_collect() {
+    local no_cache=0 print_json=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --no-cache) no_cache=1; shift ;;
+            --json)     print_json=1; shift ;;
+            *) echo "collect: unknown flag '$1'" >&2; return 2 ;;
+        esac
+    done
+
+    # Cache: skip measurement if latest.json is fresher than TTL.
+    if [ "$no_cache" = "0" ] && [ -f "$LATEST" ]; then
+        local age
+        age=$(( $(date +%s) - $(mtime_epoch "$LATEST") ))
+        if [ "$age" -lt "$TTL" ]; then
+            [ "$print_json" = "1" ] && cat "$LATEST"
+            return 0
+        fi
+    fi
+
+    if [ ! -d "$SCRIPTS_DIR" ]; then
+        echo "bstack-metrics: no scripts/metrics/ directory at $SCRIPTS_DIR" >&2
+        return 1
+    fi
+
+    local results_file
+    results_file="$(mktemp)"
+    trap 'rm -f "$results_file"' RETURN
+
+    local script sid
+    for script in "$SCRIPTS_DIR"/measure-S*.sh; do
+        [ -f "$script" ] || continue
+        sid="$(basename "$script" .sh | sed 's/^measure-//')"
+        run_measure "$sid" "$script" >> "$results_file"
+    done
+
+    if [ ! -s "$results_file" ]; then
+        # No measurements available — empty result is still valid JSON.
+        printf '{"generated_at":"%s","setpoints":{}}\n' "$(now_iso)" > "$LATEST"
+        [ "$print_json" = "1" ] && cat "$LATEST"
+        return 0
+    fi
+
+    jq -s --arg now "$(now_iso)" '
+        {
+          generated_at: $now,
+          setpoints: map({(.id): .}) | add
+        }
+    ' "$results_file" > "$LATEST"
+
+    [ "$print_json" = "1" ] && cat "$LATEST"
+}
+
+# `bstack metrics observe <S-id>`
+cmd_observe() {
+    if [ $# -eq 0 ]; then
+        echo "observe: missing setpoint id (e.g. S13)" >&2
+        return 2
+    fi
+    local sid="$1"
+    local script="$SCRIPTS_DIR/measure-${sid}.sh"
+    if [ ! -f "$script" ]; then
+        printf '{"id":"%s","value":null,"error":"no-measurement-script","computed_at":"%s"}\n' \
+            "$sid" "$(now_iso)"
+        return 1
+    fi
+    run_measure "$sid" "$script"
+}
+
+case "${1:-}" in
+    collect)             shift; cmd_collect "$@" ;;
+    observe)             shift; cmd_observe "$@" ;;
+    -h|--help|help|"")   usage ;;
+    *)
+        echo "bstack-metrics: unknown subcommand '$1'" >&2
+        usage >&2
+        exit 2
+        ;;
+esac
