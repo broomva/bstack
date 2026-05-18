@@ -1,0 +1,461 @@
+#!/usr/bin/env bash
+# bstack-status — substrate health surface (Phase 2, v0.5.0).
+#
+# Reads the metrics produced by `bstack metrics collect` (Phase 1) and
+# renders a human- or machine-readable summary of substrate health
+# covering: plant, setpoints, gates, primitives, companion skills,
+# bridge freshness, RCS stability, and last upgrade.
+#
+# Subcommands:
+#   (default)                Render colored text summary
+#   --json                   Emit a single JSON object (machine-readable)
+#   --setpoint <S-id>        Detailed single-setpoint view
+#   --aggregate              Federation view (Phase 8 placeholder)
+#   --no-color               Strip ANSI even on TTY
+#   --no-collect             Use cached latest.json even if stale
+#   --help                   Help text
+#
+# Reads:
+#   ~/.bstack/metrics/latest.json   produced by bstack metrics collect
+#   .control/policy.yaml            workspace gates + setpoint declarations
+#   ~/.bstack/just-upgraded-from    last-upgrade marker (if present)
+#   ~/.bstack/gate-audit.jsonl      bypass-attempt log (Phase 5; optional)
+#   research/rcs/data/parameters.toml  RCS L3 lambda (if workspace has it)
+#
+# Env overrides:
+#   BSTACK_DIR              override bstack root
+#   BSTACK_METRICS_DIR      override ~/.bstack/metrics/
+#   BSTACK_STATE_DIR        override ~/.bstack/
+#   BROOMVA_WORKSPACE       workspace root for policy.yaml/RCS reads
+#
+# SLO targets (per spec §7.3):
+#   bstack status (cached metrics): p50 < 500ms, p99 < 1s
+set -euo pipefail
+
+BSTACK_DIR="${BSTACK_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
+METRICS_DIR="${BSTACK_METRICS_DIR:-$HOME/.bstack/metrics}"
+STATE_DIR="${BSTACK_STATE_DIR:-$HOME/.bstack}"
+WORKSPACE="${BROOMVA_WORKSPACE:-$PWD}"
+LATEST="$METRICS_DIR/latest.json"
+POLICY="$WORKSPACE/.control/policy.yaml"
+UPGRADE_MARKER="$STATE_DIR/just-upgraded-from"
+LAST_CHECK="$STATE_DIR/last-update-check"
+GATE_AUDIT="$STATE_DIR/gate-audit.jsonl"
+
+NO_COLOR=""
+NO_COLLECT=0
+JSON_MODE=0
+SETPOINT_FILTER=""
+AGGREGATE=0
+
+usage() {
+    cat <<'EOF'
+bstack-status — substrate health surface
+
+Modes:
+  bstack status                  Colored text summary (default)
+  bstack status --json           Single JSON object on stdout
+  bstack status --setpoint S<n>  Detailed view of one setpoint
+  bstack status --aggregate      Cross-workspace rollup (Phase 8, placeholder)
+
+Flags:
+  --no-color                     Strip ANSI even on TTY
+  --no-collect                   Skip auto-collect when latest.json is stale
+  --help, -h                     This message
+EOF
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --json)        JSON_MODE=1; shift ;;
+        --setpoint)    SETPOINT_FILTER="${2:?}"; shift 2 ;;
+        --aggregate)   AGGREGATE=1; shift ;;
+        --no-color)    NO_COLOR=1; shift ;;
+        --no-collect)  NO_COLLECT=1; shift ;;
+        -h|--help)     usage; exit 0 ;;
+        *) echo "bstack-status: unknown flag '$1'" >&2; usage >&2; exit 2 ;;
+    esac
+done
+
+if [ "$AGGREGATE" = "1" ]; then
+    echo "bstack-status: --aggregate not implemented until Phase 8 (federation)" >&2
+    exit 3
+fi
+
+# ─── Color setup (TTY + NO_COLOR aware) ────────────────────────────────
+if [ -t 1 ] && [ -z "$NO_COLOR" ] && [ -z "${NO_COLOR_ENV:-}" ]; then
+    GREEN=$'\033[32m'
+    YELLOW=$'\033[33m'
+    RED=$'\033[31m'
+    DIM=$'\033[2m'
+    BOLD=$'\033[1m'
+    RESET=$'\033[0m'
+else
+    GREEN="" YELLOW="" RED="" DIM="" BOLD="" RESET=""
+fi
+
+SEP="─────────────────────────────────────────────"
+OK="${GREEN}✓${RESET}"
+WARN="${YELLOW}⚠${RESET}"
+FAIL="${RED}✗${RESET}"
+
+# ─── Helpers ───────────────────────────────────────────────────────────
+collect_metrics_if_needed() {
+    # Trigger collect if latest.json missing or older than 5min, unless
+    # --no-collect was passed.
+    if [ "$NO_COLLECT" = "1" ]; then return 0; fi
+    local stale=0
+    if [ ! -f "$LATEST" ]; then
+        stale=1
+    else
+        local now age
+        now=$(date +%s)
+        if stat -f %m "$LATEST" >/dev/null 2>&1; then
+            age=$(( now - $(stat -f %m "$LATEST") ))
+        else
+            age=$(( now - $(stat -c %Y "$LATEST") ))
+        fi
+        [ "$age" -gt 300 ] && stale=1
+    fi
+    if [ "$stale" = "1" ]; then
+        "$BSTACK_DIR/bin/bstack-metrics" collect >/dev/null 2>&1 || true
+    fi
+}
+
+# Read primitive count from CLAUDE.md if available; else default 20.
+# Note: BSD/macOS grep -c exits 1 on zero matches, so a "|| echo 0" fallback
+# would double-print. Use "|| true" + trim whitespace + default to 0.
+primitive_count() {
+    local claude n
+    for claude in "$WORKSPACE/CLAUDE.md" "$BSTACK_DIR/assets/templates/CLAUDE.md.template"; do
+        [ -f "$claude" ] || continue
+        n=$(grep -cE '^\| P[0-9]+ \|' "$claude" 2>/dev/null || true)
+        n=$(printf '%s' "${n:-0}" | tr -d '[:space:]')
+        if [ -n "$n" ] && [ "$n" -gt 0 ] 2>/dev/null; then
+            printf '%s\n' "$n"
+            return 0
+        fi
+    done
+    echo 20
+}
+
+# Count hard gates declared in workspace policy.yaml.
+gate_count() {
+    [ ! -f "$POLICY" ] && { echo 0; return; }
+    local n
+    n=$(grep -cE '^\s+- id: G[0-9]+' "$POLICY" 2>/dev/null || true)
+    printf '%s\n' "${n:-0}" | tr -d '[:space:]'
+    echo
+}
+
+# Count bypass-attempt audit entries in the last 24h.
+gate_bypass_count_24h() {
+    [ ! -f "$GATE_AUDIT" ] && { echo 0; return; }
+    local cutoff n
+    cutoff=$(date -u -v-1d +%FT%TZ 2>/dev/null || date -u -d '-1 day' +%FT%TZ 2>/dev/null || echo "")
+    if [ -z "$cutoff" ]; then
+        n=$(wc -l < "$GATE_AUDIT" 2>/dev/null || true)
+    else
+        n=$(jq -s --arg cutoff "$cutoff" '[.[] | select(.ts > $cutoff)] | length' "$GATE_AUDIT" 2>/dev/null || true)
+    fi
+    printf '%s\n' "${n:-0}" | tr -d '[:space:]'
+    echo
+}
+
+# Read RCS L3 stability margin (λ₃) from canonical parameters.toml.
+rcs_l3_lambda() {
+    local toml="$WORKSPACE/research/rcs/data/parameters.toml"
+    if [ ! -f "$toml" ]; then echo ""; return; fi
+    # Look for derived.lambda.l3 or derived.lambda[3]; fallback grep.
+    local v
+    v=$(grep -E '^\s*l3\s*=' "$toml" 2>/dev/null | head -1 | sed -E 's/.*=\s*([0-9.]+).*/\1/' || true)
+    [ -z "$v" ] && v=$(grep -E 'lambda.*l3' "$toml" 2>/dev/null | head -1 | sed -E 's/[^0-9.]//g' || true)
+    echo "$v"
+}
+
+# Read profile from policy.yaml (governed | baseline | autonomous).
+profile_name() {
+    [ ! -f "$POLICY" ] && { echo "unknown"; return; }
+    local p
+    p=$(grep -E '^profile:' "$POLICY" | head -1 | awk '{print $2}' | tr -d '#' | tr -d '[:space:]')
+    [ -z "$p" ] && p="unknown"
+    echo "$p"
+}
+
+# Human-readable upgrade summary.
+upgrade_line() {
+    if [ -f "$UPGRADE_MARKER" ]; then
+        local from to age
+        from=$(cat "$UPGRADE_MARKER" 2>/dev/null | tr -d '[:space:]')
+        to=$(cat "$BSTACK_DIR/VERSION" | tr -d '[:space:]')
+        if stat -f %m "$UPGRADE_MARKER" >/dev/null 2>&1; then
+            age=$(( $(date +%s) - $(stat -f %m "$UPGRADE_MARKER") ))
+        else
+            age=$(( $(date +%s) - $(stat -c %Y "$UPGRADE_MARKER") ))
+        fi
+        local hum
+        if   [ "$age" -lt 60   ]; then hum="${age}s ago"
+        elif [ "$age" -lt 3600 ]; then hum="$((age / 60))m ago"
+        elif [ "$age" -lt 86400 ]; then hum="$((age / 3600))h ago"
+        else hum="$((age / 86400))d ago"; fi
+        echo "v$from → v$to (auto, $hum)"
+    elif [ -f "$LAST_CHECK" ]; then
+        local cached
+        cached=$(cat "$LAST_CHECK" 2>/dev/null | head -1)
+        case "$cached" in
+            UP_TO_DATE*)         echo "on v$(cat "$BSTACK_DIR/VERSION" | tr -d '[:space:]') (up to date)" ;;
+            UPGRADE_AVAILABLE*)  echo "v$(echo "$cached" | awk '{print $2}') → v$(echo "$cached" | awk '{print $3}') (available)" ;;
+            *)                   echo "on v$(cat "$BSTACK_DIR/VERSION" | tr -d '[:space:]')" ;;
+        esac
+    else
+        echo "on v$(cat "$BSTACK_DIR/VERSION" | tr -d '[:space:]')"
+    fi
+}
+
+# Compose a one-line description of which setpoints are out-of-target.
+setpoint_outliers() {
+    [ ! -f "$LATEST" ] && return
+    jq -r '
+        .setpoints
+        | to_entries
+        | map(.value)
+        | map(select(
+            (.value != null) and (
+                ((.alert_below // null) != null and .value < .alert_below)
+                or
+                ((.alert_above // null) != null and .value > .alert_above)
+            )
+          ))
+        | map("\(.id) \(.name) \(.value) "
+              + (if .alert_below then "< \(.alert_below)" else "> \(.alert_above) " end))
+        | join(", ")
+    ' "$LATEST" 2>/dev/null
+}
+
+setpoint_in_target_count() {
+    [ ! -f "$LATEST" ] && { echo "0/0"; return; }
+    jq -r '
+        .setpoints | to_entries | map(.value) as $sp
+        | (
+            ($sp | map(select(.value != null)) | map(select(
+              (((.alert_below // null) != null and .value < .alert_below)
+               or ((.alert_above // null) != null and .value > .alert_above))
+              | not
+            )) | length) as $in_target
+            | ($sp | map(select(.value != null)) | length) as $measured
+            | "\($in_target)/\($measured)"
+        )
+    ' "$LATEST" 2>/dev/null
+}
+
+severity_emoji_for_setpoint() {
+    # Args: id ; reads from $LATEST
+    jq -r --arg id "$1" '
+        .setpoints[$id] // {}
+        | if .value == null then "-"
+          elif ((.alert_below // null) != null and .value < .alert_below) then
+            (if .severity == "blocking" then "fail" else "warn" end)
+          elif ((.alert_above // null) != null and .value > .alert_above) then
+            (if .severity == "blocking" then "fail" else "warn" end)
+          else "ok" end
+    ' "$LATEST" 2>/dev/null
+}
+
+# ─── --setpoint <S-id> path ───────────────────────────────────────────
+if [ -n "$SETPOINT_FILTER" ]; then
+    collect_metrics_if_needed
+    if [ ! -f "$LATEST" ]; then
+        echo "bstack-status: no metrics available — run 'bstack metrics collect' first" >&2
+        exit 1
+    fi
+    if [ "$JSON_MODE" = "1" ]; then
+        jq -e --arg id "$SETPOINT_FILTER" '.setpoints[$id]' "$LATEST" || {
+            echo "bstack-status: setpoint '$SETPOINT_FILTER' not found" >&2
+            exit 4
+        }
+        exit 0
+    fi
+    # Text view
+    if ! jq -e --arg id "$SETPOINT_FILTER" '.setpoints[$id]' "$LATEST" >/dev/null 2>&1; then
+        echo "bstack-status: setpoint '$SETPOINT_FILTER' not found in metrics" >&2
+        exit 4
+    fi
+    sev=$(severity_emoji_for_setpoint "$SETPOINT_FILTER")
+    case "$sev" in
+        ok)   marker="$OK" ;;
+        warn) marker="$WARN" ;;
+        fail) marker="$FAIL" ;;
+        *)    marker="${DIM}-${RESET}" ;;
+    esac
+    printf "%s %s\n" "$marker" "$BOLD$SETPOINT_FILTER$RESET"
+    jq -r --arg id "$SETPOINT_FILTER" '
+        .setpoints[$id] | to_entries
+        | map(if .value | type == "object" then {key, value: (.value|tostring)} else . end)
+        | map("  \(.key): \(.value)") | join("\n")
+    ' "$LATEST"
+    exit 0
+fi
+
+# ─── --json path (full summary as JSON) ───────────────────────────────
+if [ "$JSON_MODE" = "1" ]; then
+    collect_metrics_if_needed
+    bstack_version=$(cat "$BSTACK_DIR/VERSION" | tr -d '[:space:]')
+    workspace_name=$(basename "$WORKSPACE")
+    prim_count=$(primitive_count)
+    gates_total=$(gate_count)
+    bypass_24h=$(gate_bypass_count_24h)
+    profile=$(profile_name)
+    l3=$(rcs_l3_lambda)
+    in_target=$(setpoint_in_target_count)
+    upgrade=$(upgrade_line)
+
+    metrics_blob='{"setpoints": {}}'
+    [ -f "$LATEST" ] && metrics_blob=$(cat "$LATEST")
+
+    echo "$metrics_blob" | jq \
+        --arg bstack_version "$bstack_version" \
+        --arg workspace "$workspace_name" \
+        --arg profile "$profile" \
+        --arg in_target "$in_target" \
+        --arg primitives "$prim_count" \
+        --arg gates_total "$gates_total" \
+        --arg bypass_24h "$bypass_24h" \
+        --arg l3 "$l3" \
+        --arg upgrade "$upgrade" \
+        --arg generated_at "$(date -u +%FT%TZ)" \
+        '{
+          bstack_version: $bstack_version,
+          workspace: $workspace,
+          profile: $profile,
+          generated_at: $generated_at,
+          setpoints: (.setpoints // {}),
+          summary: {
+            setpoints_in_target: $in_target,
+            primitives: ($primitives | tonumber),
+            gates_total: ($gates_total | tonumber),
+            gate_bypass_attempts_24h: ($bypass_24h | tonumber),
+            rcs_l3_lambda: (if $l3 == "" then null else ($l3 | tonumber) end),
+            last_upgrade: $upgrade
+          }
+        }'
+    exit 0
+fi
+
+# ─── Default: colored text summary ────────────────────────────────────
+collect_metrics_if_needed
+
+bstack_version=$(cat "$BSTACK_DIR/VERSION" | tr -d '[:space:]')
+workspace_name=$(basename "$WORKSPACE")
+profile=$(profile_name)
+prim_count=$(primitive_count)
+gates_total=$(gate_count)
+bypass_24h=$(gate_bypass_count_24h)
+l3=$(rcs_l3_lambda)
+in_target=$(setpoint_in_target_count)
+outliers=$(setpoint_outliers)
+upgrade=$(upgrade_line)
+
+# Plant section (uses S11 + S12 if present).
+plant_gov="—"
+plant_hooks="—"
+if [ -f "$LATEST" ]; then
+    plant_gov=$(jq -r '"\(.setpoints.S11.value // 0)/5"' "$LATEST" 2>/dev/null)
+    plant_hooks=$(jq -r '"\(.setpoints.S12.value // 0)/3"' "$LATEST" 2>/dev/null)
+fi
+
+plant_marker="$OK"
+[ "$plant_gov" != "5/5" ] && plant_marker="$WARN"
+[ "$plant_hooks" != "3/3" ] && plant_marker="$WARN"
+
+# Setpoints section
+setpoint_marker="$OK"
+if [ -n "$outliers" ]; then setpoint_marker="$WARN"; fi
+sp_detail="$in_target in target"
+[ -n "$outliers" ] && sp_detail="$sp_detail  ($outliers)"
+
+# Gates section
+gates_marker="$OK"
+[ "$bypass_24h" -gt 0 ] && gates_marker="$WARN"
+gates_detail="$gates_total reachable, $bypass_24h bypass attempts last 24h"
+
+# Companion skills section (S10)
+skills_marker="$OK"
+skills_detail="—"
+if [ -f "$LATEST" ]; then
+    s10_val=$(jq -r '.setpoints.S10.value // 0' "$LATEST" 2>/dev/null)
+    s10_tgt=$(jq -r '.setpoints.S10.target // 27' "$LATEST" 2>/dev/null)
+    skills_detail="$s10_val/$s10_tgt installed"
+    [ "$s10_val" -lt "$s10_tgt" ] && skills_marker="$WARN"
+fi
+
+# Bridge section (S13)
+bridge_marker="$OK"
+bridge_detail="—"
+if [ -f "$LATEST" ]; then
+    s13_val=$(jq -r '.setpoints.S13.value // "null"' "$LATEST" 2>/dev/null)
+    s13_alert=$(jq -r '.setpoints.S13.alert_above // 3600' "$LATEST" 2>/dev/null)
+    if [ "$s13_val" = "null" ]; then
+        bridge_detail="(no stamp)"
+        bridge_marker="$WARN"
+    else
+        bridge_detail="freshness ${s13_val}s (alert >${s13_alert}s)"
+        # shellcheck disable=SC2086
+        if [ $s13_val -gt $s13_alert ] 2>/dev/null; then bridge_marker="$WARN"; fi
+    fi
+fi
+
+# RCS section
+rcs_marker="$OK"
+if [ -n "$l3" ]; then
+    rcs_detail="λ₃ = $l3 STABLE"
+else
+    rcs_marker="${DIM}-${RESET}"
+    rcs_detail="${DIM}(not configured for this workspace)${RESET}"
+fi
+
+# Primitives section (mechanism on disk would require Phase 5 doctor extension)
+prim_marker="$OK"
+prim_detail="$prim_count/20 declared"
+[ "$prim_count" -ne 20 ] && prim_marker="$WARN"
+
+# Bottom-line counts
+blocking=0
+informational=0
+if [ -f "$LATEST" ]; then
+    blocking=$(jq -r '
+        [.setpoints | to_entries[] | .value
+         | select(.value != null)
+         | select(((.alert_below // null) != null and .value < .alert_below)
+                  or ((.alert_above // null) != null and .value > .alert_above))
+         | select(.severity == "blocking")] | length
+    ' "$LATEST" 2>/dev/null)
+    informational=$(jq -r '
+        [.setpoints | to_entries[] | .value
+         | select(.value != null)
+         | select(((.alert_below // null) != null and .value < .alert_below)
+                  or ((.alert_above // null) != null and .value > .alert_above))
+         | select(.severity != "blocking")] | length
+    ' "$LATEST" 2>/dev/null)
+fi
+
+# Render
+echo "${BOLD}bstack v${bstack_version}${RESET} — ${workspace_name} [${profile}]"
+echo "$SEP"
+printf "%-16s %b  %s\n" "Plant"            "$plant_marker"   "${plant_gov} governance files, ${plant_hooks} hooks wired"
+printf "%-16s %b  %s\n" "Setpoints"        "$setpoint_marker" "$sp_detail"
+printf "%-16s %b  %s\n" "Gates"            "$gates_marker"   "$gates_detail"
+printf "%-16s %b  %s\n" "Primitives"       "$prim_marker"    "$prim_detail"
+printf "%-16s %b  %s\n" "Companion skills" "$skills_marker"  "$skills_detail"
+printf "%-16s %b  %s\n" "Bridge"           "$bridge_marker"  "$bridge_detail"
+printf "%-16s %b  %s\n" "RCS stability"    "$rcs_marker"     "$rcs_detail"
+printf "%-16s %s  %s\n" "Last upgrade"     " "               "$upgrade"
+echo "$SEP"
+if [ "$blocking" -gt 0 ]; then
+    printf "%s%d blocking violation(s)%s, %d informational alert(s).\n" "$RED" "$blocking" "$RESET" "$informational"
+    exit 1
+elif [ "$informational" -gt 0 ]; then
+    printf "%s%d informational alert(s)%s. No blocking violations.\n" "$YELLOW" "$informational" "$RESET"
+else
+    printf "%sAll setpoints within target%s. No alerts.\n" "$GREEN" "$RESET"
+fi
+exit 0
