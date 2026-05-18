@@ -40,6 +40,10 @@
 #      against schemas/primitives.v1.json; workspace .control/policy.yaml
 #      validates against schemas/policy.v1.json. Skipped gracefully if
 #      python3 + jsonschema + PyYAML are absent.
+#  11. Gate enforcement type validation (v0.8.0+) — every blocking gate in
+#      .control/policy.yaml must have a `pattern`, `enforcement.spec`, or
+#      `measurement`. Advisory gates exempt. Catches gates declared
+#      "blocking" with no mechanism behind them (Gap 4.2.1).
 #
 # Usage:
 #   bash scripts/doctor.sh               # full report
@@ -405,6 +409,61 @@ PYEOF
             gap ".control/policy.yaml fails policy.v1.json validation" \
                 "see bstack schemas/policy.v1.json + workspace .control/policy.yaml; \`scripts/migrate.sh\` may be needed"
         fi
+    fi
+fi
+
+# ── Section 11: gate enforcement type validation (v0.8.0+) ─────────────────
+# Every blocking/governed gate must have a `pattern`, `enforcement.spec`,
+# or `measurement`. Advisory / soft / warn severities exempt. Catches
+# gates declared "blocking" with no mechanism behind them (Gap 4.2.1).
+echo ""
+echo "=== Section 11: gate enforcement type validation ==="
+POLICY_FOR_GATES="$WORKSPACE/.control/policy.yaml"
+if [ ! -f "$POLICY_FOR_GATES" ]; then
+    echo "  [skip] no policy.yaml at $POLICY_FOR_GATES"
+elif ! command -v python3 >/dev/null 2>&1 || ! python3 -c "import yaml" 2>/dev/null; then
+    echo "  [skip] python3 + PyYAML required for gate-enforcement lint"
+else
+    gate_lint=$(python3 - "$POLICY_FOR_GATES" <<'PYEOF'
+import sys, yaml
+data = yaml.safe_load(open(sys.argv[1]))
+gates = data.get("gates", {}) or {}
+problems = []
+ok_count = 0
+for category, items in gates.items():
+    if not isinstance(items, list):
+        continue
+    for g in items:
+        if not isinstance(g, dict):
+            continue
+        gid = g.get("id", "?")
+        severity = g.get("severity", "")
+        if severity in ("advisory", "soft", "warn"):
+            ok_count += 1
+            continue
+        has_pattern = bool(g.get("pattern"))
+        has_enforcement = bool((g.get("enforcement") or {}).get("spec"))
+        has_measurement = bool(g.get("measurement"))
+        if has_pattern or has_enforcement or has_measurement:
+            ok_count += 1
+        else:
+            problems.append(f"{gid} ({category}): no pattern, no enforcement.spec, no measurement")
+if problems:
+    print("GAP")
+    for p in problems:
+        print(p)
+else:
+    print(f"OK {ok_count}")
+PYEOF
+)
+    if echo "$gate_lint" | head -1 | grep -q "^OK "; then
+        n=$(echo "$gate_lint" | head -1 | awk '{print $2}')
+        ok "all $n declared gates have enforcement type (pattern / runtime_check / measurement)"
+    else
+        echo "  [gap] blocking gates without enforcement mechanism:"
+        echo "$gate_lint" | tail -n +2 | sed 's/^/         /'
+        gap "Section 11 found gates declared blocking with no enforcement" \
+            "add 'pattern' / 'enforcement.spec' / 'measurement' to each blocking gate (or downgrade severity to advisory)"
     fi
 fi
 

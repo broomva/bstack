@@ -43,9 +43,13 @@ assert_fail() {
 run_onboard() {
     local test_home="$1" test_ws="$2"
     shift 2
+    # BSTACK_SKIP_SKILLS=1 prevents bootstrap.sh from running `npx skills add`
+    # for each ROSTER entry (gate added in v0.8.0). Without it, T3+ block
+    # on the network-bound install loop and hang in CI.
     HOME="$test_home" \
         BSTACK_STATE_DIR="$test_home/.bstack" \
         BROOMVA_STATE_DIR="$test_home/.config/broomva/bstack" \
+        BSTACK_SKIP_SKILLS=1 \
         bash "$ONBOARD_SH" --workspace="$test_ws" "$@"
 }
 

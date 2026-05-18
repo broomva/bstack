@@ -54,8 +54,12 @@ assert_eq() {
 
 assert_contains() {
     local name="$1" haystack="$2" needle="$3"
-    if echo "$haystack" | grep -qF "$needle"; then
-        echo "  [ok] $name: contains '$needle'"
+    # Case-insensitive: canonical word can appear capitalized at sentence
+    # start (e.g. "Twenty irreducible primitives" in SKILL.md description)
+    # without breaking the lockstep contract — the test only cares the
+    # token + count are consistent across files.
+    if echo "$haystack" | grep -iqF "$needle"; then
+        echo "  [ok] $name: contains '$needle' (case-insensitive)"
         PASS=$((PASS + 1))
     else
         echo "  [FAIL] $name: missing '$needle'"
