@@ -375,33 +375,44 @@ P13 is a reflex, not a request. Apply without being prompted:
 
 **Closes**: Implicit between-reflex handoffs ("continue please"); using the wrong mechanism for the work shape; the autonomous arc broken by missing-mechanism failure. Before P19, mechanism selection was implicit and agents defaulted to returning control to the user between reflexes — the exact ritual the `/autonomous` skill was created to resist.
 
-**How**: At pre-flight, before any substantive autonomous work, apply the **2×2 decision matrix**:
+**How**: At pre-flight, before any substantive autonomous work, apply the **2×2×2 mechanism cube** (session-scope × trigger-source × agent-count).
+
+**N=1 plane** (single-agent work):
 
 |  | Within session | Across sessions |
 |---|---|---|
-| **External trigger** (event-driven) | **P7** `p9 watch --background` (CI/deploy/build) | **P12** `persist iterate PROMPT.md` (cross-context-rot, >1h) |
+| **External trigger** (event-driven) | **P9** `p9 watch --background` (CI/deploy/build) | **P12** `persist iterate PROMPT.md` (cross-context-rot, >1h) |
 | **Internal trigger** (condition or time) | **`/goal <condition>`** (Haiku evaluator per turn) | **`/loop <interval>`** (Claude Code time-trigger) |
+
+**N>1 plane** (parallel-agent work):
+
+|  | Within session | Across sessions |
+|---|---|---|
+| **External trigger** (event-driven) | **P5** Fanout — multiple `Agent` calls in one message | **`bstack wave dispatch <plan...>`** — one `claude --bg` per plan, worktree per plan, JSONL state in `~/.cache/bstack/wave/<id>/` |
+| **Internal trigger** (condition or time) | P5 + `/goal` per agent (rare; expensive) | (speculative — multiple `persist iterate` loops on a `/loop` interval) |
 
 Decision logic:
 
 1. Verifiable end state + bounded session + condition fits 4000 chars → `/goal <pipeline-completion-condition>`
-2. External completion event blocking (CI, deploy, build) → P7 `p9 watch --background` + drain wait-queue
+2. External completion event blocking (CI, deploy, build) → P9 `p9 watch --background` + drain wait-queue
 3. Time-triggered recurring routine → `/loop <interval> <slash-command>`
 4. >1h work OR cross-session OR context window approaching ~100K → P12 `persist iterate PROMPT.md` with budget
+5. Independent in-session subtasks with no shared mutable writes → P5 — multiple `Agent` calls in one message
+6. N independent plan files for cross-session parallel fan-out (spec sub-phases, multi-crate work) → `bstack wave dispatch <plan...>` — atomic validate + worktree per plan
 
-**Composition is dynamic**: P12 iterations can invoke `/goal` for sub-tasks. `/goal`-driven sessions fire P9 watchers when CI is blocking. `/loop`-scheduled sessions can spawn P12 for the long-horizon piece. The orchestration tree grows by which mechanism owns which level of the work.
+**Composition is dynamic**: P12 iterations can invoke `/goal` for sub-tasks. `/goal`-driven sessions fire P9 watchers when CI is blocking. `/loop`-scheduled sessions can spawn P12 for the long-horizon piece. `bstack wave` is the across-session sibling of P5 — escalate to wave when parallel work doesn't fit one in-session message-fan-out. The orchestration tree grows by which mechanism owns which level of the work.
 
-**Invariant**: No autonomous-continuation work without (a) an explicit mechanism choice surfaced in the response, and (b) a one-line justification matched to the 2×2 quadrant. Returning control mid-arc is the failure mode P19 prevents — there's a mechanism for every work shape, pick one.
+**Invariant**: No autonomous-continuation work without (a) an explicit mechanism choice surfaced in the response, and (b) a one-line justification matched to a cell of the 2×2×2 cube. Returning control mid-arc is the failure mode P19 prevents — there's a mechanism for every work shape, pick one.
 
 ### P19 Reflexive Trigger Rule (binding on every agent)
 
-1. **Pre-flight of substantive autonomous work** — state chosen mechanism + cite 2×2 quadrant.
+1. **Pre-flight of substantive autonomous work** — state chosen mechanism + cite cube cell (session-scope × trigger-source × agent-count).
 2. **Before returning control mid-arc** — verify no mechanism would keep the arc closed.
-3. **At mechanism boundary crossings** (goal hits >1h, context ~100K) — explicit transition, not drift.
+3. **At mechanism boundary crossings** (goal hits >1h, context ~100K, in-session N>1 needs across-session fan-out) — explicit transition, not drift.
 4. **When composing mechanisms** — surface the composition tree, don't compose silently.
 5. **Tempted to type "continue please" / wait for user prompts** — STOP. That's the ritual P19 makes impossible.
 
-**Origin**: Claude Code `/goal` shipped May 2026 (`code.claude.com/docs/en/goal`) — completes the 2×2 by adding the internal-condition/in-session corner. Five+ instances logged in `bstack-engine.md` candidate ledger.
+**Origin**: Claude Code `/goal` shipped May 2026 (`code.claude.com/docs/en/goal`) — completed the original 2×2. The 2×2 became a 2×2×2 cube in 2026-05 when Claude Code's agent view (`claude --bg` + `claude agents`) plus the bstack wave-dispatch ritual (Spec C/D/E sub-phase fan-outs) demanded an N>1 axis. The wave mechanism is a P19 *graduation* (a new cell on an existing primitive's mechanism family), not a new primitive. See `research/entities/pattern/bstack-engine.md` §Mechanism Graduations for rule-of-three citations.
 
 ---
 
