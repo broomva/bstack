@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.2 — 2026-05-18
+
+### Release infrastructure
+
+First formal release with proper OSS tooling. Establishes the foundation that 0.2.3 (`bstack repair` merges hooks) and 0.3.0 (SessionStart auto-upgrade) build on.
+
+- **NEW** `bin/bstack` — top-level CLI dispatcher. Subcommands: `doctor`, `validate`, `repair`, `bootstrap`, `onboard`, `revamp`, `upgrade`, `config`, `update-check`, `wave`, `release tag`, `version`. Existing sub-binaries (`bstack-config`, `bstack-update-check`, `bstack-wave`) remain callable directly — the dispatcher is additive. `bstack release tag` is a maintainer helper that validates the tree, tags `vX.Y.Z`, pushes the tag, and creates the GitHub Release with the matching CHANGELOG section as notes.
+- **NEW** `CONTRIBUTING.md` — contribution guide: branch/PR shape, Conventional Commits, primitive-promotion rule, local validation steps.
+- **NEW** `RELEASE.md` — semver policy (pre-1.0: minor = potentially breaking), release checklist, retroactive-tag history, cadence guidance, update-check transport docs.
+- **NEW** `.github/workflows/ci.yml` — shellcheck on `scripts/*.sh` and `bin/*`, JSON validation for `assets/templates/*.snippet`, `bstack doctor --quiet` on templated fixtures.
+- **NEW** `.github/workflows/validate-release.yml` — PR check: if `VERSION` changed, `CHANGELOG.md` must have a matching `## X.Y.Z` section and the version must monotonically increase.
+- **CHANGED** `bin/bstack-update-check` — primary source is now the GitHub Releases API (`/repos/broomva/bstack/releases/latest`), with raw `VERSION` on `main` as fallback. **This means dev-branch VERSION bumps no longer leak to downstream installs as "available upgrades"** — only tagged releases do. Two new env vars: `BSTACK_RELEASES_URL` (primary), `BSTACK_REMOTE_URL` (fallback, unchanged behavior).
+- **HISTORY** `v0.2.0` and `v0.2.1` tags + GitHub Releases created retroactively on 2026-05-18 to give the update-check transport a stable anchor.
+
+### Migration
+
+None required. Existing installs continue to work — the API-first transport falls back to the raw `VERSION` URL on any failure, so behavior degrades gracefully.
+
 ## 0.2.1 — 2026-05-16
 
 ### Drop legacy fallback shims from the 0.2.0 renumber
