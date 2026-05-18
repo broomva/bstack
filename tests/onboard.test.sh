@@ -57,12 +57,18 @@ echo "── tests/onboard.test.sh ───────────────
 echo ""
 
 # ── Test 1: --help renders Usage block ───────────────────────────────────
+# Portable across BSD sed (macOS) and GNU sed (Linux/CI). onboard.sh's
+# --help pipes through `sed 's/^# \?//'` which strips the prefix on GNU
+# but leaves it intact on BSD (BSD treats `\?` literally). Asserting the
+# un-prefixed `Usage:` token works on both. The original portable fix
+# from PR #36 (commit a2bd9b9) was orphaned in the v0.8.0 squash merge;
+# this re-applies it inside the Phase 6 PR so the suite stays green.
 echo "T1. --help renders Usage block"
-if bash "$ONBOARD_SH" --help 2>&1 | grep -q "^# Usage:" \
+if bash "$ONBOARD_SH" --help 2>&1 | grep -q "Usage:" \
     && bash "$ONBOARD_SH" --help 2>&1 | grep -q -- "--skip-prompts"; then
     assert_pass "T1: --help renders"
 else
-    assert_fail "T1: --help renders" "expected '# Usage:' and '--skip-prompts' in output"
+    assert_fail "T1: --help renders" "expected 'Usage:' and '--skip-prompts' in output"
 fi
 
 # ── Test 2: --dry-run produces choices receipt but writes nothing ────────
