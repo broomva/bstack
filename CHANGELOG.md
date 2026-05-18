@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.3.0 — 2026-05-18
+
+### SessionStart auto-upgrade (push-to-main → live-on-next-session)
+
+bstack now upgrades itself in the background when you start a new Claude Code session, provided you have a git-checkout install and have not opted out. Previously the update check only fired when the user invoked `/bstack` — installs that never invoked the skill stayed pinned forever.
+
+- **NEW** `scripts/bstack-autoupdate-hook.sh` — SessionStart hook. Calls `bstack-update-check` (cached, ≤ 5s curl), and if `UPGRADE_AVAILABLE` is reported, runs `git stash && git fetch && git reset --hard origin/main` in the background so the next Claude session picks up the new release. Writes `~/.bstack/just-upgraded-from` so the preamble's `JUST_UPGRADED` path fires. Log at `~/.bstack/auto-upgrade.log`.
+- **CHANGED** `assets/templates/settings.json.snippet` — adds the new SessionStart entry (tagged `_bstack_primitive: "P7"`, timeout 10s, ordered before the existing freshness + role-x hooks). Downstream installs running `bstack repair` (≥ 0.2.3) pick it up idempotently.
+
+### Behavior change: `auto_upgrade` defaults to `true`
+
+This is the silently-different default the bump to 0.3.0 captures. To opt out:
+
+```bash
+bstack config set auto_upgrade false   # persistent
+# or
+BSTACK_AUTO_UPGRADE=0                  # per-session env override
+```
+
+### Safety constraints
+
+- **Git installs only.** Vendored installs (no `.git`) get an informational message — no auto-write. The destructive `mv + clone` upgrade path requires user confirmation through `/bstack-upgrade`.
+- **`git stash push -u`** preserves any uncommitted local edits to the skill dir. They land in the stash; the auto-upgrade log records the stash message.
+- **Backgrounded.** The fetch + reset runs detached so SessionStart's 10s timeout is never the bottleneck. The hook itself only does the cached check + spawn.
+- **Cache TTL preserved.** `bstack-update-check` caches `UPGRADE_AVAILABLE` results for 12h, so the hook only does network work at most ~twice/day.
+
+### Migration
+
+Existing installs upgrading to 0.3.0 need the new SessionStart hook wired into their `.claude/settings.json`. Two paths:
+
+1. **Automatic** (recommended) — run `bstack repair` once after upgrading. The merge logic from 0.2.3 picks up the new snippet entry idempotently.
+2. **Manual** — run `bstack bootstrap` to re-scaffold from snippet (idempotent, never overwrites).
+
+For installs that *do not want* auto-upgrade as the default, run `bstack config set auto_upgrade false` before upgrading to 0.3.0 (or immediately after — the hook honors the config from its first invocation).
+
 ## 0.2.3 — 2026-05-18
 
 ### `bstack repair` merges missing hooks (chicken-and-egg fix)
