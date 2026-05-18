@@ -98,6 +98,7 @@ jobs:
           VETTED=(
             tests/repair-merge-hooks.test.sh
             tests/metrics-pipeline.test.sh
+            tests/status-surface.test.sh
           )
           fail=0
           for t in "${VETTED[@]}"; do

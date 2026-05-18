@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.5.0 — 2026-05-18
+
+### Substrate status surface (Phase 2 of substrate completion)
+
+The metrics pipeline shipped in v0.4.0 now has a readable face. A single command surfaces substrate health across 8 dimensions — Plant, Setpoints, Gates, Primitives, Companion skills, Bridge, RCS stability, Last upgrade — in colored text for humans or JSON for tooling.
+
+- **NEW** `bin/bstack-status` — health summary dispatcher.
+  - `bstack status` — colored text summary (ANSI-aware, TTY-detecting; `--no-color` opt-out).
+  - `bstack status --json` — single JSON object: `{bstack_version, workspace, profile, generated_at, setpoints, summary}` with `summary` carrying derived counts (`setpoints_in_target`, `primitives`, `gates_total`, `gate_bypass_attempts_24h`, `rcs_l3_lambda`, `last_upgrade`). Intended for CI / external consumers / status badges.
+  - `bstack status --setpoint S<n>` — detailed single-setpoint view (text or `--json`).
+  - `bstack status --aggregate` — placeholder for Phase 8 federation; exits 3 with explanation.
+  - `--no-collect` — render from cached `~/.bstack/metrics/latest.json` even if stale (default behavior auto-runs `bstack metrics collect` when the cache is missing or > 5 min old).
+- **EDIT** `bin/bstack` — register `status` subcommand. New `Observability:` `--help` line.
+- **NEW** `tests/status-surface.test.sh` — 8 fixture-based tests covering: all 8 sections render, `--json` shape, `--setpoint` text + JSON modes, unknown-setpoint error, `--aggregate` placeholder, `--no-color` strips ANSI, auto-collect on stale cache. Added to vetted CI suite.
+
+### Composition with v0.4.0
+
+`bstack-status` is a pure reader. It calls `bstack metrics collect` itself when needed so users running `bstack status` cold (e.g. fresh install) still see a populated panel. Cache TTL (5 min for status's own collection trigger; 60s for metrics's own cache) keeps repeated invocations cheap.
+
+### Data sources
+
+| Section | Source |
+|---|---|
+| Plant | derived from S11 (governance files) + S12 (hooks wired) in `~/.bstack/metrics/latest.json` |
+| Setpoints | all setpoints in `latest.json`, classified vs alert thresholds, counted as `in_target/measured` |
+| Gates | grep on `.control/policy.yaml` for `^\s+- id: G[0-9]+` |
+| Primitives | grep on `CLAUDE.md` (workspace) or `assets/templates/CLAUDE.md.template` for primitive table rows; falls back to 20 |
+| Companion skills | S10 in `latest.json` |
+| Bridge | S13 in `latest.json` |
+| RCS stability | parse `~/<workspace>/research/rcs/data/parameters.toml` for `l3` lambda (gracefully degrades when absent) |
+| Last upgrade | `~/.bstack/just-upgraded-from` (if present) + `~/.bstack/last-update-check` cache |
+
+### Bug fix from earlier development (caught in smoke)
+
+The first iteration of `primitive_count()` used `grep -cE PATTERN file || echo 0` which double-emits `"0\n0"` on BSD/macOS grep (where `grep -c` exits 1 on zero matches AND outputs `0`). Replaced with `|| true` + `tr -d` whitespace + default. Same fix applied to `gate_count()` and `gate_bypass_count_24h()`. The regex was also corrected from `^\| \*\*P[0-9]+\*\*` (matches no rows) to `^\| P[0-9]+ \|` (matches actual table format).
+
+### SLO targets (introduced)
+
+- `bstack status` (cached metrics): p50 < 500ms, p99 < 1s
+- `bstack status` (cold, auto-collects first): p50 < 2.5s, p99 < 6s
+- `bstack status --setpoint <S-id>`: p50 < 100ms, p99 < 300ms (single jq read)
+
+Spec reference: §6 Phase 2 of [specs/2026-05-18-substrate-completion.md](specs/2026-05-18-substrate-completion.md).
+
 ## 0.4.0 — 2026-05-18
 
 ### Setpoint measurement pipeline (Phase 1 of substrate completion)
