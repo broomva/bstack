@@ -1,0 +1,13 @@
+# Python build artifacts
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# macOS
+.DS_Store
+
+# Local-only scaffolding produced by `bstack doctor` against a non-bstack workspace
+.control/
+.claude/

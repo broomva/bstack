@@ -42,6 +42,7 @@ Observability:
   metrics collect|observe         Setpoint measurement pipeline (≥ 0.4.0).
   status [--json|--setpoint X]    Substrate health summary (≥ 0.5.0).
   skills install|status|list      Companion skill roster manager (≥ 0.7.0).
+  crystallize candidates|promote  P16 rule-of-three candidate detector (≥ 0.9.5).
 
 Release (maintainers):
   release tag                     Tag the current VERSION and create the
@@ -322,6 +323,7 @@ case "$cmd" in
     metrics)                exec "$BIN_DIR/bstack-metrics" "$@" ;;
     status)                 exec "$BIN_DIR/bstack-status" "$@" ;;
     skills)                 exec "$BIN_DIR/bstack-skills" "$@" ;;
+    crystallize)            exec "$BIN_DIR/bstack-crystallize" "$@" ;;
     release)
         sub="${1:-}"
         [ $# -gt 0 ] && shift

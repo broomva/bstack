@@ -118,8 +118,7 @@ jobs:
         #   02 — metrics pipeline (Phase 1 v0.4.0)
         #   03 — status surface (Phase 2 v0.5.0)
         #   04 — schemas validate (Phase 3 v0.6.0)
-        # canary/05+ (skills auto-install, gates audit, release pipeline)
-        # ship in v0.9.1+ as Phase 4-6 stabilize.
+        #   05 — crystallize detector (Phase 7 v0.9.5)
         run: |
           set -euo pipefail
           shopt -s nullglob

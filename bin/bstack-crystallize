@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# bstack-crystallize — rule-of-three pattern detector dispatcher (Phase 7, v0.9.5).
+#
+# Thin bash wrapper that delegates to scripts/crystallize.py. Surfaces
+# rule-of-three candidates from docs/conversations/*.md for human P16
+# approval — never auto-promotes a primitive.
+#
+# Subcommands:
+#   candidates [--json] [--conversations <dir>] [--min-sessions <N>] [--limit <N>]
+#                                Emit detected candidates
+#   promote <slug> [--json] [--conversations <dir>] [--min-sessions <N>]
+#                                Draft primitive scaffold (does NOT auto-merge)
+#   help | --help                This message
+#
+# Env overrides:
+#   BSTACK_CONVERSATIONS         Override default conversations directory.
+#                                Lookup order:
+#                                  1. --conversations <dir> on the command line
+#                                  2. BSTACK_CONVERSATIONS env var
+#                                  3. $BROOMVA_WORKSPACE/docs/conversations
+#                                  4. $PWD/docs/conversations
+#
+# Exit codes:
+#   0  success
+#   2  invalid arguments / unknown subcommand
+#   3  conversations directory missing
+#   4  promote slug not found in current candidates
+#
+# SLO targets:
+#   candidates (fixtures, ~6 files):     p50 < 200ms, p99 < 1s
+#   candidates (workspace, ~50 files):   p50 < 2s,    p99 < 5s
+set -euo pipefail
+
+BSTACK_DIR="${BSTACK_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
+DETECTOR="$BSTACK_DIR/scripts/crystallize.py"
+
+usage() {
+    cat <<'EOF'
+bstack-crystallize — rule-of-three pattern detector (P16 machine-assist)
+
+Subcommands:
+  candidates [--json] [--conversations <dir>] [--min-sessions <N>] [--limit <N>]
+                                 Surface recurring patterns for P16 review
+  promote <slug> [--json] [--conversations <dir>] [--min-sessions <N>]
+                                 Draft primitive scaffold (does NOT auto-merge)
+  help | --help                  This message
+
+Heuristics (per spec section 6, Phase 7):
+  1. Phrase appears in >=3 distinct conversation files (default)
+  2. >=1 occurrence co-locates with a failure-mode keyword (200-char window)
+  3. >=1 occurrence co-locates with a repetition-acknowledgement keyword
+
+Defaults:
+  conversations  $BSTACK_CONVERSATIONS env var > $BROOMVA_WORKSPACE/docs/conversations > $PWD/docs/conversations
+  min-sessions   3
+  limit          20
+
+Examples:
+  bstack crystallize candidates
+  bstack crystallize candidates --json | jq '.candidates | length'
+  bstack crystallize candidates --conversations /tmp/sessions --min-sessions 4
+  bstack crystallize promote squash-merge-race
+EOF
+}
+
+default_conv_dir() {
+    if [ -n "${BSTACK_CONVERSATIONS:-}" ]; then
+        echo "$BSTACK_CONVERSATIONS"
+    elif [ -n "${BROOMVA_WORKSPACE:-}" ] && [ -d "${BROOMVA_WORKSPACE:-}/docs/conversations" ]; then
+        echo "$BROOMVA_WORKSPACE/docs/conversations"
+    else
+        echo "$PWD/docs/conversations"
+    fi
+}
+
+has_conversations_flag() {
+    for a in "$@"; do
+        case "$a" in
+            --conversations|--conversations=*) return 0 ;;
+        esac
+    done
+    return 1
+}
+
+if [ $# -eq 0 ]; then
+    usage
+    exit 0
+fi
+
+cmd="$1"
+shift || true
+
+case "$cmd" in
+    help|--help|-h)
+        usage
+        ;;
+    candidates|promote)
+        if has_conversations_flag "$@"; then
+            exec python3 "$DETECTOR" "$cmd" "$@"
+        else
+            exec python3 "$DETECTOR" "$cmd" --conversations "$(default_conv_dir)" "$@"
+        fi
+        ;;
+    *)
+        echo "bstack crystallize: unknown subcommand '$cmd' — try 'bstack crystallize --help'." >&2
+        exit 2
+        ;;
+esac

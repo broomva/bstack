@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.9.5 — 2026-05-18
+
+### Crystallization detection (Phase 7 of substrate completion)
+
+Closes substrate-completion gap **4.4.1** — until now, P16 (rule-of-three crystallization) ran in the user's head. Phase 7 ships machine-assist: `bstack crystallize candidates` scans `docs/conversations/*.md` for patterns that recur in ≥3 distinct sessions with explicit failure-mode and acknowledgement signals. Candidates are surfaced for human approval; the substrate **never** auto-promotes a primitive.
+
+- **NEW** `scripts/crystallize.py` — rule-of-three pattern detector (Python). Heuristics per spec §6 Phase 7:
+  - Phrase recurs in ≥`--min-sessions` distinct conversation files (default 3)
+  - ≥1 occurrence co-locates within a 200-char window of a failure-mode keyword (`failed`, `orphaned`, `race`, `regression`, `shipped broken`, …)
+  - ≥1 occurrence co-locates with a repetition-acknowledgement keyword (`again`, `twice`, `third time`, `recurring`, `had to redo`, …)
+  - Substring suppression: keep shorter phrase when it strictly recurs more often than a longer one (the longer is a phrasing variant; the shorter is the recurring kernel)
+  - n-gram window: 2–4 tokens; 2-grams require both tokens be content (no stop-words); 3+-grams reject stop-word prefix or suffix and require ≥⌈n/2⌉ content tokens
+  - Citation excerpts are scrubbed for common secret patterns (`sk-…`, `ghp_…`, `xoxb-…`, AWS/GCP keys, JWTs, generic `password:`/`token:` assignments) before emission — excerpts may flow into PR comments and CI artifacts
+  - Failure/ack keyword lists overridable via `CRYSTALLIZE_FAILURE_KEYWORDS` / `CRYSTALLIZE_ACK_KEYWORDS` env vars
+- **NEW** `bin/bstack-crystallize` — thin bash dispatcher; delegates to `scripts/crystallize.py`. Defaults `--conversations` to `$BSTACK_CONVERSATIONS` → `$BROOMVA_WORKSPACE/docs/conversations` → `$PWD/docs/conversations`.
+- **NEW** `bstack crystallize candidates [--json] [--conversations <dir>] [--min-sessions <N>] [--limit <N>]` — surface detected candidates with citations + signal summaries.
+- **NEW** `bstack crystallize promote <slug> [--json]` — draft a primitive scaffold (auto-detected pattern + failure mode + ack signals + citations + P16 manual-gate checklist). Explicitly **does not** auto-merge a primitive; the scaffold is a starting point, not a decision.
+- **NEW** `tests/canary/05-crystallize.test.sh` — 14 assertions covering: fixtures present, `--help` lists both subcommands, `--json` shape, known squash-merge-race pattern surfaces at ≥3 sessions, `--min-sessions=99` returns 0 (no false positives), promote scaffold contains DRAFT + auto-merge disclaimer + P16 reference, unknown subcommand exits 2, missing conversations directory exits 3, unknown promote slug exits 4.
+- **NEW** `tests/fixtures/conversations/{positive-1..4,negative-1..2}.md` — 4 fixtures sharing the `squash merge race` rule-of-three pattern + 2 negative fixtures (no recurrence / no failure-mode signal).
+- **CHANGED** `bin/bstack` — dispatcher: `crystallize` subcommand wired alongside `skills`; usage text updated.
+
+### Design choices
+
+- **Detection, not promotion.** Phase 7's contract is that P16 stays a deliberate human decision. The scaffold output explicitly disclaims auto-merge and surfaces the four manual P16 gates (concrete mechanism, stated invariant, stated failure mode, short name).
+- **Bounded false-positive risk.** Per the spec §8 risk table, the failure mode is *false-positive ritual detection*. Mitigation: candidates are surfaced for human review; the substring-suppression rule keeps the recurring kernel rather than every phrasing variant; the failure-mode + ack co-occurrence filter rejects phrases that recur without an actual problem signal.
+- **No new dependencies.** Pure Python stdlib + standard `jq` (already a canary-suite dependency). The detector runs on the same Python interpreter that runs `scripts/wave.py` and the `measure-*.sh` setpoint scripts.
+
+### SLO targets (introduced)
+
+- `bstack crystallize candidates` (fixtures, ~6 files): p50 < 200ms, p99 < 1s
+- `bstack crystallize candidates` (workspace, ~50 files): p50 < 2s, p99 < 5s
+- `bstack crystallize promote <slug>`: p50 < 200ms, p99 < 1s (re-runs detection then formats one candidate)
+
+### Exit codes
+
+- `0` success (zero or more candidates surfaced)
+- `2` invalid arguments / unknown subcommand
+- `3` conversations directory missing
+- `4` `promote` slug not found in current candidate set
+
+### Out of scope for v0.9.5 (deferred)
+
+- Setpoint-history-driven trend detection (open question §10.1)
+- Cross-workspace candidate aggregation (depends on Phase 8 federation)
+- Auto-PR drafting via `gh pr create` from `crystallize promote` (deliberate — keeps P16 a manual decision)
+
 ## 0.9.0 — 2026-05-18
 
 ### Vendored upgrade path + canary suite (Phase 6 of substrate completion)
