@@ -1,0 +1,243 @@
+schema_version: 1
+# Canonical machine-readable primitive registry. Conforms to
+# schemas/primitives.v1.json. The narrative in references/primitives.md
+# is the human-readable companion; both surfaces must stay in lockstep
+# (validated by scripts/doctor.sh §10 from v0.6.0 onwards).
+#
+# The four promotion conditions for every Pn:
+#   1. ≥3 independent instances of the failure mode (rule_of_three)
+#   2. Concrete mechanism (hook / script / reflex / skill / composed)
+#   3. Stated invariant
+#   4. Stated failure mode this primitive closes
+
+primitives:
+  - id: P1
+    short_name: Bridge
+    full_name: Conversation Bridge
+    category: knowledge
+    mechanism:
+      type: hook
+      spec: "Stop + Notification → scripts/conversation-bridge-hook.sh"
+    invariant: "Bridge stamp < 24h stale"
+    failure_mode: "session amnesia — each session starts from zero without episodic memory"
+    introduced_in: 0.1.0
+
+  - id: P2
+    short_name: Gate
+    full_name: Control Gate
+    category: safety
+    mechanism:
+      type: hook
+      spec: "PreToolUse (Bash/Write/Edit) → scripts/control-gate-hook.sh + .control/policy.yaml"
+    invariant: "G1-G4 blocking gates never bypassed"
+    failure_mode: "destructive ops the model did not authorize (force-push, rm -rf, secrets committed, hard-reset over live work)"
+    introduced_in: 0.1.0
+
+  - id: P3
+    short_name: Tickets
+    full_name: Linear Tickets
+    category: lifecycle
+    mechanism:
+      type: reflex
+      spec: "Agent reflexive rule — every work unit tracked Backlog → Done"
+    invariant: "No significant work without a ticket"
+    failure_mode: "invisible work — substantive changes ship without traceability or coordination"
+    introduced_in: 0.1.0
+
+  - id: P4
+    short_name: Pipeline
+    full_name: PR Pipeline
+    category: lifecycle
+    mechanism:
+      type: reflex
+      spec: "Agent reflexive rule — branch → PR → CI → merge → deploy"
+    invariant: "Never merge with failing checks"
+    failure_mode: "merging unreviewed or untested code directly to main"
+    introduced_in: 0.1.0
+
+  - id: P5
+    short_name: Fanout
+    full_name: Parallel Agents
+    category: execution
+    mechanism:
+      type: composed
+      spec: "Task tool dispatch in worktrees + bstack-wave for N>1 across-session orchestration"
+    invariant: "No shared mutable file writes between concurrent agents"
+    failure_mode: "sequential bottleneck on independent work units"
+    introduced_in: 0.1.0
+
+  - id: P6
+    short_name: Bookkeeping
+    full_name: Knowledge Bookkeeping
+    category: knowledge
+    mechanism:
+      type: skill
+      spec: "broomva/bookkeeping — score, promote, synthesize, lint"
+    invariant: "research/entities/ never contains unscored items"
+    failure_mode: "knowledge graph rot — observations decay before promotion to canonical pages"
+    skill_repo: broomva/bookkeeping
+    introduced_in: 0.1.0
+
+  - id: P7
+    short_name: Freshness
+    full_name: Skill Freshness Check
+    category: lifecycle
+    mechanism:
+      type: hook
+      spec: "SessionStart → scripts/skill-freshness-hook.sh + scripts/bstack-autoupdate-hook.sh (≥0.3.0)"
+    invariant: "Never blocks; weekly nudge when last update check ≥ 7d ago"
+    failure_mode: "silent rot of npx skills add snapshots — installed skills drift from upstream without notice"
+    introduced_in: 0.1.0
+
+  - id: P8
+    short_name: Janitor
+    full_name: Branch + Worktree Janitor
+    category: lifecycle
+    mechanism:
+      type: cli
+      spec: "make janitor / scripts/branch-janitor.sh — detects squash-merged branches + dead worktrees"
+    invariant: "Default --dry-run; never touches main/master/develop or protected branches"
+    failure_mode: "squash-merge accumulation — orphaned local branches + worktrees obscure real working state"
+    introduced_in: 0.1.0
+
+  - id: P9
+    short_name: Wait
+    full_name: CI Watcher + Productive Wait
+    category: lifecycle
+    mechanism:
+      type: skill
+      spec: "broomva/p9 — gh pr checks --watch via run_in_background + wait-queue drains"
+    invariant: "Never sleep on CI; merge authorization always defers to control metalayer"
+    failure_mode: "sleep-on-wait dead time (CI, deploys, builds — PR CI is the reference implementation)"
+    skill_repo: broomva/p9
+    introduced_in: 0.1.0
+
+  - id: P10
+    short_name: Hygiene
+    full_name: Worktree Hygiene Discipline
+    category: lifecycle
+    mechanism:
+      type: reflex
+      spec: "Agent reflexive rule — decide worktree-or-not before first file; clean tree through PR lifecycle"
+    invariant: "A clean tree is the only reliable reset point; auto-run P8 janitor after every merge"
+    failure_mode: "dirty-tree drift across the PR lifecycle"
+    introduced_in: 0.1.0
+
+  - id: P11
+    short_name: Empirical
+    full_name: Empirical Feedback Loop
+    category: execution
+    mechanism:
+      type: reflex
+      spec: "Agent reflexive rule — validate by interacting; multi-modal evidence before claiming complete"
+    invariant: "Reasoning isn't validation; interaction is"
+    failure_mode: "shipping code that compiles but doesn't work"
+    introduced_in: 0.1.0
+
+  - id: P12
+    short_name: Persist
+    full_name: Persistent Loop Discipline
+    category: execution
+    mechanism:
+      type: skill
+      spec: "broomva/persist — cross-context restart loop; state in filesystem (PROMPT.md + git + state.jsonl)"
+    invariant: "At long-horizon work (>1h), restart fresh; backpressure from compilers/tests/linters, not model self-grading"
+    failure_mode: "long-horizon work decaying as the context window rots"
+    skill_repo: broomva/persist
+    introduced_in: 0.1.0
+
+  - id: P13
+    short_name: Dream
+    full_name: Dream Cycle Discipline
+    category: knowledge
+    mechanism:
+      type: reflex
+      spec: "Agent reflexive rule — 5-phase shape (gather → replay → prune → consolidate → index); replay against frozen substrate"
+    invariant: "Replay against frozen substrate is the runtime form of stop-gradient — what makes consolidation safe"
+    failure_mode: "tier-crossing consolidation corrupting upper-tier rules without replay (the shadow dream failure mode)"
+    introduced_in: 0.1.0
+
+  - id: P14
+    short_name: Dep-Chain
+    full_name: Dependency-Chain Reasoning Discipline
+    category: meta
+    mechanism:
+      type: reflex
+      spec: "Agent reflexive rule — before any substantive write, explicit upstream + downstream enumeration with concrete file paths"
+    invariant: "Concrete enumeration in response or PR body — not the agent's head"
+    failure_mode: "'think deeply through chain of dependencies' becoming a ritual phrase without concrete upstream/downstream enumeration"
+    rule_of_three:
+      - citation: research/notes/2026-05-12-prompt-patterns-raw.md
+        summary: "30+ instances of 'think deeply' in the user's prompt-pattern dump without concrete dep-chain"
+    introduced_in: 0.1.0
+
+  - id: P15
+    short_name: Snapshot
+    full_name: State-Snapshot Before Action
+    category: meta
+    mechanism:
+      type: reflex
+      spec: "Agent reflexive rule — surface git status + branch + ahead/behind + PRs + tickets + deploy state before plan"
+    invariant: "The snapshot is part of the planning response — not deferred"
+    failure_mode: "plans built on stale state (uncommitted work, in-flight PRs, stale deploys)"
+    rule_of_three:
+      - citation: research/notes/2026-05-12-prompt-patterns-raw.md
+        summary: "10+ instances of 'help me understand where we stand' / 'is everything committed' in the prompt-pattern dump"
+    introduced_in: 0.1.0
+
+  - id: P16
+    short_name: Crystallize
+    full_name: Crystallization Discipline (the Bstack Engine)
+    category: meta
+    mechanism:
+      type: reflex
+      spec: "Meta-primitive — the loop that produces every other primitive; rule-of-three + concrete mechanism + invariant + failure mode"
+    invariant: "Candidate ledger lives in research/entities/pattern/bstack-engine.md; rare + deliberate promotion only"
+    failure_mode: "recurring valuable patterns living only in the user's head — never promoted to skill/primitive/policy infrastructure"
+    introduced_in: 0.1.0
+
+  - id: P17
+    short_name: Lens
+    full_name: Lens-Routed Request Articulation
+    category: meta
+    mechanism:
+      type: hook
+      spec: "broomva/role-x skill — UserPromptSubmit + SessionStart hooks → lens registry selection"
+    invariant: "No 'act as X' persona rewrites; lens loads substantive context only"
+    failure_mode: "flat-dispatch fan-out without typed lens that shapes correct quality_bar"
+    skill_repo: broomva/role-x
+    introduced_in: 0.2.0
+
+  - id: P18
+    short_name: Audience
+    full_name: Format-Follows-Audience Discipline
+    category: meta
+    mechanism:
+      type: reflex
+      spec: "Agent reflexive rule — agent-readable → markdown; human-readable → HTML; both → markdown (GitHub renders)"
+    invariant: "Format follows audience, not habit; ASCII pseudo-diagrams + unicode-color-approximation are anti-patterns"
+    failure_mode: "markdown-by-default for everything regardless of audience; 200+ line specs nobody reads; ASCII when SVG-in-HTML is correct"
+    introduced_in: 0.2.0
+
+  - id: P19
+    short_name: Orchestrate
+    full_name: Orchestration-Mechanism Selection Discipline
+    category: meta
+    mechanism:
+      type: composed
+      spec: "2×2×2 mechanism cube (session-scope × trigger × N) → /goal | p9 watch | /loop | persist iterate | Fanout | bstack wave"
+    invariant: "No autonomous-continuation work without explicit mechanism choice + cube-cell citation"
+    failure_mode: "implicit between-reflex handoffs ('continue please'); using wrong mechanism for work shape"
+    introduced_in: 0.2.0
+
+  - id: P20
+    short_name: Cross-Review
+    full_name: Cross-Model Adversarial Review Gate
+    category: safety
+    mechanism:
+      type: skill
+      spec: "broomva/cross-review — Strata A (cross-vendor) / B (fresh subagent) / C (composed adversarial skills); ≥7/10 score gate"
+    invariant: "Same model that writes the code cannot be the final judge of the code"
+    failure_mode: "single-model echo chamber; AI slop merged because writer self-validated"
+    skill_repo: broomva/cross-review
+    introduced_in: 0.2.0

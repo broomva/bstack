@@ -1,0 +1,95 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/broomva/bstack/blob/main/schemas/primitives.v1.json",
+  "title": "bstack primitives v1",
+  "description": "Schema for references/primitives.yaml — the canonical machine-readable primitive registry. Each Pn entry conforms to the four promotion conditions: concrete mechanism, stated invariant, stated failure mode, rule-of-three citations.",
+  "type": "object",
+  "required": ["schema_version", "primitives"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "generated_at": {
+      "type": "string",
+      "description": "ISO-8601 timestamp of last regeneration from canonical sources."
+    },
+    "primitives": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "short_name", "invariant", "failure_mode"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^P[0-9]+$",
+            "description": "Canonical numeric identifier (P1..Pn). Stable across renames."
+          },
+          "short_name": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Za-z-]*$",
+            "description": "Human-readable handle used in `Name (Pn)` prose form."
+          },
+          "full_name": {
+            "type": "string",
+            "description": "Long-form descriptive name (e.g. `Conversation Bridge`)."
+          },
+          "category": {
+            "enum": ["lifecycle", "knowledge", "safety", "execution", "meta", "observability"]
+          },
+          "mechanism": {
+            "type": "object",
+            "required": ["type"],
+            "properties": {
+              "type": {
+                "enum": ["hook", "script", "reflex", "skill", "composed", "cli"]
+              },
+              "spec": {
+                "type": "string",
+                "description": "Concrete handle: hook event + script path / CLI command / skill repo / reflex rule reference."
+              }
+            }
+          },
+          "invariant": {
+            "type": "string",
+            "description": "The property that must hold for this primitive to be considered satisfied."
+          },
+          "failure_mode": {
+            "type": "string",
+            "description": "The concrete failure mode this primitive prevents."
+          },
+          "rule_of_three": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["citation"],
+              "properties": {
+                "citation": { "type": "string", "description": "Path or URL anchor pointing to evidence." },
+                "summary": { "type": "string" }
+              }
+            },
+            "description": "≥3 citations required for post-formalization primitives (P14+)."
+          },
+          "skill_repo": {
+            "type": "string",
+            "description": "If this primitive has a dedicated companion skill, the repo handle (e.g. `broomva/p9`)."
+          },
+          "introduced_in": {
+            "type": "string",
+            "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+          },
+          "deprecated_in": {
+            "type": "string",
+            "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+          },
+          "retired_in": {
+            "type": "string",
+            "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+          }
+        }
+      }
+    }
+  }
+}

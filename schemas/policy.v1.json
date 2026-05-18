@@ -1,0 +1,72 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/broomva/bstack/blob/main/schemas/policy.v1.json",
+  "title": "bstack .control/policy.yaml v1",
+  "description": "Top-level schema for the substrate's policy.yaml. Composes setpoint.v1.json and gate.v1.json into a workspace policy.",
+  "type": "object",
+  "required": ["version"],
+  "additionalProperties": true,
+  "properties": {
+    "version": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+$",
+      "description": "Schema version. `1.0` and any `1.x` are v1 (handled by this schema). Breaking changes bump to `2.0` + new schema file."
+    },
+    "profile": {
+      "enum": ["baseline", "governed", "autonomous"],
+      "description": "Active profile — selects which gate set is enforced."
+    },
+    "workspace": {
+      "type": "string",
+      "description": "Workspace identifier (free-form; informational)."
+    },
+    "setpoints": {
+      "type": "array",
+      "items": { "$ref": "setpoint.v1.json" },
+      "description": "Substrate-tracked measurable targets."
+    },
+    "gates": {
+      "type": "object",
+      "description": "Hard + soft gates. Hard gates block agent actions; soft gates are advisory.",
+      "properties": {
+        "hard": {
+          "type": "array",
+          "items": { "$ref": "gate.v1.json" }
+        },
+        "soft": {
+          "type": "array",
+          "items": { "$ref": "gate.v1.json" }
+        },
+        "governed": {
+          "type": "array",
+          "items": { "$ref": "gate.v1.json" }
+        },
+        "baseline": {
+          "type": "array",
+          "items": { "$ref": "gate.v1.json" }
+        },
+        "autonomous": {
+          "type": "array",
+          "items": { "$ref": "gate.v1.json" }
+        }
+      }
+    },
+    "profiles": {
+      "type": "object",
+      "description": "Per-profile customization blocks.",
+      "additionalProperties": { "type": "object" }
+    },
+    "ci_watch": {
+      "type": "object",
+      "description": "Config for the P9 productive-wait watcher (poll intervals, classifier rules)."
+    },
+    "ci_heal": {
+      "type": "object",
+      "description": "Known-failure → auto-fix recipes for self-healing CI."
+    },
+    "auto_merge": {
+      "type": "object",
+      "description": "When the substrate is allowed to auto-merge a PR (path filters, required reviewers, score thresholds)."
+    }
+  }
+}

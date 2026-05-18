@@ -1,0 +1,128 @@
+# {{WORKSPACE_NAME}} — Control Metalayer
+
+Behavioral governance manifest for the {{WORKSPACE_NAME}} workspace. This file is scaffolded by `bstack bootstrap` and is the authoritative declaration of the workspace's control plant, controller, safety shields, and feedback loop.
+
+## Plant
+
+The **plant** is this workspace — the composition of repos / apps / services that bstack governs. The plant's measurable signals are declared as setpoints S1-S15 in `.control/policy.yaml` and measured by `scripts/metrics/measure-S<n>.sh` shipped by bstack (≥ v0.4.0).
+
+| Signal | Source | Type | Primitive |
+|---|---|---|---|
+| Git status across repos | `make status` (workspace-defined) | measured | — |
+| CI/CD check results | GitHub Actions + provider-specific | measured | P4 (Pipeline) |
+| Conversation bridge health | `~/.cache/broomva-bridge-stamp` mtime | measured | P1 (Bridge) |
+| Skills installed | union of `~/.agents/skills/` + `~/.claude/skills/` | measured | — (S10) |
+| Governance files present | `CLAUDE.md` + `AGENTS.md` + `METALAYER.md` + `.control/policy.yaml` + `schemas/` | measured | — (S11) |
+| Hooks wired | `.claude/settings.json` (Stop + PreToolUse + UserPromptSubmit) + `.git/hooks/pre-commit` | measured | P1 + P2 + P17 (S12) |
+| Control gate enforcement | `.control/policy.yaml` active gates G1-G11 | measured | P2 (Gate) |
+| Workspace-specific signals | (extend this table per workspace) | — | — |
+
+## Controller
+
+Agents operating in this workspace follow the policy in `.control/policy.yaml` (default `profile: governed`).
+
+**Decision flow per session:**
+1. Read `CLAUDE.md` + `AGENTS.md` for workspace invariants
+2. Read `.control/policy.yaml` for active gates + setpoints
+3. Check `docs/conversations/` for prior session context on branch/topic
+4. Apply reflexive primitives (P10 Hygiene, P11 Empirical, P14 Dep-Chain, P15 Snapshot, P18 Audience, P19 Orchestrate) before substantive work
+5. Execute within harness gates (G1-G4 hard gates enforced by `control-gate-hook.sh`)
+6. Create PRs as checkpoints — never merge with failing CI (P4 Pipeline)
+
+## Safety Shields
+
+Hard gates (G1-G4+) enforced by `control-gate-hook.sh` on every Bash/Write/Edit tool call. The full list lives in `.control/policy.yaml` `gates.hard` — at minimum:
+
+| Gate | Rule | Severity |
+|---|---|---|
+| G1 | No force-push to protected branches | blocking |
+| G2 | No `git reset --hard` without backup branch | blocking |
+| G3 | No `rm -rf` on home / root / protected paths | blocking |
+| G4 | No staging `.env`, credentials, secrets | blocking |
+
+Soft gates (G5-G10+) are advisory — agent guidance only. Extend in `.control/policy.yaml` `gates.soft` as workspace needs emerge.
+
+## Estimator
+
+Agent confidence is derived from:
+- **Code context**: files read, git history checked
+- **Conversation history**: prior sessions on same branch/topic (via P1 Bridge captures)
+- **Knowledge graph**: entity pages in `research/entities/` (via P6 Bookkeeping)
+- **CI signals**: test pass rate, build status (via P4 Pipeline + P9 Wait)
+- **Setpoint state**: current measurements via `bstack status` (≥ v0.5.0)
+
+## Feedback Loop
+
+```
+Session start
+  → SessionStart hooks fire (autoupdate, freshness, role-x coverage)
+  → Agent loads CLAUDE.md + AGENTS.md + policy.yaml
+  → Check docs/conversations/ for prior context
+
+Task execution
+  → Apply reflexive primitives (P10/P11/P14/P15/P18/P19)
+  → PreToolUse hook gates every Bash/Write/Edit against policy.yaml
+  → P9 watcher monitors CI in background after push
+
+Checkpoint
+  → PR opens (P3 Tickets + P4 Pipeline)
+  → CI runs → P20 Cross-Review if substantive
+  → Auto-merge when green per policy.yaml.auto_merge
+
+Post-merge
+  → release.yml auto-tag + GH release (if VERSION changed)
+  → P8 janitor cleans worktree + branch
+  → Stop hook captures session to docs/conversations/ (P1 Bridge)
+
+Observation update
+  → P6 Bookkeeping scores raw extracts → promotes to research/entities/
+  → Patterns recurring ≥3 times → P16 Crystallize candidate
+  → Eventually: new primitive promoted to substrate (rule-of-three)
+```
+
+## RCS Hierarchy (reference)
+
+The substrate operates under the Recursive Controlled Systems (RCS) hierarchy with measured stability margins:
+
+| Level | System | Controller Π | Time scale |
+|---|---|---|---|
+| L0 | External plant (codebase, deploy targets) | per-tool gate enforcement | seconds |
+| L1 | Agent internal (per-turn state) | reflexive primitives (P10-P20) | per-turn |
+| L2 | Meta-control (CI/CD, EGRI) | release pipeline + PR validation | minutes-days |
+| L3 | Governance (this metalayer) | CLAUDE.md + AGENTS.md + policy.yaml | days-weeks |
+
+**L3 has the narrowest stability margin** (λ₃ ≈ 0.006 measured in the reference Broomva workspace). Governance changes must be rare and deliberate — rule-of-three promotion gate.
+
+For the formal framework + canonical parameters, see the [RCS paper repo](https://github.com/broomva/bstack/tree/main/specs/) and `research/rcs/data/parameters.toml` if your workspace ships the RCS substrate.
+
+## Harness Commands
+
+```bash
+bstack doctor               # Validate primitive contract + governance file presence
+bstack metrics collect      # Compute every setpoint (≥ 0.4.0)
+bstack status               # Render substrate health summary (≥ 0.5.0)
+bstack repair               # Idempotent fix for gaps (governance files, hooks, policy blocks)
+bstack upgrade              # Pull latest bstack release into this install
+make janitor                # P8 — branch + worktree cleanup (if workspace defines)
+```
+
+## Schemas
+
+The substrate ships JSON Schemas for declarative surfaces in `schemas/`:
+
+- `policy.v1.json` — full `.control/policy.yaml` shape
+- `setpoint.v1.json` — single setpoint
+- `gate.v1.json` — single gate
+- `primitives.v1.json` — primitive registry shape
+
+Schemas v1 are stable from bstack v1.0.0 onwards (currently pre-1.0, additive changes only). Breaking changes ship a v2 schema + migration via `scripts/migrate.sh`.
+
+## Customization
+
+Workspaces extend this template by:
+1. Adding workspace-specific signals to the Plant table
+2. Defining additional gates in `.control/policy.yaml` `gates.hard` / `gates.soft`
+3. Adding workspace-specific harness commands to the Harness Commands section
+4. Documenting workspace-specific RCS instantiation in the RCS section (if applicable)
+
+The bstack-shipped sections (Controller, Safety Shields, Estimator, Feedback Loop, Schemas) are stable and should not be modified directly — they're the substrate contract.

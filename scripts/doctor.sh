@@ -36,6 +36,10 @@
 #   9. Naming convention propagation — Name (Pn) rule + Short-name index
 #      present in CLAUDE.md + AGENTS.md (the LLM-loaded surfaces). Index has
 #      exactly 20 entries (one per primitive).
+#  10. Schema validation (v0.6.0+) — references/primitives.yaml validates
+#      against schemas/primitives.v1.json; workspace .control/policy.yaml
+#      validates against schemas/policy.v1.json. Skipped gracefully if
+#      python3 + jsonschema + PyYAML are absent.
 #
 # Usage:
 #   bash scripts/doctor.sh               # full report
@@ -333,6 +337,76 @@ for f in CLAUDE.md AGENTS.md; do
             "add the canonical short-name index after the naming rule"
     fi
 done
+
+# ── Section 10: schema validation (v0.6.0+) ────────────────────────────────
+# Validates references/primitives.yaml against schemas/primitives.v1.json and
+# workspace .control/policy.yaml against schemas/policy.v1.json (when both
+# schemas are present in the bstack install).
+#
+# Requires python3 + the jsonschema package + PyYAML. Degrades gracefully:
+# skipped if dependencies absent (informational message, never a gap).
+echo ""
+echo "=== Section 10: schema validation ==="
+DOCTOR_DIR="$(cd "$(dirname "$0")" && pwd)"
+BSTACK_INSTALL_DIR="$(cd "$DOCTOR_DIR/.." && pwd)"
+SCHEMAS_DIR="$BSTACK_INSTALL_DIR/schemas"
+PRIMITIVES_YAML="$BSTACK_INSTALL_DIR/references/primitives.yaml"
+
+if [ ! -d "$SCHEMAS_DIR" ]; then
+    echo "  [skip] no schemas/ directory in this bstack install (pre-v0.6.0?)"
+elif ! command -v python3 >/dev/null 2>&1; then
+    echo "  [skip] python3 not available — cannot run schema validation"
+elif ! python3 -c "import jsonschema, yaml" 2>/dev/null; then
+    echo "  [skip] python3 packages jsonschema + PyYAML not installed"
+    echo "         pip install jsonschema PyYAML  (then re-run bstack doctor)"
+else
+    # Validate primitives.yaml against primitives.v1.json
+    if [ -f "$PRIMITIVES_YAML" ] && [ -f "$SCHEMAS_DIR/primitives.v1.json" ]; then
+        if python3 - "$PRIMITIVES_YAML" "$SCHEMAS_DIR/primitives.v1.json" <<'PYEOF' 2>/dev/null
+import json, sys, yaml, jsonschema
+data_path, schema_path = sys.argv[1], sys.argv[2]
+schema = json.load(open(schema_path))
+data = yaml.safe_load(open(data_path))
+v = jsonschema.Draft7Validator(schema)
+errors = list(v.iter_errors(data))
+sys.exit(1 if errors else 0)
+PYEOF
+        then
+            ok "references/primitives.yaml validates against primitives.v1.json"
+        else
+            gap "references/primitives.yaml fails primitives.v1.json validation" \
+                "run \`python3 -c 'import json,yaml,jsonschema; s=json.load(open(\"schemas/primitives.v1.json\")); d=yaml.safe_load(open(\"references/primitives.yaml\")); [print(e.message) for e in jsonschema.Draft7Validator(s).iter_errors(d)]'\`"
+        fi
+    fi
+
+    # Validate workspace .control/policy.yaml against policy.v1.json (if both exist).
+    POLICY_FILE="$WORKSPACE/.control/policy.yaml"
+    if [ -f "$POLICY_FILE" ] && [ -f "$SCHEMAS_DIR/policy.v1.json" ]; then
+        if python3 - "$POLICY_FILE" "$SCHEMAS_DIR" <<'PYEOF' 2>/dev/null
+import json, sys, yaml, jsonschema
+from pathlib import Path
+policy_path = sys.argv[1]
+schemas_dir = Path(sys.argv[2])
+store = {}
+for f in schemas_dir.glob('*.json'):
+    s = json.load(open(f))
+    sid = s.get('$id') or f.name
+    store[sid] = s
+    store[f.name] = s
+policy_schema = json.load(open(schemas_dir / 'policy.v1.json'))
+resolver = jsonschema.RefResolver(base_uri='', referrer=policy_schema, store=store)
+v = jsonschema.Draft7Validator(policy_schema, resolver=resolver)
+errors = list(v.iter_errors(yaml.safe_load(open(policy_path))))
+sys.exit(1 if errors else 0)
+PYEOF
+        then
+            ok ".control/policy.yaml validates against policy.v1.json"
+        else
+            gap ".control/policy.yaml fails policy.v1.json validation" \
+                "see bstack schemas/policy.v1.json + workspace .control/policy.yaml; \`scripts/migrate.sh\` may be needed"
+        fi
+    fi
+fi
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
