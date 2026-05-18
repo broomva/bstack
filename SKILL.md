@@ -77,6 +77,9 @@ Then, in your agent session:
 /bstack status        → show which skills are installed vs missing
 /bstack validate      → check skill SKILL.md frontmatter health
 /bstack revamp        → full reconfiguration (force-reinstall + rewire + re-doctor)
+/bstack wave dispatch <plan...>   → atomic parallel-agent dispatch from N plan files
+/bstack wave status <wave-id>     → forensic per-wave state table
+/bstack wave list                 → all waves with summary state
 ```
 
 ## What bstack enforces
@@ -117,6 +120,8 @@ Each primitive carries a **short name** for use in agent prose. When referencing
 **Canonical statement** lives in workspace `CLAUDE.md` §Bstack Core Automation Primitives and workspace `AGENTS.md` near line 93. This SKILL.md restates the rule so it's visible at the entry point where `/bstack` loads.
 
 **Skill-name ↔ primitive-number alignment**: when a skill repo carries a numeric name (e.g., `broomva/p9` for Wait at P9), the primitive numbering commits to keeping that number stable — renaming a skill repo would break every `npx skills add broomva/p9` install. Skill repos with functional names (`broomva/bookkeeping` = P6, `broomva/persist` = P12) take their name from the function, not the number.
+
+> **`bstack wave` (new in this version).** Fills the N>1 × across-session × external-trigger cell of Orchestrate (P19)'s mechanism cube. Use it when you have N independent plan files that can run in parallel without shared mutable file writes (Fanout (P5)). Each plan's frontmatter declares its `worktree` and `branch`; the wrapper validates atomically, creates worktrees, and launches one `claude --bg` per plan. State lives in `~/.cache/bstack/wave/<wave-id>/` (Persist (P12) filesystem-as-state). See the design at `docs/superpowers/specs/2026-05-13-bstack-wave-design.md` (workspace repo) for the full primitive coalescence map.
 
 **Canonical operating mode**: `broomva/autonomous` — when the user says "go" / "proceed" / "be autonomous" / "automerge" / any bare execution directive, `/autonomous` fires the 20-reflex pipeline that exercises every primitive above in the right sequence. Substrate without mode is dormant; mode without substrate is wishful. Compounded, they produce a self-operating workspace.
 
