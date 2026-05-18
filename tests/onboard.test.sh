@@ -58,7 +58,11 @@ echo ""
 
 # ── Test 1: --help renders Usage block ───────────────────────────────────
 echo "T1. --help renders Usage block"
-if bash "$ONBOARD_SH" --help 2>&1 | grep -q "^# Usage:" \
+# `Usage:` (no `# ` anchor) because onboard.sh's --help strips the `# `
+# comment prefix via sed. BSD sed and GNU sed disagree on `\?` interpretation,
+# so the stripped output's first column varies by platform. Anchoring on
+# the un-prefixed token works on both.
+if bash "$ONBOARD_SH" --help 2>&1 | grep -q "Usage:" \
     && bash "$ONBOARD_SH" --help 2>&1 | grep -q -- "--skip-prompts"; then
     assert_pass "T1: --help renders"
 else
