@@ -6,6 +6,12 @@
         "hooks": [
           {
             "type": "command",
+            "command": "${BROOMVA_HOME}/.claude/skills/bstack/scripts/bstack-autoupdate-hook.sh",
+            "timeout": 10,
+            "_bstack_primitive": "P7"
+          },
+          {
+            "type": "command",
             "command": "${BROOMVA_WORKSPACE}/scripts/skill-freshness-hook.sh",
             "timeout": 5,
             "_bstack_primitive": "P7"
