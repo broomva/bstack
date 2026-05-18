@@ -1,0 +1,246 @@
+schema_version: 1
+# Canonical companion-skill roster. The bstack substrate ships with these
+# skills *checked* (SKILL.md preamble) and *installable* (bin/bstack-skills
+# install) but does not bundle them — each skill ships from its own
+# `broomva/<name>` repo and installs via `npx skills add broomva/<name>`.
+#
+# Conforms to schemas/companion-skills.v1.json. Validated by `bstack doctor`
+# Section 11 (v0.7.0+).
+#
+# Adding a skill:
+#   1. Append an entry below with name + repo + category.
+#   2. Set `primitive` only if the skill embodies a specific bstack primitive.
+#   3. Set `required: true` if the skill is mandatory for full substrate
+#      compliance (default false — optional / domain-specific skills).
+#   4. Bump bstack VERSION (additive — minor pre-1.0, patch otherwise).
+
+skills:
+  # ── Foundation: orchestration + governance modes ────────────────────────
+  - name: autonomous
+    repo: broomva/autonomous
+    category: orchestration
+    required: true
+    introduced_in: 0.1.0
+    description: "Canonical operating mode that fires the 20-reflex pipeline"
+
+  - name: cross-review
+    repo: broomva/cross-review
+    category: safety
+    primitive: P20
+    required: true
+    introduced_in: 0.2.0
+    description: "Cross-model adversarial review gate"
+
+  - name: role-x
+    repo: broomva/role-x
+    category: meta
+    primitive: P17
+    required: true
+    introduced_in: 0.2.0
+    description: "Lens-routed request articulation"
+
+  # ── Control + knowledge stack ───────────────────────────────────────────
+  - name: agentic-control-kernel
+    repo: broomva/agentic-control-kernel
+    category: meta
+    required: true
+    introduced_in: 0.1.0
+    description: "Unifying control-systems metalayer kernel"
+
+  - name: control-metalayer-loop
+    repo: broomva/control-metalayer-loop
+    category: meta
+    required: true
+    introduced_in: 0.1.0
+    description: "Governance feedback loop"
+
+  - name: harness-engineering-playbook
+    repo: broomva/harness-engineering-playbook
+    category: meta
+    required: true
+    introduced_in: 0.1.0
+    description: "Patterns for agent harness design"
+
+  - name: agent-consciousness
+    repo: broomva/agent-consciousness
+    category: knowledge
+    required: true
+    introduced_in: 0.1.0
+    description: "Three-substrate persistence + episodic memory"
+
+  - name: knowledge-graph-memory
+    repo: broomva/knowledge-graph-memory
+    category: knowledge
+    primitive: P6
+    required: true
+    introduced_in: 0.1.0
+    description: "Conversation logs → Obsidian-shaped knowledge graph"
+
+  - name: prompt-library
+    repo: broomva/prompt-library
+    category: meta
+    required: true
+    introduced_in: 0.1.0
+    description: "Prompt management CLI + API"
+
+  # ── Productive-wait + orchestration ─────────────────────────────────────
+  - name: p9
+    repo: broomva/p9
+    category: lifecycle
+    primitive: P9
+    required: true
+    introduced_in: 0.1.0
+    description: "CI watcher + productive-wait"
+
+  - name: symphony
+    repo: broomva/symphony
+    category: orchestration
+    required: true
+    introduced_in: 0.1.0
+    description: "Orchestration daemon"
+
+  - name: symphony-forge
+    repo: broomva/symphony-forge
+    category: orchestration
+    required: true
+    introduced_in: 0.1.0
+    description: "Project scaffolding with control metalayer"
+
+  - name: autoany
+    repo: broomva/autoany
+    category: meta
+    required: true
+    introduced_in: 0.1.0
+    description: "EGRI L2 meta-controller (self-improvement)"
+
+  - name: alkosto-wait-optimizer
+    repo: broomva/alkosto-wait-optimizer
+    category: lifecycle
+    required: false
+    introduced_in: 0.1.0
+    description: "Domain-specific wait-time optimizer (P9 variant)"
+
+  # ── Research + knowledge work ───────────────────────────────────────────
+  - name: deep-dive-research-orchestrator
+    repo: broomva/deep-dive-research-orchestrator
+    category: knowledge
+    required: true
+    introduced_in: 0.1.0
+    description: "Multi-source research with citation tracking"
+
+  # ── Discovery + skill management ────────────────────────────────────────
+  - name: skills
+    repo: broomva/skills
+    category: meta
+    required: true
+    introduced_in: 0.1.0
+    description: "Canonical reference of all available skills"
+
+  - name: skills-showcase
+    repo: broomva/skills-showcase
+    category: meta
+    required: false
+    introduced_in: 0.1.0
+    description: "Skill catalog presentation + Remotion showcase"
+
+  # ── Design + frontend ───────────────────────────────────────────────────
+  - name: arcan-glass
+    repo: broomva/arcan-glass
+    category: design
+    required: false
+    introduced_in: 0.1.0
+    description: "Broomva trademark web styling system"
+
+  - name: next-forge
+    repo: broomva/next-forge
+    category: platform
+    required: false
+    introduced_in: 0.1.0
+    description: "Next.js project scaffolding"
+
+  - name: brand-icons
+    repo: broomva/brand-icons
+    category: design
+    required: false
+    introduced_in: 0.1.0
+    description: "Brand icon library"
+
+  # ── Content + marketing ─────────────────────────────────────────────────
+  - name: content-creation
+    repo: broomva/content-creation
+    category: content
+    required: false
+    introduced_in: 0.1.0
+    description: "Content production pipeline"
+
+  - name: seo-llmeo
+    repo: broomva/seo-llmeo
+    category: content
+    required: false
+    introduced_in: 0.1.0
+    description: "SEO + LLM-optimized content"
+
+  # ── Strategy + decision intelligence ────────────────────────────────────
+  - name: pre-mortem
+    repo: broomva/pre-mortem
+    category: strategy
+    required: false
+    introduced_in: 0.1.0
+    description: "Pre-mortem risk analysis"
+
+  - name: braindump
+    repo: broomva/braindump
+    category: strategy
+    required: false
+    introduced_in: 0.1.0
+    description: "Structured idea capture + triage"
+
+  - name: morning-briefing
+    repo: broomva/morning-briefing
+    category: strategy
+    required: false
+    introduced_in: 0.1.0
+    description: "Daily context briefing"
+
+  - name: drift-check
+    repo: broomva/drift-check
+    category: strategy
+    required: false
+    introduced_in: 0.1.0
+    description: "Detect drift from stated plan"
+
+  - name: strategy-critique
+    repo: broomva/strategy-critique
+    category: strategy
+    required: false
+    introduced_in: 0.1.0
+    description: "Strategic decision critique"
+
+  - name: stakeholder-update
+    repo: broomva/stakeholder-update
+    category: strategy
+    required: false
+    introduced_in: 0.1.0
+    description: "Stakeholder communication drafting"
+
+  - name: decision-log
+    repo: broomva/decision-log
+    category: strategy
+    required: false
+    introduced_in: 0.1.0
+    description: "Structured decision log + ADR"
+
+  - name: weekly-review
+    repo: broomva/weekly-review
+    category: strategy
+    required: false
+    introduced_in: 0.1.0
+    description: "Weekly retrospective + planning"
+
+  # ── Platform + finance ──────────────────────────────────────────────────
+  - name: finance-substrate
+    repo: broomva/finance-substrate
+    category: platform
+    required: false
+    introduced_in: 0.1.0
+    description: "Financial workflow substrate"
