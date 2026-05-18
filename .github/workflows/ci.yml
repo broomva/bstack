@@ -96,3 +96,40 @@ jobs:
             fi
           done
           exit "$fail"
+
+  canary:
+    name: bstack canary suite (substrate invariants)
+    runs-on: ubuntu-latest
+    needs: [lint, doctor]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install jq + python deps for canary
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y jq
+          python3 -m pip install --quiet jsonschema PyYAML
+
+      - name: Run canary suite (substrate invariants on fresh install)
+        # The canary suite verifies that the substrate's load-bearing
+        # contracts hold on a fresh install (no companion skills, no
+        # workspace state). Each canary covers one phase's deliverables:
+        #   01 — fresh bootstrap (Plant Contract)
+        #   02 — metrics pipeline (Phase 1 v0.4.0)
+        #   03 — status surface (Phase 2 v0.5.0)
+        #   04 — schemas validate (Phase 3 v0.6.0)
+        # canary/05+ (skills auto-install, gates audit, release pipeline)
+        # ship in v0.9.1+ as Phase 4-6 stabilize.
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          fail=0
+          for t in tests/canary/*.test.sh; do
+            echo ""
+            echo "=== $t ==="
+            if ! bash "$t"; then
+              echo "::error file=$t::canary failed"
+              fail=1
+            fi
+          done
+          exit "$fail"

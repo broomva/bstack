@@ -97,3 +97,46 @@ jobs:
             --title "$tag — $title" \
             --notes-file /tmp/release-notes.md
           echo "  ✓ released $tag"
+
+      # Package the skill directory as a tarball and publish it as a release
+      # asset, so vendored installs (no `.git`) can self-upgrade via
+      # `bstack upgrade --self` (≥ 0.9.0). The tarball excludes ephemeral
+      # state — only the in-repo skill source ships.
+      - name: Package + publish vendored upgrade tarball
+        if: steps.tag_check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${{ steps.version.outputs.tag }}"
+          tarball="bstack-${tag}.tar.gz"
+          # Build a clean staging tree — the extracted root must contain
+          # VERSION + bin/ + scripts/ + assets/ + references/ + schemas/ +
+          # SKILL.md + CHANGELOG.md, mirroring a fresh `npx skills add` layout.
+          staging="$(mktemp -d)"
+          dest="$staging/bstack-${tag}"
+          mkdir -p "$dest"
+          # Copy the canonical skill payload; exclude .git, .github, tests
+          # (downstream installs don't need CI workflow or development tests).
+          tar --exclude='./.git' \
+              --exclude='./.github' \
+              --exclude='./tests' \
+              --exclude='./broomva.tech-worktrees' \
+              --exclude='./bstack-worktrees' \
+              --exclude='./.cache' \
+              -cf - . | tar -xf - -C "$dest"
+          # Build the tarball in a deterministic order for reproducible
+          # sha256 across runs (though we don't fail-close on this yet).
+          ( cd "$staging" && tar --sort=name -czf "$tarball" "bstack-${tag}" )
+          mv "$staging/$tarball" "./$tarball"
+          # sha256 sidecar — single canonical line, "<hash>  <filename>" format.
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$tarball" > "${tarball}.sha256"
+          else
+            shasum -a 256 "$tarball" > "${tarball}.sha256"
+          fi
+          echo "  packaged $tarball ($(wc -c < "$tarball") bytes)"
+          echo "  sha256: $(awk '{print $1}' "${tarball}.sha256")"
+          # Upload as release assets.
+          gh release upload "$tag" "$tarball" "${tarball}.sha256" --clobber
+          echo "  ✓ uploaded $tarball + sha256 to $tag"

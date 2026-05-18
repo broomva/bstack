@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.9.0 — 2026-05-18
+
+### Vendored upgrade path + canary suite (Phase 6 of substrate completion)
+
+Closes two v1.0 blockers from the substrate completion spec (§4.3.2, §4.6.2). Vendored installs (`npx skills add` produces these — no `.git`) can now self-upgrade via release tarball + sha256 verification + atomic swap. The canary suite verifies the substrate's load-bearing contracts hold on a fresh install — runs on every PR.
+
+- **NEW** `bstack upgrade --self` for vendored installs (extends `bin/bstack` `bstack_upgrade_vendored`):
+  - Downloads `bstack-vX.Y.Z.tar.gz` from the GitHub Release
+  - Downloads matching `.sha256` sidecar
+  - **Mandatory** sha256 verification — no `--skip-sha256` flag; fail-closed on mismatch
+  - Atomic swap via `mv current → .bak`, `mv new → install`; rollback on swap failure
+  - `BSTACK_DRY_RUN=1` env override prints the plan without writing
+  - Falls back to manual `npx skills add` guidance if tarball missing (pre-v0.9.0 releases)
+  - Structured log at `~/.bstack/auto-upgrade.log`
+- **CHANGED** `.github/workflows/release.yml` — new `Package + publish vendored upgrade tarball` step:
+  - Builds `bstack-vX.Y.Z.tar.gz` from the in-repo skill payload (excludes `.git`, `.github`, `tests`, worktree dirs)
+  - Uses `tar --sort=name` for byte-deterministic tarballs
+  - Computes sha256, uploads tarball + sha256 sidecar via `gh release upload --clobber`
+- **NEW** `tests/canary/01-fresh-bootstrap.test.sh` — Plant Contract verification on a fresh workspace (10 assertions: bootstrap exits 0, governance files scaffold, hooks wired for SessionStart/Stop/PreToolUse, doctor produces expected summary, doctor exits 0 per HC-1)
+- **NEW** `tests/canary/02-metrics-pipeline.test.sh` — Phase 1 (v0.4.0) end-to-end: collect produces valid JSON, latest.json written, observe single-setpoint returns id-matched output
+- **NEW** `tests/canary/03-status-surface.test.sh` — Phase 2 (v0.5.0) end-to-end: 7 core sections render, --json shape valid, --setpoint deep-view, --aggregate Phase 8 placeholder
+- **NEW** `tests/canary/04-schemas-validate.test.sh` — Phase 3 (v0.6.0) contracts: 4 schemas valid draft-07, primitives.yaml validates, companion-skills.yaml validates, policy.yaml.template validates (top-level shape + flat-schema parts)
+- **CHANGED** `.github/workflows/ci.yml` — new `canary` job gated on `lint` + `doctor`; installs jq + jsonschema + PyYAML; runs `tests/canary/*.test.sh`
+
+### SLO targets (introduced)
+
+- `bstack upgrade --self` (vendored, cold network): p50 < 30s, p99 < 60s
+- canary suite (4 tests, sequential): p99 < 30s
+
+### Supply-chain safety
+
+- sha256 verification mandatory — no bypass flag
+- Atomic swap with `.bak` rollback on failure
+- Tarball excludes ephemeral state and CI tooling — only the canonical skill payload ships
+- Backup retained until swap completes successfully
+
+### Out of scope for v0.9.0 (deferred to v0.9.1)
+
+- Cosign signature verification — sha256 covers the principal integrity concern; cosign adds publisher identity verification
+- `bstack reproduce` subcommand (drift detection vs fresh-install reference)
+- Canary tests 05-08 (skills auto-install, gates audit, release pipeline E2E) — ship as Phase 4-6 deliverables stabilize
+
 ## 0.8.0 — 2026-05-18
 
 ### Doctor extensions + pre-existing test fixes (Phase 5 of substrate completion)
