@@ -67,30 +67,41 @@ skipped=0
 failed=0
 
 echo "=== bstack bootstrap ==="
-echo "Installing 31 Broomva Stack skills..."
-echo ""
 
-for skill in "${ORDERED_SKILLS[@]}"; do
-  repo="${SKILL_REPOS[$skill]}"
+# BSTACK_SKIP_SKILLS=1 short-circuits the npx-driven skill install loop.
+# Test fixtures (tests/onboard.test.sh) set this so CI doesn't fan out to
+# the real registry. Workspace operators wanting a governance-only bootstrap
+# without the full skill roster can also use it.
+if [ "${BSTACK_SKIP_SKILLS:-0}" = "1" ]; then
+  echo "BSTACK_SKIP_SKILLS=1 — skipping skill installation loop."
+  echo "(Run \`bstack skills install\` manually to install the roster.)"
+  echo ""
+else
+  echo "Installing 31 Broomva Stack skills..."
+  echo ""
 
-  if [ -d "$AGENTS_DIR/$skill" ] && [ -f "$AGENTS_DIR/$skill/SKILL.md" ]; then
-    echo "  [skip] $skill"
-    skipped=$((skipped + 1))
-  else
-    echo "  [install] $skill ($repo)..."
-    if npx skills add "$repo" 2>/dev/null; then
-      installed=$((installed + 1))
+  for skill in "${ORDERED_SKILLS[@]}"; do
+    repo="${SKILL_REPOS[$skill]}"
+
+    if [ -d "$AGENTS_DIR/$skill" ] && [ -f "$AGENTS_DIR/$skill/SKILL.md" ]; then
+      echo "  [skip] $skill"
+      skipped=$((skipped + 1))
     else
-      echo "  [FAIL] $skill"
-      failed=$((failed + 1))
+      echo "  [install] $skill ($repo)..."
+      if npx skills add "$repo" 2>/dev/null; then
+        installed=$((installed + 1))
+      else
+        echo "  [FAIL] $skill"
+        failed=$((failed + 1))
+      fi
     fi
-  fi
 
-  # Ensure claude symlink
-  if [ -d "$AGENTS_DIR/$skill" ] && [ ! -e "$CLAUDE_DIR/$skill" ]; then
-    ln -snf "$AGENTS_DIR/$skill" "$CLAUDE_DIR/$skill" 2>/dev/null || true
-  fi
-done
+    # Ensure claude symlink
+    if [ -d "$AGENTS_DIR/$skill" ] && [ ! -e "$CLAUDE_DIR/$skill" ]; then
+      ln -snf "$AGENTS_DIR/$skill" "$CLAUDE_DIR/$skill" 2>/dev/null || true
+    fi
+  done
+fi
 
 echo ""
 echo "=== bstack skills install complete ==="

@@ -76,35 +76,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run vetted test suite
-        # The tests/ suite is being incrementally migrated to a green-on-CI
-        # state. Two pre-existing test files were broken before 0.2.3
-        # introduced the CI lane:
-        #   tests/template_lockstep.test.sh — asserts "twenty irreducible
-        #     primitives" verbatim in SKILL.md; the description was
-        #     compressed in 0.2.1 (PR #26) and the assertion was not
-        #     updated. Cosmetic, follow-up.
-        #   tests/onboard.test.sh — T3+ steps hang in the GitHub Actions
-        #     runner because the script expects interactive input the
-        #     env doesn't provide. Needs --non-interactive flag in
-        #     scripts/onboard.sh.
-        # Both are pre-existing failures, out of scope for the 0.2.x →
-        # 0.3.0 release-infra series. CI gate runs only the vetted-green
-        # suite until they are fixed.
+      - name: Run all tests/*.test.sh
+        # As of v0.8.0 (Phase 5 of substrate completion) the pre-existing
+        # tests/template_lockstep.test.sh and tests/onboard.test.sh are
+        # fixed (case-insensitive lockstep assertion + BSTACK_SKIP_SKILLS=1
+        # env override for the bootstrap skill-install loop). The full
+        # `tests/*.test.sh` suite now runs on every PR — no more vetted
+        # allowlist.
         run: |
           set -euo pipefail
-          # Vetted: known to pass on CI. Add new test files here as they
-          # ship green.
-          VETTED=(
-            tests/repair-merge-hooks.test.sh
-            tests/metrics-pipeline.test.sh
-            tests/status-surface.test.sh
-            tests/schema-validation.test.sh
-            tests/skills-roster.test.sh
-          )
+          shopt -s nullglob
           fail=0
-          for t in "${VETTED[@]}"; do
-            [ -f "$t" ] || continue
+          for t in tests/*.test.sh; do
             echo ""
             echo "=== $t ==="
             if ! bash "$t"; then

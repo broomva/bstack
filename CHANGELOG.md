@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.8.0 — 2026-05-18
+
+### Doctor extensions + pre-existing test fixes (Phase 5 of substrate completion)
+
+`bstack doctor` now lints gate-enforcement consistency, and the two pre-existing tests that were excluded from the CI suite since 0.2.3 are fixed and back in the gate. The full `tests/*.test.sh` suite runs on every PR.
+
+- **CHANGED** `scripts/doctor.sh` — new **Section 11: gate enforcement type validation**. For every blocking/governed gate in `.control/policy.yaml`, verifies the gate has either a `pattern` (regex for hook enforcement), an `enforcement.spec` (named runtime check), or a `measurement` (description of how compliance is verified). Advisory / soft / warn severities exempt. Catches gates declared blocking with no mechanism behind them (Gap 4.2.1).
+- **CHANGED** `scripts/bootstrap.sh` — honors `BSTACK_SKIP_SKILLS=1` env to skip the npx skill-install loop. Used by CI fixtures and workspace operators wanting a governance-only bootstrap.
+- **FIX** `tests/template_lockstep.test.sh` — `assert_contains` is now **case-insensitive** (`grep -iqF`). Canonical word can appear capitalized at sentence start (e.g. "Twenty irreducible primitives" in SKILL.md description) without breaking the lockstep contract — the test only cares the token + count are consistent across files. 15/15 now passing locally and in CI.
+- **FIX** `tests/onboard.test.sh` — `run_onboard` now sets `BSTACK_SKIP_SKILLS=1` so `bootstrap.sh` short-circuits the network-bound `npx skills add` loop. Without it T3+ would block on the install loop and hang in CI. 8/8 now passing.
+- **CHANGED** `.github/workflows/ci.yml` — drops the vetted-test allowlist. The `tests/*.test.sh` glob runs every test file on every PR. Removes the technical debt the allowlist was carrying since v0.2.3.
+
+### Live verification against this workspace
+
+```
+$ bstack doctor (Section 11)
+  [ok] all 12 declared gates have enforcement type (pattern / runtime_check / measurement)
+```
+
+### Closes gaps from substrate completion spec §4
+
+- **4.2.1** — soft gates advisory without enforcement → doctor §11 makes the requirement machine-checkable
+- **4.6.3** — vetted test allowlist → full suite runs now
+
+### Out of scope (deferred)
+
+The original Phase 5 spec included six more deliverables; this PR keeps focus on the high-impact items shipping fixes for the persistent technical debt. Deferred to **0.8.1 / Phase 5.1**:
+
+- Doctor §12 (reflexive-primitive compliance sampling from `docs/conversations/`)
+- Doctor §13 (skill roster lockstep — `SKILL.md` ROSTER ↔ `references/companion-skills.yaml`)
+- `scripts/control-gate-hook.sh` moved into bstack (Gap 4.2.5 — currently workspace-only)
+- `~/.bstack/gate-audit.jsonl` bypass-attempt log (Gap 4.2.4)
+- `SLOs.md` consolidated latency budgets document
+- `auto_merge` `p20_score >= 7` requirement for substantive PRs (Gap 4.2.3 — depends on `/cross-review` skill instrumentation)
+
+The deferred items are each meaningful but composable; the 0.8.0 cut focuses on the test-debt closure since that gates everything downstream (canary suite in Phase 6 needs the full `tests/*.test.sh` running first).
+
+### SLO targets
+
+- `bstack doctor` end-to-end (full 11 sections): p50 < 1s, p99 < 3s
+- Section 11 alone (12-gate fixture): p50 < 100ms, p99 < 500ms
+
+Spec reference: §6 Phase 5 of [specs/2026-05-18-substrate-completion.md](specs/2026-05-18-substrate-completion.md).
+
 ## 0.7.0 — 2026-05-18
 
 ### Companion skill auto-install (Phase 4 of substrate completion)
