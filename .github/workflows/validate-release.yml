@@ -1,0 +1,64 @@
+name: Validate release
+
+on:
+  pull_request:
+    paths:
+      - VERSION
+      - CHANGELOG.md
+
+permissions:
+  contents: read
+
+jobs:
+  version-changelog-alignment:
+    name: VERSION ↔ CHANGELOG match
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect VERSION change
+        id: version
+        run: |
+          set -euo pipefail
+          base="${{ github.event.pull_request.base.sha }}"
+          if ! git diff --name-only "$base"...HEAD | grep -qx VERSION; then
+            echo "VERSION not modified in this PR — nothing to validate."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          new="$(cat VERSION | tr -d '[:space:]')"
+          if ! printf '%s' "$new" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error file=VERSION::VERSION '$new' is not semver X.Y.Z"
+            exit 1
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "new=$new" >> "$GITHUB_OUTPUT"
+
+      - name: CHANGELOG has matching section
+        if: steps.version.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          new="${{ steps.version.outputs.new }}"
+          if ! grep -qE "^## ${new}([[:space:]]|$)" CHANGELOG.md; then
+            echo "::error file=CHANGELOG.md::No '## ${new}' section found — every VERSION bump needs a matching CHANGELOG entry."
+            exit 1
+          fi
+          echo "  ✓ CHANGELOG.md has '## ${new}' section"
+
+      - name: VERSION moves forward
+        if: steps.version.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          base="${{ github.event.pull_request.base.sha }}"
+          new="${{ steps.version.outputs.new }}"
+          old="$(git show "$base:VERSION" 2>/dev/null | tr -d '[:space:]' || echo '0.0.0')"
+          # Lexicographic comparison works for left-padded semver but not generally.
+          # Use sort -V for correctness.
+          highest="$(printf '%s\n%s\n' "$old" "$new" | sort -V | tail -1)"
+          if [ "$highest" != "$new" ] || [ "$old" = "$new" ]; then
+            echo "::error file=VERSION::VERSION must increase. Previous: ${old}, this PR: ${new}."
+            exit 1
+          fi
+          echo "  ✓ VERSION ${old} → ${new}"

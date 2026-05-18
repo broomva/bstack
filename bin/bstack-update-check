@@ -7,9 +7,17 @@
 #   (nothing)                       — up to date, snoozed, disabled, or check skipped
 #
 # Env overrides (for testing):
-#   BSTACK_DIR          — override auto-detected bstack root
-#   BSTACK_REMOTE_URL   — override remote VERSION URL
-#   BSTACK_STATE_DIR    — override ~/.bstack state directory
+#   BSTACK_DIR           — override auto-detected bstack root
+#   BSTACK_RELEASES_URL  — override GitHub Releases API endpoint (primary)
+#   BSTACK_REMOTE_URL    — override raw-VERSION fallback URL
+#   BSTACK_STATE_DIR     — override ~/.bstack state directory
+#
+# Resolution order (≥ 0.2.2):
+#   1. GitHub Releases API `/releases/latest` → strip leading `v` from
+#      tag_name. This is the canonical "what is the latest release" answer
+#      and ignores unreleased VERSION bumps on `main`.
+#   2. Raw VERSION on `main` — fallback for offline, rate-limited, or
+#      pre-tagged installs.
 set -euo pipefail
 
 BSTACK_DIR="${BSTACK_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
@@ -18,6 +26,7 @@ CACHE_FILE="$STATE_DIR/last-update-check"
 MARKER_FILE="$STATE_DIR/just-upgraded-from"
 SNOOZE_FILE="$STATE_DIR/update-snoozed"
 VERSION_FILE="$BSTACK_DIR/VERSION"
+RELEASES_URL="${BSTACK_RELEASES_URL:-https://api.github.com/repos/broomva/bstack/releases/latest}"
 REMOTE_URL="${BSTACK_REMOTE_URL:-https://raw.githubusercontent.com/broomva/bstack/main/VERSION}"
 
 # ─── Force flag (busts cache for standalone /bstack-upgrade) ──
@@ -134,9 +143,24 @@ fi
 # ─── Step 4: Slow path — fetch remote version ────────────────
 mkdir -p "$STATE_DIR"
 
+# Primary: GitHub Releases API. Captures only tagged releases — dev-branch
+# VERSION bumps stay invisible until release.
 REMOTE=""
-REMOTE="$(curl -sf --max-time 5 "$REMOTE_URL" 2>/dev/null || true)"
-REMOTE="$(echo "$REMOTE" | tr -d '[:space:]')"
+RELEASES_JSON="$(curl -sf --max-time 5 -H 'Accept: application/vnd.github+json' "$RELEASES_URL" 2>/dev/null || true)"
+if [ -n "$RELEASES_JSON" ]; then
+  # Prefer jq when available; fall back to grep for portability.
+  if command -v jq >/dev/null 2>&1; then
+    REMOTE="$(printf '%s' "$RELEASES_JSON" | jq -r '.tag_name // empty' 2>/dev/null | sed 's/^v//')"
+  else
+    REMOTE="$(printf '%s' "$RELEASES_JSON" | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' | head -1 | sed -E 's/.*"v?([0-9.]+)"/\1/')"
+  fi
+fi
+
+# Fallback: raw VERSION on main (offline, rate-limited, or pre-tagged installs).
+if ! echo "$REMOTE" | grep -qE '^[0-9]+\.[0-9.]+$'; then
+  REMOTE="$(curl -sf --max-time 5 "$REMOTE_URL" 2>/dev/null || true)"
+  REMOTE="$(echo "$REMOTE" | tr -d '[:space:]')"
+fi
 
 if ! echo "$REMOTE" | grep -qE '^[0-9]+\.[0-9.]+$'; then
   echo "UP_TO_DATE $LOCAL" > "$CACHE_FILE"

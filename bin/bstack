@@ -1,0 +1,197 @@
+#!/usr/bin/env bash
+# bstack — top-level CLI dispatcher for the Broomva Stack.
+#
+# Subcommands delegate to existing sub-binaries (bstack-config, bstack-
+# update-check, bstack-wave) and to scripts/*.sh. Standalone sub-binaries
+# remain callable directly — the dispatcher is additive, never replacing.
+#
+# Usage:
+#   bstack <subcommand> [args...]
+#   bstack --help | -h | help
+#   bstack --version | -V | version
+set -euo pipefail
+
+BSTACK_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+SCRIPTS_DIR="$BSTACK_DIR/scripts"
+BIN_DIR="$BSTACK_DIR/bin"
+
+usage() {
+    cat <<'EOF'
+bstack — Broomva Stack CLI
+
+Validation:
+  doctor [--quiet]                Lint primitive-contract compliance.
+  validate                        Validate skill frontmatter health.
+  repair [--apply-all|--dry-run]  Apply fixes for gaps surfaced by doctor.
+
+Lifecycle:
+  bootstrap                       Wire bstack into the current workspace.
+  onboard                         First-time setup wizard (4 questions).
+  revamp                          Full reconfiguration (idempotent).
+  upgrade                         Pull latest release into this install.
+
+Config + state:
+  config get|set|list             Read/write ~/.bstack/config.yaml.
+  update-check [--force]          Check for a newer tagged release.
+  version                         Print this install's VERSION.
+
+Orchestration:
+  wave <subcommand>               P19 parallel sub-phase dispatch.
+
+Release (maintainers):
+  release tag                     Tag the current VERSION and create the
+                                  matching GitHub Release from CHANGELOG.
+
+Misc:
+  --help | -h | help              This message.
+  --version | -V                  Print VERSION and exit.
+
+Examples:
+  bstack doctor --quiet
+  bstack config set auto_upgrade true
+  bstack wave dispatch plans/sub-a.md plans/sub-b.md
+  bstack release tag
+EOF
+}
+
+bstack_version() {
+    if [ -f "$BSTACK_DIR/VERSION" ]; then
+        cat "$BSTACK_DIR/VERSION"
+    else
+        echo "unknown"
+        return 1
+    fi
+}
+
+# `bstack upgrade` — non-interactive equivalent of the /bstack-upgrade flow.
+# For git installs, runs the same git stash + fetch + reset --hard pattern
+# the SKILL.md describes. For vendored installs, prints guidance.
+bstack_upgrade() {
+    local upd
+    upd="$("$BIN_DIR/bstack-update-check" --force 2>/dev/null || true)"
+    case "$upd" in
+        JUST_UPGRADED*)
+            echo "Already on $(bstack_version) (just upgraded from $(echo "$upd" | awk '{print $2}'))."
+            return 0
+            ;;
+        UPGRADE_AVAILABLE*)
+            local old new
+            old="$(echo "$upd" | awk '{print $2}')"
+            new="$(echo "$upd" | awk '{print $3}')"
+            if [ ! -d "$BSTACK_DIR/.git" ]; then
+                echo "Vendored install — v$new available. Re-run:"
+                echo "  npx skills add -g broomva/bstack"
+                return 0
+            fi
+            echo "Upgrading bstack v$old → v$new..."
+            (
+                cd "$BSTACK_DIR"
+                git stash push -u -m "bstack upgrade $(date +%s)" 2>/dev/null || true
+                git fetch origin
+                git reset --hard origin/main
+                chmod +x bin/* scripts/* 2>/dev/null || true
+            )
+            mkdir -p "$HOME/.bstack"
+            echo "$old" > "$HOME/.bstack/just-upgraded-from"
+            rm -f "$HOME/.bstack/last-update-check" "$HOME/.bstack/update-snoozed"
+            echo "Done. Running v$(bstack_version)."
+            ;;
+        *)
+            echo "Already on v$(bstack_version) (latest release)."
+            ;;
+    esac
+}
+
+# `bstack release tag` — maintainer helper. Validates clean tree, reads
+# VERSION, tags v$VERSION, pushes the tag, and creates a GitHub Release
+# with the matching CHANGELOG section as body.
+bstack_release_tag() {
+    cd "$BSTACK_DIR"
+    if [ -n "$(git status --porcelain)" ]; then
+        echo "release: working tree is dirty. Commit or stash first." >&2
+        return 1
+    fi
+    local current_branch
+    current_branch="$(git branch --show-current)"
+    if [ "$current_branch" != "main" ]; then
+        echo "release: must be on main (currently on '$current_branch')." >&2
+        return 1
+    fi
+    git fetch origin --tags --quiet
+    if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
+        echo "release: local main diverges from origin/main. Pull first." >&2
+        return 1
+    fi
+    local version tag
+    version="$(bstack_version)"
+    tag="v${version}"
+    if git rev-parse "$tag" >/dev/null 2>&1; then
+        echo "release: $tag already exists." >&2
+        return 1
+    fi
+    local notes_file
+    notes_file="$(mktemp)"
+    awk -v ver="$version" '
+        $0 ~ "^## " ver "( |$)" { flag=1; next }
+        flag && /^## / { exit }
+        flag { print }
+    ' CHANGELOG.md > "$notes_file"
+    if [ ! -s "$notes_file" ]; then
+        echo "release: no '## $version' section found in CHANGELOG.md." >&2
+        rm -f "$notes_file"
+        return 1
+    fi
+    local title
+    title="$(awk '/^### / { sub(/^### /, ""); print; exit }' "$notes_file")"
+    [ -z "$title" ] && title="$tag"
+    echo "Tagging $tag..."
+    git tag -a "$tag" -m "$tag — $title"
+    git push origin "$tag"
+    if command -v gh >/dev/null 2>&1; then
+        echo "Creating GitHub Release..."
+        gh release create "$tag" --title "$tag — $title" --notes-file "$notes_file"
+    else
+        echo "gh not installed — tag pushed; create the GitHub Release manually:"
+        echo "  gh release create $tag --notes-file $notes_file"
+    fi
+    rm -f "$notes_file"
+}
+
+# ─── Dispatch ────────────────────────────────────────────────────────────
+if [ $# -eq 0 ]; then
+    usage
+    exit 0
+fi
+
+cmd="$1"; shift
+case "$cmd" in
+    -h|--help|help)         usage ;;
+    -V|--version|version)   bstack_version ;;
+    doctor)                 exec bash "$SCRIPTS_DIR/doctor.sh" "$@" ;;
+    validate)               exec bash "$SCRIPTS_DIR/validate.sh" "$@" ;;
+    repair)                 exec bash "$SCRIPTS_DIR/repair.sh" "$@" ;;
+    bootstrap)              exec bash "$SCRIPTS_DIR/bootstrap.sh" "$@" ;;
+    onboard)                exec bash "$SCRIPTS_DIR/onboard.sh" "$@" ;;
+    revamp)                 exec bash "$SCRIPTS_DIR/revamp.sh" "$@" ;;
+    upgrade)                bstack_upgrade "$@" ;;
+    config)                 exec "$BIN_DIR/bstack-config" "$@" ;;
+    update-check)           exec "$BIN_DIR/bstack-update-check" "$@" ;;
+    wave)                   exec "$BIN_DIR/bstack-wave" "$@" ;;
+    release)
+        sub="${1:-}"
+        [ $# -gt 0 ] && shift
+        case "$sub" in
+            tag) bstack_release_tag "$@" ;;
+            ""|-h|--help)
+                echo "Usage: bstack release tag" ;;
+            *)
+                echo "bstack release: unknown subcommand '$sub' (try: tag)" >&2
+                exit 2
+                ;;
+        esac
+        ;;
+    *)
+        echo "bstack: unknown subcommand '$cmd' — try 'bstack --help'." >&2
+        exit 2
+        ;;
+esac

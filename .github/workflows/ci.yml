@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint shell + JSON templates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ShellCheck (scripts + bin)
+        run: |
+          # Only lint files that have a shebang we recognize.
+          set -euo pipefail
+          mapfile -t targets < <(
+            find scripts bin -type f \( -name "*.sh" -o ! -name "*.*" \) 2>/dev/null \
+              | xargs -I {} sh -c 'head -n1 "{}" | grep -q "^#!.*sh" && echo "{}"' \
+              | sort -u
+          )
+          if [ "${#targets[@]}" -eq 0 ]; then
+            echo "No shell scripts found to lint."
+            exit 0
+          fi
+          printf '  • %s\n' "${targets[@]}"
+          # SC1091: don't follow sourced files; SC2155: declare-and-assign exit-code
+          # warnings — we accept these in bstack's defensive shell style.
+          shellcheck --severity=warning --exclude=SC1091,SC2155 "${targets[@]}"
+
+      - name: Validate JSON templates
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          fail=0
+          for f in assets/templates/*.snippet; do
+            if ! jq -e . "$f" >/dev/null 2>&1; then
+              echo "::error file=$f::invalid JSON shape"
+              fail=1
+            else
+              echo "  • $f — valid JSON"
+            fi
+          done
+          exit "$fail"
+
+  doctor:
+    name: bstack doctor (primitive-contract lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run doctor against templates
+        run: |
+          set -euo pipefail
+          # doctor.sh expects CLAUDE.md / AGENTS.md / .control/policy.yaml in cwd.
+          # Stage the templated versions as a fixture so doctor lints what
+          # downstream installs would see after `bstack bootstrap`.
+          mkdir -p .control
+          cp assets/templates/CLAUDE.md.template ./CLAUDE.md 2>/dev/null || true
+          cp assets/templates/AGENTS.md.template ./AGENTS.md 2>/dev/null || true
+          cp assets/templates/policy.yaml.template .control/policy.yaml 2>/dev/null || true
+          bash scripts/doctor.sh --quiet
