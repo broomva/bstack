@@ -70,10 +70,18 @@ class DispatchTest(unittest.TestCase):
             self.assertTrue((wave_dirs[0] / "manifest.json").exists())
             self.assertTrue((Path(td) / "wt-a").exists())
             self.assertTrue((Path(td) / "wt-b").exists())
-            # Give the (instantly-exiting) stubs a moment to write the log.
+            # Poll for the stubs to flush their log (fire-and-forget Popen +
+            # DEVNULL stdio means OS scheduling decides when the child starts).
             import time
-            time.sleep(0.5)
-            calls = Path(td + "/fake-calls.log").read_text().strip().splitlines()
+            log_path = Path(td + "/fake-calls.log")
+            deadline = time.time() + 5.0
+            while time.time() < deadline:
+                if log_path.exists():
+                    content = log_path.read_text()
+                    if len(content.strip().splitlines()) >= 2:
+                        break
+                time.sleep(0.05)
+            calls = log_path.read_text().strip().splitlines()
             self.assertEqual(len(calls), 2)
             self.assertIn("bg=1", calls[0])
             self.assertIn("bg=1", calls[1])
