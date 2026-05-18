@@ -84,9 +84,12 @@ bstack_upgrade() {
             old="$(echo "$upd" | awk '{print $2}')"
             new="$(echo "$upd" | awk '{print $3}')"
             if [ ! -d "$BSTACK_DIR/.git" ]; then
-                echo "Vendored install — v$new available. Re-run:"
-                echo "  npx skills add -g broomva/bstack"
-                return 0
+                # Vendored install (≥ 0.9.0): self-upgrade via release tarball +
+                # sha256 verification + atomic swap. Falls back to manual `npx
+                # skills add` guidance if the tarball is missing on the release
+                # (e.g. pre-0.9.0 releases without the tarball job).
+                bstack_upgrade_vendored "$old" "$new"
+                return $?
             fi
             echo "Upgrading bstack v$old → v$new..."
             (
@@ -105,6 +108,132 @@ bstack_upgrade() {
             echo "Already on v$(bstack_version) (latest release)."
             ;;
     esac
+}
+
+# `bstack_upgrade_vendored` — release-tarball-based upgrade for installs
+# without `.git` (the vendored install path produced by `npx skills add`).
+#
+# Pipeline:
+#   1. Download `bstack-v$NEW.tar.gz` from the GitHub Release.
+#   2. Download the matching `.sha256` sidecar.
+#   3. Verify the sha256 (mandatory — no skip flag, fail-closed).
+#   4. Extract into a temp dir.
+#   5. Atomic swap: move current install to `.bak`, move temp into place.
+#   6. On any error after step 4, restore from `.bak`.
+#
+# Output:
+#   $HOME/.bstack/auto-upgrade.log   structured per-attempt log
+#   $HOME/.bstack/just-upgraded-from set so the next session sees JUST_UPGRADED
+#
+# Env overrides (testability):
+#   BSTACK_RELEASE_TARBALL_URL   override the GitHub Releases asset URL
+#   BSTACK_DRY_RUN=1             validate the plan + print, don't swap
+bstack_upgrade_vendored() {
+    local old="$1" new="$2"
+    local tag="v$new"
+    local tarball="bstack-${tag}.tar.gz"
+    local sha_file="${tarball}.sha256"
+    local base_url="${BSTACK_RELEASE_TARBALL_URL:-https://github.com/broomva/bstack/releases/download/${tag}}"
+    local log="$HOME/.bstack/auto-upgrade.log"
+
+    mkdir -p "$HOME/.bstack"
+    {
+        echo "=== $(date -u +%FT%TZ) vendored upgrade v$old → v$new ==="
+    } >> "$log"
+
+    if ! command -v curl >/dev/null 2>&1; then
+        echo "Vendored upgrade requires curl. Falling back to manual: npx skills add -g broomva/bstack" >&2
+        echo "  ERR: curl missing" >> "$log"
+        return 1
+    fi
+    if ! command -v shasum >/dev/null 2>&1 && ! command -v sha256sum >/dev/null 2>&1; then
+        echo "Vendored upgrade requires shasum or sha256sum for verification." >&2
+        echo "  ERR: sha tool missing" >> "$log"
+        return 1
+    fi
+
+    local tmp; tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+
+    echo "Downloading $tarball..."
+    if ! curl -fsSL --max-time 120 -o "$tmp/$tarball" "$base_url/$tarball" 2>>"$log"; then
+        echo "  Failed to download $base_url/$tarball" >&2
+        echo "  Falling back to: npx skills add -g broomva/bstack" >&2
+        echo "  ERR: tarball download failed" >> "$log"
+        return 1
+    fi
+    if ! curl -fsSL --max-time 30 -o "$tmp/$sha_file" "$base_url/$sha_file" 2>>"$log"; then
+        echo "  Failed to download $base_url/$sha_file" >&2
+        echo "  Falling back to: npx skills add -g broomva/bstack" >&2
+        echo "  ERR: sha256 download failed" >> "$log"
+        return 1
+    fi
+
+    # Verify sha256
+    local expected actual
+    expected="$(awk '{print $1}' "$tmp/$sha_file" | tr -d '[:space:]')"
+    if command -v shasum >/dev/null 2>&1; then
+        actual="$(shasum -a 256 "$tmp/$tarball" | awk '{print $1}')"
+    else
+        actual="$(sha256sum "$tmp/$tarball" | awk '{print $1}')"
+    fi
+    if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
+        echo "  sha256 mismatch — refusing to install unverified tarball" >&2
+        echo "    expected: $expected" >&2
+        echo "    actual:   $actual" >&2
+        echo "  ERR: sha256 mismatch" >> "$log"
+        return 1
+    fi
+    echo "  sha256 verified."
+
+    if [ "${BSTACK_DRY_RUN:-}" = "1" ]; then
+        echo "  [dry-run] would swap $BSTACK_DIR with extracted contents"
+        echo "  [dry-run] sha256 verified at $tmp/$tarball"
+        return 0
+    fi
+
+    # Extract
+    if ! tar -xzf "$tmp/$tarball" -C "$tmp"; then
+        echo "  Failed to extract tarball" >&2
+        echo "  ERR: tar -xzf failed" >> "$log"
+        return 1
+    fi
+
+    # Find the extracted root — expect a single top-level dir
+    local extracted
+    extracted="$(find "$tmp" -maxdepth 2 -name VERSION -not -path "$tmp/VERSION" 2>/dev/null | head -1)"
+    if [ -z "$extracted" ]; then
+        echo "  Extracted tarball has no VERSION file — refusing to swap" >&2
+        echo "  ERR: extracted tree invalid" >> "$log"
+        return 1
+    fi
+    local new_root; new_root="$(dirname "$extracted")"
+
+    # Atomic swap: move current to .bak, move new into place. Restore on
+    # any failure between swap-out and swap-in.
+    local bak="${BSTACK_DIR}.bak.$$"
+    if ! mv "$BSTACK_DIR" "$bak"; then
+        echo "  Failed to move current install aside" >&2
+        echo "  ERR: mv current → bak failed" >> "$log"
+        return 1
+    fi
+    if ! mv "$new_root" "$BSTACK_DIR"; then
+        echo "  Swap failed — restoring previous install from $bak" >&2
+        mv "$bak" "$BSTACK_DIR" 2>/dev/null || true
+        echo "  ERR: mv new → install failed; restored" >> "$log"
+        return 1
+    fi
+    rm -rf "$bak"
+
+    # Make scripts executable (tar should preserve perms but be defensive)
+    chmod +x "$BSTACK_DIR/bin/"* "$BSTACK_DIR/scripts/"* 2>/dev/null || true
+
+    # Mark for next-session JUST_UPGRADED display
+    echo "$old" > "$HOME/.bstack/just-upgraded-from"
+    rm -f "$HOME/.bstack/last-update-check" "$HOME/.bstack/update-snoozed"
+
+    echo "  ✓ upgraded v$old → v$new (vendored)" >> "$log"
+    echo "Done. Running v$new (vendored install)."
 }
 
 # `bstack release tag` — maintainer helper. Validates clean tree, reads
