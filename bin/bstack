@@ -107,8 +107,16 @@ bstack_upgrade() {
 # with the matching CHANGELOG section as body.
 bstack_release_tag() {
     cd "$BSTACK_DIR"
-    if [ -n "$(git status --porcelain)" ]; then
-        echo "release: working tree is dirty. Commit or stash first." >&2
+    # Block on modified/staged tracked files only; untracked files (e.g. a
+    # workspace's .agents/ or skills-lock.json) are unrelated to the release
+    # state and would otherwise prevent the helper from running in a
+    # working development checkout.
+    local dirty
+    dirty="$(git status --porcelain | grep -v '^?? ' || true)"
+    if [ -n "$dirty" ]; then
+        echo "release: working tree has modified or staged tracked files:" >&2
+        printf '  %s\n' "$dirty" >&2
+        echo "Commit or stash first." >&2
         return 1
     fi
     local current_branch
