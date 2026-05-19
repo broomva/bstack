@@ -483,6 +483,21 @@ User intent → Linear ticket (P3) → Agent dispatched (P5)
 
 ---
 
+## Four Pillars of Self-Operation
+
+The cohesion narrative above describes how the primitives compose mechanically. The four-pillar view describes *what capabilities the composition delivers* — the canonical agentic-systems lens (recursive self-improvement, goal-formation, resource acquisition, autonomous execution). Naming the pillars here makes coverage explicit at the reference-doc level; the canonical statement lives in workspace `CLAUDE.md` §Four Pillars of Self-Operation, and `bstack doctor` §12 reports per-pillar state on every audit.
+
+| Pillar | Primitives | Coverage |
+|---|---|---|
+| **1. Recursive self-improvement** — the system improves itself | **Crystallize (P16)** + **Dream (P13)** + **Bridge (P1)** + **Bookkeeping (P6)** | FULL |
+| **2. Setting its own goals** — goal-formation moves inside the system | *Execution:* **Orchestrate (P19)** + **Wait (P9)** + **Persist (P12)** + **Fanout (P5)**. *Formation:* **Bookkeeping (P6)** Layer-4 + **Crystallize (P16)** candidate ledger. | PARTIAL (formation implicit) |
+| **3. Acquiring its own resources** — compute, money, access self-sourced | *Constraints:* **Gate (P2)** + **Tickets (P3)**. *Acquisition:* none (Zero CLI exists but isn't a primitive). | GAP (candidate P21) |
+| **4. Acting autonomously** — execution without human-in-the-loop | **Pipeline (P4)** + **Wait (P9)** + **Persist (P12)** + **Cross-Review (P20)** + **Orchestrate (P19)** + **Empirical (P11)** + **Fanout (P5)** + **Hygiene (P10)** + **Snapshot (P15)** + **Dep-Chain (P14)** + **Audience (P18)** + **Lens (P17)** + **Janitor (P8)** + **Freshness (P7)** | FULL |
+
+**Promotion gating**: Pillars 2 and 3 are known limitations. Promotion of a goal-formation primitive (auto-promote Layer-4 synthesis ≥7/9 → Linear tickets, gated by Cross-Review (P20)) or a resource-acquisition primitive (Anima-bound + haima-billed budget-scoped wallet) follows rule-of-three per **Crystallize (P16)** — ≥3 documented incidents + concrete mechanism + stated invariant + stated failure mode. Until then, the gaps stay surfaced (not silenced) so the next person to hit one knows the pattern is already named.
+
+---
+
 ## RCS L3 stability constraint
 
 bstack's governance layer (`CLAUDE.md` + `AGENTS.md` + `.control/policy.yaml`) is the **Level 3 controller** in a Recursive Controlled Systems hierarchy with formal stability proofs:
