@@ -490,7 +490,7 @@ The cohesion narrative above describes how the primitives compose mechanically. 
 | Pillar | Primitives | Coverage |
 |---|---|---|
 | **1. Recursive self-improvement** — the system improves itself | **Crystallize (P16)** + **Dream (P13)** + **Bridge (P1)** + **Bookkeeping (P6)** | FULL |
-| **2. Setting its own goals** — goal-formation moves inside the system | *Execution:* **Orchestrate (P19)** + **Wait (P9)** + **Persist (P12)** + **Fanout (P5)**. *Formation:* **Bookkeeping (P6)** Layer-4 + **Crystallize (P16)** candidate ledger. | PARTIAL (formation implicit) |
+| **2. Setting its own goals** — goal-formation moves inside the system | *Execution:* **Orchestrate (P19)** + **Wait (P9)** + **Persist (P12)** + **Fanout (P5)**. *Formation:* **Bridge (P1)** + **Bookkeeping (P6)** Layer-4 + **Crystallize (P16)** candidate ledger. | PARTIAL (formation implicit) |
 | **3. Acquiring its own resources** — compute, money, access self-sourced | *Constraints:* **Gate (P2)** + **Tickets (P3)**. *Acquisition:* none (Zero CLI exists but isn't a primitive). | GAP (candidate P21) |
 | **4. Acting autonomously** — execution without human-in-the-loop | **Pipeline (P4)** + **Wait (P9)** + **Persist (P12)** + **Cross-Review (P20)** + **Orchestrate (P19)** + **Empirical (P11)** + **Fanout (P5)** + **Hygiene (P10)** + **Snapshot (P15)** + **Dep-Chain (P14)** + **Audience (P18)** + **Lens (P17)** + **Janitor (P8)** + **Freshness (P7)** | FULL |
 
