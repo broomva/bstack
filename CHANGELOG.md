@@ -43,6 +43,18 @@ Origin: HKUDS/OpenSpace research dive (see `research/entities/project/openspace.
 - Synthesis: `research/notes/2026-05-20-openspace-evolver-synthesis.md`
 - Linear ticket: BRO-1205
 
+### Cross-Review (P20) round-1 fixes (applied before merge)
+
+A fresh-context subagent under devil's-advocate brief scored the first push at 5/10 (below the ≥7/10 P20 threshold) and surfaced four correctness defects + dead code. Round 1 closes all four with adversarial tests (one per defect, written to falsify the bug existed, not to confirm the fix works):
+
+- **Defect #1 — evaluator stub leaked raw traceback.** `_run_task` caught `NotImplementedError` from `runner.run` but not `evaluator.evaluate`. `--evaluator llm-judge` now exits 6 with a clean stderr migration message, mirroring the runner path. Test #15.
+- **Defect #2 — budget cap broken on resume.** `spent` initialized at 0.0 in `cmd_run`, ignoring prior-session costs in the existing JSONL. `--resume --budget-usd 0.01` could spend a fresh \$0.01 each session. Fixed: when `--resume`, sum `cost_usd` from every existing phase-results row before the phase loop. Refuses to start if prior cost already exceeds budget. Test #16.
+- **Defect #3 — aggregate double-counted resumed tasks.** `_read_existing_results` returned every JSONL row; a task that failed then re-ran successfully produced two rows under the same `task_id`, inflating `task_count` and `total_tokens`. Fixed: last-write-wins dedup by `task_id` in `_read_existing_results`. Resume-completion contract preserved (success row, if any, is last). Test #17.
+- **Defect #4 — compare emitted phantom regression on phase-1-only runs.** `_emit_compare` accepted empty phase2 lists and reported "Phase 2 = 0 tokens, Δquality = -0.8" — noise masquerading as data. Fixed: refuse to compare with exit 7 + clear message when either phase is empty. Test #18.
+- **Cleanups.** Removed dead `--workers` argparse flag, unused `asdict` + `EvaluationResult` imports, dead `tasks.set_defaults(func=cmd_tasks)` (subparser `required=True` makes it unreachable), and the `# pragma: no cover (defensive)` slop tell.
+
+Test count: 14 → 18 assertions. New exit code 7 documented in dispatcher + orchestrator headers.
+
 ## 0.9.5 — 2026-05-18
 
 ### Crystallization detection (Phase 7 of substrate completion)

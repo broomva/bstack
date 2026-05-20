@@ -36,6 +36,7 @@ Exit codes:
   4  budget exceeded mid-run
   5  resume run-id not found
   6  all task runs failed (structurally broken — see stderr for runner messages)
+  7  compare requires both phase 1 + phase 2 results
 """
 
 from __future__ import annotations
@@ -43,12 +44,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import sys
 import tarfile
 import time
 import uuid
-from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
 
@@ -59,8 +58,8 @@ if str(_HERE.parent) not in sys.path:
     sys.path.insert(0, str(_HERE.parent))
 
 # Local imports (after sys.path setup).
-from bench.agent_runner import AgentRunner, RunResult, get_runner  # noqa: E402
-from bench.evaluator import EvaluationResult, Evaluator, get_evaluator  # noqa: E402
+from bench.agent_runner import AgentRunner, get_runner  # noqa: E402
+from bench.evaluator import Evaluator, get_evaluator  # noqa: E402
 from bench.task_loader import (  # noqa: E402
     Task,
     TaskSetNotFound,
@@ -144,17 +143,17 @@ def _run_task(
     try:
         run_result = runner.run(task, workspace, phase)
     except NotImplementedError as exc:
-        # Stub runners (live, llm-judge) raise NotImplementedError with a
-        # clear migration message. Surface that message to stderr so the
-        # caller sees it without having to read the per-task JSONL.
+        # Stub runners raise NotImplementedError with a clear migration
+        # message. Surface that to stderr so the caller sees it without
+        # having to read the per-task JSONL.
         print(f"bstack bench: runner '{runner.name}' not wired: {exc}", file=sys.stderr)
         return {
             "task_id": task.task_id,
             "phase": phase,
             "exit_status": "failure",
-            "error": f"NotImplementedError: {exc!s}",
+            "error": f"runner NotImplementedError: {exc!s}",
         }
-    except Exception as exc:  # pragma: no cover (defensive)
+    except Exception as exc:
         print(f"bstack bench: runner '{runner.name}' raised {type(exc).__name__}: {exc}", file=sys.stderr)
         return {
             "task_id": task.task_id,
@@ -164,7 +163,35 @@ def _run_task(
         }
     if run_result.exit_status != "success":
         return {**run_result.to_dict(), "phase": phase}
-    eval_result = evaluator.evaluate(task, run_result.deliverable_paths)
+    # Symmetric stub-handling for the evaluator: StubLLMJudgeEvaluator
+    # raises NotImplementedError; surface it the same way as the runner so
+    # the all-failed → exit 6 path catches structurally-unwired evaluators
+    # (P20 round-1 fix).
+    try:
+        eval_result = evaluator.evaluate(task, run_result.deliverable_paths)
+    except NotImplementedError as exc:
+        print(
+            f"bstack bench: evaluator '{evaluator.name}' not wired: {exc}",
+            file=sys.stderr,
+        )
+        return {
+            **run_result.to_dict(),
+            "phase": phase,
+            "exit_status": "failure",
+            "error": f"evaluator NotImplementedError: {exc!s}",
+        }
+    except Exception as exc:
+        print(
+            f"bstack bench: evaluator '{evaluator.name}' raised "
+            f"{type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return {
+            **run_result.to_dict(),
+            "phase": phase,
+            "exit_status": "failure",
+            "error": f"evaluator exception: {exc!s}",
+        }
     return {
         **run_result.to_dict(),
         "phase": phase,
@@ -211,19 +238,34 @@ def _run_phase(
 
 
 def _read_existing_results(path: Path) -> list[dict]:
+    """Read JSONL results, last-write-wins per task_id (P20 round-1 fix).
+
+    A task that failed then re-ran successfully writes two rows under the
+    same task_id; without deduplication, `_aggregate` double-counts.
+    Last-write-wins preserves the resume-completion contract (the success
+    row, if any, is last) while keeping aggregates honest.
+    """
+
     if not path.is_file():
         return []
-    out: list[dict] = []
+    by_id: dict[str, dict] = {}
+    order: list[str] = []
     with path.open(encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
             if not line:
                 continue
             try:
-                out.append(json.loads(line))
+                obj = json.loads(line)
             except json.JSONDecodeError:
                 continue
-    return out
+            tid = obj.get("task_id")
+            if not isinstance(tid, str):
+                continue
+            if tid not in by_id:
+                order.append(tid)
+            by_id[tid] = obj
+    return [by_id[t] for t in order]
 
 
 # ---------------------------------------------------------------------------
@@ -394,6 +436,23 @@ def cmd_run(args: argparse.Namespace) -> int:
         phases_to_run = [int(args.phase)]
 
     spent = 0.0
+    # P20 round-1 fix: budget must survive resume. Sum cost_usd from every
+    # already-written result so the per-phase budget check counts prior
+    # spend. Without this, `--resume --budget-usd 0.01` accepts a fresh
+    # $0.01 each session, defeating the cap.
+    if args.resume:
+        for prior_phase in (1, 2):
+            for prior in _read_existing_results(_phase_results_path(run_dir, prior_phase)):
+                spent += float((prior.get("tokens") or {}).get("cost_usd", 0.0) or 0.0)
+        if spent > 0:
+            print(f"  → resume: prior cost ≈ ${spent:.4f} counted toward budget")
+        if args.budget_usd is not None and spent > args.budget_usd:
+            print(
+                f"bstack bench: prior cost ${spent:.4f} already exceeds budget "
+                f"${args.budget_usd}; refusing to start.",
+                file=sys.stderr,
+            )
+            return 4
     total_attempted = 0
     total_failed = 0
     for phase in phases_to_run:
@@ -442,6 +501,18 @@ def cmd_run(args: argparse.Namespace) -> int:
 def _emit_compare(run_dir: Path, run_id: str, config: dict) -> int:
     p1 = _read_existing_results(_phase_results_path(run_dir, 1))
     p2 = _read_existing_results(_phase_results_path(run_dir, 2))
+    # P20 round-1 fix: refuse to compare when either phase is empty.
+    # Previously `_compare` happily emitted "Phase 2 = 0 tokens" and the
+    # report showed phantom regression. A benchmark substrate that
+    # silently produces noise as data is worse than no substrate.
+    if not p1 or not p2:
+        print(
+            f"bstack bench: compare requires both phases "
+            f"(phase1={len(p1)} task(s), phase2={len(p2)} task(s)). "
+            "Run with --phase both, or finish both phases separately before compare.",
+            file=sys.stderr,
+        )
+        return 7
     cmp_ = _compare(p1, p2)
     (run_dir / "comparison.json").write_text(
         json.dumps(cmp_, indent=2) + "\n", encoding="utf-8"
@@ -531,7 +602,6 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--phase", default="both", choices=["1", "2", "both"], help="Phase(s) to run.")
     run.add_argument("--dry-run", action="store_true", default=True, help="Dry-run mode (default). Use --no-dry-run to opt out (stub).")
     run.add_argument("--no-dry-run", dest="dry_run", action="store_false")
-    run.add_argument("--workers", type=int, default=1, help="Parallel workers (single-thread in v0.10.0).")
     run.add_argument("--budget-usd", type=float, default=None, help="Halt run when cumulative cost exceeds this (USD).")
     run.add_argument("--resume", default=None, help="Resume an existing run-id.")
     run.set_defaults(func=cmd_run)
@@ -546,7 +616,6 @@ def _build_parser() -> argparse.ArgumentParser:
     tasks_sub = tasks.add_subparsers(dest="subaction", required=True)
     tasks_list = tasks_sub.add_parser("list", help="List registered task sets.")
     tasks_list.set_defaults(func=cmd_tasks, subaction="list")
-    tasks.set_defaults(func=cmd_tasks)
 
     # status
     st = sub.add_parser("status", help="Show recent run summaries.")

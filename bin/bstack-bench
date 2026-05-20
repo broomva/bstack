@@ -6,7 +6,7 @@
 #
 # Subcommands:
 #   run [--tasks SET] [--runner R] [--evaluator E] [--phase {1|2|both}]
-#       [--workers N] [--budget-usd N] [--resume RUN_ID] [--no-dry-run]
+#       [--budget-usd N] [--resume RUN_ID] [--no-dry-run]
 #                                Two-phase bench against a task set.
 #   compare [--run-id RUN_ID]    Build REPORT.md from existing phase results.
 #   tasks list                   List registered task sets.
@@ -21,9 +21,10 @@
 #   0  success
 #   2  invalid arguments
 #   3  task set not found
-#   4  budget exceeded mid-run
+#   4  budget exceeded mid-run (or prior spend already exceeds budget on resume)
 #   5  resume / status run-id not found
 #   6  all task runs failed (structurally broken — e.g. stub runner without SDK)
+#   7  compare requires both phase 1 + phase 2 results
 
 set -euo pipefail
 
@@ -71,7 +72,7 @@ bstack-bench — skill-evolution benchmark dispatcher
 
 Usage:
   bstack bench run [--tasks SET] [--runner R] [--evaluator E]
-                   [--phase {1|2|both}] [--workers N] [--budget-usd N]
+                   [--phase {1|2|both}] [--budget-usd N]
                    [--resume RUN_ID] [--no-dry-run]
   bstack bench compare [--run-id RUN_ID]
   bstack bench tasks list
