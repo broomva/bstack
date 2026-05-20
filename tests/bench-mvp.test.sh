@@ -198,7 +198,10 @@ else
     assert_fail "budget cap should halt with rc=4, got rc=$budget_rc" "$budget_out"
 fi
 
-# ── 13. live runner is a clear stub ──────────────────────────────────────
+# ── 13. live runner without provider fails fast (v0.11.0 behavior) ───────
+# v0.10.0: hit StubLiveRunner with "not wired" message via rc=6.
+# v0.11.0: fail fast at CLI layer with rc=2 + "--provider required" before
+# any task runs. Cleaner — surfaces the missing-config error immediately.
 LIVE_HOME="$(mktemp -d -t bstack-bench-live.XXXXXX)"
 set +e
 live_out="$(BSTACK_BENCH_HOME="$LIVE_HOME" "$BSTACK_BENCH" \
@@ -206,10 +209,10 @@ live_out="$(BSTACK_BENCH_HOME="$LIVE_HOME" "$BSTACK_BENCH" \
 live_rc=$?
 set -e
 rm -rf "$LIVE_HOME"
-if [ "$live_rc" != "0" ] && echo "$live_out" | grep -qi "not.*wired\|NotImplementedError\|stub\|live mode"; then
-    assert_pass "live runner stub surfaces a clear migration message"
+if [ "$live_rc" = "2" ] && echo "$live_out" | grep -qi "provider.*required\|--provider"; then
+    assert_pass "live runner without --provider fails fast (rc=2 + provider-required message)"
 else
-    assert_fail "live runner stub should fail with a clear message" "$live_out"
+    assert_fail "live runner without --provider should rc=2 + clear message (got rc=$live_rc)" "$live_out"
 fi
 
 # ── 14. snapshot tarball exists ──────────────────────────────────────────
@@ -226,10 +229,10 @@ fi
 #  reach. Author intent: prove the fix works AND that the bug existed.
 # ═══════════════════════════════════════════════════════════════════════
 
-# ── 15. evaluator stub fails cleanly (defect #1) ─────────────────────────
-# StubLLMJudgeEvaluator must surface a clear migration message via stderr,
-# not a raw Python traceback. Prior to P20 round-1, `_run_task` caught
-# NotImplementedError from the runner but not the evaluator.
+# ── 15. evaluator llm-judge without provider fails fast (v0.11.0) ────────
+# v0.10.0: hit StubLLMJudgeEvaluator with "not wired" message via rc=6.
+# v0.11.0: fail fast at CLI layer with rc=2 + "--provider required" message
+# before any task runs. Cleaner — surfaces missing-config immediately.
 LLM_HOME="$(mktemp -d -t bstack-bench-llm.XXXXXX)"
 set +e
 llm_out="$(BSTACK_BENCH_HOME="$LLM_HOME" "$BSTACK_BENCH" \
@@ -237,14 +240,12 @@ llm_out="$(BSTACK_BENCH_HOME="$LLM_HOME" "$BSTACK_BENCH" \
 llm_rc=$?
 set -e
 rm -rf "$LLM_HOME"
-# Must NOT be a raw traceback (rc != 1), must contain a clear message, must
-# end as a clean structural failure (rc=6 — all tasks failed via stub).
-if [ "$llm_rc" = "6" ] \
-    && echo "$llm_out" | grep -qi "evaluator.*not.*wired\|LLM judge\|NotImplementedError" \
+if [ "$llm_rc" = "2" ] \
+    && echo "$llm_out" | grep -qi "provider.*required\|--provider" \
     && ! echo "$llm_out" | grep -q "Traceback (most recent call last)"; then
-    assert_pass "evaluator llm-judge stub surfaces clean migration message (no traceback)"
+    assert_pass "evaluator llm-judge without --provider fails fast (rc=2 + clear message)"
 else
-    assert_fail "evaluator llm-judge stub should fail cleanly (rc=6, no traceback), got rc=$llm_rc" "$llm_out"
+    assert_fail "evaluator llm-judge should rc=2 + provider-required message (got rc=$llm_rc)" "$llm_out"
 fi
 
 # ── 16. budget-on-resume counts prior cost (defect #2) ───────────────────

@@ -92,7 +92,7 @@ bstack bench tasks list                     # registered task sets
 bstack bench status [--run-id RUN_ID]       # recent run summaries
 ```
 
-### Exit codes (v0.10.0 MVP)
+### Exit codes (v0.11.0)
 
 | Code | Meaning |
 |---|---|
@@ -103,6 +103,31 @@ bstack bench status [--run-id RUN_ID]       # recent run summaries
 | 5 | Resume / status run-id not found |
 | 6 | All task runs failed (structurally broken — e.g. stub runner without SDK) |
 | 7 | Compare requires both phase 1 + phase 2 results |
+| 8 | P20 violation: judge model equals agent model without `--allow-same-judge-model` |
+| 9 | Provider not configured (e.g. `DATABRICKS_TOKEN` missing for `--provider databricks`) |
+| 10 | Provider SDK not installed (e.g. `pip install openai` required) |
+
+### Live mode (v0.11.0+)
+
+Real LLM calls via the provider abstraction. Required flags: `--runner live --provider <name> --model <name>`. When `--evaluator llm-judge` is used, also pass `--judge-model <different-name>`.
+
+```bash
+# Direct (env exported)
+export DATABRICKS_HOST=https://...azuredatabricks.net
+export DATABRICKS_TOKEN=dapi...
+bstack bench run --runner live --evaluator llm-judge \
+    --provider databricks \
+    --model databricks-claude-haiku-4-5 \
+    --judge-model databricks-claude-opus-4-5 \
+    --phase 1 --budget-usd 0.50
+
+# Railway as credential broker (recommended for shared dev envs)
+railway run --service stimulus-api -- bstack bench run --runner live \
+    --provider databricks --model databricks-claude-haiku-4-5 \
+    --phase 1 --no-dry-run --budget-usd 0.10
+```
+
+Built-in providers: `databricks` (Anthropic Claude via Databricks Model Serving), `mock` (deterministic in-process). Future: `anthropic`, `openai`, `openai-compat`, `bedrock`. See `references/provider-standards.md`.
 
 **Task sets** (registered in `bstack/scripts/bench/task_sets.json`):
 - `gdpval-50` — OpenSpace's 50-task subset (vendored from HF `openai/gdpval`)

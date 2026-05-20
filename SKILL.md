@@ -39,6 +39,8 @@ Then, in your agent session:
 /bstack bench run                 → two-phase skill-evolution benchmark (P11)
 /bstack bench compare             → Phase 1 vs Phase 2 REPORT.md
 /bstack bench tasks list          → registered task sets
+/bstack bench run --runner live --provider databricks --model ...
+                                  → real LLM via OpenAI-compatible provider (≥ 0.11.0)
 ```
 
 ## What bstack enforces

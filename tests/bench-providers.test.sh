@@ -1,0 +1,456 @@
+#!/usr/bin/env bash
+# tests/bench-providers.test.sh — Provider abstraction tests (v0.11.0).
+#
+# Validates the LLM provider abstraction shipped in BRO-1211:
+#
+#   1. Unknown provider name exits 2 with clear message
+#   2. `--runner live --provider` without --model exits 2
+#   3. `--provider mock --model mock-small` runs end-to-end (offline)
+#   4. mock provider populates real token usage from response.usage
+#   5. P20 violation: same model for agent + judge exits 8
+#   6. P20 override with --allow-same-judge-model captures rationale in config
+#   7. P20 distinct models proceeds (no violation)
+#   8. databricks provider without DATABRICKS_TOKEN exits 9 (ProviderNotConfigured)
+#   9. databricks provider name resolves (lazy import — no openai needed for resolution)
+#  10. providers/list_providers includes mock + databricks
+#
+# Runs offline. Live integration test lives in tests/bench-live.test.sh
+# and is gated by BSTACK_BENCH_LIVE=1.
+
+set -uo pipefail
+
+BSTACK_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BSTACK_BENCH="$BSTACK_REPO/bin/bstack-bench"
+
+BSTACK_BENCH_HOME="$(mktemp -d -t bstack-bench-providers.XXXXXX)"
+export BSTACK_BENCH_HOME
+
+cleanup() {
+    rm -rf "$BSTACK_BENCH_HOME"
+}
+trap cleanup EXIT
+
+PASS=0
+FAIL=0
+FAILED_TESTS=()
+
+assert_pass() { PASS=$((PASS + 1)); echo "  ✓ $1"; }
+assert_fail() {
+    FAIL=$((FAIL + 1))
+    FAILED_TESTS+=("$1")
+    echo "  ✗ $1"
+    [ -n "${2:-}" ] && echo "    ${2}"
+}
+
+# Pick a python3.10+ interpreter the same way bstack-bench does.
+pick_py() {
+    for cand in python3.13 python3.12 python3.11 python3.10; do
+        if command -v "$cand" >/dev/null 2>&1; then
+            local v
+            v="$("$cand" -c 'import sys; print(sys.version_info[:2] >= (3,10))' 2>/dev/null || echo False)"
+            [ "$v" = "True" ] && { echo "$cand"; return 0; }
+        fi
+    done
+    for probe in /opt/homebrew/bin/python3.13 /opt/homebrew/bin/python3.12 \
+                 /opt/homebrew/bin/python3.11 /opt/homebrew/bin/python3.10; do
+        [ -x "$probe" ] && { echo "$probe"; return 0; }
+    done
+    return 1
+}
+PY="$(pick_py || true)"
+if [ -z "$PY" ]; then
+    echo "bench-providers.test.sh: needs Python 3.10+; skipping."
+    exit 0
+fi
+
+# ── 1. unknown provider name → rc=2 ──────────────────────────────────────
+set +e
+out="$("$BSTACK_BENCH" run --tasks bstack-smoke --runner live \
+    --provider nonexistent-provider --model whatever --phase 1 --no-dry-run 2>&1)"
+rc=$?
+set -e
+if [ "$rc" = "2" ] && echo "$out" | grep -qi "Unknown provider"; then
+    assert_pass "unknown provider name fails with rc=2 + 'Unknown provider'"
+else
+    assert_fail "unknown provider should rc=2 with clear message (got rc=$rc)" "$out"
+fi
+
+# ── 2. --runner live without --model → rc=2 ──────────────────────────────
+set +e
+out="$("$BSTACK_BENCH" run --tasks bstack-smoke --runner live \
+    --provider mock --phase 1 --no-dry-run 2>&1)"
+rc=$?
+set -e
+if [ "$rc" = "2" ] && echo "$out" | grep -qi "model.*required\|--model"; then
+    assert_pass "--runner live without --model fails fast (rc=2)"
+else
+    assert_fail "live without --model should rc=2 (got rc=$rc)" "$out"
+fi
+
+# ── 3. mock provider end-to-end ──────────────────────────────────────────
+# P20 round-1 de-rig: replace 'rc=0 OR rc=6' with specific assertions on
+# the substrate that ran. The harness can subtract is not the test —
+# tokens=20 + at least one task succeeded is.
+RUN_HOME="$(mktemp -d -t bstack-bench-mock.XXXXXX)"
+set +e
+out="$(BSTACK_BENCH_HOME="$RUN_HOME" "$BSTACK_BENCH" \
+    run --tasks bstack-smoke --runner live \
+    --provider mock --model mock-small \
+    --phase 1 --no-dry-run 2>&1)"
+rc=$?
+set -e
+run_dir="$(ls -1 "$RUN_HOME/runs" 2>/dev/null | head -1)"
+mock_check_ok=0
+if [ -n "$run_dir" ] && [ -f "$RUN_HOME/runs/$run_dir/phase1_results.jsonl" ]; then
+    # Specific assertions:
+    # 1. Every row has tokens=20 (mock canned: 12 prompt + 8 completion)
+    # 2. Every row has runner=live (real LiveProviderRunner ran, not the stub)
+    # 3. config.json records provider=mock + model=mock-small
+    mock_check_ok="$("$PY" -c "
+import json
+ok = 1
+with open('$RUN_HOME/runs/$run_dir/phase1_results.jsonl') as f:
+    rows = [json.loads(l) for l in f if l.strip()]
+if not rows: ok = 0
+for r in rows:
+    if r.get('tokens', {}).get('total_tokens') != 20: ok = 0
+    if r.get('runner') != 'live': ok = 0
+cfg = json.load(open('$RUN_HOME/runs/$run_dir/config.json'))
+if cfg.get('provider') != 'mock' or cfg.get('model') != 'mock-small': ok = 0
+print(ok)
+")"
+fi
+if [ "$mock_check_ok" = "1" ]; then
+    assert_pass "mock provider end-to-end — all rows tokens=20 runner=live + config records provider/model"
+else
+    assert_fail "mock provider substrate check failed (rc=$rc)" "$out"
+fi
+rm -rf "$RUN_HOME"
+
+# ── 4. P20 violation: same model for agent + judge → rc=8 ────────────────
+set +e
+out="$("$BSTACK_BENCH" run --tasks bstack-smoke --runner live --evaluator llm-judge \
+    --provider mock --model mock-small --judge-model mock-small \
+    --phase 1 --no-dry-run 2>&1)"
+rc=$?
+set -e
+if [ "$rc" = "8" ] && echo "$out" | grep -qi "P20.*violation\|judge model.*equals agent model"; then
+    assert_pass "P20 violation (same model agent+judge) fails fast with rc=8"
+else
+    assert_fail "P20 same-model should rc=8 (got rc=$rc)" "$out"
+fi
+
+# ── 5. P20 override with rationale → rationale captured in config ────────
+RUN_HOME="$(mktemp -d -t bstack-bench-p20override.XXXXXX)"
+set +e
+out="$(BSTACK_BENCH_HOME="$RUN_HOME" "$BSTACK_BENCH" \
+    run --tasks bstack-smoke --runner live --evaluator llm-judge \
+    --provider mock --model mock-small --judge-model mock-small \
+    --allow-same-judge-model "smoke test only" \
+    --phase 1 --no-dry-run 2>&1)"
+rc=$?
+set -e
+# rc can be 0 or 6 — what we care about is the rationale was captured.
+run_dir="$(ls -1 "$RUN_HOME/runs" 2>/dev/null | head -1)"
+if [ -n "$run_dir" ]; then
+    rationale="$("$PY" -c "
+import json
+d = json.load(open('$RUN_HOME/runs/$run_dir/config.json'))
+print(d.get('allow_same_judge_model_rationale', ''))
+")"
+    if [ "$rationale" = "smoke test only" ]; then
+        assert_pass "P20 override rationale captured in config.json"
+    else
+        assert_fail "rationale should be 'smoke test only' (got '$rationale')" "$out"
+    fi
+else
+    assert_fail "P20 override should create run dir even on failure"
+fi
+rm -rf "$RUN_HOME"
+
+# ── 6. P20 distinct models → no violation ────────────────────────────────
+RUN_HOME="$(mktemp -d -t bstack-bench-p20ok.XXXXXX)"
+set +e
+out="$(BSTACK_BENCH_HOME="$RUN_HOME" "$BSTACK_BENCH" \
+    run --tasks bstack-smoke --runner live --evaluator llm-judge \
+    --provider mock --model mock-small --judge-model mock-large \
+    --phase 1 --no-dry-run 2>&1)"
+rc=$?
+set -e
+# Mock provider returns a non-JSON canned string, so the judge parse will
+# fail and tasks will fail. We just verify no P20 violation fired.
+if [ "$rc" != "8" ] && ! echo "$out" | grep -qi "P20.*violation"; then
+    assert_pass "P20 distinct models proceeds (no violation)"
+else
+    assert_fail "P20 distinct models should NOT trigger violation (got rc=$rc)" "$out"
+fi
+rm -rf "$RUN_HOME"
+
+# ── 7. databricks without DATABRICKS_TOKEN → rc=9 ────────────────────────
+set +e
+NOENV_OUT="$(env -i \
+    HOME="$HOME" PATH="$PATH" BSTACK_BENCH_HOME="$BSTACK_BENCH_HOME" \
+    "$BSTACK_BENCH" run --tasks bstack-smoke --runner live \
+    --provider databricks --model databricks-claude-haiku-4-5 \
+    --phase 1 --no-dry-run 2>&1)"
+NOENV_RC=$?
+set -e
+if [ "$NOENV_RC" = "9" ] && echo "$NOENV_OUT" | grep -qi "DATABRICKS_HOST\|DATABRICKS_TOKEN\|not configured"; then
+    assert_pass "databricks provider without env vars fails with rc=9 (not configured)"
+else
+    assert_fail "databricks without env should rc=9 (got rc=$NOENV_RC)" "$NOENV_OUT"
+fi
+
+# ── 8. list_providers() includes mock + databricks ───────────────────────
+list_out="$("$PY" -c "
+import sys
+sys.path.insert(0, '$BSTACK_REPO/scripts')
+from bench.providers import list_providers
+print(','.join(list_providers()))
+" 2>&1)"
+if echo "$list_out" | grep -q "databricks" && echo "$list_out" | grep -q "mock"; then
+    assert_pass "list_providers() returns databricks + mock"
+else
+    assert_fail "list_providers() should include databricks + mock (got: $list_out)"
+fi
+
+# ── 9. provider standards reference doc exists ───────────────────────────
+if [ -f "$BSTACK_REPO/references/provider-standards.md" ]; then
+    if grep -q "OpenAI Chat Completions API" "$BSTACK_REPO/references/provider-standards.md" \
+        && grep -q "DatabricksGatewayProvider\|databricks" "$BSTACK_REPO/references/provider-standards.md" \
+        && grep -q "railway run" "$BSTACK_REPO/references/provider-standards.md"; then
+        assert_pass "references/provider-standards.md exists with required sections"
+    else
+        assert_fail "provider-standards.md missing required sections (OpenAI contract / databricks / railway)"
+    fi
+else
+    assert_fail "references/provider-standards.md missing"
+fi
+
+# ── 10. Provider error types are exposed at package level ────────────────
+type_check="$("$PY" -c "
+import sys
+sys.path.insert(0, '$BSTACK_REPO/scripts')
+from bench.providers import (
+    Provider, ChatMessage, ChatCompletion, Usage,
+    ProviderError, ProviderNotConfigured, ProviderNotInstalled,
+    get_provider, list_providers, register_provider,
+)
+print('ALL_GOOD')
+" 2>&1)"
+if echo "$type_check" | grep -q "ALL_GOOD"; then
+    assert_pass "providers public API exposes all required symbols"
+else
+    assert_fail "providers package missing public symbols" "$type_check"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════
+#  P20 round-1 adversarial tests — one per defect, written to FALSIFY.
+#  Each demonstrates the bug existed on round-0 AND the fix works.
+# ═══════════════════════════════════════════════════════════════════════
+
+# ── 11. Budget escape via unknown model fails fast (round-1 defect #1) ───
+# Pre-round-1: `--budget-usd N` + model not in cost table → silent zero
+# cost → budget cap never trips. Now: rc=2 + "not in the cost table" msg.
+set +e
+out="$("$BSTACK_BENCH" run --tasks bstack-smoke --runner live \
+    --provider mock --model unknown-model-not-in-table \
+    --budget-usd 0.01 --phase 1 --no-dry-run 2>&1)"
+rc=$?
+set -e
+if [ "$rc" = "2" ] && echo "$out" | grep -qi "not in the cost table\|allow-unknown-cost"; then
+    assert_pass "budget + unknown model fails fast with rc=2 + cost-table message"
+else
+    assert_fail "unknown-model budget should rc=2 (got rc=$rc)" "$out"
+fi
+
+# ── 12. --allow-unknown-cost rationale unblocks unknown-model budget ─────
+RUN_HOME="$(mktemp -d -t bstack-bench-allowunk.XXXXXX)"
+set +e
+out="$(BSTACK_BENCH_HOME="$RUN_HOME" "$BSTACK_BENCH" \
+    run --tasks bstack-smoke --runner live \
+    --provider mock --model unknown-model-not-in-table \
+    --budget-usd 0.01 --allow-unknown-cost "smoke test" \
+    --phase 1 --no-dry-run 2>&1)"
+rc=$?
+set -e
+run_dir="$(ls -1 "$RUN_HOME/runs" 2>/dev/null | head -1)"
+rationale_ok=0
+if [ -n "$run_dir" ]; then
+    rationale="$("$PY" -c "
+import json
+d = json.load(open('$RUN_HOME/runs/$run_dir/config.json'))
+print(d.get('allow_unknown_cost_rationale', ''))
+")"
+    [ "$rationale" = "smoke test" ] && rationale_ok=1
+fi
+# Mock cost is unknown so cost reports as 0.0 — that's fine here since
+# the user opted in. We just need the run to start + rationale to be captured.
+if [ "$rationale_ok" = "1" ]; then
+    assert_pass "--allow-unknown-cost rationale captured in config (run proceeds)"
+else
+    assert_fail "rationale not captured for --allow-unknown-cost (rc=$rc)" "$out"
+fi
+rm -rf "$RUN_HOME"
+
+# ── 13. Config drift on resume fails fast (round-1 defect #2) ────────────
+# Pre-round-1: resume silently overwrote config.json with new model.
+# Now: rc=2 unless --allow-config-drift rationale passed.
+DRIFT_HOME="$(mktemp -d -t bstack-bench-drift.XXXXXX)"
+DRIFT_RUN_ID="20260101T000000-drifttest"
+DRIFT_DIR="$DRIFT_HOME/runs/$DRIFT_RUN_ID"
+mkdir -p "$DRIFT_DIR"
+# Seed a run config with model=mock-small.
+cat > "$DRIFT_DIR/config.json" <<'EOF'
+{"run_id": "20260101T000000-drifttest", "tasks_set": "bstack-smoke", "runner": "live", "evaluator": "rubric-match", "provider": "mock", "model": "mock-small"}
+EOF
+# Resume with --model mock-large (drift).
+set +e
+out="$(BSTACK_BENCH_HOME="$DRIFT_HOME" "$BSTACK_BENCH" \
+    run --tasks bstack-smoke --runner live \
+    --provider mock --model mock-large \
+    --resume "$DRIFT_RUN_ID" --phase 1 --no-dry-run 2>&1)"
+rc=$?
+set -e
+if [ "$rc" = "2" ] && echo "$out" | grep -qi "config drift\|allow-config-drift"; then
+    assert_pass "config drift on resume fails fast with rc=2 + clear message"
+else
+    assert_fail "config drift should rc=2 (got rc=$rc)" "$out"
+fi
+rm -rf "$DRIFT_HOME"
+
+# ── 14. --allow-config-drift unblocks resume with new model ──────────────
+DRIFT2_HOME="$(mktemp -d -t bstack-bench-drift2.XXXXXX)"
+DRIFT2_DIR="$DRIFT2_HOME/runs/$DRIFT_RUN_ID"
+mkdir -p "$DRIFT2_DIR"
+cat > "$DRIFT2_DIR/config.json" <<'EOF'
+{"run_id": "20260101T000000-drifttest", "tasks_set": "bstack-smoke", "runner": "live", "evaluator": "rubric-match", "provider": "mock", "model": "mock-small"}
+EOF
+set +e
+out="$(BSTACK_BENCH_HOME="$DRIFT2_HOME" "$BSTACK_BENCH" \
+    run --tasks bstack-smoke --runner live \
+    --provider mock --model mock-large \
+    --resume "$DRIFT_RUN_ID" \
+    --allow-config-drift "intentional model upgrade" \
+    --phase 1 --no-dry-run 2>&1)"
+rc=$?
+set -e
+new_model="$("$PY" -c "
+import json
+try:
+    d = json.load(open('$DRIFT2_DIR/config.json'))
+    print(d.get('model', ''), d.get('allow_config_drift_rationale', ''))
+except Exception as e:
+    print('FAIL', e)
+" 2>&1)"
+if [ "$rc" != "2" ] && echo "$new_model" | grep -q "mock-large intentional model upgrade"; then
+    assert_pass "--allow-config-drift rationale captured + resume proceeds"
+else
+    assert_fail "config-drift override should proceed (rc=$rc, config: $new_model)" "$out"
+fi
+rm -rf "$DRIFT2_HOME"
+
+# ── 15. Judge ID hallucination → evaluator name flagged (round-1 #3) ─────
+# Inject a MockProvider that returns judge JSON with IDs that don't match
+# the rubric. Verify evaluator name contains "id-mismatch" + feedback
+# carries [ID-MISMATCH] prefix.
+JM_HOME="$(mktemp -d -t bstack-bench-jm.XXXXXX)"
+JM_OUT="$("$PY" -c "
+import sys
+sys.path.insert(0, '$BSTACK_REPO/scripts')
+import json
+from pathlib import Path
+from bench.providers import register_provider, ChatMessage
+from bench.providers.base import Provider, ChatCompletion, Usage
+from bench.evaluator import LLMJudgeEvaluator
+from bench.task_loader import Task
+
+class IDHallucinator(Provider):
+    name = 'idhallu'
+    def configured(self): return True
+    def list_models(self): return ['idhallu-judge']
+    def chat(self, messages, model, max_tokens=4096, temperature=0.0, **kwargs):
+        # Returns valid JSON with criterion IDs that don't match any rubric.
+        body = json.dumps({
+            'criteria': [
+                {'id': 'completely_made_up_id', 'pass': True, 'reason': 'looks ok'},
+                {'id': 'another_fake_id', 'pass': True, 'reason': 'also ok'},
+            ],
+            'overall_feedback': 'Excellent work overall.',
+        })
+        return ChatCompletion(content=body, model=model, usage=Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30), finish_reason='stop')
+
+register_provider('idhallu', IDHallucinator)
+provider = IDHallucinator()
+ev = LLMJudgeEvaluator(provider=provider, model='idhallu-judge')
+
+task = Task(
+    task_id='t1', task_set='smoke', occupation='', sector='',
+    prompt='Do the thing.',
+    deliverable_files=['out.md'],
+    rubric_json={'criteria': [
+        {'id': 'real_criterion_1', 'check': 'contains_any', 'tokens': ['hello'], 'weight': 1.0},
+        {'id': 'real_criterion_2', 'check': 'contains_any', 'tokens': ['world'], 'weight': 1.0},
+    ]},
+    task_value_usd=1.0,
+)
+wd = Path('$JM_HOME')
+wd.mkdir(parents=True, exist_ok=True)
+deliv = wd / 'out.md'
+deliv.write_text('some output content', encoding='utf-8')
+result = ev.evaluate(task, [deliv])
+print(f'evaluator={result.evaluator}')
+print(f'feedback_starts_with={result.feedback[:80]!r}')
+print(f'quality={result.quality_score}')
+" 2>&1)"
+if echo "$JM_OUT" | grep -q "evaluator=llm-judge(id-mismatch)" \
+    && echo "$JM_OUT" | grep -qF "[ID-MISMATCH]" \
+    && echo "$JM_OUT" | grep -q "quality=0.0"; then
+    assert_pass "judge ID hallucination flags evaluator as id-mismatch + ID-MISMATCH feedback prefix"
+else
+    assert_fail "judge ID mismatch detection failed" "$JM_OUT"
+fi
+rm -rf "$JM_HOME"
+
+# ── 16. --max-tokens + --judge-max-tokens flags accepted ─────────────────
+MT_HOME="$(mktemp -d -t bstack-bench-mt.XXXXXX)"
+set +e
+out="$(BSTACK_BENCH_HOME="$MT_HOME" "$BSTACK_BENCH" \
+    run --tasks bstack-smoke --runner live \
+    --provider mock --model mock-small \
+    --max-tokens 128 --judge-max-tokens 256 \
+    --phase 1 --no-dry-run 2>&1)"
+rc=$?
+set -e
+mt_ok=0
+mjmt_ok=0
+run_dir="$(ls -1 "$MT_HOME/runs" 2>/dev/null | head -1)"
+if [ -n "$run_dir" ]; then
+    vals="$("$PY" -c "
+import json
+d = json.load(open('$MT_HOME/runs/$run_dir/config.json'))
+print(d.get('max_tokens'), d.get('judge_max_tokens'))
+")"
+    [ "$vals" = "128 256" ] && mt_ok=1
+fi
+if [ "$mt_ok" = "1" ]; then
+    assert_pass "--max-tokens + --judge-max-tokens flags captured in config (128, 256)"
+else
+    assert_fail "max-tokens flags not propagated (rc=$rc)" "$out"
+fi
+rm -rf "$MT_HOME"
+
+# ── Summary ──────────────────────────────────────────────────────────────
+echo ""
+echo "=== Summary ==="
+echo "  Passed: $PASS"
+echo "  Failed: $FAIL"
+if [ "$FAIL" -gt 0 ]; then
+    echo ""
+    echo "Failed tests:"
+    for t in "${FAILED_TESTS[@]}"; do
+        echo "  - $t"
+    done
+    exit 1
+fi
+exit 0
