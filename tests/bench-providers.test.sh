@@ -88,6 +88,9 @@ else
 fi
 
 # ── 3. mock provider end-to-end ──────────────────────────────────────────
+# P20 round-1 de-rig: replace 'rc=0 OR rc=6' with specific assertions on
+# the substrate that ran. The harness can subtract is not the test —
+# tokens=20 + at least one task succeeded is.
 RUN_HOME="$(mktemp -d -t bstack-bench-mock.XXXXXX)"
 set +e
 out="$(BSTACK_BENCH_HOME="$RUN_HOME" "$BSTACK_BENCH" \
@@ -96,30 +99,31 @@ out="$(BSTACK_BENCH_HOME="$RUN_HOME" "$BSTACK_BENCH" \
     --phase 1 --no-dry-run 2>&1)"
 rc=$?
 set -e
-if [ "$rc" = "0" ] || [ "$rc" = "6" ]; then
-    # rc=0 if some tasks pass the rubric, rc=6 if mock content fails rubric
-    # entirely. Either is fine — the substrate ran. Verify results.jsonl.
-    run_dir="$(ls -1 "$RUN_HOME/runs" 2>/dev/null | head -1)"
-    if [ -n "$run_dir" ] && [ -f "$RUN_HOME/runs/$run_dir/phase1_results.jsonl" ]; then
-        # Confirm tokens came from the mock provider's canned values.
-        mock_tokens="$("$PY" -c "
+run_dir="$(ls -1 "$RUN_HOME/runs" 2>/dev/null | head -1)"
+mock_check_ok=0
+if [ -n "$run_dir" ] && [ -f "$RUN_HOME/runs/$run_dir/phase1_results.jsonl" ]; then
+    # Specific assertions:
+    # 1. Every row has tokens=20 (mock canned: 12 prompt + 8 completion)
+    # 2. Every row has runner=live (real LiveProviderRunner ran, not the stub)
+    # 3. config.json records provider=mock + model=mock-small
+    mock_check_ok="$("$PY" -c "
 import json
+ok = 1
 with open('$RUN_HOME/runs/$run_dir/phase1_results.jsonl') as f:
-    for line in f:
-        obj = json.loads(line)
-        print(obj['tokens']['total_tokens'])
-        break
+    rows = [json.loads(l) for l in f if l.strip()]
+if not rows: ok = 0
+for r in rows:
+    if r.get('tokens', {}).get('total_tokens') != 20: ok = 0
+    if r.get('runner') != 'live': ok = 0
+cfg = json.load(open('$RUN_HOME/runs/$run_dir/config.json'))
+if cfg.get('provider') != 'mock' or cfg.get('model') != 'mock-small': ok = 0
+print(ok)
 ")"
-        if [ "$mock_tokens" = "20" ]; then
-            assert_pass "mock provider end-to-end produces results with provider-reported tokens (20 = 12 prompt + 8 completion)"
-        else
-            assert_fail "mock provider tokens should be 20 (canned), got $mock_tokens"
-        fi
-    else
-        assert_fail "mock provider run produced no phase1_results.jsonl"
-    fi
+fi
+if [ "$mock_check_ok" = "1" ]; then
+    assert_pass "mock provider end-to-end — all rows tokens=20 runner=live + config records provider/model"
 else
-    assert_fail "mock provider should rc=0 or 6 (got rc=$rc)" "$out"
+    assert_fail "mock provider substrate check failed (rc=$rc)" "$out"
 fi
 rm -rf "$RUN_HOME"
 
@@ -239,6 +243,202 @@ if echo "$type_check" | grep -q "ALL_GOOD"; then
 else
     assert_fail "providers package missing public symbols" "$type_check"
 fi
+
+# ═══════════════════════════════════════════════════════════════════════
+#  P20 round-1 adversarial tests — one per defect, written to FALSIFY.
+#  Each demonstrates the bug existed on round-0 AND the fix works.
+# ═══════════════════════════════════════════════════════════════════════
+
+# ── 11. Budget escape via unknown model fails fast (round-1 defect #1) ───
+# Pre-round-1: `--budget-usd N` + model not in cost table → silent zero
+# cost → budget cap never trips. Now: rc=2 + "not in the cost table" msg.
+set +e
+out="$("$BSTACK_BENCH" run --tasks bstack-smoke --runner live \
+    --provider mock --model unknown-model-not-in-table \
+    --budget-usd 0.01 --phase 1 --no-dry-run 2>&1)"
+rc=$?
+set -e
+if [ "$rc" = "2" ] && echo "$out" | grep -qi "not in the cost table\|allow-unknown-cost"; then
+    assert_pass "budget + unknown model fails fast with rc=2 + cost-table message"
+else
+    assert_fail "unknown-model budget should rc=2 (got rc=$rc)" "$out"
+fi
+
+# ── 12. --allow-unknown-cost rationale unblocks unknown-model budget ─────
+RUN_HOME="$(mktemp -d -t bstack-bench-allowunk.XXXXXX)"
+set +e
+out="$(BSTACK_BENCH_HOME="$RUN_HOME" "$BSTACK_BENCH" \
+    run --tasks bstack-smoke --runner live \
+    --provider mock --model unknown-model-not-in-table \
+    --budget-usd 0.01 --allow-unknown-cost "smoke test" \
+    --phase 1 --no-dry-run 2>&1)"
+rc=$?
+set -e
+run_dir="$(ls -1 "$RUN_HOME/runs" 2>/dev/null | head -1)"
+rationale_ok=0
+if [ -n "$run_dir" ]; then
+    rationale="$("$PY" -c "
+import json
+d = json.load(open('$RUN_HOME/runs/$run_dir/config.json'))
+print(d.get('allow_unknown_cost_rationale', ''))
+")"
+    [ "$rationale" = "smoke test" ] && rationale_ok=1
+fi
+# Mock cost is unknown so cost reports as 0.0 — that's fine here since
+# the user opted in. We just need the run to start + rationale to be captured.
+if [ "$rationale_ok" = "1" ]; then
+    assert_pass "--allow-unknown-cost rationale captured in config (run proceeds)"
+else
+    assert_fail "rationale not captured for --allow-unknown-cost (rc=$rc)" "$out"
+fi
+rm -rf "$RUN_HOME"
+
+# ── 13. Config drift on resume fails fast (round-1 defect #2) ────────────
+# Pre-round-1: resume silently overwrote config.json with new model.
+# Now: rc=2 unless --allow-config-drift rationale passed.
+DRIFT_HOME="$(mktemp -d -t bstack-bench-drift.XXXXXX)"
+DRIFT_RUN_ID="20260101T000000-drifttest"
+DRIFT_DIR="$DRIFT_HOME/runs/$DRIFT_RUN_ID"
+mkdir -p "$DRIFT_DIR"
+# Seed a run config with model=mock-small.
+cat > "$DRIFT_DIR/config.json" <<'EOF'
+{"run_id": "20260101T000000-drifttest", "tasks_set": "bstack-smoke", "runner": "live", "evaluator": "rubric-match", "provider": "mock", "model": "mock-small"}
+EOF
+# Resume with --model mock-large (drift).
+set +e
+out="$(BSTACK_BENCH_HOME="$DRIFT_HOME" "$BSTACK_BENCH" \
+    run --tasks bstack-smoke --runner live \
+    --provider mock --model mock-large \
+    --resume "$DRIFT_RUN_ID" --phase 1 --no-dry-run 2>&1)"
+rc=$?
+set -e
+if [ "$rc" = "2" ] && echo "$out" | grep -qi "config drift\|allow-config-drift"; then
+    assert_pass "config drift on resume fails fast with rc=2 + clear message"
+else
+    assert_fail "config drift should rc=2 (got rc=$rc)" "$out"
+fi
+rm -rf "$DRIFT_HOME"
+
+# ── 14. --allow-config-drift unblocks resume with new model ──────────────
+DRIFT2_HOME="$(mktemp -d -t bstack-bench-drift2.XXXXXX)"
+DRIFT2_DIR="$DRIFT2_HOME/runs/$DRIFT_RUN_ID"
+mkdir -p "$DRIFT2_DIR"
+cat > "$DRIFT2_DIR/config.json" <<'EOF'
+{"run_id": "20260101T000000-drifttest", "tasks_set": "bstack-smoke", "runner": "live", "evaluator": "rubric-match", "provider": "mock", "model": "mock-small"}
+EOF
+set +e
+out="$(BSTACK_BENCH_HOME="$DRIFT2_HOME" "$BSTACK_BENCH" \
+    run --tasks bstack-smoke --runner live \
+    --provider mock --model mock-large \
+    --resume "$DRIFT_RUN_ID" \
+    --allow-config-drift "intentional model upgrade" \
+    --phase 1 --no-dry-run 2>&1)"
+rc=$?
+set -e
+new_model="$("$PY" -c "
+import json
+try:
+    d = json.load(open('$DRIFT2_DIR/config.json'))
+    print(d.get('model', ''), d.get('allow_config_drift_rationale', ''))
+except Exception as e:
+    print('FAIL', e)
+" 2>&1)"
+if [ "$rc" != "2" ] && echo "$new_model" | grep -q "mock-large intentional model upgrade"; then
+    assert_pass "--allow-config-drift rationale captured + resume proceeds"
+else
+    assert_fail "config-drift override should proceed (rc=$rc, config: $new_model)" "$out"
+fi
+rm -rf "$DRIFT2_HOME"
+
+# ── 15. Judge ID hallucination → evaluator name flagged (round-1 #3) ─────
+# Inject a MockProvider that returns judge JSON with IDs that don't match
+# the rubric. Verify evaluator name contains "id-mismatch" + feedback
+# carries [ID-MISMATCH] prefix.
+JM_HOME="$(mktemp -d -t bstack-bench-jm.XXXXXX)"
+JM_OUT="$("$PY" -c "
+import sys
+sys.path.insert(0, '$BSTACK_REPO/scripts')
+import json
+from pathlib import Path
+from bench.providers import register_provider, ChatMessage
+from bench.providers.base import Provider, ChatCompletion, Usage
+from bench.evaluator import LLMJudgeEvaluator
+from bench.task_loader import Task
+
+class IDHallucinator(Provider):
+    name = 'idhallu'
+    def configured(self): return True
+    def list_models(self): return ['idhallu-judge']
+    def chat(self, messages, model, max_tokens=4096, temperature=0.0, **kwargs):
+        # Returns valid JSON with criterion IDs that don't match any rubric.
+        body = json.dumps({
+            'criteria': [
+                {'id': 'completely_made_up_id', 'pass': True, 'reason': 'looks ok'},
+                {'id': 'another_fake_id', 'pass': True, 'reason': 'also ok'},
+            ],
+            'overall_feedback': 'Excellent work overall.',
+        })
+        return ChatCompletion(content=body, model=model, usage=Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30), finish_reason='stop')
+
+register_provider('idhallu', IDHallucinator)
+provider = IDHallucinator()
+ev = LLMJudgeEvaluator(provider=provider, model='idhallu-judge')
+
+task = Task(
+    task_id='t1', task_set='smoke', occupation='', sector='',
+    prompt='Do the thing.',
+    deliverable_files=['out.md'],
+    rubric_json={'criteria': [
+        {'id': 'real_criterion_1', 'check': 'contains_any', 'tokens': ['hello'], 'weight': 1.0},
+        {'id': 'real_criterion_2', 'check': 'contains_any', 'tokens': ['world'], 'weight': 1.0},
+    ]},
+    task_value_usd=1.0,
+)
+wd = Path('$JM_HOME')
+wd.mkdir(parents=True, exist_ok=True)
+deliv = wd / 'out.md'
+deliv.write_text('some output content', encoding='utf-8')
+result = ev.evaluate(task, [deliv])
+print(f'evaluator={result.evaluator}')
+print(f'feedback_starts_with={result.feedback[:80]!r}')
+print(f'quality={result.quality_score}')
+" 2>&1)"
+if echo "$JM_OUT" | grep -q "evaluator=llm-judge(id-mismatch)" \
+    && echo "$JM_OUT" | grep -qF "[ID-MISMATCH]" \
+    && echo "$JM_OUT" | grep -q "quality=0.0"; then
+    assert_pass "judge ID hallucination flags evaluator as id-mismatch + ID-MISMATCH feedback prefix"
+else
+    assert_fail "judge ID mismatch detection failed" "$JM_OUT"
+fi
+rm -rf "$JM_HOME"
+
+# ── 16. --max-tokens + --judge-max-tokens flags accepted ─────────────────
+MT_HOME="$(mktemp -d -t bstack-bench-mt.XXXXXX)"
+set +e
+out="$(BSTACK_BENCH_HOME="$MT_HOME" "$BSTACK_BENCH" \
+    run --tasks bstack-smoke --runner live \
+    --provider mock --model mock-small \
+    --max-tokens 128 --judge-max-tokens 256 \
+    --phase 1 --no-dry-run 2>&1)"
+rc=$?
+set -e
+mt_ok=0
+mjmt_ok=0
+run_dir="$(ls -1 "$MT_HOME/runs" 2>/dev/null | head -1)"
+if [ -n "$run_dir" ]; then
+    vals="$("$PY" -c "
+import json
+d = json.load(open('$MT_HOME/runs/$run_dir/config.json'))
+print(d.get('max_tokens'), d.get('judge_max_tokens'))
+")"
+    [ "$vals" = "128 256" ] && mt_ok=1
+fi
+if [ "$mt_ok" = "1" ]; then
+    assert_pass "--max-tokens + --judge-max-tokens flags captured in config (128, 256)"
+else
+    assert_fail "max-tokens flags not propagated (rc=$rc)" "$out"
+fi
+rm -rf "$MT_HOME"
 
 # ── Summary ──────────────────────────────────────────────────────────────
 echo ""

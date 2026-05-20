@@ -160,6 +160,10 @@ else
 fi
 
 # ── 4. LLMJudgeEvaluator end-to-end (different models for agent + judge) ─
+# P20 round-1 de-rig: replace 'rc=0 OR rc=6' with specific assertions on
+# the judge output. At minimum one task must have a clean evaluator name
+# (no parse-fail / provider-error / id-mismatch suffix) — that proves the
+# judge actually evaluated, not that the harness can subtract.
 JUDGE_HOME="$(mktemp -d -t bstack-bench-judge.XXXXXX)"
 judge_out="$(BSTACK_BENCH_HOME="$JUDGE_HOME" "$BSTACK_BENCH" run --tasks bstack-smoke \
     --runner live --evaluator llm-judge \
@@ -168,13 +172,28 @@ judge_out="$(BSTACK_BENCH_HOME="$JUDGE_HOME" "$BSTACK_BENCH" run --tasks bstack-
     --judge-model databricks-claude-sonnet-4 \
     --phase 1 --no-dry-run --budget-usd 0.50 2>&1)"
 judge_rc=$?
+judge_run_dir="$(ls -1 "$JUDGE_HOME/runs" 2>/dev/null | head -1)"
+judge_clean=0
+if [ -n "$judge_run_dir" ] && [ -f "$JUDGE_HOME/runs/$judge_run_dir/phase1_results.jsonl" ]; then
+    judge_clean="$("$PY" -c "
+import json
+clean_count = 0
+with open('$JUDGE_HOME/runs/$judge_run_dir/phase1_results.jsonl') as f:
+    for line in f:
+        if not line.strip(): continue
+        r = json.loads(line)
+        ev = (r.get('evaluation') or {}).get('evaluator', '')
+        # 'clean' means the evaluator wasn't suffixed with a failure marker
+        if ev == 'llm-judge':
+            clean_count += 1
+print(clean_count)
+")"
+fi
 rm -rf "$JUDGE_HOME"
-if [ "$judge_rc" = "0" ] || [ "$judge_rc" = "6" ]; then
-    # Either: all tasks scored ≥0.6 (rc=0) or some failed (rc=6 only if ALL failed).
-    # rc=0 is the expected happy path for these simple tasks.
-    assert_pass "LLMJudgeEvaluator (Haiku agent / Sonnet judge) ran end-to-end (rc=$judge_rc)"
+if [ "$judge_rc" != "2" ] && [ "$judge_rc" != "8" ] && [ "$judge_clean" -ge 1 ] 2>/dev/null; then
+    assert_pass "LLMJudgeEvaluator end-to-end: $judge_clean task(s) judged cleanly (no parse-fail/id-mismatch)"
 else
-    assert_fail "LLMJudgeEvaluator end-to-end failed (rc=$judge_rc)" "$judge_out"
+    assert_fail "LLMJudgeEvaluator should produce ≥1 clean judge result (rc=$judge_rc, clean=$judge_clean)" "$judge_out"
 fi
 
 # ── 5. P20 still enforces same-model rejection even in live mode ─────────

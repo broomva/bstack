@@ -31,7 +31,8 @@ specs/bench-skill-evolution.md §Phasing.
 
 Exit codes:
   0  success
-  2  invalid arguments
+  2  invalid arguments  (includes unknown model w/ --budget-usd, and
+                         config-drift on resume without --allow-config-drift)
   3  task set not found
   4  budget exceeded mid-run
   5  resume run-id not found
@@ -461,11 +462,27 @@ def cmd_run(args: argparse.Namespace) -> int:
         except ProviderNotConfigured as exc:
             print(f"bstack bench: provider not configured: {exc}", file=sys.stderr)
             return 9
-    runner = get_runner(args.runner, provider=provider, model=args.model or "")
+    # P20 round-1: surface cost-unknown when --budget-usd is set against a
+    # model absent from the cost table. Defeats silent budget-escape
+    # (agent_runner.py would have recorded cost_usd=0.0 for unknown models,
+    # making the budget cap unenforceable).
+    if args.budget_usd is not None and provider is not None and args.model:
+        from bench.providers.base import cost_per_million  # local
+        if cost_per_million(args.model) is None and not args.allow_unknown_cost:
+            print(
+                f"bstack bench: --budget-usd set but model {args.model!r} is "
+                "not in the cost table — cost would silently zero, defeating "
+                "the budget cap. Pass --allow-unknown-cost with a rationale, "
+                "or extend bench/providers/base.py:_COST_TABLE_USD_PER_MILLION.",
+                file=sys.stderr,
+            )
+            return 2
+    runner = get_runner(args.runner, provider=provider, model=args.model or "", max_tokens=args.max_tokens)
     evaluator = get_evaluator(
         args.evaluator,
         provider=provider,
         model=args.judge_model or args.model or "",
+        max_tokens=args.judge_max_tokens,
     )
     if args.resume:
         run_id = args.resume
@@ -473,6 +490,41 @@ def cmd_run(args: argparse.Namespace) -> int:
         if not run_dir.is_dir():
             print(f"bstack bench: resume run-id '{run_id}' not found at {run_dir}", file=sys.stderr)
             return 5
+        # P20 round-1: refuse to silently swap provider/model/judge_model/
+        # runner/evaluator on resume. Mixing two model boundaries inside a
+        # single run dir corrupts REPORT.md without warning. The user can
+        # opt in with --allow-config-drift "<reason>", which is captured in
+        # the new config.json for audit.
+        existing_config_path = run_dir / "config.json"
+        if existing_config_path.is_file():
+            try:
+                existing_config = json.loads(existing_config_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                existing_config = {}
+            drifts: list[tuple[str, object, object]] = []
+            for key, new_val in [
+                ("provider", args.provider),
+                ("model", args.model),
+                ("judge_model", args.judge_model or args.model),
+                ("runner", args.runner),
+                ("evaluator", args.evaluator),
+            ]:
+                old_val = existing_config.get(key)
+                if old_val is not None and new_val is not None and old_val != new_val:
+                    drifts.append((key, old_val, new_val))
+            if drifts and not args.allow_config_drift:
+                msg_lines = [
+                    f"bstack bench: --resume detected config drift on run {run_id!r}:",
+                ]
+                for k, old, new in drifts:
+                    msg_lines.append(f"    {k}: {old!r} → {new!r}")
+                msg_lines.append(
+                    "  Mixing config across resume corrupts the run comparison. "
+                    "Pass --allow-config-drift '<rationale>' to acknowledge, "
+                    "or start a fresh run (drop --resume)."
+                )
+                print("\n".join(msg_lines), file=sys.stderr)
+                return 2
     else:
         run_id = _new_run_id()
         run_dir = _ensure_run_dir(run_id)
@@ -489,7 +541,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         "provider": args.provider,
         "model": args.model,
         "judge_model": args.judge_model or args.model,
+        "max_tokens": args.max_tokens,
+        "judge_max_tokens": args.judge_max_tokens,
         "allow_same_judge_model_rationale": args.allow_same_judge_model,
+        "allow_unknown_cost_rationale": args.allow_unknown_cost,
+        "allow_config_drift_rationale": args.allow_config_drift,
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
     config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
@@ -677,6 +733,10 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--model", default=None, help="Agent model name (e.g. databricks-claude-haiku-4-5).")
     run.add_argument("--judge-model", default=None, help="Judge model name (must differ from --model unless --allow-same-judge-model).")
     run.add_argument("--allow-same-judge-model", default=None, help="Rationale string allowing judge model == agent model (P20 override).")
+    run.add_argument("--allow-unknown-cost", default=None, help="Rationale allowing --budget-usd with a model absent from the cost table.")
+    run.add_argument("--allow-config-drift", default=None, help="Rationale allowing --resume to change provider/model/judge_model/runner/evaluator.")
+    run.add_argument("--max-tokens", type=int, default=2048, help="Max output tokens for agent calls (default 2048).")
+    run.add_argument("--judge-max-tokens", type=int, default=2048, help="Max output tokens for judge calls (default 2048).")
     run.set_defaults(func=cmd_run)
 
     # compare

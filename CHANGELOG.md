@@ -53,6 +53,18 @@ The contract bstack adopts is **OpenAI Chat Completions API v1** — the de fact
 - Reference: `references/provider-standards.md` (NEW)
 - Stimulus mirror: `apps/api/src/utils/databricks_openai.py` (reference implementation)
 
+### Cross-Review (P20) round-1 fixes (applied before merge)
+
+Fresh-context subagent scored round-0 at 6.6/10 (below ≥7/10 threshold) and surfaced 3 blocking defects + 2 should-fix items. Round 1 closes all 5 with 6 new adversarial tests + 2 de-rigged existing tests:
+
+- **Defect #1 — budget escape via unknown model.** `agent_runner.py` silently zeroed `cost_usd` for any model absent from `base.py:_COST_TABLE_USD_PER_MILLION`, defeating `--budget-usd`. Fix: orchestrator refuses to start with rc=2 + "not in the cost table" when `--budget-usd` set against an unknown model. Opt-out via `--allow-unknown-cost RATIONALE` captured in config. Test #11 + #12.
+- **Defect #2 — resume silently destroyed audit trail.** `orchestrator.py` unconditionally overwrote `config.json` on resume, allowing silent model/provider/judge_model swap mid-run. Fix: on resume, diff incoming args against stored config; rc=2 if any of `{provider, model, judge_model, runner, evaluator}` changed without `--allow-config-drift RATIONALE`. Test #13 + #14.
+- **Defect #3 — test rigging.** `bench-providers.test.sh:99` and `bench-live.test.sh:172` accepted `rc=0 OR rc=6` — same harness-can-subtract anti-pattern P20 round-0 flagged on PR #40. Fix: provider tests now assert `tokens=20 + runner=live + config records provider/model`; live judge test now asserts ≥1 clean judge result (no `parse-fail`/`id-mismatch` suffix).
+- **Defect #4 — judge ID hallucination silently scored 0.** When the judge returned criterion IDs that didn't match the rubric, `verdicts.get(cid, False)` returned False for every rubric ID → score 0.0 with judge's positive `overall_feedback` preserved verbatim. Fix: `LLMJudgeEvaluator.evaluate` detects set-difference between rubric IDs and judge-returned IDs; on mismatch, evaluator name becomes `llm-judge(id-mismatch)` and feedback is prefixed `[ID-MISMATCH]` listing unrecognized + missing IDs. Test #15.
+- **Defect #5 — `max_tokens=2048` hardcoded.** No CLI override → silent truncation of large deliverables or many-criteria judge verdicts. Fix: `--max-tokens` + `--judge-max-tokens` CLI flags, default 2048, threaded through `get_runner` + `get_evaluator`. Test #16.
+
+Test count: provider tests 10 → 16 (+6 adversarial). Live tests still 5/5 against real Databricks, with the judge assertion now substantive ("3 task(s) judged cleanly").
+
 ## 0.10.0 — 2026-05-20
 
 ### Skill-evolution benchmark substrate (BRO-1205)

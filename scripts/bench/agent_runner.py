@@ -301,18 +301,26 @@ class LiveProviderRunner(AgentRunner):
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_text(completion.content, encoding="utf-8")
             deliverables.append(out_path)
-        # Cost estimation. None when model is unknown — explicit None reaches
-        # the report so a reader sees "cost unknown" rather than 0.0.
+        # Cost estimation. None when model is unknown — recorded as 0.0 here
+        # but the orchestrator's --budget-usd path refuses to start unless
+        # the user opts in with --allow-unknown-cost, so this 0.0 can never
+        # silently defeat the cap. The by_source dict tags this entry as
+        # cost-unknown so REPORT.md can surface the gap.
         from bench.providers.base import estimate_cost_usd  # local
 
         cost = estimate_cost_usd(self._model, completion.usage)
+        cost_known = cost is not None
+        by_source: dict[str, int] = {"agent": completion.usage.total_tokens}
+        if not cost_known:
+            # Marker for downstream consumers (REPORT.md, comparison).
+            by_source["cost_unknown"] = 1
         tokens = TokenUsage(
             prompt_tokens=completion.usage.prompt_tokens,
             completion_tokens=completion.usage.completion_tokens,
             total_tokens=completion.usage.total_tokens,
             llm_calls=1,
-            cost_usd=float(cost) if cost is not None else 0.0,
-            by_source={"agent": completion.usage.total_tokens},
+            cost_usd=float(cost) if cost_known else 0.0,
+            by_source=by_source,
         )
         skills_selected = list(task.expected_skills) if phase == 2 else []
         skills_applied = list(task.expected_skills) if phase == 2 else []
@@ -368,18 +376,25 @@ class StubLiveRunner(AgentRunner):
         )
 
 
-def get_runner(name: str, *, provider: object = None, model: str = "", **kwargs: object) -> AgentRunner:
+def get_runner(
+    name: str,
+    *,
+    provider: object = None,
+    model: str = "",
+    max_tokens: int = 2048,
+    **kwargs: object,
+) -> AgentRunner:
     if name in ("dry-run", "dryrun", "canned"):
         return DryRunRunner()
     if name == "live":
         if provider is None or not model:
             return StubLiveRunner()
-        return LiveProviderRunner(provider=provider, model=model)
+        return LiveProviderRunner(provider=provider, model=model, max_tokens=max_tokens)
     # Back-compat aliases — accept old names, route to live with provider.
     if name in ("claude-code", "vanilla-claude", "codex"):
         if provider is None or not model:
             return StubLiveRunner()
-        return LiveProviderRunner(provider=provider, model=model)
+        return LiveProviderRunner(provider=provider, model=model, max_tokens=max_tokens)
     raise ValueError(
         f"Unknown runner '{name}'. Available: dry-run, live."
     )

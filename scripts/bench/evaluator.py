@@ -303,8 +303,24 @@ class LLMJudgeEvaluator(Evaluator):
                 ),
                 evaluator=f"{self.name}(parse-fail)",
             )
-        # Weight passes.
-        verdicts = {str(c.get("id", "")): bool(c.get("pass", False)) for c in verdict.get("criteria", [])}
+        # P20 round-1: detect judge ID hallucination. If the judge returns
+        # criterion IDs that aren't in the rubric, we'd silently score 0
+        # against the rubric IDs (verdicts.get(cid, False) returns False).
+        # That hides judge confusion behind score=0.0 + positive
+        # overall_feedback. Surface it via evaluator name suffix +
+        # feedback prefix so the report shows the mismatch.
+        rubric_ids = {str(c.get("id", "anon")) for c in criteria}
+        verdict_entries = verdict.get("criteria", []) or []
+        judge_ids = {
+            str(v.get("id", "")) for v in verdict_entries if isinstance(v, dict)
+        }
+        unknown_judge_ids = judge_ids - rubric_ids
+        missing_rubric_ids = rubric_ids - judge_ids
+        verdicts = {
+            str(c.get("id", "")): bool(c.get("pass", False))
+            for c in verdict_entries
+            if isinstance(c, dict)
+        }
         breakdown: dict[str, float] = {}
         weighted_passes = 0.0
         weight_total = 0.0
@@ -322,10 +338,37 @@ class LLMJudgeEvaluator(Evaluator):
         quality = (weighted_passes / weight_total) if weight_total else 0.0
         payment = task.task_value_usd
         actual = payment if quality >= QUALITY_CLIFF else 0.0
-        feedback = str(verdict.get("overall_feedback", "")) or (
-            f"Judge passed {len(criteria) - len(failures)}/{len(criteria)} criteria. "
-            f"Failed: {', '.join(failures) or 'none'}."
-        )
+        # Suffix evaluator name with id-mismatch when the judge invented IDs
+        # or omitted rubric IDs entirely. Both are signals the judge wasn't
+        # answering the rubric we asked about.
+        evaluator_name = self.name
+        mismatch_notes: list[str] = []
+        if unknown_judge_ids:
+            mismatch_notes.append(
+                f"judge returned unknown IDs: {sorted(unknown_judge_ids)}"
+            )
+        if missing_rubric_ids and len(missing_rubric_ids) == len(rubric_ids):
+            # Judge didn't return any of our IDs — full mismatch.
+            mismatch_notes.append(
+                f"judge omitted ALL rubric IDs (expected: {sorted(rubric_ids)})"
+            )
+        elif missing_rubric_ids:
+            mismatch_notes.append(
+                f"judge omitted rubric IDs: {sorted(missing_rubric_ids)}"
+            )
+        if mismatch_notes:
+            evaluator_name = f"{self.name}(id-mismatch)"
+        feedback_parts: list[str] = []
+        if mismatch_notes:
+            feedback_parts.append("[ID-MISMATCH] " + "; ".join(mismatch_notes))
+        judge_feedback = str(verdict.get("overall_feedback", ""))
+        if judge_feedback:
+            feedback_parts.append(judge_feedback)
+        if not feedback_parts:
+            feedback_parts.append(
+                f"Judge passed {len(criteria) - len(failures)}/{len(criteria)} criteria. "
+                f"Failed: {', '.join(failures) or 'none'}."
+            )
         return EvaluationResult(
             task_id=task.task_id,
             quality_score=quality,
@@ -333,8 +376,8 @@ class LLMJudgeEvaluator(Evaluator):
             payment_usd=payment,
             actual_payment_usd=actual,
             rubric_breakdown=breakdown,
-            feedback=feedback,
-            evaluator=self.name,
+            feedback=" | ".join(feedback_parts),
+            evaluator=evaluator_name,
         )
 
     def _build_judge_prompt(
@@ -434,13 +477,20 @@ class StubLLMJudgeEvaluator(Evaluator):
         )
 
 
-def get_evaluator(name: str, *, provider: object = None, model: str = "", **kwargs: object) -> Evaluator:
+def get_evaluator(
+    name: str,
+    *,
+    provider: object = None,
+    model: str = "",
+    max_tokens: int = 2048,
+    **kwargs: object,
+) -> Evaluator:
     if name in ("rubric", "rubric-match", "deterministic"):
         return RubricMatchEvaluator()
     if name in ("llm", "llm-judge"):
         if provider is None or not model:
             return StubLLMJudgeEvaluator()
-        return LLMJudgeEvaluator(provider=provider, model=model)
+        return LLMJudgeEvaluator(provider=provider, model=model, max_tokens=max_tokens)
     raise ValueError(
         f"Unknown evaluator '{name}'. Available: rubric-match, llm-judge."
     )
