@@ -84,14 +84,25 @@ State directory (matches bstack convention):
 ## CLI Surface
 
 ```bash
-bstack bench run [--tasks TASKS] [--agent AGENT] [--model MODEL] \
-                 [--phase {1|2|both}] [--workers N] [--resume RUN_ID]
-bstack bench status [--run-id RUN_ID]
-bstack bench compare RUN_ID                 # show Phase 1 vs Phase 2 delta
-bstack bench snapshot RUN_ID                # archive skill state mid-run
-bstack bench tasks list                     # list available task sets
-bstack bench tasks add PATH                 # register a custom task set
+bstack bench run [--tasks SET] [--runner R] [--evaluator E] \
+                 [--phase {1|2|both}] [--budget-usd N] [--resume RUN_ID] \
+                 [--no-dry-run]
+bstack bench compare [--run-id RUN_ID]      # Phase 1 vs Phase 2 → REPORT.md
+bstack bench tasks list                     # registered task sets
+bstack bench status [--run-id RUN_ID]       # recent run summaries
 ```
+
+### Exit codes (v0.10.0 MVP)
+
+| Code | Meaning |
+|---|---|
+| 0 | Success |
+| 2 | Invalid arguments |
+| 3 | Task set not found |
+| 4 | Budget exceeded mid-run (or prior spend already exceeds budget on resume) |
+| 5 | Resume / status run-id not found |
+| 6 | All task runs failed (structurally broken — e.g. stub runner without SDK) |
+| 7 | Compare requires both phase 1 + phase 2 results |
 
 **Task sets** (registered in `bstack/scripts/bench/task_sets.json`):
 - `gdpval-50` — OpenSpace's 50-task subset (vendored from HF `openai/gdpval`)

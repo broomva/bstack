@@ -5,7 +5,7 @@ Spec: specs/bench-skill-evolution.md
 Ticket: BRO-1205
 
 Subcommands:
-  run [--tasks SET] [--runner R] [--evaluator E] [--workers N]
+  run [--tasks SET] [--runner R] [--evaluator E]
       [--phase {1|2|both}] [--dry-run] [--budget-usd N] [--resume RUN_ID]
   compare [--run-id RUN_ID]
   tasks list
@@ -598,7 +598,7 @@ def _build_parser() -> argparse.ArgumentParser:
     run = sub.add_parser("run", help="Run a bench against a task set.")
     run.add_argument("--tasks", default="bstack-smoke", help="Task set name (default: bstack-smoke).")
     run.add_argument("--runner", default="dry-run", help="Agent runner: dry-run | live (stub).")
-    run.add_argument("--evaluator", default="rubric-match", help="Evaluator: rubric-match | llm (stub).")
+    run.add_argument("--evaluator", default="rubric-match", help="Evaluator: rubric-match | llm-judge (stub).")
     run.add_argument("--phase", default="both", choices=["1", "2", "both"], help="Phase(s) to run.")
     run.add_argument("--dry-run", action="store_true", default=True, help="Dry-run mode (default). Use --no-dry-run to opt out (stub).")
     run.add_argument("--no-dry-run", dest="dry_run", action="store_false")
