@@ -37,6 +37,10 @@ Exit codes:
   5  resume run-id not found
   6  all task runs failed (structurally broken — see stderr for runner messages)
   7  compare requires both phase 1 + phase 2 results
+  8  P20 model-isolation violation (judge model equals agent model without
+     --allow-same-judge-model)
+  9  provider not configured (missing required env vars)
+ 10  provider SDK not installed (e.g. `pip install openai`)
 """
 
 from __future__ import annotations
@@ -402,8 +406,67 @@ def cmd_run(args: argparse.Namespace) -> int:
     except TaskSetNotFound as exc:
         print(f"bstack bench: {exc}", file=sys.stderr)
         return 3
-    runner = get_runner(args.runner)
-    evaluator = get_evaluator(args.evaluator)
+    # Build runner + evaluator. Live runner and llm-judge evaluator need a
+    # provider + model; dry-run + rubric-match don't.
+    needs_provider = args.runner in ("live", "claude-code", "vanilla-claude", "codex") \
+        or args.evaluator in ("llm", "llm-judge")
+    provider = None
+    if needs_provider:
+        if not args.provider:
+            print(
+                "bstack bench: --provider required when --runner=live or "
+                "--evaluator=llm-judge. Available: databricks, mock. "
+                "See references/provider-standards.md.",
+                file=sys.stderr,
+            )
+            return 2
+        if not args.model:
+            print(
+                "bstack bench: --model required when --runner=live or "
+                "--evaluator=llm-judge. Example: --model databricks-claude-haiku-4-5.",
+                file=sys.stderr,
+            )
+            return 2
+        # P20 enforcement: when llm-judge is in play, judge model must differ
+        # from agent model unless --allow-same-judge-model is passed with a
+        # rationale. This catches the same-model-echo-chamber failure at the
+        # CLI layer, before any LLM cost is incurred.
+        if args.evaluator in ("llm", "llm-judge"):
+            judge_model = args.judge_model or args.model
+            if judge_model == args.model and not args.allow_same_judge_model:
+                print(
+                    f"bstack bench: P20 violation — judge model "
+                    f"({judge_model!r}) equals agent model ({args.model!r}). "
+                    "Pass a different --judge-model, OR pass "
+                    "--allow-same-judge-model with a rationale string "
+                    "(e.g. --allow-same-judge-model='smoke test only').",
+                    file=sys.stderr,
+                )
+                return 8
+        # Instantiate provider. Surface configured/installed failures via
+        # distinct exit codes so callers can scriptize remediation.
+        from bench.providers import (  # local — keep top-level light
+            ProviderNotConfigured,
+            ProviderNotInstalled,
+            get_provider,
+        )
+        try:
+            provider = get_provider(args.provider)
+        except KeyError as exc:
+            print(f"bstack bench: {exc}", file=sys.stderr)
+            return 2
+        except ProviderNotInstalled as exc:
+            print(f"bstack bench: provider SDK missing: {exc}", file=sys.stderr)
+            return 10
+        except ProviderNotConfigured as exc:
+            print(f"bstack bench: provider not configured: {exc}", file=sys.stderr)
+            return 9
+    runner = get_runner(args.runner, provider=provider, model=args.model or "")
+    evaluator = get_evaluator(
+        args.evaluator,
+        provider=provider,
+        model=args.judge_model or args.model or "",
+    )
     if args.resume:
         run_id = args.resume
         run_dir = _runs_root() / run_id
@@ -423,6 +486,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         "phase": args.phase,
         "dry_run": args.dry_run,
         "budget_usd": args.budget_usd,
+        "provider": args.provider,
+        "model": args.model,
+        "judge_model": args.judge_model or args.model,
+        "allow_same_judge_model_rationale": args.allow_same_judge_model,
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
     config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
@@ -598,12 +665,18 @@ def _build_parser() -> argparse.ArgumentParser:
     run = sub.add_parser("run", help="Run a bench against a task set.")
     run.add_argument("--tasks", default="bstack-smoke", help="Task set name (default: bstack-smoke).")
     run.add_argument("--runner", default="dry-run", help="Agent runner: dry-run | live (stub).")
-    run.add_argument("--evaluator", default="rubric-match", help="Evaluator: rubric-match | llm-judge (stub).")
+    run.add_argument("--evaluator", default="rubric-match", help="Evaluator: rubric-match | llm-judge.")
     run.add_argument("--phase", default="both", choices=["1", "2", "both"], help="Phase(s) to run.")
-    run.add_argument("--dry-run", action="store_true", default=True, help="Dry-run mode (default). Use --no-dry-run to opt out (stub).")
+    run.add_argument("--dry-run", action="store_true", default=True, help="Dry-run mode (default). Use --no-dry-run to opt out.")
     run.add_argument("--no-dry-run", dest="dry_run", action="store_false")
     run.add_argument("--budget-usd", type=float, default=None, help="Halt run when cumulative cost exceeds this (USD).")
     run.add_argument("--resume", default=None, help="Resume an existing run-id.")
+    # Provider abstraction (v0.11.0). When --runner=live or --evaluator=llm-judge,
+    # --provider + --model are required.
+    run.add_argument("--provider", default=None, help="LLM provider: databricks | mock (required for live runner / llm-judge).")
+    run.add_argument("--model", default=None, help="Agent model name (e.g. databricks-claude-haiku-4-5).")
+    run.add_argument("--judge-model", default=None, help="Judge model name (must differ from --model unless --allow-same-judge-model).")
+    run.add_argument("--allow-same-judge-model", default=None, help="Rationale string allowing judge model == agent model (P20 override).")
     run.set_defaults(func=cmd_run)
 
     # compare

@@ -4,15 +4,21 @@ A runner takes a Task + a workspace directory and is expected to produce
 deliverable files in that directory. The harness then passes those files
 to the evaluator. Runners report token usage via the returned RunResult.
 
-Stdlib only. Two runners ship in v0.10.0:
+Three runners ship as of v0.11.0:
 
-  - DryRunRunner    deterministic canned responses; no LLM cost
-  - StubLiveRunner  raises NotImplementedError with a clear migration path
-                    (anthropic SDK + ANTHROPIC_API_KEY needed)
+  - DryRunRunner         deterministic canned responses; no LLM cost; default
+  - LiveProviderRunner   delegates to a `bench.providers.Provider` (e.g.
+                         DatabricksGatewayProvider). Real LLM calls, real
+                         token usage, real cost. Replaces the v0.10.0
+                         StubLiveRunner that raised NotImplementedError.
+  - StubLiveRunner       kept as alias for backwards-compat: returns the
+                         LiveProviderRunner result when a provider is
+                         supplied, else raises a migration-message error
+                         pointing to the spec.
 
 A runner's job is intentionally narrow: produce the deliverable files +
 report a TokenUsage struct. Skill telemetry (selections/applied/...) is
-captured separately by the orchestrator from the side-channel run log.
+captured separately by the orchestrator.
 """
 
 from __future__ import annotations
@@ -24,7 +30,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from .task_loader import Task
+from bench.task_loader import Task
 
 
 @dataclass
@@ -217,32 +223,163 @@ class DryRunRunner(AgentRunner):
         )
 
 
+class LiveProviderRunner(AgentRunner):
+    """Real LLM runner — delegates to a `bench.providers.Provider`.
+
+    The runner builds a single user message from the task prompt, calls the
+    provider's `chat()`, writes the response body to the first declared
+    deliverable file, and reports real token usage + estimated cost.
+
+    Skill simulation for the two-phase protocol is intentionally minimal:
+    Phase 2 prepends a "warm" system message listing the task's expected
+    skills. In v0.11.0 this is *not* a measurement of skill self-evolution
+    yet (that requires the FIX/DERIVED/RETIRE wire from BRO-1205 followups);
+    it is a deterministic phase signal so the two-phase comparison harness
+    has something non-trivial to compare against the cold start.
+
+    Usage (constructor wiring lives in orchestrator.py):
+
+        from bench.providers import get_provider
+        provider = get_provider("databricks")
+        runner = LiveProviderRunner(provider=provider, model="databricks-claude-haiku-4-5")
+        result = runner.run(task, workspace, phase=1)
+    """
+
+    name = "live"
+
+    def __init__(self, provider: object, model: str, max_tokens: int = 2048) -> None:
+        # `provider` typed as `object` (not `Provider`) to keep the agent_runner
+        # module free of mandatory imports from bench.providers — circular-
+        # import guard. Real type is `bench.providers.Provider`.
+        self._provider = provider
+        self._model = model
+        self._max_tokens = max_tokens
+
+    def run(self, task: Task, workspace: Path, phase: int) -> RunResult:
+        from bench.providers import ChatMessage  # local — break import cycle
+
+        start = time.monotonic()
+        # System message: minimal in Phase 1 (cold), enriched in Phase 2 (warm)
+        # with the task's expected skills as a "memory" of what the agent
+        # learned in the prior phase. This is deterministic phase signal,
+        # not a real skill-engine integration.
+        if phase == 2 and task.expected_skills:
+            system_text = (
+                "You are a careful, concise assistant. From prior runs you "
+                "have access to these skills: "
+                f"{', '.join(task.expected_skills)}. Apply them when relevant."
+            )
+        else:
+            system_text = "You are a careful, concise assistant."
+        messages = [
+            ChatMessage(role="system", content=system_text),
+            ChatMessage(role="user", content=task.prompt),
+        ]
+        try:
+            completion = self._provider.chat(  # type: ignore[attr-defined]
+                messages=messages,
+                model=self._model,
+                max_tokens=self._max_tokens,
+                temperature=0.0,
+            )
+        except Exception as exc:
+            return RunResult(
+                task_id=task.task_id,
+                runner=self.name,
+                duration_seconds=time.monotonic() - start,
+                tokens=TokenUsage(),
+                deliverable_paths=[],
+                exit_status="failure",
+                error=f"provider error: {type(exc).__name__}: {exc}",
+            )
+        # Write deliverables. First declared file gets the full body; if more
+        # are declared they get the same content (test rubrics typically only
+        # check the first; we don't fabricate per-file content).
+        deliverables: list[Path] = []
+        for name in task.deliverable_files or [f"{task.task_id}.md"]:
+            out_path = workspace / name
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(completion.content, encoding="utf-8")
+            deliverables.append(out_path)
+        # Cost estimation. None when model is unknown — explicit None reaches
+        # the report so a reader sees "cost unknown" rather than 0.0.
+        from bench.providers.base import estimate_cost_usd  # local
+
+        cost = estimate_cost_usd(self._model, completion.usage)
+        tokens = TokenUsage(
+            prompt_tokens=completion.usage.prompt_tokens,
+            completion_tokens=completion.usage.completion_tokens,
+            total_tokens=completion.usage.total_tokens,
+            llm_calls=1,
+            cost_usd=float(cost) if cost is not None else 0.0,
+            by_source={"agent": completion.usage.total_tokens},
+        )
+        skills_selected = list(task.expected_skills) if phase == 2 else []
+        skills_applied = list(task.expected_skills) if phase == 2 else []
+        # Per-task runlog mirroring DryRunRunner — keeps the side-channel
+        # contract for any downstream telemetry consumer.
+        log_path = workspace / f"{task.task_id}.runlog.jsonl"
+        log_path.write_text(
+            json.dumps(
+                {
+                    "task_id": task.task_id,
+                    "runner": self.name,
+                    "phase": phase,
+                    "model": completion.model,
+                    "finish_reason": completion.finish_reason,
+                    "tokens": tokens.to_dict(),
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return RunResult(
+            task_id=task.task_id,
+            runner=self.name,
+            duration_seconds=time.monotonic() - start,
+            tokens=tokens,
+            deliverable_paths=deliverables,
+            exit_status="success",
+            skills_available=list(task.expected_skills),
+            skills_selected=skills_selected,
+            skills_applied=skills_applied,
+            skills_fallback=[],
+        )
+
+
 class StubLiveRunner(AgentRunner):
-    """Placeholder for the future live runner.
+    """Legacy stub. Retained for backwards-compat with v0.10.0 callers.
 
-    v0.10.0 ships dry-run only. Live mode unblocks when:
-      1. `anthropic` SDK is installed (or `claude --print` CLI is in PATH), and
-      2. `ANTHROPIC_API_KEY` is set in the environment.
-
-    Once both hold, this stub is replaced with a real subprocess invocation of
-    the agent (claude / codex / vanilla-anthropic). See specs/bench-skill-evolution.md.
+    v0.11.0 ships `LiveProviderRunner` as the real live path. This class
+    only fires when `get_runner("live")` is called without a provider — the
+    orchestrator never goes through that path in v0.11.0+, but external
+    callers might.
     """
 
     name = "live-stub"
 
     def run(self, task: Task, workspace: Path, phase: int) -> RunResult:
         raise NotImplementedError(
-            "Live mode is not wired yet. v0.10.0 ships dry-run only. "
-            "See specs/bench-skill-evolution.md for the live-runner spec. "
-            "Re-run with --dry-run for the substrate smoke."
+            "StubLiveRunner is a legacy v0.10.0 placeholder. v0.11.0 "
+            "replaces it with LiveProviderRunner — call "
+            "`get_runner('live', provider=..., model=...)` or use "
+            "`bstack bench run --runner live --provider databricks "
+            "--model <name>`. See references/provider-standards.md."
         )
 
 
-def get_runner(name: str) -> AgentRunner:
+def get_runner(name: str, *, provider: object = None, model: str = "", **kwargs: object) -> AgentRunner:
     if name in ("dry-run", "dryrun", "canned"):
         return DryRunRunner()
-    if name in ("live", "claude-code", "vanilla-claude", "codex"):
-        return StubLiveRunner()
+    if name == "live":
+        if provider is None or not model:
+            return StubLiveRunner()
+        return LiveProviderRunner(provider=provider, model=model)
+    # Back-compat aliases — accept old names, route to live with provider.
+    if name in ("claude-code", "vanilla-claude", "codex"):
+        if provider is None or not model:
+            return StubLiveRunner()
+        return LiveProviderRunner(provider=provider, model=model)
     raise ValueError(
-        f"Unknown runner '{name}'. Available: dry-run, live (stub)."
+        f"Unknown runner '{name}'. Available: dry-run, live."
     )

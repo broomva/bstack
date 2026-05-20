@@ -6,6 +6,7 @@
 #
 # Subcommands:
 #   run [--tasks SET] [--runner R] [--evaluator E] [--phase {1|2|both}]
+#       [--provider P] [--model M] [--judge-model M] [--allow-same-judge-model RATIONALE]
 #       [--budget-usd N] [--resume RUN_ID] [--no-dry-run]
 #                                Two-phase bench against a task set.
 #   compare [--run-id RUN_ID]    Build REPORT.md from existing phase results.
@@ -25,6 +26,9 @@
 #   5  resume / status run-id not found
 #   6  all task runs failed (structurally broken — e.g. stub runner without SDK)
 #   7  compare requires both phase 1 + phase 2 results
+#   8  P20 violation: judge model equals agent model without --allow-same-judge-model
+#   9  provider not configured (missing DATABRICKS_TOKEN, etc.)
+#  10  provider SDK not installed (e.g. `pip install openai`)
 
 set -euo pipefail
 
@@ -72,6 +76,8 @@ bstack-bench — skill-evolution benchmark dispatcher
 
 Usage:
   bstack bench run [--tasks SET] [--runner R] [--evaluator E]
+                   [--provider P] [--model M] [--judge-model M]
+                   [--allow-same-judge-model RATIONALE]
                    [--phase {1|2|both}] [--budget-usd N]
                    [--resume RUN_ID] [--no-dry-run]
   bstack bench compare [--run-id RUN_ID]
@@ -81,12 +87,22 @@ Usage:
 
 Defaults:
   --tasks bstack-smoke   --runner dry-run   --evaluator rubric-match
-  --phase both           --dry-run (live mode is a stub in v0.10.0)
+  --phase both           --dry-run
+
+Live mode (v0.11.0+):
+  bstack bench run --runner live --evaluator llm-judge \\
+      --provider databricks \\
+      --model databricks-claude-haiku-4-5 \\
+      --judge-model databricks-claude-opus-4-5
+  # Or, with Railway as credential broker:
+  railway run --service stimulus-api -- bstack bench run --runner live ...
 
 State:
   ~/.config/bstack/bench/runs/<run-id>/  (override via BSTACK_BENCH_HOME)
 
-Spec: specs/bench-skill-evolution.md   Ticket: BRO-1205
+Spec:       specs/bench-skill-evolution.md
+Providers:  references/provider-standards.md
+Tickets:    BRO-1205 (MVP), BRO-1211 (live mode)
 EOF
 }
 

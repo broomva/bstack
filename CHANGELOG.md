@@ -1,5 +1,58 @@
 # Changelog
 
+## 0.11.0 — 2026-05-20
+
+### Live mode for `bstack bench` — Databricks Gateway provider + OpenAI-compatible abstraction (BRO-1211)
+
+Closes the live-mode gap left open by v0.10.0 (BRO-1205). v0.10.0 shipped `StubLiveRunner` + `StubLLMJudgeEvaluator` that raised NotImplementedError. v0.11.0 ships the real thing: an industry-standard provider abstraction with **Databricks Model Serving Gateway** as the first concrete provider. Live mode validated end-to-end against real Databricks Anthropic Claude endpoints (5/5 live tests green; 221 real tokens on a `databricks-claude-haiku-4-5` call; Haiku-agent + Sonnet-judge run reached quality cliff at rc=0).
+
+The contract bstack adopts is **OpenAI Chat Completions API v1** — the de facto LLM standard in 2026, served by Databricks, OpenAI, Anthropic-via-Bedrock, Together, Fireworks, Anyscale, vLLM, llama.cpp, etc. Future providers (anthropic, openai, openai-compat, bedrock) plug in by implementing `Provider.chat()`.
+
+- **NEW** `scripts/bench/providers/` package (stdlib + optional `openai` SDK):
+  - `base.py` — `Provider` ABC + OpenAI-compatible `ChatMessage` / `Usage` / `ChatCompletion` types + `ProviderError` / `ProviderNotConfigured` / `ProviderNotInstalled` taxonomy + `estimate_cost_usd()` with per-model pricing table.
+  - `databricks.py` — `DatabricksGatewayProvider`: wraps the OpenAI SDK with `base_url = {DATABRICKS_HOST}/serving-endpoints` + `api_key = DATABRICKS_TOKEN`. Mirrors Stimulus's `apps/api/src/utils/databricks_openai.py` pattern. Known models hardcoded: `databricks-claude-{haiku-4-5, sonnet-4, opus-4-5}` + `databricks-meta-llama-4-maverick`.
+  - `registry.py` — `get_provider(name, **kwargs)` factory with lazy module loading. Built-in providers: `databricks`, `mock`. Runtime extension via `register_provider()`.
+  - `__init__.py` — public API exports.
+- **NEW** `references/provider-standards.md` — documents OpenAI-compatible contract bstack adopts, how to add a new provider, P20 model-isolation enforcement rules, and Railway credential-broker invocation pattern.
+- **NEW** `tests/bench-providers.test.sh` — 10 offline tests covering unknown-provider error, missing `--model`, mock provider end-to-end (real `chat()` call), P20 violation (rc=8), P20 override rationale captured in config, P20 distinct-models accepted, `DATABRICKS_TOKEN` absent (rc=9), `list_providers()` shape, provider-standards doc presence, public API symbol coverage. All green.
+- **NEW** `tests/bench-live.test.sh` — 5 live integration tests (gated by `BSTACK_BENCH_LIVE=1` + `DATABRICKS_HOST` + `DATABRICKS_TOKEN`). Validates: `DatabricksGatewayProvider` instantiates with real creds, minimal `chat()` returns PONG with parseable usage stats, Phase 1 run produces non-canned token counts (real Databricks usage), `LLMJudgeEvaluator` end-to-end (Haiku agent + Sonnet judge), P20 enforcement holds in live mode. **All 5 passed against real Databricks at ship time** — this PR ships proven-working live mode, not stubs.
+- **CHANGED** `scripts/bench/agent_runner.py` — `LiveProviderRunner` replaces `StubLiveRunner` (which is kept as legacy fallback). Delegates to a Provider, captures real token usage from `completion.usage`, writes deliverables, estimates cost from per-model pricing table.
+- **CHANGED** `scripts/bench/evaluator.py` — `LLMJudgeEvaluator` replaces `StubLLMJudgeEvaluator`. Builds structured judge prompt from rubric criteria, parses JSON verdict (with fallback for prose-wrapped output), computes weighted pass rate, applies 0.6 cliff. Handles judge-side provider errors + parse failures gracefully (no traceback).
+- **CHANGED** `scripts/bench/orchestrator.py` — adds `--provider`, `--model`, `--judge-model`, `--allow-same-judge-model RATIONALE` flags. Enforces P20 model isolation: judge model MUST differ from agent model unless explicit override with rationale (captured in `config.json` for audit). New exit codes 8 (P20 violation), 9 (provider not configured), 10 (SDK not installed).
+- **CHANGED** `bin/bstack-bench` — surfaces new flags in `--help`; documents new exit codes; adds live-mode invocation examples (direct + Railway credential broker pattern).
+- **CHANGED** `tests/bench-mvp.test.sh` — tests #13 + #15 updated for v0.11.0 semantics: live runner / llm-judge without `--provider` now fails *fast* at the CLI layer with rc=2 + "--provider required" instead of reaching the stub. Cleaner error, surfaces missing config before any task runs.
+
+### Design choices
+
+- **OpenAI Chat Completions API is the contract.** Picked because Databricks, OpenAI, vLLM, Together, Fireworks, Anyscale, llama.cpp, and Anthropic-via-Bedrock all serve identical request/response JSON. Choosing the same shape means new providers ship with zero translation layer.
+- **`openai` SDK is a soft dependency.** Imported lazily inside `DatabricksGatewayProvider.__init__`; raises `ProviderNotInstalled` with install hint when missing. CI doesn't install it (mock provider covers offline tests). Live runs need it.
+- **Railway as credential broker.** Recommended invocation: `railway run --service stimulus-api -- bstack bench run ...`. Credentials never written to disk in the bstack tree. Direct env export works identically.
+- **P20 enforcement at CLI layer.** Same model for agent + judge is the same-model-echo-chamber failure mode P20 exists for. Rejected with rc=8 unless `--allow-same-judge-model "rationale"` is passed; rationale is captured in `config.json` for audit.
+- **Mock provider is built in.** Deterministic in-process provider; tests + CI never need network or credentials. Same registry, same factory, same API as `databricks`.
+- **No `.env` file loading at runtime.** Bstack reads `os.environ`; how vars get there is the caller's concern (Railway, direnv, sops, 1Password, manual export — all work).
+- **Stimulus pattern mirrored.** `DatabricksGatewayProvider` directly mirrors `apps/api/src/utils/databricks_openai.py` — same base_url construction (`{HOST}/serving-endpoints`), same auth (token as `api_key`), same model name conventions.
+
+### What this enables (next BRO-1205 followups, now unblocked)
+
+- Per-skill telemetry counters can land — substrate now produces real token usage to populate them.
+- Crystallize (P16) FIX/DERIVED/RETIRE sub-modes can read from real bench runs, not synthetic numbers.
+- Cross-provider benchmarking — agent on Databricks Claude, judge on OpenAI GPT-4o (when `openai` provider lands).
+- Cost-per-quality measurement — bench reports now include real `cost_usd` from `estimate_cost_usd()`.
+
+### Test counts
+
+- `tests/bench-mvp.test.sh`: 18 → 18 (unchanged, two assertions retargeted for v0.11.0 semantics)
+- `tests/bench-providers.test.sh`: NEW, 10 assertions
+- `tests/bench-live.test.sh`: NEW, 5 assertions (gated, ran green at ship time)
+- Total: 33 offline + 5 live (gated) = 38 assertions
+
+### Linked artifacts
+
+- Linear: BRO-1211 (this PR); BRO-1205 (predecessor — MVP)
+- Spec: `specs/bench-skill-evolution.md` (updated)
+- Reference: `references/provider-standards.md` (NEW)
+- Stimulus mirror: `apps/api/src/utils/databricks_openai.py` (reference implementation)
+
 ## 0.10.0 — 2026-05-20
 
 ### Skill-evolution benchmark substrate (BRO-1205)
