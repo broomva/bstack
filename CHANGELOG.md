@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.10.0 — 2026-05-20
+
+### Skill-evolution benchmark substrate (BRO-1205)
+
+Closes the **Empirical (P11)** substrate gap. Before 0.10.0, bstack had L3 stability margins (λ₃ ≈ 0.006) and a 20-primitive composition graph but **no empirical performance number** — every P-primitive promotion was faith-based. 0.10.0 ships the harness that makes those claims falsifiable.
+
+Origin: HKUDS/OpenSpace research dive (see `research/entities/project/openspace.md` + `research/notes/2026-05-20-openspace-evolver-synthesis.md` in the consuming workspace). OpenSpace's `gdpval_bench/` shipped 4.2× higher earned income vs ClawWork baseline + 46% Phase 2 token reduction on GDPVal; this is the bstack-native port of that substrate, refactored to drop OpenSpace coupling and apply P20 Cross-Review discipline (judge model MUST differ from agent model).
+
+- **NEW** `scripts/bench/` Python package (stdlib only — zero third-party deps):
+  - `orchestrator.py` — two-phase loop (Phase 1 cold → snapshot skills → Phase 2 warm → compare). Subcommands: `run | compare | tasks list | status`. Resume support via `--resume <run-id>`. Budget cap via `--budget-usd N` (exit 4 when exceeded). All-tasks-failed → exit 6.
+  - `task_loader.py` — `Task` dataclass + JSONL loader. `BSTACK_BENCH_TASKS_DIR` env override for tests.
+  - `agent_runner.py` — `DryRunRunner` (canned, deterministic, $0 cost) + `StubLiveRunner` (clear NotImplementedError pointing to spec). Pluggable contract for future `claude-code`/`codex`/`vanilla-anthropic` runners.
+  - `evaluator.py` — `RubricMatchEvaluator` (deterministic rubric checks: `has_section` / `sentence_count_at_least` / `bullet_count_at_least` / `contains_any`) + `StubLLMJudgeEvaluator` for the future LLM judge. 0.6 quality cliff (matches OpenSpace + ClawWork policy: `quality < 0.6` → payment = 0).
+  - `tasks/bstack-smoke.jsonl` — 3 hand-written bstack-themed tasks (Linear ticket triage, PR diff summary, primitive-symptom matching) with simple rubrics.
+- **NEW** `bin/bstack-bench` — bash dispatcher. Mirrors `bstack-crystallize`'s shape. Robust Python interpreter discovery (PATH lookup + well-known absolute install paths for restricted-PATH environments).
+- **NEW** `tests/bench-mvp.test.sh` — 14-assertion smoke test verifying: dispatcher `--help`, task set discovery, exit code shape (2/3/4/5/6), JSONL result schema, comparison + REPORT.md generation, Phase 2 token ratio < 1.0 + Δquality ≥ 0 (canned dry-run deltas), `compare` without args picks latest, `status` lists runs, budget cap behavior, live-stub-runner clear migration message, skill-snapshot tarball creation.
+- **CHANGED** `bin/bstack` — dispatcher: `bench` subcommand wired alongside `crystallize`; usage text updated.
+- **CHANGED** `SKILL.md` — Quick start section lists `/bstack bench` triplet.
+
+### Design choices
+
+- **Stdlib only.** No `anthropic`, no `litellm`, no third-party deps. Matches `crystallize.py`'s discipline. CI runners ship Python 3.10+; macOS dev fallback probes `/opt/homebrew/bin/python3.X` directly.
+- **Dry-run is the default.** v0.10.0 ships rubric matching + canned responses; live mode is a stub with a clear migration message ("install anthropic SDK + set ANTHROPIC_API_KEY"). This is the responsible /autonomous path — the substrate is exercisable for free; live mode opt-in flips on when SDK+key are wired in a future PR.
+- **Two-phase protocol from OpenSpace, not the SQLite content-snapshot+diff lineage.** Git already gives us lineage on entity pages + skills; we don't need OpenSpace's content-snapshot SQLite schema.
+- **0.6 quality cliff preserved** (OpenSpace + ClawWork compatibility). Payment is $0 below cliff, full `task_value_usd` above.
+- **Skill snapshot is synthetic in dry-run.** `_simulate_phase1_skill_dir()` mints a tiny fake `phase1-skills/` between phases so the snapshot tarball path is exercised without touching `~/.claude/skills/`.
+- **P20 Cross-Review forward compatibility.** The evaluator docstring documents the upcoming constraint: judge model MUST differ from agent model. Enforcement lands when the LLM judge stub is replaced.
+- **State location follows bstack convention.** `~/.config/bstack/bench/runs/<run-id>/` (mirrors `~/.config/broomva/p7/`, `~/.config/broomva/p8-janitor/`). Override via `BSTACK_BENCH_HOME` env var (used by tests).
+
+### What this enables
+
+- Future PRs can wire FIX/DERIVED/RETIRE sub-modes of Crystallize (P16) — extending P16 from CAPTURED-only to all four sub-modes (the OpenSpace decomposition). Per-skill telemetry counters (`total_selections / total_applied / total_completions / total_fallbacks`) and metric-driven evolution triggers are the next layer; this PR is the measurement substrate they build on.
+- The `live` runner stub is the integration point for the Anthropic SDK / `claude --print` subprocess path. Once wired, the same harness runs real-LLM benchmarks against any bstack-instrumented agent.
+- The substrate composes with P9 (`p9 watch` long-running benches), P12 (`persist iterate` multi-hour campaigns), and P19 (Orchestrate cube cell selection for bench shape).
+
+### Linked artifacts (in the consuming workspace, not in this repo)
+
+- Spec: `bstack/specs/bench-skill-evolution.md`
+- Project entity: `research/entities/project/openspace.md` (9/9 Nous)
+- Concept entity: `research/entities/concept/skill-self-evolution.md` (7/9 candidate)
+- Synthesis: `research/notes/2026-05-20-openspace-evolver-synthesis.md`
+- Linear ticket: BRO-1205
+
 ## 0.9.5 — 2026-05-18
 
 ### Crystallization detection (Phase 7 of substrate completion)

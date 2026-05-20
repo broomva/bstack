@@ -36,6 +36,9 @@ Then, in your agent session:
 /bstack wave dispatch <plan...>   → atomic parallel-agent dispatch from N plan files
 /bstack wave status <wave-id>     → forensic per-wave state table
 /bstack wave list                 → all waves with summary state
+/bstack bench run                 → two-phase skill-evolution benchmark (P11)
+/bstack bench compare             → Phase 1 vs Phase 2 REPORT.md
+/bstack bench tasks list          → registered task sets
 ```
 
 ## What bstack enforces

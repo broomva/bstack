@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# bstack-bench — skill-evolution benchmark dispatcher (BRO-1205, v0.10.0).
+#
+# Thin bash wrapper that delegates to scripts/bench/orchestrator.py.
+# Mirrors bin/bstack-crystallize's shape (Phase 7).
+#
+# Subcommands:
+#   run [--tasks SET] [--runner R] [--evaluator E] [--phase {1|2|both}]
+#       [--workers N] [--budget-usd N] [--resume RUN_ID] [--no-dry-run]
+#                                Two-phase bench against a task set.
+#   compare [--run-id RUN_ID]    Build REPORT.md from existing phase results.
+#   tasks list                   List registered task sets.
+#   status [--run-id RUN_ID]     Summarize recent runs.
+#   help | --help                This message.
+#
+# Env overrides:
+#   BSTACK_BENCH_HOME            Override default ~/.config/bstack/bench/.
+#   BSTACK_BENCH_TASKS_DIR       Override default scripts/bench/tasks/.
+#
+# Exit codes (from orchestrator.py):
+#   0  success
+#   2  invalid arguments
+#   3  task set not found
+#   4  budget exceeded mid-run
+#   5  resume / status run-id not found
+#   6  all task runs failed (structurally broken — e.g. stub runner without SDK)
+
+set -euo pipefail
+
+BSTACK_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+ORCHESTRATOR="$BSTACK_DIR/scripts/bench/orchestrator.py"
+
+# Pick the best available Python interpreter (3.10+ required for PEP 604
+# `|` unions in annotations). Checks PATH first, then falls back to common
+# absolute install locations (Homebrew, /usr/local) so the dispatcher works
+# in restricted-PATH environments (e.g. CI matrices, agent sandboxes).
+pick_python() {
+    local cand resolved ver
+    # 1. PATH lookup
+    for cand in python3.13 python3.12 python3.11 python3.10 python3; do
+        if command -v "$cand" >/dev/null 2>&1; then
+            resolved="$(command -v "$cand")"
+            ver="$("$resolved" -c 'import sys; print(sys.version_info[:2] >= (3,10))' 2>/dev/null || echo False)"
+            if [ "$ver" = "True" ]; then
+                echo "$resolved"
+                return 0
+            fi
+        fi
+    done
+    # 2. Well-known install locations (Homebrew, /usr/local)
+    local probe
+    for probe in \
+        /opt/homebrew/bin/python3.13 /opt/homebrew/bin/python3.12 \
+        /opt/homebrew/bin/python3.11 /opt/homebrew/bin/python3.10 \
+        /usr/local/bin/python3.13 /usr/local/bin/python3.12 \
+        /usr/local/bin/python3.11 /usr/local/bin/python3.10; do
+        if [ -x "$probe" ]; then
+            ver="$("$probe" -c 'import sys; print(sys.version_info[:2] >= (3,10))' 2>/dev/null || echo False)"
+            if [ "$ver" = "True" ]; then
+                echo "$probe"
+                return 0
+            fi
+        fi
+    done
+    return 1
+}
+
+usage() {
+    cat <<'EOF'
+bstack-bench — skill-evolution benchmark dispatcher
+
+Usage:
+  bstack bench run [--tasks SET] [--runner R] [--evaluator E]
+                   [--phase {1|2|both}] [--workers N] [--budget-usd N]
+                   [--resume RUN_ID] [--no-dry-run]
+  bstack bench compare [--run-id RUN_ID]
+  bstack bench tasks list
+  bstack bench status [--run-id RUN_ID]
+  bstack bench --help
+
+Defaults:
+  --tasks bstack-smoke   --runner dry-run   --evaluator rubric-match
+  --phase both           --dry-run (live mode is a stub in v0.10.0)
+
+State:
+  ~/.config/bstack/bench/runs/<run-id>/  (override via BSTACK_BENCH_HOME)
+
+Spec: specs/bench-skill-evolution.md   Ticket: BRO-1205
+EOF
+}
+
+if [ $# -eq 0 ] || [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ] || [ "${1:-}" = "help" ]; then
+    usage
+    exit 0
+fi
+
+PY="$(pick_python || true)"
+if [ -z "$PY" ]; then
+    echo "bstack-bench: requires Python >= 3.10 (none found in PATH)." >&2
+    exit 2
+fi
+
+if [ ! -f "$ORCHESTRATOR" ]; then
+    echo "bstack-bench: orchestrator missing at $ORCHESTRATOR" >&2
+    exit 2
+fi
+
+exec "$PY" "$ORCHESTRATOR" "$@"
