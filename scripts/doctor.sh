@@ -467,6 +467,43 @@ PYEOF
     fi
 fi
 
+# ── Section 12: Four Pillars of Self-Operation (informational) ──────────────
+# Surface the four canonical agentic-systems pillars and which primitives
+# deliver each. PARTIAL / GAP states are KNOWN limitations tracked in
+# workspace CLAUDE.md §Four Pillars of Self-Operation; they are informational
+# only and do NOT count against doctor's GAP total or fail --strict mode.
+# The audit's job is to keep the lens visible during install / SessionStart,
+# not to gate compliance.
+section "12. Four Pillars of Self-Operation"
+# Format: pillar_num|pillar_name|primitives|state
+# State values: FULL | PARTIAL | GAP (candidate P21 territory)
+FOUR_PILLARS=(
+    "1|Recursive self-improvement|P1 P6 P13 P16|FULL"
+    "2|Setting its own goals|P1 P5 P6 P9 P12 P16 P19|PARTIAL"
+    "3|Acquiring its own resources|P2 P3|GAP"
+    "4|Acting autonomously|P4 P5 P7 P8 P9 P10 P11 P12 P14 P15 P17 P18 P19 P20|FULL"
+)
+for entry in "${FOUR_PILLARS[@]}"; do
+    pnum="${entry%%|*}"
+    rest="${entry#*|}"
+    pname="${rest%%|*}"
+    rest="${rest#*|}"
+    pprims="${rest%%|*}"
+    pstate="${rest#*|}"
+
+    case "$pstate" in
+        FULL)
+            ok "Pillar $pnum ($pname): $pprims — FULL"
+            ;;
+        PARTIAL)
+            [ "$QUIET" = "0" ] && echo "  [info] Pillar $pnum ($pname): $pprims — PARTIAL (goal-formation implicit; see CLAUDE.md §Four Pillars of Self-Operation)"
+            ;;
+        GAP)
+            [ "$QUIET" = "0" ] && echo "  [info] Pillar $pnum ($pname): $pprims — GAP (candidate P21; see CLAUDE.md §Four Pillars of Self-Operation for promotion gating)"
+            ;;
+    esac
+done
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 TOTAL=$((PASSES + GAPS))
