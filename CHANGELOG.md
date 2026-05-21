@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.12.0 — 2026-05-21
+
+### LLM-as-index wiring — catalog refresh hook + `/kg load` skill doctor checks (BRO-1223)
+
+Wires the workspace-side LLM-as-index architecture into bstack's bootstrap and audit machinery. The workspace ships a Stop hook that regenerates `docs/knowledge-index.md` after each session (so the dense catalog stays fresh without manual `bookkeeping index` invocations) and a Claude skill `/kg load <topic>` that uses the catalog to route the loading agent.
+
+The architectural anchor: at sub-10k-entity scale, the substrate (`research/entities/**/*.md`) fits in any 1M-context model with >95% headroom — the LLM **is** the index. One projection (the catalog), one consumer (the loading agent), inferences fold back into the substrate as commits. No SQLite mirror, no embeddings, no typed-edge schema.
+
+- **CHANGED** `assets/templates/settings.json.snippet` — adds a second `Stop` hook entry pointing at `${BROOMVA_WORKSPACE}/scripts/knowledge-catalog-refresh-hook.sh`, tagged `_bstack_primitive: "P6"`. New installs and `bstack repair` invocations now wire the catalog refresh by default. Composes cleanly with the existing `conversation-bridge-hook.sh` Stop entry — bridge first, catalog second.
+- **CHANGED** `scripts/doctor.sh` — section 7 (Primitive mechanisms) gains three new P6 sub-checks:
+  - `scripts/knowledge-catalog-refresh-hook.sh` present + executable
+  - `docs/knowledge-index.md` exists AND mtime ≤ 48h (catalog freshness gate; warns at >48h with the repair command)
+  - `~/.claude/skills/kg/SKILL.md` + `scripts/kg.py` present (the load skill)
+
+  All three are advisory (informational nudges) — they never fail strict-mode CI on missing-skill, because the kg skill is intentionally workspace-local v1 (no GitHub repo, no skills-lock entry) until rule-of-three earns the promotion.
+
+### Cross-repo composition
+
+This release pairs with two workspace-side PRs:
+- `broomva/bookkeeping` — adds `cmd_index` (the catalog generator) + `from __future__ import annotations` Py3.9 compatibility fix
+- `broomva/broomva` — adds the Stop hook script, wires `.claude/settings.json`, adds AGENTS.md §P6 sub-rule on substrate-edit-as-inference-persistence, ships the `/kg load` skill at `~/.claude/skills/kg/`, mirrors documentation at `docs/skills/kg.md`
+
+### Validation gate
+
+The composite release is validated by the **12-query parity test** documented in the PR body: each of 12 representative graph queries (tag intersection, k-hop neighborhood, shortest path, provenance trace, hub identification, full-text body search, cross-type co-occurrence, etc.) must be answerable by the agent using only `/kg load` + on-demand entity reads, matching the deterministic Python-script baseline.
+
+### Future work
+
+- Promote `broomva/kg` to its own GitHub repo + bstack skills-lock entry once usage exceeds rule-of-three (≥3 sessions with load-bearing `/kg load` invocations)
+- Add `bookkeeping index --cache-graph` to memoize the parsed in-memory graph to `~/.cache/broomva/bookkeeping/graph.json` (drops repeat runs from ~315ms to ~5ms)
+- Optional sidecar embeddings index at >2k entities (not needed today; pre-mature now)
+
 ## 0.11.0 — 2026-05-20
 
 ### Live mode for `bstack bench` — Databricks Gateway provider + OpenAI-compatible abstraction (BRO-1211)
