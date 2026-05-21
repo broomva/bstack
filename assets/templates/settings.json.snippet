@@ -45,6 +45,13 @@
             "command": "${BROOMVA_WORKSPACE}/scripts/conversation-bridge-hook.sh",
             "timeout": 5,
             "_bstack_primitive": "P1"
+          },
+          {
+            "type": "command",
+            "command": "${BROOMVA_WORKSPACE}/scripts/knowledge-catalog-refresh-hook.sh",
+            "timeout": 5,
+            "_bstack_primitive": "P6",
+            "_purpose": "Regenerate dense LLM-loadable catalog (LLM-as-index architecture; routes /kg load)"
           }
         ]
       }

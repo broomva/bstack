@@ -270,6 +270,44 @@ else
       "install/rebuild from bstack repo HEAD"
 fi
 
+# P6 catalog: knowledge-catalog-refresh-hook + docs/knowledge-index.md freshness
+# (LLM-as-index architecture — substrate routes through the catalog; the
+# catalog must regenerate at Stop time and stay <48h old)
+_CATALOG_HOOK="$WORKSPACE/scripts/knowledge-catalog-refresh-hook.sh"
+_CATALOG="$WORKSPACE/docs/knowledge-index.md"
+if [ -x "$_CATALOG_HOOK" ]; then
+    ok "P6 catalog hook: scripts/knowledge-catalog-refresh-hook.sh present + executable"
+else
+    gap "P6 catalog hook missing or not executable: scripts/knowledge-catalog-refresh-hook.sh" \
+        "copy from bstack/assets/templates/ or rerun 'bstack repair'"
+fi
+if [ -f "$_CATALOG" ]; then
+    if [ "$(uname)" = "Darwin" ]; then
+        _catalog_mtime=$(stat -f %m "$_CATALOG" 2>/dev/null || echo 0)
+    else
+        _catalog_mtime=$(stat -c %Y "$_CATALOG" 2>/dev/null || echo 0)
+    fi
+    _now=$(date +%s)
+    _age_h=$(( (_now - _catalog_mtime) / 3600 ))
+    if [ "$_age_h" -le 48 ]; then
+        ok "P6 catalog fresh: docs/knowledge-index.md (${_age_h}h old)"
+    else
+        gap "P6 catalog stale: docs/knowledge-index.md (${_age_h}h old; threshold 48h)" \
+            "run 'python3 skills/bookkeeping/scripts/bookkeeping.py index'"
+    fi
+else
+    gap "P6 catalog missing: docs/knowledge-index.md" \
+        "run 'python3 skills/bookkeeping/scripts/bookkeeping.py index'"
+fi
+
+# /kg load skill (Claude-installed at ~/.claude/skills/kg/ — workspace-local v1)
+if [ -f "$HOME/.claude/skills/kg/SKILL.md" ] && [ -f "$HOME/.claude/skills/kg/scripts/kg.py" ]; then
+    ok "/kg load skill installed at ~/.claude/skills/kg/"
+else
+    gap "/kg load skill missing at ~/.claude/skills/kg/" \
+        "install per docs/skills/kg.md (workspace-local v1; promotes to broomva/kg GitHub repo after rule-of-three)"
+fi
+
 # ── L3 trust gates (G-L3-1 + G-L3-2) ───────────────────────────────────────
 section "8. L3 trust gates"
 L3_PRIMITIVE_LINT="$WORKSPACE/scripts/bstack-primitive-lint.py"
