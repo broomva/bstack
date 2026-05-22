@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# .githooks/pre-commit — bstack L3 rate gate (Gate G1).
+#
+# Installed by bstack/scripts/install-l3-stability.sh. Fires on every
+# `git commit` and blocks if the L3 mutation rate exceeds the RCS stability
+# budget (tau_a_3 from .control/rcs-parameters.toml, default 86400s = 1 day).
+#
+# Bypass with: git commit --no-verify  (document why in the commit body)
+#
+# Composes with other pre-commit hooks: if a .githooks/pre-commit existed
+# before bstack onboarding, install-l3-stability.sh chains it via the
+# .githooks/pre-commit.local sidecar.
+
+set -uo pipefail
+
+# Try to locate the workspace's bstack scripts
+WORKSPACE="$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")"
+BSTACK_REPO=""
+for candidate in \
+    "$HOME/.agents/skills/bstack" \
+    "$HOME/.claude/skills/bstack" \
+    "$WORKSPACE/.agents/skills/bstack" \
+    "$HOME/broomva/bstack" \
+; do
+    if [ -x "$candidate/scripts/l3-rate-gate.sh" ]; then
+        BSTACK_REPO="$candidate"
+        break
+    fi
+done
+
+if [ -z "$BSTACK_REPO" ]; then
+    # bstack not findable — degrade gracefully (warn but don't block)
+    echo "[L3 gate] warn: bstack scripts not found; skipping rate check" >&2
+    # Fall through to .local chain if present
+else
+    # Run the rate gate against staged + last-tau_a window
+    if ! BROOMVA_WORKSPACE="$WORKSPACE" bash "$BSTACK_REPO/scripts/l3-rate-gate.sh" --staged; then
+        echo "" >&2
+        echo "[L3 gate] commit blocked by RCS stability budget" >&2
+        echo "[L3 gate] override with: git commit --no-verify  (document reason in body)" >&2
+        exit 1
+    fi
+fi
+
+# Chain to user's pre-commit.local if present
+if [ -x "$WORKSPACE/.githooks/pre-commit.local" ]; then
+    "$WORKSPACE/.githooks/pre-commit.local" "$@"
+fi
+
+exit 0
