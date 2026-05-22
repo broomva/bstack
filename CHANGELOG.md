@@ -1,5 +1,118 @@
 # Changelog
 
+## 0.18.0 — 2026-05-22
+
+### Phase 8 — Multi-workspace federation registry
+
+Closes the substrate-completion-arc Phase 8 backlog item: introduces an opt-in
+host-level registry (`~/.broomva/global/registry.yaml`) that catalogues every
+bstack-governed workspace on this machine, plus a `bstack status --aggregate`
+rollup that walks the registry and surfaces cross-workspace composite-ω.
+Federation is **read-only aggregation** — each workspace remains the source
+of truth for its own state; the registry is the index, not the database.
+
+This release lands on top of v0.16.0 (multi-layer RCS closure) and v0.17.0
+(BROOMVA_ROOT convention). Together they form the substrate that PR2
+(v0.19.0, BRO-48 — Closure Contract) generalizes from 4 hard-coded RCS layers
+to N user-declared domain arcs.
+
+### New scripts + bin (3)
+
+- **NEW** `bin/bstack-workspace` — 90-line bash dispatcher delegating to
+  `scripts/workspace.py`. Subcommands `register | list | info | deregister`
+  with `--json` + `--tag` + per-subcommand `--path`/`--name` filters. Exit
+  codes documented in the help block: 0 ok, 2 invalid args, 3 schema/parse
+  error, 4 target not found, 5 name conflict at different path.
+- **NEW** `scripts/workspace.py` — 523-line Python registry manager with an
+  inline minimal-YAML parser fallback (when PyYAML is absent), atomic
+  writes (`.tmp` + `replace`), and schema-version checking. Honors
+  `BSTACK_REGISTRY` env (default `~/.broomva/global/registry.yaml`) and
+  `BSTACK_DIR` for VERSION detection. SLO: register/list p50 < 100ms.
+- **NEW** `schemas/workspaces.v1.json` — JSON-schema draft-07 contract for
+  the registry. `schema_version: 1` is the only valid value at v0.18.0;
+  field `bstack_version` matches `^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$`;
+  `name` matches `^[A-Za-z0-9][A-Za-z0-9._-]*$` (1–64 chars).
+
+### New tests (1)
+
+- **NEW** `tests/workspace.test.sh` — 203-line hermetic bash suite, 10 cases:
+  fresh register, refresh on same path, name conflict at different path (exit
+  5), `info --path` reports `registered: true`, deregister by path, deregister
+  miss (exit 4), schema_version=99 → exit 3, tag accumulation on refresh,
+  invalid name (exit 2), `--help` block renders. Every test uses
+  `BSTACK_REGISTRY=$(mktemp)` so the host registry is untouched. All 10 GREEN.
+
+### Changed (4)
+
+- **CHANGED** `bin/bstack` — dispatcher: new `workspace) exec
+  "$BIN_DIR/bstack-workspace" "$@"` case + `Federation:` usage section
+  + `status --aggregate` cross-reference under Observability.
+- **CHANGED** `bin/bstack-status` — adds `--aggregate` (alias
+  `--multi-workspace`) flag. Reads the registry via `bash bin/bstack-workspace
+  list --json`, then for each entry attempts `bash <path>/bstack/scripts/compute-budget-status.sh --json`
+  (falls back to reading `<path>/.control/audit/composite-omega.jsonl`),
+  emits a table: name × bstack_version × composite_ω × last_seen × verdict.
+  JSON form via `--json --aggregate`. Read-only, no writes anywhere.
+- **CHANGED** `scripts/doctor.sh` — adds §20 (Workspace federation registry):
+  informational when no registry present (federation opt-in); hard gap on
+  schema mismatch (`schema_version != 1`); soft warning on entries with
+  `last_seen_at > 30 days`. Reads `BSTACK_REGISTRY` env or default path.
+- **CHANGED** `assets/templates/{SKILL,AGENTS,CLAUDE}.md.template` — light
+  surface updates so freshly-bootstrapped workspaces document the
+  `bstack workspace` commands. Federation is **not a new primitive** (no
+  P21); it composes existing primitives (Snapshot P15 + multi-layer ω
+  from v0.16.0 §19).
+
+### Doctor section table after this release
+
+| § | Title | Source | Hard gap when |
+|---|---|---|---|
+| §14 | RCS stability budget | compute-lambda.sh | any λᵢ ≤ 0 |
+| §15 | L3 stability gate-flow wiring | install-l3-stability.sh | (informational only) |
+| §16 | L0 plant audit | l0-tools.jsonl | >10000 events runaway |
+| §17 | L1 autonomic reflex compliance | l1-reflexes.jsonl | compliance < 30% |
+| §18 | L2 EGRI promotion throttle | l2-promotions.jsonl | over τ_a₂ budget |
+| §19 | Multi-layer composite health | compute-budget-status.sh | any layer unstable |
+| §20 | Workspace federation registry | bin/bstack-workspace list | schema_version != 1 |
+
+### Test plan executed
+
+- `bash -n` syntax check across all new + modified scripts → clean.
+- `bash bin/bstack-workspace --help` → renders subcommand block.
+- `BSTACK_REGISTRY=/tmp/test.yaml bash bin/bstack-workspace register --path /tmp --name test --json`
+  → exit 0, action: registered.
+- `BSTACK_REGISTRY=/tmp/test.yaml bash bin/bstack-workspace list --json` → count: 1.
+- `BSTACK_REGISTRY=/tmp/test.yaml bash bin/bstack-workspace deregister --name test --json`
+  → exit 0, count: 0.
+- `bash tests/workspace.test.sh` → 10/10 GREEN.
+- `bash scripts/doctor.sh` against worktree → 87/90 passed (baseline; §20
+  fires as informational with no registry — same total).
+- `bash scripts/compute-budget-status.sh --human` against ~/broomva
+  → composite still stable.
+
+### Honest scope caveats
+
+- Federation is **local-filesystem only**. No network/IPC transport. A
+  workspace on a remote host has to register itself locally; cross-host
+  rollup is deferred.
+- The registry is **read-only aggregation**. `bstack status --aggregate` does
+  not mutate any registered workspace's state. CRDT-replicated cross-workspace
+  promotion (the swarm-autoresearch-loop primitive) is a future Phase 8.5
+  spec, not in this release.
+- `last_seen_at` is updated on `register` (which is also "refresh"); it is
+  not automatically updated by `--aggregate`. A future hook may bump
+  `last_seen_at` on every successful `compute-budget-status.sh` invocation
+  per workspace.
+
+### Spec doc + cross-references
+
+- Linear ticket: [BRO-47](https://linear.app/stimulus/issue/BRO-47)
+- Prior release: v0.17.0 (BROOMVA_ROOT convention, #47, BRO-1223 follow-up)
+- Next release: v0.19.0 (Closure Contract — arcs.yaml + composite-ω drift trend,
+  BRO-48) builds on this substrate.
+- Concept entity: `research/entities/concept/closure-contract.md` (in broomva
+  workspace) — captures the 5-tuple generalization Phase 8 helps enable.
+
 ## 0.17.0 — 2026-05-22
 
 ### Crystallize `BROOMVA_ROOT` env-var convention (BRO-1223 follow-up)
@@ -21,7 +134,7 @@ The ledger at the bottom of `references/conventions.md` mirrors the workspace-si
 
 ### Refs
 
-BRO-1223 follow-up. Linear MCP still down at session ship time — ticket creation deferred.
+BRO-1223 follow-up.
 
 ## 0.16.0 — 2026-05-22
 
@@ -140,7 +253,6 @@ Pairs with `broomva/workspace` PR (adds the `catalog:` block to `.control/policy
 
 ---
 
-<<<<<<< HEAD
 ## 0.14.0 — 2026-05-22
 
 ### L3 stability closure — compute + enforce λ in every bstack workspace

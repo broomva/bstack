@@ -76,11 +76,17 @@ This workspace registers Claude Code hooks in `.claude/settings.json`:
 ## Testing & Verification
 
 ```bash
-bstack doctor      # Verify primitive contract compliance
-bstack repair      # Fix specific gaps
-make control-audit # Full metalayer compliance audit
-make janitor       # Janitor (P8) dry-run
+bstack doctor             # Verify primitive contract compliance
+bstack repair             # Fix specific gaps
+bstack status --aggregate # Federation rollup across registered workspaces (≥ 0.18.0)
+make control-audit        # Full metalayer compliance audit
+make janitor              # Janitor (P8) dry-run
 ```
+
+> **Federation (Phase 8, v0.18.0).** `bstack workspace` maintains an opt-in
+> host-level registry at `~/.broomva/global/registry.yaml`. It is a substrate
+> surface, not a new primitive — composes Snapshot (P15) + multi-layer
+> composite-ω (v0.16.0 §19). Doctor §20 surfaces registry health.
 
 ## Conventions
 

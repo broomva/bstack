@@ -65,18 +65,22 @@ else
     fail "setpoint deep-view did not return id-matched JSON"
 fi
 
-# Step 4: --aggregate is the Phase 8 placeholder; assert exit 3.
+# Step 4: --aggregate ships in v0.18.0 (this PR). Assert success against an
+# isolated empty registry — exit 0 with a "no registered workspaces" message
+# (or equivalent), never the old Phase-8 placeholder error.
 echo ""
-echo "Step 4: bstack status --aggregate exits 3 (Phase 8 placeholder)"
+echo "Step 4: bstack status --aggregate works against empty registry (Phase 8, v0.18.0)"
+EMPTY_REG=$(mktemp -d)/registry.yaml
 set +e
-BSTACK_METRICS_DIR="$MD" BROOMVA_WORKSPACE="$TW" "$REPO/bin/bstack-status" --aggregate >/dev/null 2>&1
+out=$(BSTACK_METRICS_DIR="$MD" BROOMVA_WORKSPACE="$TW" BSTACK_REGISTRY="$EMPTY_REG" "$REPO/bin/bstack-status" --aggregate 2>&1)
 rc=$?
 set -e
-if [ "$rc" = "3" ]; then
-    pass "--aggregate exit 3 (not-yet-implemented)"
+if [ "$rc" = "0" ] && ! echo "$out" | grep -qF "Phase 8 placeholder"; then
+    pass "--aggregate succeeds against empty registry"
 else
-    fail "--aggregate exit $rc (expected 3)"
+    fail "--aggregate did not succeed against empty registry (rc=$rc out=$out)"
 fi
+rm -rf "$(dirname "$EMPTY_REG")"
 
 echo ""
 echo "─────────────────────────────────────"

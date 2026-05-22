@@ -41,6 +41,11 @@ Then, in your agent session:
 /bstack bench tasks list          → registered task sets
 /bstack bench run --runner live --provider databricks --model ...
                                   → real LLM via OpenAI-compatible provider (≥ 0.11.0)
+/bstack workspace register        → add this workspace to ~/.broomva/global/registry.yaml (≥ 0.18.0)
+/bstack workspace list            → list all registered workspaces (Federation, Phase 8)
+/bstack workspace info            → is the current workspace registered?
+/bstack workspace deregister      → remove a workspace by --name or --path
+/bstack status --aggregate        → federation rollup: name × bstack_version × composite_ω × verdict
 ```
 
 ## What bstack enforces
@@ -280,6 +285,32 @@ Re-run the preamble. For each skill show: name, layer, installed/missing. Then r
 4. Force-run conversation bridge across all projects
 5. Run full control audit
 6. Update AGENTS.md with current state
+
+### `workspace` — multi-workspace federation registry (≥ 0.18.0, Phase 8)
+
+`bin/bstack-workspace` + `scripts/workspace.py`. Maintains the host-level
+roster at `~/.broomva/global/registry.yaml` of bstack-governed workspaces
+on this machine. Federation is **opt-in** and **read-only** — each
+workspace remains the source of truth for its own state. The registry is
+the index `bstack status --aggregate` walks to rollup composite-ω health.
+
+```bash
+bstack workspace register             # registers $PWD (name = basename)
+bstack workspace register --path ~/projects/foo --tag client-x
+bstack workspace list --json          # machine-readable for scripts
+bstack workspace info                 # is this workspace registered?
+bstack workspace deregister --name foo
+```
+
+Exit codes: `0` ok, `2` invalid args, `3` schema/parse error, `4` target
+not found, `5` name conflict at different path. SLO: register/list p50 <
+100ms.
+
+Federation is **not a new primitive** — no P21. It composes existing
+primitives: Snapshot (P15) emits the per-workspace audit signal; the
+multi-layer composite-ω from v0.16.0 §19 feeds the per-workspace verdict.
+Doctor §20 surfaces registry health (informational unless the registry
+file's `schema_version != 1`).
 
 ## Stack layers (30 skills)
 

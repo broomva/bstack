@@ -41,9 +41,14 @@ Orchestration:
 Observability:
   metrics collect|observe         Setpoint measurement pipeline (≥ 0.4.0).
   status [--json|--setpoint X]    Substrate health summary (≥ 0.5.0).
+  status --aggregate              Federation rollup across registered workspaces (≥ 0.18.0).
   skills install|status|list      Companion skill roster manager (≥ 0.7.0).
   crystallize candidates|promote  P16 rule-of-three candidate detector (≥ 0.9.5).
   bench run|compare|tasks|status  Skill-evolution benchmark harness (≥ 0.10.0).
+
+Federation:
+  workspace register|list         Manage ~/.broomva/global/registry.yaml (≥ 0.18.0).
+  workspace info|deregister       Inspect or remove a workspace entry.
 
 Release (maintainers):
   release tag                     Tag the current VERSION and create the
@@ -326,6 +331,7 @@ case "$cmd" in
     skills)                 exec "$BIN_DIR/bstack-skills" "$@" ;;
     crystallize)            exec "$BIN_DIR/bstack-crystallize" "$@" ;;
     bench)                  exec "$BIN_DIR/bstack-bench" "$@" ;;
+    workspace)              exec "$BIN_DIR/bstack-workspace" "$@" ;;
     release)
         sub="${1:-}"
         [ $# -gt 0 ] && shift

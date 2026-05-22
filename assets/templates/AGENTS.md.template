@@ -437,12 +437,46 @@ Dep-Chain (P14) + Snapshot (P15) already define the required behavior — contex
 From workspace root:
 
 ```bash
-bstack doctor      # Verify primitive contract compliance
-bstack repair      # Fix specific gaps surfaced by doctor
-bstack status      # Show installed-vs-missing skills + harness health
-make control-audit # Full metalayer compliance audit
-make janitor       # P8 janitor (dry-run by default)
+bstack doctor             # Verify primitive contract compliance
+bstack repair             # Fix specific gaps surfaced by doctor
+bstack status             # Show installed-vs-missing skills + harness health
+bstack status --aggregate # Federation rollup across registered workspaces
+bstack workspace register # Register this workspace in the host federation registry
+bstack workspace list     # List all registered workspaces
+make control-audit        # Full metalayer compliance audit
+make janitor              # P8 janitor (dry-run by default)
 ```
+
+## Substrate Surfaces
+
+### Federation (v0.18.0 — Phase 8)
+
+`bstack workspace` is a substrate surface that maintains an **opt-in**
+host-level registry of bstack-governed workspaces at
+`~/.broomva/global/registry.yaml`. Federation is **read-only aggregation** —
+each workspace remains the source of truth for its own state. The registry
+is the index `bstack status --aggregate` walks to surface the composite
+health of every registered workspace on this host.
+
+Federation is **not a new primitive** (no P21). It composes existing
+primitives: Snapshot (P15) emits the per-workspace audit signal that the
+aggregate rollup reads; Bookkeeping (P6) and the multi-layer composite-ω
+(v0.16.0 §19) feed the per-workspace verdict. The registry is the spine
+that lets a developer see all bstack workspaces at once without inventing
+a new control loop.
+
+Registering is opt-in and idempotent:
+
+```bash
+bstack workspace register             # registers $PWD (name = basename)
+bstack workspace register --tag client-x --tag primary
+bstack workspace list --json          # machine-readable for scripts
+bstack workspace info                 # is this workspace registered?
+bstack workspace deregister --name X  # remove an entry
+```
+
+Doctor §20 reports federation health (informational unless the registry
+file is corrupted with `schema_version != 1`).
 
 ## Conversation Capture
 
