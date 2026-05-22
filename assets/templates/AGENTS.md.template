@@ -140,6 +140,24 @@ The agent picks the right subset, runs as parallel watchers, and **captures evid
 4. After deploy — capture deployed-state evidence. *Compile-time success is not deploy-time correctness.*
 5. When CI or tests fail — capture full context first before attempting a fix.
 6. At session end — produce a *dogfood receipt*.
+7. **Dogfood Plan keyed to detected stack** — before substantive feature work, produce a Dogfood Plan (entry surface · driver · evidence · smoke · end-to-end · receipt anchor) in the response and PR body, citing the per-stack pattern from the bstack cookbook (Tauri+sidecar / Next.js / Expo RN / Rust CLI / REST API / MCP server). Interceptor is mandatory for visual deploy verification; gstack / cliclick / screencapture / curl+jq compose per stack. The plan anchors at `## Dogfood Plan (Stack: <pattern>)` in this AGENTS.md, or `docs/dogfood-plan.md`, or the PR body — `bstack doctor` §13 looks for any of the three.
+
+## Dogfood Plan (Stack: TBD)
+
+<!-- bstack onboard stubs this section the first time the repo is bootstrapped.
+     Detected stack is auto-filled when the repo signals match a known pattern
+     (Cargo.toml + src-tauri/ → Tauri; next.config.* → Next.js; etc.).
+     Fill the rows below for the current substantive work unit; the receipt
+     anchor at session end is the artifact that closes the loop. -->
+
+- **Entry surface**: <URL / window / CLI command the user touches>
+- **Driver**: <Interceptor / gstack / cliclick+screencapture / curl+jq / xcrun simctl>
+- **Evidence**: <screenshot path / response body path / log line>
+- **Smoke**: <one-line "didn't obviously break" check>
+- **End-to-end**: <multi-step user flow that catches regression a smoke test misses>
+- **Receipt anchor**: <file / line / PR comment ID where the receipt lives>
+
+Reference: `bstack/references/dogfood-patterns.md` for the per-stack surfaces matrix, canonical arc, gotchas, and receipt template.
 
 ### P12 — Persist: Persistent Loop Discipline (Cross-Context Restart Loop)
 

@@ -228,8 +228,11 @@ P11 is a reflex, not a request. Agents must apply the following without being pr
 4. After deploy — capture deployed-state evidence. Vercel preview URL screenshot. Production log query. Live browser session. *Compile-time success is not deploy-time correctness.*
 5. When CI or any test fails — capture full context first (logs + screenshots + last-known-good diff) before attempting a fix. The fix-without-context loop is how harness defects compound.
 6. At session end — produce a *dogfood receipt*: what was actually exercised vs what was only claimed. The receipt feeds P1 and P6.
+7. **Dogfood Plan keyed to detected stack** — before substantive feature work, produce a Dogfood Plan (entry surface · driver · evidence · smoke · end-to-end · receipt anchor) in the response and PR body, picking the right pattern from [references/dogfood-patterns.md](dogfood-patterns.md) — Tauri+sidecar / Next.js / Expo RN / Rust CLI / REST API / MCP server. The plan IS the agent's "how" for the stack; the receipt (rule 6) is the artifact that proves discipline was applied. The cookbook also names the skill toolkit (Interceptor is mandatory for visual deploy verification; gstack, cliclick, screencapture, curl+jq compose per stack).
 
-Mental checklist: *Did I interact with it? Did I capture evidence? Was the evidence multi-modal? Did I exercise it like a user would? Is the deploy actually correct, or just deployed?*
+Mental checklist: *Did I interact with it? Did I capture evidence? Was the evidence multi-modal? Did I exercise it like a user would? Is the deploy actually correct, or just deployed? Does my Dogfood Plan match the stack I'm actually working on?*
+
+**Companion reference**: [references/dogfood-patterns.md](dogfood-patterns.md) — per-tech-stack cookbook with surfaces matrix, canonical arcs, gotchas, and receipt templates. Loaded by `bstack doctor` §13 (informational dogfood-readiness check) and by every agent applying this primitive.
 
 ---
 

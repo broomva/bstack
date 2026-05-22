@@ -542,6 +542,72 @@ for entry in "${FOUR_PILLARS[@]}"; do
     esac
 done
 
+# ── Section 13: P11 Empirical dogfood-readiness (informational) ─────────────
+# Detect tech stack from repo signals, then verify a Dogfood Plan section
+# exists in workspace AGENTS.md OR docs/dogfood-plan.md OR (acceptable but
+# weakest) is just expected per-PR via PR body.
+#
+# Informational — never blocks (rule-of-three for promotion to blocking gate
+# not yet hit). Surfaces stack detection + plan presence so the agent applying
+# P11 has the right cookbook entry at hand. References: bstack/references/
+# dogfood-patterns.md is the canonical per-stack cookbook.
+section "13. P11 Empirical dogfood-readiness"
+
+# Detect stack by repo signals (mirrors dogfood-patterns.md §Detection algorithm).
+DETECTED_STACK="unknown"
+DETECTION_REASON=""
+
+if [ -f "$WORKSPACE/Cargo.toml" ] && [ -d "$WORKSPACE/src-tauri" ]; then
+    DETECTED_STACK="tauri-sidecar"
+    DETECTION_REASON="Cargo.toml + src-tauri/ present"
+elif [ -d "$WORKSPACE/app/src-tauri" ] || ls "$WORKSPACE"/*/src-tauri 2>/dev/null | head -1 | grep -q . ; then
+    DETECTED_STACK="tauri-sidecar"
+    DETECTION_REASON="nested src-tauri/ present (multi-package repo)"
+elif ls "$WORKSPACE"/next.config.* 2>/dev/null | head -1 | grep -q . ; then
+    DETECTED_STACK="nextjs"
+    DETECTION_REASON="next.config.* present"
+elif [ -f "$WORKSPACE/app.json" ] && grep -q '"expo"' "$WORKSPACE/app.json" 2>/dev/null; then
+    DETECTED_STACK="expo-rn"
+    DETECTION_REASON="app.json with expo block"
+elif [ -f "$WORKSPACE/Cargo.toml" ]; then
+    DETECTED_STACK="rust-cli"
+    DETECTION_REASON="Cargo.toml without src-tauri/"
+elif ls "$WORKSPACE"/openapi.* 2>/dev/null | head -1 | grep -q . ; then
+    DETECTED_STACK="rest-api"
+    DETECTION_REASON="openapi.* spec present"
+elif [ -f "$WORKSPACE/mcp.json" ] || [ -f "$WORKSPACE/mcp.yaml" ]; then
+    DETECTED_STACK="mcp-server"
+    DETECTION_REASON="mcp.{json,yaml} present"
+elif [ -f "$WORKSPACE/package.json" ] && grep -qE '"(fastapi|hono|axum|express)"' "$WORKSPACE/package.json" 2>/dev/null; then
+    DETECTED_STACK="rest-api"
+    DETECTION_REASON="REST framework dep in package.json"
+fi
+
+if [ "$DETECTED_STACK" = "unknown" ]; then
+    [ "$QUIET" = "0" ] && echo "  [info] stack: unknown (no detection signal matched; agent declares stack in Dogfood Plan)"
+else
+    ok "stack detected: $DETECTED_STACK ($DETECTION_REASON)"
+fi
+
+# Verify a Dogfood Plan anchor exists at one of three accepted locations.
+DOGFOOD_PLAN_FOUND=0
+DOGFOOD_LOCATION=""
+if [ -f "$AGENTS" ] && grep -qiE '^## Dogfood Plan' "$AGENTS"; then
+    DOGFOOD_PLAN_FOUND=1
+    DOGFOOD_LOCATION="AGENTS.md"
+elif [ -f "$WORKSPACE/docs/dogfood-plan.md" ]; then
+    DOGFOOD_PLAN_FOUND=1
+    DOGFOOD_LOCATION="docs/dogfood-plan.md"
+fi
+
+if [ "$DOGFOOD_PLAN_FOUND" = "1" ]; then
+    ok "Dogfood Plan section present at $DOGFOOD_LOCATION"
+else
+    [ "$QUIET" = "0" ] && echo "  [info] no Dogfood Plan anchor in AGENTS.md or docs/dogfood-plan.md"
+    [ "$QUIET" = "0" ] && echo "         → for substantive feature PRs, include plan in PR body OR run \`bstack onboard\` to stub one"
+    [ "$QUIET" = "0" ] && echo "         → reference: bstack/references/dogfood-patterns.md for the per-stack cookbook (informational; not blocking until rule-of-three)"
+fi
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 TOTAL=$((PASSES + GAPS))
