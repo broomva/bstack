@@ -956,10 +956,11 @@ else
                 "inspect: bash $WORKSPACE_BIN list --json"
         else
             FED_COUNT=$(echo "$FED_SUMMARY" | python3 -c "import sys,json;print(json.load(sys.stdin).get('count', 0))" 2>/dev/null)
-            FED_STALE=$(echo "$FED_SUMMARY" | python3 - "$REGISTRY_PATH" <<'PYEOF' 2>/dev/null
-import json, sys
+            # SC2259-safe: pass payload via env var instead of pipe + heredoc.
+            FED_STALE=$(BSTACK_FED_SUMMARY="$FED_SUMMARY" python3 - "$REGISTRY_PATH" <<'PYEOF' 2>/dev/null
+import json, os, sys
 from datetime import datetime, timedelta, timezone
-data = json.load(sys.stdin)
+data = json.loads(os.environ.get("BSTACK_FED_SUMMARY", "{}"))
 cutoff = datetime.now(timezone.utc) - timedelta(days=30)
 stale = []
 for ws in data.get("workspaces", []):

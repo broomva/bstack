@@ -7,7 +7,7 @@
 #   3. --setpoint S<n> returns single-setpoint view (text)
 #   4. --setpoint S<n> --json returns just that setpoint
 #   5. --setpoint S999 (unknown) errors cleanly
-#   6. --aggregate placeholders error with exit 3 (Phase 8)
+#   6. --aggregate works on an empty registry (Phase 8 shipped in v0.18.0)
 #   7. --no-color strips ANSI sequences
 #   8. Status auto-collects metrics when latest.json is stale/missing
 set -uo pipefail
@@ -122,17 +122,22 @@ else
 fi
 rm -rf "$MD" "$WS" "$SD"
 
-# ── Test 6: --aggregate exits 3 (Phase 8 placeholder) ──────────────────
+# ── Test 6: --aggregate works on empty registry (Phase 8, v0.18.0) ─────
+# Pre-v0.18.0 this exit'd 3 (not-implemented placeholder); v0.18.0 ships
+# the implementation. On a fresh isolated registry path with no entries,
+# --aggregate should exit 0 with a "no registered workspaces" message
+# (or equivalent) — never the old Phase-8 placeholder error.
 echo ""
-echo "Test 6: --aggregate exits 3 (not-yet-implemented)"
-"$BSTACK_STATUS" --aggregate >/dev/null 2>&1
+echo "Test 6: --aggregate succeeds against an empty registry"
+EMPTY_REG=$(mktemp -d)/registry.yaml
+out=$(BSTACK_REGISTRY="$EMPTY_REG" "$BSTACK_STATUS" --aggregate 2>&1)
 rc=$?
-out=$("$BSTACK_STATUS" --aggregate 2>&1 || true)
-if [ "$rc" = "3" ] && echo "$out" | grep -qF "Phase 8"; then
-    assert_pass "--aggregate exits 3 with Phase 8 message"
+if [ "$rc" = "0" ] && ! echo "$out" | grep -qF "Phase 8 placeholder"; then
+    assert_pass "--aggregate succeeds against empty registry (no placeholder error)"
 else
-    assert_fail "--aggregate did not produce expected error" "rc=$rc out=$out"
+    assert_fail "--aggregate did not succeed against empty registry" "rc=$rc out=$out"
 fi
+rm -rf "$(dirname "$EMPTY_REG")"
 
 # ── Test 7: --no-color strips ANSI sequences ───────────────────────────
 echo ""
