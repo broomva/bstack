@@ -1,5 +1,88 @@
 # Changelog
 
+## 0.16.0 — 2026-05-22
+
+### Multi-layer RCS closure — extending the control loop across L0/L1/L2
+
+Closes the gap identified in PR #45 review: v0.14.0 wired *enforcement* only at L3 (governance), while **L0/L1/L2 had no audit, no per-layer doctor sections, no programmatic feedback into the control loop**. The receipts produced by `broomva/dogfood` were human-read artifacts but did not feed back into the multi-layer stability budget.
+
+This release adds per-layer sensors, audit logs, doctor sections, and a composite multi-layer health report. The dogfood receipt and every tool call become the empirical sensors that calibrate the RCS hierarchy.
+
+### New scripts (5)
+
+- **NEW** `scripts/l0-tool-audit-hook.sh` — Claude Code PostToolUse hook. Logs every tool call (tool name, latency_ms, is_error, file_path when applicable) as one JSONL line to `.control/audit/l0-tools.jsonl`. Always exits 0; never blocks.
+
+- **NEW** `scripts/l1-reflex-audit-hook.sh` — Claude Code Stop hook. Scans the session transcript for evidence of 21 /autonomous reflexes firing (mechanism cube, lens intake, snapshot, dep-chain, worktree decision, ticket, dogfood plan, validation, first write, empirical, PR opened, watcher, healing, cross-review, deploy verify, receipt, PR comments, auto-merge, cleanup, bridge, bookkeeping). Writes per-session compliance bitmask + anti-rationalization-line evaluation to `.control/audit/l1-reflexes.jsonl`.
+
+- **NEW** `scripts/l2-promotion-audit-hook.sh` — L2 (EGRI / Crystallize P16) candidate-promotion sensor. Called by `bookkeeping.py promote` step with promotion metadata. Counts promotions in last τ_a₂ window (1h default); enforces budget (5 promotions/window default). Exit 2 with warning when over budget — caller SHOULD defer remaining promotions.
+
+- **NEW** `scripts/compute-budget-status.sh` — Multi-layer health reader. Reads all four audit logs (.control/audit/l[0-3]-*.jsonl) + parameters.toml; computes per-layer observed metrics in each layer's τ_a window; emits composite verdict (stable / stable_warn / unstable) per layer + overall.
+
+- **NEW** `scripts/install-rcs-stability.sh` — Unified multi-layer installer. Delegates L3 setup to install-l3-stability.sh (preserves v0.14.0 behavior), then merges PostToolUse (L0) + Stop (L1) hook entries into `.claude/settings.json` via `_bstack_primitive` markers. Creates `.control/audit/` directory. Idempotent.
+
+### New template (1)
+
+- **NEW** `assets/templates/settings.json.multi-layer-hooks.snippet` — PostToolUse + Stop hook entries. Composes additively with v0.14.0's `settings.json.l3-stability-hook.snippet` (PreToolUse) — each hook entry is uniquely identified by `_bstack_primitive` marker (`L0-audit`, `L1-audit`, `L3-G0`) so re-installation is structurally idempotent.
+
+### Doctor extensions (4 new sections)
+
+- **CHANGED** `scripts/doctor.sh` adds:
+  - **§16 L0 plant audit** — tool-call count + latency mean + error count over last 10min (informational; hard gap only on >10000 events runaway).
+  - **§17 L1 autonomic reflex compliance** — per-session mean compliance rate over last 24h + dogfood-yes count (hard gap if < 30%; soft warn 30-60%).
+  - **§18 L2 EGRI promotion throttle** — promotions in last τ_a₂ window vs budget; hard gap when over budget.
+  - **§19 Multi-layer composite health** — calls compute-budget-status; surfaces per-layer verdicts (`L0=stable L1=stable L2=stable L3=stable` form). Hard gap only if any layer "unstable".
+
+### Onboard + repair (wired to install-rcs-stability)
+
+- **CHANGED** `scripts/onboard.sh` calls `install-rcs-stability.sh` after bootstrap (replaces v0.14.0 call to `install-l3-stability.sh`). Falls back to L3-only installer if multi-layer one is absent.
+- **CHANGED** `scripts/repair.sh` runs `install-rcs-stability.sh` when doctor reports any L0/L1 audit-log gap, missing G0/G1/G2, or unstable λ. Falls back to L3-only installer.
+
+### What changes operationally
+
+Before v0.16.0:
+- L0/L1/L2 stability was uncontrolled at the audit level.
+- The dogfood receipt was a PR artifact, not a control-loop sensor.
+
+After v0.16.0:
+- Every tool call logs to L0 audit. Every session ends with an L1 reflex-compliance record. Every bookkeeping promotion records to L2.
+- `bstack doctor §19` and `bash scripts/compute-budget-status.sh --human` show the multi-layer health on demand.
+- The dogfood receipt's anti-rationalization line is parsed by the L1 Stop hook and recorded as a binary signal — receipts auto-feed back into the control loop.
+
+### The 4-gate flow now per-layer
+
+| Layer | Sensor | Audit log | Doctor section | Throttle |
+|---|---|---|---|---|
+| L0 plant | PostToolUse hook | `l0-tools.jsonl` | §16 | informational; runaway detection |
+| L1 autonomic | Stop hook (transcript scanner) | `l1-reflexes.jsonl` | §17 | hard gap if compliance < 30% |
+| L2 EGRI | bookkeeping promote step | `l2-promotions.jsonl` | §18 | hard gap if over τ_a₂ budget |
+| L3 governance | PreToolUse + git pre-commit + GH Actions (v0.14.0) | `l3-edits.jsonl` | §14 + §15 | hard gap if λ₃ ≤ 0 |
+
+### Test plan executed
+
+- `bash -n scripts/*.sh` — syntax clean on all new + modified scripts
+- `compute-budget-status.sh --human` against ~/broomva → reports L0=stable L1=stable L2=stable L3=stable; composite ω = 0.006398
+- L0 hook tested with synthetic JSON input → entry appended correctly to l0-tools.jsonl
+- L2 hook tested with `--slug --type --score --source` → entry appended; over-budget case (5 + 1 in 1h) → exit 2 with warning
+- `install-rcs-stability.sh --dry-run` on fresh workspace → reports all install steps without writing
+- `install-rcs-stability.sh` real → L3 (4 files via install-l3-stability) + L0 + L1 hooks merged into settings.json + .control/audit/ created
+- Re-run installer → all hooks skipped via `_bstack_primitive` markers (idempotent)
+- doctor.sh against ~/broomva → §16-§18 informational (audit logs not yet wired in broomva); §19 reports L0=stable L1=stable L2=stable L3=stable composite. 89/91 passed, 2 pre-existing gaps unrelated.
+
+### Honest scope caveats
+
+- L0 audit-log retention is unbounded by default; rotation policy (`policy.yaml [audit_retention]`) is deferred to a follow-up.
+- L2 wiring requires `bookkeeping.py promote` to call `l2-promotion-audit-hook.sh`. The hook itself ships in this PR; the bookkeeping integration is a small follow-up in the broomva/bookkeeping repo (one-line subprocess.run after the promotion write).
+- L1 transcript-scanner uses heuristic substring matches against the session log. False positives possible (e.g., "interceptor" in a non-validation context counts as r10_empirical). The heuristic is intentionally permissive at v0.16.0; tightening is a follow-up after rule-of-three failure cases accumulate in the audit log.
+
+### Spec doc + cross-references
+
+- Spec: `~/broomva/conductor/workspaces/broomva/doha/docs/reports/2026-05-22-multi-layer-closure-spec.html`
+- Prior PR (L3 closure): broomva/bstack#45 (v0.14.0, merged 2026-05-22)
+- Dogfood skill: github.com/broomva/dogfood v0.1.0
+- /autonomous flow record: `~/broomva/conductor/workspaces/broomva/doha/docs/reports/2026-05-22-autonomous-flow-achieved.html`
+
+---
+
 ## 0.15.0 — 2026-05-22
 
 ### Add `broomva/kg` to managed-skill registry + catalog policy reader (BRO-1223 follow-up)
