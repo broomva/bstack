@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.13.0 — 2026-05-22
+
+### P11 Empirical operationalization — Dogfood Plan reflex + per-stack cookbook + doctor §13
+
+Closes P11's *operationalization gap*: the discipline of "validate by interacting" was well-defined, but agents lacked a concrete *how* keyed to the tech stack the workspace was instantiated from. This release adds:
+
+- **NEW** `references/dogfood-patterns.md` — per-stack cookbook with surfaces matrix (Tauri+sidecar / Next.js / Expo RN / Rust CLI / REST API / MCP server). Each pattern names the canonical arc, the skill toolkit (Interceptor mandatory for visual deploy verification; gstack, cliclick, screencapture, curl+jq compose per stack), the gotchas observed in production, and the receipt template. Anchored by the Houston dogfood-pattern.html worked example.
+
+- **CHANGED** `references/primitives.md` §P11 — adds reflex rule 7 (Dogfood Plan keyed to detected stack): before substantive work, the agent produces a plan (entry surface · driver · evidence · smoke · end-to-end · receipt anchor) in the response and PR body, citing the per-stack pattern from the cookbook. Companion-reference callout points to the cookbook.
+
+- **CHANGED** `assets/templates/AGENTS.md.template` §P11 — propagates the reflex rule 7 to every new bstack'd project AND stubs a `## Dogfood Plan (Stack: TBD)` block with the row template, so the first substantive feature work has a concrete anchor to fill.
+
+- **CHANGED** `SKILL.md` — surfaces `references/dogfood-patterns.md` in the on-demand reference index alongside the canonical primitive contract.
+
+- **CHANGED** `scripts/doctor.sh` — adds §13 P11 Empirical dogfood-readiness. Auto-detects tech stack from repo signals (Cargo.toml + src-tauri/ → tauri-sidecar; next.config.* → nextjs; app.json + expo → expo-rn; Cargo.toml solo → rust-cli; openapi.* or REST-framework deps → rest-api; mcp.{json,yaml} → mcp-server). Verifies a Dogfood Plan anchor exists at one of three accepted locations (AGENTS.md `## Dogfood Plan`, `docs/dogfood-plan.md`, or PR body). Informational — never blocks (rule-of-three not yet hit; promotion to blocking gate requires ≥3 documented incidents per Crystallize P16).
+
+- **CHANGED** `scripts/onboard.sh` — after bootstrap, auto-detects stack and substitutes the `## Dogfood Plan (Stack: TBD)` placeholder with the detected stack name. Surfaces the cookbook reference in the next-step receipt. Persists detected stack in the initialization marker.
+
+### L3 stability budget — why this isn't P21
+
+P11 already covers "validate by interacting" with full reflex rules. The gap was operationalization (the *how*), not coverage. Adding a 21st primitive for the cookbook would consume L3 stability budget (λ₃ ≈ 0.006) for no policy delta. Instead: sub-rule + cookbook + doctor check at L2 operationalization layer.
+
+### Promotion gating for §13
+
+The §13 check ships as informational (warn-only). Promotion to `policy.yaml` blocking gate requires (a) ≥3 documented incidents where missing Dogfood Plan caused user-visible regression, (b) the unambiguous blocking criterion ("PR has no Dogfood Plan in body"), (c) failure mode named (P11 ritual without substance), (d) L3 stability budget available. Logged in `research/entities/pattern/bstack-engine.md` candidate ledger.
+
+### Companion artifact
+
+Human-readable record of /autonomous flow integration at `~/broomva/docs/reports/2026-05-22-autonomous-flow-achieved.html` (in workspace repo, separate PR). Per P18 Audience: HTML for human reading; this CHANGELOG + the cookbook + the primitives reference stay markdown for agent loading.
+
+---
+
 ## 0.12.0 — 2026-05-21
 
 ### LLM-as-index wiring — catalog refresh hook + `/kg load` skill doctor checks (BRO-1223)

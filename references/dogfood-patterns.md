@@ -1,0 +1,311 @@
+# bstack — Dogfood Patterns Cookbook
+
+**Status**: P11 (Empirical Feedback Loop) operationalization reference. Loaded on demand when the agent needs the concrete *how* of "validate by interacting" for a given tech stack. Lives at `bstack/references/dogfood-patterns.md`; SKILL.md surfaces it in the on-demand index.
+
+**Audience**: agent-readable (LLM-loaded reference) — Markdown per P18 Format-Follows-Audience rule.
+
+**Companion docs**: `references/primitives.md` §P11 (the discipline) · `~/.claude/skills/Interceptor/SKILL.md` (the primary surface) · `~/broomva/docs/reports/2026-05-22-houston-dogfood-pattern.html` (the worked example for Tauri).
+
+---
+
+## What this cookbook closes
+
+P11 is **what to do** (interact with the deployed version, capture evidence). This cookbook is **how to do it** for whatever tech stack the workspace is currently instantiated from. Without this, the P11 reflex becomes ritual: agents acknowledge "validate by interacting" and then ship without ever clicking the app, because they don't know which surface to drive.
+
+The cookbook is keyed on the **detected stack** — not the user's words. The `bstack doctor` §13 check auto-detects the stack from repo signals (Cargo.toml + src-tauri/ → Tauri; next.config.* → Next.js; app.json + Expo SDK → React Native; Cargo.toml solo → Rust CLI; openapi.* / FastAPI / Hono routes → REST API; SKILL.md with MCP frontmatter → MCP server) and maps to the matching pattern below.
+
+---
+
+## The Dogfood Plan contract (binding)
+
+Before substantive work begins on any feature, the agent produces a **Dogfood Plan** keyed to the detected stack. The plan lives in the response (and the PR body / Linear ticket) — not the agent's head. P11's 6th reflex (the *dogfood receipt*) verifies the plan was executed before claiming complete.
+
+Minimum Dogfood Plan shape:
+
+```markdown
+**Dogfood Plan** (stack: <detected>)
+
+- **Entry surface**: what URL / window / CLI command exposes the change to a user
+- **Driver**: which skill / tool drives the interaction (Interceptor, cliclick, curl, etc.)
+- **Evidence**: what artifact proves it worked (screenshot path, response body, log line, recording)
+- **Smoke**: the one-line "did it not break in the obvious way" check
+- **End-to-end**: the multi-step user flow that would catch a regression a smoke test misses
+- **Receipt anchor**: the file / line / message-id where the evidence lives
+```
+
+If the agent cannot fill a row, it states why ("backend requires real cloud creds; smoke-only this run") — but the plan is still produced. Silent omission is the failure mode this contract closes.
+
+---
+
+## Pattern A — Tauri + sidecar (e.g. Houston, mission-control, control)
+
+**Signals**: `Cargo.toml` + `src-tauri/` + a separately-built engine binary; macOS WKWebView host; vite dev server on `:1420`.
+
+**Why hybrid**: WKWebView is opaque to System Events (AppleScript accessibility returns `missing value` for React buttons). The app the user sees is a Tauri window — but the React DOM inside it is reachable from a regular Chrome session pointing at `:1420` once engine creds are injected.
+
+| Surface | Use for | How |
+|---|---|---|
+| **Engine API** | State assertions (workspaces, sessions, providers, settings) | `curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:$PORT/v1/*`. Token from env at launch; port from `~/.dev-houston/engine.json` (note: dev mode uses isolated home). |
+| **cliclick** | Onboarding screens, button clicks, typing into chat input | `osascript -e 'tell application "Houston" to activate'` then `cliclick c:X,Y t:"text" kp:return`. Find coords by `screencapture -R region` and mapping cropped-pixel → logical-screen y. |
+| **screencapture** | Before/after visual evidence | `screencapture -x -t png -R x,y,w,h /tmp/shots/<label>.png`. Agent `Read`s the PNG back into context to verify. |
+| **Interceptor** | Specific React DOM state, network log, replay-script recording | Open `http://localhost:1420` in a real Chrome session, inject `window.__HOUSTON_ENGINE__ = { baseUrl, token }` before reload, then `interceptor read / act / inspect / monitor`. |
+| **vite HMR** | Frontend code change → re-render in ~200ms | Edit any `app/src/**`; vite pushes `hmr update`. Engine state survives. `main.tsx` can't fast-refresh → full reload expected. |
+| **Tauri supervisor** | Engine code change → restart | Watches `engine/**/*.rs`. Kills/rebuilds/restarts sidecar at a NEW port. Re-read `engine.json`. Same token persists if `HOUSTON_ENGINE_TOKEN` was set at launch. |
+
+**Canonical arc** (lifted from `~/broomva/docs/reports/2026-05-22-houston-dogfood-pattern.html`):
+
+1. `cargo build -p <engine-name>-server` (cold ~2-4 min; warm ~30s)
+2. `<TOKEN_VAR>=<known> pnpm tauri dev` from `app/` — Tauri spawns vite on :1420 + builds Tauri host + spawns engine sidecar
+3. `PORT=$(jq -r '.port' ~/.dev-<app>/engine.json)`; `curl -H "Authorization: Bearer $TOKEN" $BASE/v1/health`
+4. Drive engine state via curl (workspaces, sessions, providers); persists in dev SQLite at `~/.dev-<app>/db/`
+5. Drive UI flow via `cliclick`; capture region screenshots when coords are ambiguous
+6. Iterate frontend: edit `app/src/`, vite HMRs in ~200ms; iterate engine: edit `engine/**/*.rs`, supervisor restarts at new port; re-read engine.json
+7. Tear down: `kill $(cat /tmp/<app>-tauri-dev.pid)` cascades shutdown
+
+**Gotchas**: dev home is `~/.dev-<app>/` not `~/.<app>/`; `cargo check --workspace` fails on CI without the engine sidecar prebuilt at `binaries/<name>-<triple>`; tab cycle lands on the wrong button (mic vs chat input) — verify with a zoomed region capture; engine port changes on every supervisor respawn but the token persists across.
+
+---
+
+## Pattern B — Next.js (App Router or Pages)
+
+**Signals**: `next.config.{js,mjs,ts}`, `app/` or `pages/`, `next` in package.json.
+
+| Surface | Use for | How |
+|---|---|---|
+| **Dev server logs** | Compile errors, server-component logs, API route logs | `bun dev` or `pnpm dev` in `run_in_background`; tail the output file |
+| **Interceptor** | UI interaction in real Chrome (logged-in sessions, auth, real cookies) | `interceptor open http://localhost:3000/<route> ; interceptor read ; interceptor act --click "<role+name>"` |
+| **gstack** | Fast headless E2E (no auth state needed) | One-shot scripts via Playwright/Puppeteer wrapper |
+| **before-and-after** | Pre/post screenshot of a visible change | `before-and-after` skill — captures URL, edits, re-captures, diffs |
+| **curl + jq** | API routes and server actions (POST / GET) | `curl -sS -X POST http://localhost:3000/api/<route> -H 'content-type: application/json' -d '{...}' \| jq` |
+| **Vercel preview** | Deploy verification post-PR | `gh pr view <n> --json comments \| jq -r '...preview URL...'` then Interceptor on the preview URL |
+
+**Canonical arc**:
+
+1. `bun dev` or `pnpm dev` in `run_in_background` (capture stdout file for log-tail)
+2. Smoke: `curl -sSI http://localhost:3000 \| head -1` → expect `200`
+3. End-to-end via Interceptor: open the affected route, drive the user flow that the change targets, capture screenshot at each meaningful state
+4. API changes: `curl` the endpoint with realistic payloads; `jq` the response; assert shape
+5. On push: `p9 watch <pr> --background` for CI; on green, Vercel preview URL → Interceptor on the preview, capture deploy-verification screenshot before claiming shipped
+
+**Gotchas**: server components don't surface client errors to terminal — open dev tools / Interceptor console; middleware redirects can hide real failures behind 200s; `next dev` HMR can mask stale type errors that `next build` catches.
+
+---
+
+## Pattern C — Expo / React Native (finkids, vlgym)
+
+**Signals**: `app.json` with `expo` block, `package.json` with `expo`, presence of `metro.config.*`.
+
+| Surface | Use for | How |
+|---|---|---|
+| **Expo Go on simulator** | Visual + interaction validation | `expo start --ios` (or `--android`); simulator boots; capture via `xcrun simctl io booted screenshot /tmp/<label>.png` |
+| **Metro bundler logs** | JS errors, fast refresh status | `expo start` in `run_in_background`; tail output |
+| **EAS preview build** | Real-device validation (when simulator is insufficient) | `eas build --profile preview` → install on TestFlight / Internal Distribution |
+| **Detox** (when wired) | Automated E2E on simulator | `detox test` |
+| **xcrun simctl** | Drive iOS simulator from CLI | `simctl io booted recordVideo` for flow capture; `simctl push` for notifications |
+
+**Canonical arc**:
+
+1. `expo start --ios` in `run_in_background`
+2. Wait for simulator boot; capture initial state with `xcrun simctl io booted screenshot /tmp/<label>-baseline.png`
+3. Drive the user flow (taps, scrolls) — for non-Detox repos, narrate the manual flow in the PR body and capture per-state screenshots via `xcrun simctl io booted screenshot`
+4. For state assertions: query Reactotron, async-storage CLI, or the app's debug menu
+5. Tear down: `xcrun simctl shutdown booted`; metro stops via the background-process kill
+
+**Gotchas**: simulator can be in a stale state between runs — `xcrun simctl erase booted` is the nuclear reset; Expo SDK upgrades can change which surface works; iOS-Android divergence means dogfood plan should pick the *primary* target platform per ticket.
+
+---
+
+## Pattern D — Rust CLI (microgpt, p9, bstack, persist)
+
+**Signals**: `Cargo.toml` without a UI framework, `src/main.rs` or `src/bin/*.rs`, no `tauri.conf.*` or web assets.
+
+| Surface | Use for | How |
+|---|---|---|
+| **Direct invocation** | The CLI IS the user surface | `cargo run -- <args>` for dev; `./target/release/<bin> <args>` for the binary the user sees |
+| **trycmd / assert_cmd** | Repeatable CLI scenarios | Integration tests under `tests/` — these ARE the dogfood receipts when wired |
+| **Snapshot via expect-test / insta** | Output format regressions | `insta` review for any output change |
+| **Real-arg shell sessions** | Multi-step flows | Capture via `script -q /tmp/<label>.log <cmd>` or `asciinema rec` |
+| **`--help` smoke** | Public-API surface check | `cargo run -- --help` → assert exit 0 + key flags listed |
+
+**Canonical arc**:
+
+1. `cargo build` (release mode if perf matters)
+2. Smoke: `./target/release/<bin> --version && ./target/release/<bin> --help` → exit 0 both times
+3. The user-flow case(s) that motivated the change: invoke the actual flag combination a user would type; capture stdout/stderr; verify exit code and output shape
+4. For interactive CLIs (TUI / prompts): `script -q` or `asciinema rec` captures the session as a replayable artifact
+5. If the CLI calls external services: `--dry-run` first (no side effects), then real call with redacted output captured in the receipt
+
+**Gotchas**: cargo features matter — dogfood the feature flags the user will ship with, not just the default; rust-toolchain.toml pins matter for deploy-verification; CLI args that look like flags but mean filenames need explicit `--` separators when testing.
+
+---
+
+## Pattern E — REST API / FastAPI / Hono / Axum
+
+**Signals**: route definitions in `routes/`, `api/`, or `src/handlers/`; `openapi.{yaml,json}` present; framework dep (fastapi, hono, axum, express).
+
+| Surface | Use for | How |
+|---|---|---|
+| **curl + jq** | Endpoint behavior | `curl -sS -X <METHOD> $BASE/<route> -H 'authorization: Bearer ...' -d '{...}' \| jq` |
+| **httpie** (if available) | Friendlier ad-hoc requests | `http POST $BASE/<route> field=value` |
+| **OpenAPI schema diff** | Public-contract regression | Compare `openapi.{yaml,json}` before/after; alert on breaking changes |
+| **hurl / bruno / postman runner** | Repeatable request collections | `hurl tests/*.hurl` returns pass/fail per scenario |
+| **Server logs** | What the request actually did | `run_in_background` tailing the dev server stdout |
+| **Database snapshot** | Side-effect verification | `sqlite3 dev.db 'select * from ...'` or psql equivalent before/after the request |
+
+**Canonical arc**:
+
+1. Start the dev server in `run_in_background` (uvicorn, hono, axum); capture stdout
+2. Smoke: `curl -sSI $BASE/health` (or root) → 200
+3. The endpoint being changed: hit it with realistic auth + payload; assert response shape with `jq` filters; verify side effects in the DB snapshot
+4. OpenAPI: regenerate if needed; diff for breaking changes; if changed, surface in PR body
+5. Concurrency: hit the endpoint with `xargs -P` parallelism if the change touches shared state or transactions
+
+**Gotchas**: 200 with wrong body looks like success; auth middleware can mask real failures; OpenAPI drift = client breakage; database side effects don't show in the response — query the DB to confirm.
+
+---
+
+## Pattern F — MCP server / Tool provider
+
+**Signals**: SKILL.md frontmatter with `tools:`, `mcp.json` / `mcp.yaml` config, `@modelcontextprotocol/sdk` dep.
+
+| Surface | Use for | How |
+|---|---|---|
+| **mcp inspector / explorer** | Tool discovery + manual invocation | `npx @modelcontextprotocol/inspector <server-cmd>` |
+| **Direct LLM invocation** | The agent IS the user — try it in a session | Have Claude / GPT invoke the tool with a realistic prompt; check the response |
+| **Conversation log** | What the model actually did with your tool | P1 (Conversation Bridge) preserves this; grep the log for the tool's name |
+| **mcp server logs** | What the tool saw | Background tail of the server's stdout/stderr |
+| **Tool-call shape diff** | Regression | Capture before/after tool-call JSON; assert structural compatibility |
+
+**Canonical arc**:
+
+1. Launch the MCP server in `run_in_background` (or via inspector)
+2. From a fresh agent context (or inspector UI), invoke each tool the change affects with realistic inputs
+3. Capture the tool response, the server log lines that fired, and any side-effect state (e.g. files written)
+4. If the change is to the tool *schema*: confirm the change is backwards-compatible OR explicitly versioned
+5. If the change is to the tool *behavior*: at minimum, capture one successful invocation from a real LLM session as the receipt
+
+**Gotchas**: MCP server contracts are stricter than REST — a missing required field is a hard fail; descriptions matter for tool selection by the model; transport layer (stdio vs SSE vs websocket) can hide failures differently.
+
+---
+
+## Skills inventory (when to reach for which)
+
+Ranked by P11 utility for dogfooding-from-client-POV. All are existing skills; the cookbook composes them per stack.
+
+| Skill | Stealth | OS-level input | Replay | Network log | Best for |
+|---|---|---|---|---|---|
+| **Interceptor** | ✅ zero CDP fingerprint | ✅ via macOS bridge | ✅ monitor/replay | ✅ auto | Authenticated Chrome flows, real-session validation, deploy verification (MANDATORY per workspace rules) |
+| **gstack** | partial | ✗ | ✗ | partial | Fast headless smoke, CI-friendly E2E, no auth state |
+| **Browser** | ✗ CDP-detectable | ✗ | ✗ | ✓ | Batch headless automation |
+| **agent-browser** | ✗ deprecated for visual verification | ✗ | ✗ | ✓ | Legacy; superseded by Interceptor |
+| **before-and-after** | n/a | n/a | n/a | n/a | Pre/post visual diff (any stack with a URL) |
+| **cliclick + screencapture** | n/a (real input) | ✅ native macOS | ✗ | ✗ | Tauri / native-app windows where WebView accessibility is opaque |
+| **xcrun simctl** | n/a | ✅ simulator | ✓ recordVideo | partial | iOS simulator drive (Expo / React Native) |
+| **curl + jq** | n/a | n/a | n/a | n/a | API state assertions, smoke checks |
+| **/p9** | n/a | n/a | n/a | n/a | Productive-wait while CI / deploy runs |
+| **/persist** | n/a | n/a | n/a | n/a | Long-horizon dogfood loops (>1h, across sessions) |
+| **BrightData** | ✓ residential proxy | ✗ | ✗ | ✗ | Scale crawling (not typical dogfood, but for production-traffic-class validation) |
+
+**Two rules** the inventory enforces:
+
+1. **Interceptor is mandatory for visual deploy verification.** agent-browser / Browser skill are not substitutes when the question is *did this actually render correctly in a real session*.
+2. **The skill list is composition, not exclusion.** A Tauri dogfood plan typically uses curl + cliclick + screencapture + Interceptor + vite logs together. The cookbook prescribes which combination for which signal.
+
+---
+
+## Detection algorithm (used by `bstack doctor` §13)
+
+```text
+if   exists(Cargo.toml) and exists(src-tauri/)         → Pattern A — Tauri + sidecar
+elif exists(next.config.*) or has_dep("next")          → Pattern B — Next.js
+elif exists(app.json) and json_has("expo")            → Pattern C — Expo / RN
+elif exists(Cargo.toml) and not exists(src-tauri/)    → Pattern D — Rust CLI
+elif exists(openapi.*) or has_dep(["fastapi","hono","axum","express"])
+                                                       → Pattern E — REST API
+elif frontmatter_has("tools:") or exists(mcp.{json,yaml})
+                                                       → Pattern F — MCP server
+else                                                   → Pattern Z — Unknown; agent declares stack in plan
+```
+
+Multi-stack repos (e.g. Next.js + REST API combined; Tauri + MCP-server-as-tool) produce *multiple* dogfood plans — one per surface the user perceives.
+
+---
+
+## Where Dogfood Plans live
+
+Once a stack is detected, the Dogfood Plan section anchors at one of:
+
+1. **Repo `AGENTS.md`** under `## Dogfood Plan (Stack: <pattern>)` — preferred for repos with substantial dogfood discipline already
+2. **`docs/dogfood-plan.md`** — preferred for repos where AGENTS.md is governance-only
+3. **PR body** — minimum-viable: every substantive PR includes the plan in the body, even if there's no canonical doc location yet
+
+`bstack doctor` §13 looks for any of the three on a substantive feature branch. Missing all three = informational nudge (rule-of-three not yet hit; not blocking until promoted).
+
+---
+
+## Composition with other primitives
+
+| Primitive | Composition |
+|---|---|
+| **P1** Bridge | Dogfood receipts captured at session end → JSONL → Obsidian; future agents can grep for "how did we dogfood X" |
+| **P4** Pipeline | Dogfood Plan goes in the PR body; reviewers verify the plan was executed before approving |
+| **P5** Fanout | Multi-stack repos fan out one dogfood agent per pattern; each agent uses its own surfaces |
+| **P9** Wait | While `gh pr checks --watch` runs, the agent runs dogfood interactions on the deploy preview |
+| **P11** Empirical | This cookbook IS P11's how. The plan + receipt is the discipline's concrete output. |
+| **P14** Dep-Chain | The Dogfood Plan's *Entry surface* row IS the downstream-consumers entry into the dep-chain enumeration |
+| **P15** Snapshot | Dogfood Plan references the deploy state surfaced in the snapshot (preview URL, dev server port) |
+| **P18** Audience | Plan is markdown (agent-loaded); receipt screenshots are PNGs (binary, sidecar `.meta.yaml` per P18 Category C) |
+| **P19** Orchestrate | Long dogfood loops (>1h) → `persist iterate` (P12 mechanism); in-session multi-flow → P5 fanout |
+| **P20** Cross-Review | Dogfood receipt is one of the inputs cross-review evaluates: "did the writer actually exercise this, or did they ship blind?" |
+
+---
+
+## Anti-patterns (don't ship without addressing)
+
+| Anti-pattern | Why it fails | Correct |
+|---|---|---|
+| "It compiles, shipping" | P11 invariant — compile-time success is not deploy-time correctness | Exercise the change end-to-end against the deployed version |
+| "CI is green, shipping" | CI tests what CI was told to test; the user-perceived flow is broader | Dogfood receipt that exercises the user-perceived flow, not just the unit test |
+| "I'll dogfood after merge" | Post-merge dogfood = bug-found-by-user, not bug-caught-by-discipline | Dogfood plan executed BEFORE merge, evidence in PR body |
+| "Same as last time, didn't re-check" | Stack changes silently (port shifted, token rotated, route renamed) | Each substantive PR fires the plan fresh; never trust stale receipts |
+| "Screenshot from local, same as prod" | Local ≠ deploy preview ≠ production | Capture the deployed surface, not local — Vercel preview / EAS build / production endpoint |
+| Agent-browser for deploy verification | Bot detection + missed visual state | Interceptor — mandatory per workspace rules |
+| Ritual-style "did I exercise it" without evidence | Ritual; P11 #6 requires the *receipt* | Every "yes" in the receipt anchors to a file path, log line, or response body |
+
+---
+
+## Receipt template
+
+The dogfood receipt is the artifact that closes the loop. It goes in the PR body or `docs/dogfood-receipts/<date>-<ticket>.md` for repos with substantial history.
+
+```markdown
+**Dogfood Receipt** — <ticket> · <date>
+
+| Plan row | Executed | Evidence |
+|---|---|---|
+| Smoke | ✅ | `curl ... \| head -1` → 200; log line at /tmp/dev.log:42 |
+| End-to-end | ✅ | Screenshots: /tmp/shots/{baseline,after,final}.png |
+| API contract | ✅ | curl response captured in PR comment #3 |
+| Side-effect | ✅ | DB query before/after: count went 0 → 1 |
+| Deploy preview | ✅ | Vercel preview <url> — Interceptor screenshot /tmp/preview.png |
+| <row that wasn't applicable> | ⊘ | Reason: <e.g. backend mocked in PR; real cloud creds not available> |
+
+**Anti-rationalization check**: did I actually click the app like a user would? <yes/no>
+**Surfaces driven**: <Interceptor / cliclick / curl / etc.>
+**Time-to-receipt**: <duration> from first write to receipt complete.
+```
+
+The "anti-rationalization check" is the test against P11's failure mode (ritual acknowledgment without substance). If the answer is no, the PR is not ready — go back to the plan.
+
+---
+
+## Promotion gating (rule-of-three for elevation to gate)
+
+The §13 check ships as **informational** (warn-only) in bstack v0.13.0. Promotion to a `policy.yaml` blocking gate requires:
+
+1. **≥3 documented incidents** where a missing Dogfood Plan caused a user-visible regression (logged in `research/entities/pattern/bstack-engine.md` candidate ledger with file citations)
+2. **Concrete blocking criterion** ("PR has no Dogfood Plan in body" is the unambiguous mechanical check)
+3. **Failure mode named** (which it is: P11 ritual without substance)
+4. **L3 stability budget available** (λ₃ ≈ 0.006 — governance changes must be rare; promotion to blocking is one such change)
+
+Until promoted, the §13 check is the warning surface; the cookbook is the agent's how-to; the receipt template is the artifact that proves discipline was applied.

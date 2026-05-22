@@ -72,6 +72,10 @@ The twenty primitives. Each closes one specific failure mode that drifts into en
 
 Full reference: see [references/primitives.md](references/primitives.md).
 
+**Primitive operationalization references** (loaded on demand by the agent applying the primitive):
+
+- **Empirical (P11) — dogfood patterns cookbook**: [references/dogfood-patterns.md](references/dogfood-patterns.md). Per-tech-stack interaction surfaces matrix (Tauri+sidecar / Next.js / Expo RN / Rust CLI / REST API / MCP server). Names the skill toolkit (Interceptor mandatory for visual deploy verification; gstack / cliclick / screencapture / curl+jq compose per stack), the canonical arc per stack, the gotchas, the Dogfood Plan contract, and the receipt template. `bstack doctor` §13 enforces stack-keyed plan presence (informational until rule-of-three).
+
 **Roadmap to v1.0.0** — the architectural contracts, gap catalog, and 9-phase closure plan from v0.3.1 onwards live in [`specs/2026-05-18-substrate-completion.md`](specs/2026-05-18-substrate-completion.md) (canonical) and [`references/substrate-completion-overview.md`](references/substrate-completion-overview.md) (agent-readable summary). Every future bstack release through v1.0.0 references this spec for "what does done look like".
 
 ### Naming convention for agent prose (binding on every agent)

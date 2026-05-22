@@ -255,6 +255,40 @@ else
     echo "[onboard] warn: bootstrap.sh not found at $BOOTSTRAP_SCRIPT"
 fi
 
+# ─── Detect tech stack + stub Dogfood Plan (P11 operationalization) ──────
+# AGENTS.md.template already contains a `## Dogfood Plan (Stack: TBD)` block.
+# Auto-fill the detected stack so the agent has a concrete pattern to follow.
+# Mirrors detection logic in bstack/scripts/doctor.sh §13 + references/dogfood-patterns.md.
+DETECTED_STACK="unknown"
+if [ -f "$WORKSPACE/Cargo.toml" ] && [ -d "$WORKSPACE/src-tauri" ]; then
+    DETECTED_STACK="tauri-sidecar"
+elif [ -d "$WORKSPACE/app/src-tauri" ] || ls "$WORKSPACE"/*/src-tauri 2>/dev/null | head -1 | grep -q . ; then
+    DETECTED_STACK="tauri-sidecar"
+elif ls "$WORKSPACE"/next.config.* 2>/dev/null | head -1 | grep -q . ; then
+    DETECTED_STACK="nextjs"
+elif [ -f "$WORKSPACE/app.json" ] && grep -q '"expo"' "$WORKSPACE/app.json" 2>/dev/null; then
+    DETECTED_STACK="expo-rn"
+elif [ -f "$WORKSPACE/Cargo.toml" ]; then
+    DETECTED_STACK="rust-cli"
+elif ls "$WORKSPACE"/openapi.* 2>/dev/null | head -1 | grep -q . ; then
+    DETECTED_STACK="rest-api"
+elif [ -f "$WORKSPACE/mcp.json" ] || [ -f "$WORKSPACE/mcp.yaml" ]; then
+    DETECTED_STACK="mcp-server"
+elif [ -f "$WORKSPACE/package.json" ] && grep -qE '"(fastapi|hono|axum|express)"' "$WORKSPACE/package.json" 2>/dev/null; then
+    DETECTED_STACK="rest-api"
+fi
+
+if [ -f "$WORKSPACE/AGENTS.md" ] && grep -q '^## Dogfood Plan (Stack: TBD)' "$WORKSPACE/AGENTS.md" 2>/dev/null; then
+    # Portable sed -i: BSD (macOS) needs '' arg, GNU doesn't. Use a temp file
+    # round-trip to stay portable.
+    tmpfile=$(mktemp)
+    sed "s/^## Dogfood Plan (Stack: TBD)$/## Dogfood Plan (Stack: $DETECTED_STACK)/" "$WORKSPACE/AGENTS.md" > "$tmpfile"
+    mv "$tmpfile" "$WORKSPACE/AGENTS.md"
+    echo "[onboard] Dogfood Plan stub auto-keyed to detected stack: $DETECTED_STACK"
+    echo "          → fill the plan rows in $WORKSPACE/AGENTS.md before first substantive feature work"
+    echo "          → cookbook: $BSTACK_REPO/references/dogfood-patterns.md"
+fi
+
 # ─── Mark initialized ─────────────────────────────────────────────────────
 mkdir -p "$STATE_DIR"
 {
@@ -266,6 +300,7 @@ mkdir -p "$STATE_DIR"
     echo "auto_merge: $AUTO_MERGE"
     echo "bstack_repo: $BSTACK_REPO"
     echo "bootstrap_status: $BOOTSTRAP_STATUS"
+    echo "detected_stack: $DETECTED_STACK"
     [ -n "$BOOTSTRAP_DETAIL" ] && echo "bootstrap_detail: $BOOTSTRAP_DETAIL"
 } > "$MARKER_FILE"
 
@@ -282,6 +317,10 @@ echo ""
 echo "  Or in your terminal:"
 echo "    cd $WORKSPACE       # cd into your workspace"
 echo "    make bstack-check   # run the smoke gate"
+echo ""
+echo "  Detected stack: $DETECTED_STACK"
+echo "  Dogfood Plan stub: $WORKSPACE/AGENTS.md → ## Dogfood Plan (Stack: $DETECTED_STACK)"
+echo "  Cookbook:          $BSTACK_REPO/references/dogfood-patterns.md"
 echo ""
 echo "  Re-run onboarding anytime: bash scripts/onboard.sh --force"
 echo "  ─────────────────────────────────────────────────────"
