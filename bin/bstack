@@ -50,6 +50,11 @@ Federation:
   workspace register|list         Manage ~/.broomva/global/registry.yaml (≥ 0.18.0).
   workspace info|deregister       Inspect or remove a workspace entry.
 
+Review:
+  cross-review <pr-num> --repo <owner/name>
+                                  P20 cross-model adversarial review via remote
+                                  git fetch — invokes codex exec (≥ 0.20.0).
+
 Release (maintainers):
   release tag                     Tag the current VERSION and create the
                                   matching GitHub Release from CHANGELOG.
@@ -62,6 +67,7 @@ Examples:
   bstack doctor --quiet
   bstack config set auto_upgrade true
   bstack wave dispatch plans/sub-a.md plans/sub-b.md
+  bstack cross-review 195 --repo broomva/broomva.tech --post-comment
   bstack release tag
 EOF
 }
@@ -332,6 +338,7 @@ case "$cmd" in
     crystallize)            exec "$BIN_DIR/bstack-crystallize" "$@" ;;
     bench)                  exec "$BIN_DIR/bstack-bench" "$@" ;;
     workspace)              exec "$BIN_DIR/bstack-workspace" "$@" ;;
+    cross-review)           exec "$BIN_DIR/bstack-cross-review" "$@" ;;
     release)
         sub="${1:-}"
         [ $# -gt 0 ] && shift

@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.20.0 — 2026-05-22
+
+### Cross-review CLI — restore the P20 mechanism (BRO-1227 Fix B)
+
+The P20 (`broomva/cross-review`) primitive — cross-model adversarial review on substantive PRs before merge — failed reliably during the 2026-05-21 Wave 3 dispatch session: both Cato sub-agent dispatches stalled within 6-7 tool uses with path-resolution errors. The Cato agent was invoked from the miami workspace but asked to read files at `~/broomva/broomva.tech/...` — the working tree was on a different branch than the PR's head SHA, so `Read`-tool calls drifted into "let me locate the actual repo" loops and never produced output.
+
+This release ships **Fix B**: a `bstack cross-review` CLI that reads PR contents via `gh pr diff` + `gh api repos/.../contents/<path>?ref=<sha>`. Working-tree state is eliminated as a variable — the CLI can be invoked from any cwd; only `--repo <owner/name>` + PR number matter.
+
+### New files (3)
+
+- **NEW** `scripts/cross-review.py` — argparse CLI. Fetches PR metadata (`gh pr view`), the diff (`gh pr diff`), and post-change file contents (`gh api …/contents/<path>?ref=<head_sha>`); skips lock files and >2000-line adds; bundles into a structured codex prompt; invokes `codex exec --sandbox read-only --model gpt-5.4 --skip-git-repo-check` with a 240s default timeout; parses JSON verdict (with fallback `try_parse_json` extractor that recovers a balanced `{…}` object from prose-wrapped output); writes structured JSON to `.bstack-cross-review/<pr>.json` + markdown to `<pr>.md`. Verdict schema: `verdict` (pass/concerns/fail/skipped) × `anti_slop_score` (0-10) × `criticality` (high/medium/low) × `findings[]` × `blind_spots_surfaced[]` × `summary`. Optional `--post-comment` posts the markdown verdict back to the PR. Exit codes: 0 pass · 10 concerns · 20 fail · 30 skipped · 2 invocation/gh failure.
+- **NEW** `bin/bstack-cross-review` — thin shim mirroring `bin/bstack-wave`: dispatches to `scripts/cross-review.py`, forwards argv unchanged.
+- **NEW** `tests/cross-review.test.sh` — 8-test hermetic offline smoke (dispatcher routing, argparse rejection cases, module import, `try_parse_json` recovery from prose-wrapped JSON, `exit_code_for_verdict` mapping). No network calls — end-to-end validation is the per-PR `--dry-run` against real PRs documented in the PR body.
+
+### Changed files (3)
+
+- **CHANGED** `bin/bstack` — adds `cross-review)` dispatch entry routing to `bin/bstack-cross-review`. Adds usage section "Review" with a one-liner pointing at `cross-review <pr-num> --repo <owner/name>` (`≥ 0.20.0`). Adds the canonical invocation to the Examples block.
+- **CHANGED** `SKILL.md` — Quick start block lists `bstack cross-review` with the BRO-1227 Fix B annotation and 0.20.0 introduction marker.
+- **CHANGED** `VERSION` — `0.19.0 → 0.20.0`.
+
+### Why Fix B over Fix A or Fix C
+
+- **Fix A** (add `--cwd` parameter to Cato dispatch) leaves the working-tree-state coupling intact — every future P20 invocation has to remember to set it, and a stale checkout silently degrades review quality. The failure mode comes back the next time someone uses Cato across repos.
+- **Fix B** (always read from git, never the working tree) eliminates the failure mode by construction. The bug surface goes away.
+- **Fix C** (full skill repo + agent definition + tmp-checkout pipeline) is the *complete* answer but requires writing the `~/.claude/skills/cross-review/` skill, deciding whether the Cato agent stays as the codex-exec frontend or gets re-architected, and managing the tmp-checkout cleanup contract. Larger blast radius — deferred to a follow-up once Fix B has soaked.
+
+### Test plan executed
+
+```
+bash -n bin/bstack-cross-review                                      # syntax OK
+bash -n bin/bstack                                                   # syntax OK
+python3 -m py_compile scripts/cross-review.py                        # OK
+bin/bstack --help | grep cross-review                                # 2 lines
+bin/bstack cross-review --help | head -20                            # argparse usage
+bin/bstack cross-review 195 --repo broomva/broomva.tech --dry-run    # 9 files fetched, 1 lock skipped
+bash tests/cross-review.test.sh                                      # 8/8 pass
+```
+
+### What's next (not in this release)
+
+- Apply `bstack cross-review` to the 3 PRs that merged WITHOUT P20 cross-review last session — broomva.tech#195, #196, life#1427 — and post retro-verdicts as PR comments. Out of scope for this PR (no code change needed; this PR ships the tool).
+- File a follow-up for the full `~/.claude/skills/cross-review/` skill (Fix C scope) once Fix B has soaked through ≥3 P20 invocations.
+
+### Backreferences
+
+- BRO-1227 — P20 cross-review mechanism gap (closes via Fix B)
+- 2026-05-22 session handoff — `/Users/broomva/conductor/archived-contexts/broomva/wave-3-dispatch-and-linear-updates/handoffs/2026-05-22-SESSION-HANDOFF.md` §"Queued + ready to dispatch"
+- CLAUDE.md §"Cross-Review (P20)" — the discipline rule this mechanism enforces
+
 ## 0.19.0 — 2026-05-22
 
 ### Closure Contract — generalize 5-tuple from 4 RCS layers to N declared arcs
