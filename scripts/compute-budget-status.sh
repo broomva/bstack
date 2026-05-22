@@ -15,6 +15,24 @@
 #   bash scripts/compute-budget-status.sh                  # JSON output
 #   bash scripts/compute-budget-status.sh --human          # human-readable
 #   bash scripts/compute-budget-status.sh --workspace=...  # custom workspace
+#   bash scripts/compute-budget-status.sh --trend          # composite-ω drift
+#                                                          # (writes 1 history
+#                                                          # line per call; reads
+#                                                          # last 7d to compute
+#                                                          # slope + verdict)
+#
+# Trend mode (v0.19.0+):
+#   - WITHOUT --trend: point-in-time composite-ω + per-layer verdicts.
+#   - WITH --trend: appends current snapshot to
+#       .control/audit/composite-omega-history.jsonl
+#     then computes a least-squares linear fit over the last 7d window:
+#       - slope (omega per second)
+#       - last value
+#       - baseline (median of first day in window)
+#       - verdict: stable_flat | drift_up | drift_down | volatile
+#   - Trend output composes with --human and --json the same way as point-in-
+#     time output (the "trend" key is added under JSON; a "Trend (7d): ..."
+#     line is added under human).
 #
 # Exit codes:
 #   0 — all layers stable
@@ -26,6 +44,7 @@ set -uo pipefail
 
 WORKSPACE="${BROOMVA_WORKSPACE:-$PWD}"
 FORMAT="json"
+TREND=0
 BSTACK_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 for arg in "$@"; do
@@ -33,8 +52,9 @@ for arg in "$@"; do
         --workspace=*) WORKSPACE="${arg#*=}" ;;
         --human)       FORMAT="human" ;;
         --json)        FORMAT="json" ;;
+        --trend)       TREND=1 ;;
         --help|-h)
-            grep -E '^#( |$)' "$0" | sed 's/^# \?//' | head -22
+            grep -E '^#( |$)' "$0" | sed 's/^# \?//' | head -34
             exit 0
             ;;
     esac
@@ -60,7 +80,7 @@ if ! command -v python3 >/dev/null 2>&1; then
     exit 3
 fi
 
-python3 - "$CONFIG" "$WORKSPACE" "$FORMAT" <<'PYEOF'
+python3 - "$CONFIG" "$WORKSPACE" "$FORMAT" "$TREND" <<'PYEOF'
 import sys, json, time, math
 from pathlib import Path
 
@@ -71,6 +91,7 @@ except ImportError:
     sys.exit(3)
 
 config_path, workspace, fmt = sys.argv[1], sys.argv[2], sys.argv[3]
+trend_enabled = sys.argv[4] == "1" if len(sys.argv) > 4 else False
 
 with open(config_path, "rb") as f:
     params = tomllib.load(f)
@@ -248,6 +269,106 @@ report = {
     "warnings": warnings,
 }
 
+# ── Trend mode (v0.19.0+) ────────────────────────────────────────────────
+# Appends current snapshot to composite-omega-history.jsonl, then reads
+# the last 7d and computes least-squares slope + verdict. The "trend"
+# block is added to the report; format-specific rendering happens below.
+trend = None
+if trend_enabled and composite_omega_paper is not None:
+    history_path = audit_dir / "composite-omega-history.jsonl"
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    snapshot = {
+        "ts": now_ms,
+        "omega": composite_omega_paper,
+        "per_layer": {l["id"]: l["lambda_paper"] for l in layers},
+    }
+    try:
+        with history_path.open("a") as f:
+            f.write(json.dumps(snapshot) + "\n")
+    except Exception as e:
+        # Recording failure is non-fatal — trend stays None.
+        trend = {"error": f"history append failed: {e.__class__.__name__}"}
+
+    if trend is None:
+        # Read last 7d of history.
+        window_ms = 7 * 24 * 60 * 60 * 1000
+        cutoff = now_ms - window_ms
+        history_rows = []
+        try:
+            with history_path.open() as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        r = json.loads(line)
+                        if isinstance(r.get("ts"), (int, float)) and r["ts"] >= cutoff:
+                            history_rows.append(r)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        # Compute slope (least-squares over (ts, omega)) when ≥ 2 points.
+        pts = [(r["ts"], r["omega"]) for r in history_rows if isinstance(r.get("omega"), (int, float))]
+        if len(pts) >= 2:
+            n = len(pts)
+            mean_x = sum(p[0] for p in pts) / n
+            mean_y = sum(p[1] for p in pts) / n
+            num = sum((p[0] - mean_x) * (p[1] - mean_y) for p in pts)
+            den = sum((p[0] - mean_x) ** 2 for p in pts)
+            slope = (num / den) if den else 0.0  # omega per millisecond
+            slope_per_sec = slope * 1000.0
+            last_val = pts[-1][1]
+            # Baseline = median of first day's points (or first half if < 1 day).
+            first_day_cutoff = pts[0][0] + 24 * 60 * 60 * 1000
+            first_day = [p[1] for p in pts if p[0] <= first_day_cutoff] or [pts[0][1]]
+            baseline = sorted(first_day)[len(first_day) // 2]
+            deviation = last_val - baseline
+            # Volatility = std / mean if mean > 0.
+            mean_omega = mean_y
+            variance = sum((p[1] - mean_omega) ** 2 for p in pts) / n
+            stddev = variance ** 0.5
+            volatility = (stddev / mean_omega) if mean_omega else 0.0
+
+            # Verdict heuristic (drift takes precedence over volatility):
+            #   drift_down — slope < 0 AND last has dropped > 1% below baseline
+            #   drift_up   — slope > 0 AND last has risen   > 1% above baseline
+            #   volatile   — coefficient of variation > 0.1 with no clear direction
+            #   stable_flat — everything else
+            # Note: thresholds are *relative* (baseline-normalized), not absolute
+            # in omega units, because composite-ω can range across orders of
+            # magnitude depending on workspace λ calibration.
+            verdict = "stable_flat"
+            relative_dev = (deviation / baseline) if baseline else 0.0
+            if slope_per_sec < 0 and relative_dev < -0.01:
+                verdict = "drift_down"
+            elif slope_per_sec > 0 and relative_dev > 0.01:
+                verdict = "drift_up"
+            elif volatility > 0.1:
+                verdict = "volatile"
+
+            trend = {
+                "window_seconds": int(window_ms / 1000),
+                "points": n,
+                "last": round(last_val, 6),
+                "baseline": round(baseline, 6),
+                "deviation": round(deviation, 6),
+                "slope_per_second": slope_per_sec,
+                "volatility": round(volatility, 4),
+                "verdict": verdict,
+            }
+        else:
+            trend = {
+                "window_seconds": int(window_ms / 1000),
+                "points": len(pts),
+                "verdict": "stable_flat",
+                "note": "need ≥ 2 points in 7d window to compute slope",
+            }
+
+if trend is not None:
+    report["trend"] = trend
+
 if fmt == "human":
     print("RCS Multi-Layer Budget Status")
     print(f"  Workspace: {workspace}")
@@ -276,6 +397,14 @@ if fmt == "human":
         print("  Warnings:")
         for w in warnings:
             print(f"    - {w['layer']}: {w['msg']}")
+    if trend is not None and "verdict" in trend:
+        print("")
+        last = trend.get("last", "-")
+        baseline = trend.get("baseline", "-")
+        slope = trend.get("slope_per_second", "-")
+        verdict = trend.get("verdict", "-")
+        points = trend.get("points", 0)
+        print(f"  Trend (7d): last={last} baseline={baseline} slope={slope} verdict={verdict} (n={points})")
 else:
     print(json.dumps(report, indent=2))
 

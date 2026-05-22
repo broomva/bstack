@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.19.0 — 2026-05-22
+
+### Closure Contract — generalize 5-tuple from 4 RCS layers to N declared arcs
+
+Builds on **v0.18.0** (Phase 8 federation, BRO-47) — the federation registry is the substrate that lets per-workspace arc declarations roll up via `bstack status --aggregate`. Together, v0.18.0 + v0.19.0 close the substrate-completion arc through the user-defined-arcs layer.
+
+v0.14.0 + v0.16.0 already shipped a 5-tuple `(plant, sensor, controller, actuator, termination)` for **4 hard-coded RCS layers** via `assets/templates/rcs-parameters.toml.template` + `scripts/compute-budget-status.sh`. This release lifts the same pattern from those 4 layers to **N user-declared domain arcs** the workspace actually runs every day (PR greenflow, bookkeeping promotion quality, deploy reliability, etc.).
+
+The closure contract: every arc declares `(id, plant_surfaces, sensor, actuator, termination, tau_a, shield_ref)`. The agent's reasoning is the universal Π (controller) — that's not declared, it's the default binding when `actuator.kind == "agent_reasoning"`. Script / mcp_tool / http actuators bind specific mechanisms while keeping the agent in the supervisory role.
+
+Companion: point-in-time → trend monitoring for composite-ω. `compute-budget-status.sh --trend` appends one snapshot per call to `.control/audit/composite-omega-history.jsonl`, then reads the last 7 days and reports slope + verdict (`stable_flat | drift_up | drift_down | volatile`). Doctor §21 surfaces a hard gap only on `drift_down` — composite stability shrinking is the signal worth interrupting on.
+
+### New files (4)
+
+- **NEW** `schemas/arcs.v1.json` — JSON-schema draft-07 for `.control/arcs.yaml`. Mirrors the style of `schemas/policy.v1.json` and `schemas/workspaces.v1.json`. Required arc fields: `id` (same character class as workspace registry name), `plant_surfaces` (free-form URIs), `sensor` (enum: `exit_code | json_path | log_match | metric_threshold`), `actuator` (enum: `agent_reasoning | script | mcp_tool | http`), `termination` (enum: `predicate | wallclock | score_threshold | exit_zero`), `tau_a` (number, seconds). Optional: `shield_ref` pointing at a `policy.yaml` gate.
+- **NEW** `assets/templates/arcs.yaml.template` — declarative arcs template with 2 worked examples and heavy commentary mirroring the rcs-parameters.toml.template intro cadence. Example 1: `code-pr-greenflow` (json_path sensor, agent_reasoning actuator, predicate termination, tau_a=1800s). Example 2: `bookkeeping-promotion-quality` (exit_code sensor, agent_reasoning actuator, score_threshold termination, tau_a=86400s).
+- **NEW** `scripts/compute-arc-status.sh` — per-arc verdict reader; mirrors the shape of `scripts/compute-budget-status.sh` exactly. Looks at `.control/arcs.yaml` → falls back to bundled template. For each arc: runs the sensor (`bash -c` for exit_code/json_path/metric_threshold; regex against log file for log_match), reads most recent termination event from `.control/audit/arc-<id>.jsonl`, evaluates termination predicate, emits verdict `green | yellow | red | unknown`. Outputs JSON (default) or `--human` table. Exit codes: 0 all green, 1 ≥1 red, 2 config missing, 3 python3 unavailable. Ships its own inline minimal YAML parser (modeled on `scripts/workspace.py` `_yaml_minimal_parse`) — PyYAML preferred, falls back when absent, both code paths exercised by the test suite.
+- **NEW** `tests/arcs-validation.test.sh` + **NEW** `tests/omega-drift-trend.test.sh` — hermetic bash test suites in the `tests/metrics-pipeline.test.sh` style. 6 + 6 tests; both GREEN under system Python (PyYAML, no tomllib path) AND homebrew Python (tomllib, no PyYAML path). Tests exercise schema rejection (`schema_version: 99`), template loading, override precedence, drift_down / drift_up / stable_flat verdicts on synthetic data, and idempotent history-line writes per `--trend` call.
+
+### Changed files (2)
+
+- **CHANGED** `scripts/compute-budget-status.sh` — adds `--trend` flag. Without `--trend`: existing point-in-time behavior preserved. With `--trend`: appends `{ts, omega, per_layer}` snapshot to `.control/audit/composite-omega-history.jsonl`, then reads last 7 days, computes least-squares slope, baseline (median of first day in window), deviation, volatility (CV), and verdict. Verdict heuristic prefers drift detection over volatility when there's a clear directional signal (slope sign matches relative-deviation sign with magnitude > 1%); volatility is the residual category. Trend block surfaces in `--human` as one extra line and as a top-level `trend` object in `--json`.
+- **CHANGED** `scripts/doctor.sh` — adds §20 and §21. §20 reads `.control/arcs.yaml` (informational when absent), reports arc count + completeness count, surfaces last-termination-event timestamp per arc; hard gap only if `schema_version != 1`. §21 reads `composite-omega-history.jsonl`, calls `compute-budget-status.sh --trend --json`, reports last/baseline/slope/verdict; hard gap only if `verdict == drift_down`.
+
+### Test plan executed
+
+```
+bash -n scripts/compute-arc-status.sh                            # syntax OK
+bash -n scripts/compute-budget-status.sh                         # syntax OK
+bash -n scripts/doctor.sh                                        # syntax OK
+python3 -c "import json; json.loads(open('schemas/arcs.v1.json').read())"  # schema parses
+bash scripts/compute-arc-status.sh --human                       # reads template, prints table for both arcs
+bash scripts/compute-budget-status.sh --trend --human            # writes 1 history line, prints trend line
+bash tests/arcs-validation.test.sh                               # 6/6 GREEN under both python envs
+bash tests/omega-drift-trend.test.sh                             # 6/6 GREEN
+bash scripts/doctor.sh against ~/broomva                         # §20 + §21 visible; 87/89 (2 pre-existing gaps unrelated)
+```
+
+### Honest scope caveats
+
+- The minimal inline YAML parser inside `compute-arc-status.sh` covers exactly the shape `schemas/arcs.v1.json` declares. Workspaces that hand-write `.control/arcs.yaml` with PyYAML-only features (anchors, multi-doc, flow-style) will need PyYAML installed; otherwise stick to the block-scalar shape shown in the template.
+- `arc-<id>.jsonl` audit-event writers are not shipped in this PR. Termination events are *read* by `compute-arc-status.sh` when present; for now, only `wallclock` and `exit_zero` terminations evaluate without a prior recorded event. `predicate` and `score_threshold` arcs surface `yellow` (running) until an event lands. Follow-up: add `scripts/arc-event-hook.sh` so actuators can record verdicts as they close.
+- Verdict thresholds in `--trend` (1% relative deviation, 10% coefficient of variation) are heuristic and calibrated for the broomva workspace's λ range. Tighten / loosen via follow-up policy.yaml block after rule-of-three failure modes accumulate.
+- The "ω is shrinking" signal in §21 fires only after ≥ 2 history points span the 7-day window. Workspaces that don't periodically invoke `--trend` (no scheduled call from `/loop` or a cron) will see only `stable_flat` regardless of underlying drift.
+
+### Spec doc + cross-references
+
+- Anchored arcs: prior PR (v0.16.0) shipped the 4-layer hard-coded analogue (`assets/templates/rcs-parameters.toml.template`); v0.14.0 shipped the L3 enforcement; this PR generalizes both surfaces to N user-declared arcs.
+- Why not a new primitive: the Closure Contract is the *generalization* of the existing (X, U, h, Π, T) substrate that L0–L3 already use. It's a declarative surface lift, not a new reflex. **P21 "Closure Contract" promotion candidate logged** — promotion to a numbered primitive deferred until rule-of-three concrete failures are recorded (per the L3 stability budget's stability budget for governance churn). The candidate ledger lives in `research/entities/pattern/bstack-engine.md` per CLAUDE.md §Bstack Engine.
+
+---
 ## 0.18.0 — 2026-05-22
 
 ### Phase 8 — Multi-workspace federation registry

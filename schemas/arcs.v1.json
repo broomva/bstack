@@ -1,0 +1,121 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/broomva/bstack/blob/main/schemas/arcs.v1.json",
+  "title": "bstack closure-contract arcs v1",
+  "description": "Schema for .control/arcs.yaml — declarative user-defined control arcs. Each arc is a (X, U, h, Π, T) 5-tuple lifted from the 4 hard-coded RCS layers in rcs-parameters.toml.template to N user-declared domain arcs. The agent's reasoning is the universal controller (Π); when actuator.kind == 'agent_reasoning' the controller binding is implicit. Read by scripts/compute-arc-status.sh and scripts/doctor.sh §20.",
+  "type": "object",
+  "required": ["schema_version", "arcs"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "description": "Schema version. Bump to 2 on breaking changes; a new schemas/arcs.v2.json file would then ship beside this one."
+    },
+    "generated_at": {
+      "type": "string",
+      "description": "Optional ISO-8601 timestamp recorded when the file was last written."
+    },
+    "arcs": {
+      "type": "array",
+      "description": "User-declared closure-contract arcs. Each item declares the 5-tuple that closes one feedback loop.",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "plant_surfaces",
+          "sensor",
+          "actuator",
+          "termination",
+          "tau_a"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "minLength": 1,
+            "maxLength": 64,
+            "description": "Arc identifier. Same character class as the workspace registry name (workspaces.v1.json) so arc ids round-trip safely through git refs, file paths, and JSONL keys. Must be unique within this file."
+          },
+          "description": {
+            "type": "string",
+            "description": "Optional human-readable summary of what this arc closes."
+          },
+          "plant_surfaces": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "minLength": 1 },
+            "description": "Free-form URIs naming the externally observable state this arc controls (fs://path, supabase://project.table, gh://owner/repo/pulls, http://service, etc). Informational — not parsed; the sensor decides how to read them."
+          },
+          "sensor": {
+            "type": "object",
+            "description": "How the arc observes the plant. Output of the sensor is what termination evaluates against.",
+            "required": ["kind"],
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": ["exit_code", "json_path", "log_match", "metric_threshold"],
+                "description": "exit_code: shell script exit status; json_path: jq-style path against script stdout; log_match: regex against a log file; metric_threshold: numeric reading from a metric source."
+              },
+              "source": {
+                "type": "string",
+                "description": "Sensor source — typically a script path (for exit_code/json_path), a log file path (for log_match), or a metric URI (for metric_threshold)."
+              },
+              "expr": {
+                "type": "string",
+                "description": "Optional sensor expression — jq path for json_path, regex for log_match, comparison expression for metric_threshold."
+              }
+            }
+          },
+          "actuator": {
+            "type": "object",
+            "description": "How the arc acts on the plant. Default Π is agent_reasoning (the agent itself is the controller); script/mcp_tool/http actuators bind specific mechanisms.",
+            "required": ["kind"],
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": ["agent_reasoning", "script", "mcp_tool", "http"],
+                "description": "agent_reasoning: the agent loop is the controller (default Π binding); script: shell-out; mcp_tool: MCP server invocation; http: REST/webhook actuator."
+              },
+              "tools": {
+                "type": "array",
+                "items": { "type": "string", "minLength": 1 },
+                "description": "Tool allowlist for agent_reasoning actuators, or argv/endpoint hints for script/mcp_tool/http."
+              },
+              "target": {
+                "type": "string",
+                "description": "Optional actuator target — script path, MCP tool name, or HTTP endpoint."
+              }
+            }
+          },
+          "termination": {
+            "type": "object",
+            "description": "When the arc closes (verdict transitions from running to green/red).",
+            "required": ["kind", "expr"],
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": ["predicate", "wallclock", "score_threshold", "exit_zero"],
+                "description": "predicate: boolean expression over sensor output; wallclock: time-bounded (use with tau_a); score_threshold: numeric comparison; exit_zero: sensor exit_code == 0."
+              },
+              "expr": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Termination expression. Form depends on kind — boolean for predicate, comparison for score_threshold, ignored for exit_zero (kept for human readers)."
+              }
+            }
+          },
+          "tau_a": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Termination window in seconds — the upper bound on how long this arc may run before forced verdict. Mirrors tau_a in rcs-parameters.toml (switching cost denominator)."
+          },
+          "shield_ref": {
+            "type": "string",
+            "description": "Optional path/anchor to the policy.yaml gate that supervises this arc (e.g. 'gates.hard.G-PR-MERGE'). Informational — read by doctor §20."
+          }
+        }
+      }
+    }
+  }
+}

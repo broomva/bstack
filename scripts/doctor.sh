@@ -986,6 +986,153 @@ PYEOF
     fi
 fi
 
+# ── Section 21: Closure-Contract arcs (v0.19.0+) ───────────────────────────
+# Reads workspace .control/arcs.yaml (if present) and reports:
+#   - Count of declared arcs
+#   - Count of arcs with all 5 components present (id, plant_surfaces, sensor,
+#     actuator, termination, tau_a)
+#   - Last termination event timestamp per arc (informational only)
+# Hard gap only if .control/arcs.yaml is present AND schema_version != 1.
+# Missing arcs.yaml is informational (workspaces opt in by writing the file).
+section "21. Closure-Contract arcs (.control/arcs.yaml)"
+
+ARCS_FILE="$WORKSPACE/.control/arcs.yaml"
+COMPUTE_ARC_STATUS="$BSTACK_REPO/scripts/compute-arc-status.sh"
+
+if [ ! -f "$ARCS_FILE" ]; then
+    [ "$QUIET" = "0" ] && echo "  [info] no .control/arcs.yaml (workspace has not declared closure arcs)"
+    [ "$QUIET" = "0" ] && echo "         → see bstack/assets/templates/arcs.yaml.template for the 5-tuple shape"
+elif ! command -v python3 >/dev/null 2>&1; then
+    [ "$QUIET" = "0" ] && echo "  [info] python3 missing — arcs validation skipped"
+else
+    ARC_SUMMARY=$(python3 - "$ARCS_FILE" <<'PYEOF' 2>/dev/null
+import sys, json
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text()
+try:
+    import yaml
+    data = yaml.safe_load(text) or {}
+except ImportError:
+    # Defer to the minimal parser inside compute-arc-status; here we only need
+    # schema_version + arc count, which fit a simpler shape.
+    data = {}
+    lines = text.splitlines()
+    arcs = []
+    in_arcs = False
+    current = None
+    for line in lines:
+        s = line.lstrip()
+        if s.startswith("#") or not s:
+            continue
+        if line.startswith("schema_version:"):
+            try:
+                data["schema_version"] = int(line.split(":", 1)[1].strip())
+            except Exception:
+                pass
+        elif line.startswith("arcs:"):
+            in_arcs = True
+        elif in_arcs and s.startswith("- "):
+            if current:
+                arcs.append(current)
+            current = {"id": "?"}
+            rest = s[2:]
+            if rest.startswith("id:"):
+                current["id"] = rest.split(":", 1)[1].strip()
+        elif in_arcs and current and s.startswith("id:"):
+            current["id"] = s.split(":", 1)[1].strip()
+    if current:
+        arcs.append(current)
+    data["arcs"] = arcs
+
+sv = data.get("schema_version")
+arcs = data.get("arcs") or []
+
+# Count arcs with all 5 components present.
+def complete(a):
+    if not isinstance(a, dict):
+        return False
+    have_id = bool(a.get("id"))
+    have_ps = bool(a.get("plant_surfaces"))
+    have_sensor = isinstance(a.get("sensor"), dict) and bool(a["sensor"].get("kind"))
+    have_act = isinstance(a.get("actuator"), dict) and bool(a["actuator"].get("kind"))
+    have_term = isinstance(a.get("termination"), dict) and bool(a["termination"].get("kind"))
+    have_tau = isinstance(a.get("tau_a"), (int, float))
+    return have_id and have_ps and have_sensor and have_act and have_term and have_tau
+
+complete_count = sum(1 for a in arcs if complete(a))
+print(json.dumps({"schema_version": sv, "arc_count": len(arcs), "complete_count": complete_count, "ids": [a.get("id") for a in arcs if isinstance(a, dict)]}))
+PYEOF
+)
+    if [ -z "$ARC_SUMMARY" ]; then
+        gap "arcs.yaml parse failed (workspace .control/arcs.yaml malformed?)" \
+            "validate against schemas/arcs.v1.json"
+    else
+        SV=$(echo "$ARC_SUMMARY" | python3 -c "import sys,json;print(json.load(sys.stdin).get('schema_version'))" 2>/dev/null)
+        AC=$(echo "$ARC_SUMMARY" | python3 -c "import sys,json;print(json.load(sys.stdin).get('arc_count'))" 2>/dev/null)
+        CC=$(echo "$ARC_SUMMARY" | python3 -c "import sys,json;print(json.load(sys.stdin).get('complete_count'))" 2>/dev/null)
+        if [ "$SV" != "1" ]; then
+            gap "arcs.yaml schema_version = $SV (expected 1)" \
+                "bump arcs.yaml schema_version to 1 or migrate to current shape"
+        else
+            ok "arcs.yaml: schema_version=1, arcs=$AC, complete=$CC"
+            # Surface most-recent termination event per arc (informational).
+            if [ -n "$AC" ] && [ "$AC" -gt 0 ]; then
+                IDS=$(echo "$ARC_SUMMARY" | python3 -c "import sys,json;print(' '.join((d:=json.load(sys.stdin)).get('ids') or []))" 2>/dev/null)
+                for aid in $IDS; do
+                    LOG="$WORKSPACE/.control/audit/arc-$aid.jsonl"
+                    if [ -f "$LOG" ]; then
+                        LAST_TS=$(tail -1 "$LOG" 2>/dev/null | python3 -c "import sys,json;
+try:
+    print(json.loads(sys.stdin.read()).get('ts','-'))
+except Exception:
+    print('-')
+" 2>/dev/null)
+                        [ "$QUIET" = "0" ] && echo "         arc $aid: last termination ts=$LAST_TS"
+                    else
+                        [ "$QUIET" = "0" ] && echo "         arc $aid: no termination events yet (.control/audit/arc-$aid.jsonl absent)"
+                    fi
+                done
+            fi
+        fi
+    fi
+fi
+# ── Section 22: Composite-ω drift trend (v0.19.0+) ─────────────────────────
+# Reads .control/audit/composite-omega-history.jsonl (written by
+# `compute-budget-status.sh --trend`). Reports last value, baseline, slope,
+# verdict. Hard gap only when verdict == drift_down (composite ω is shrinking
+# — the system is losing stability over time).
+section "22. Composite-ω drift trend"
+
+OMEGA_HISTORY="$WORKSPACE/.control/audit/composite-omega-history.jsonl"
+BUDGET_TREND="$BSTACK_REPO/scripts/compute-budget-status.sh"
+
+if [ ! -f "$OMEGA_HISTORY" ]; then
+    [ "$QUIET" = "0" ] && echo "  [info] no composite-omega-history.jsonl (run \`bash scripts/compute-budget-status.sh --trend\` periodically to populate)"
+elif [ ! -f "$BUDGET_TREND" ]; then
+    [ "$QUIET" = "0" ] && echo "  [info] scripts/compute-budget-status.sh missing — trend skipped"
+elif ! command -v python3 >/dev/null 2>&1; then
+    [ "$QUIET" = "0" ] && echo "  [info] python3 missing — trend skipped"
+else
+    TREND_JSON=$(BROOMVA_WORKSPACE="$WORKSPACE" bash "$BUDGET_TREND" --json --trend 2>/dev/null)
+    if [ -z "$TREND_JSON" ]; then
+        [ "$QUIET" = "0" ] && echo "  [info] --trend produced no output"
+    else
+        TREND_VERDICT=$(echo "$TREND_JSON" | python3 -c "import sys,json;d=json.load(sys.stdin).get('trend',{});print(d.get('verdict','-'))" 2>/dev/null)
+        TREND_LAST=$(echo "$TREND_JSON" | python3 -c "import sys,json;d=json.load(sys.stdin).get('trend',{});print(d.get('last','-'))" 2>/dev/null)
+        TREND_BASELINE=$(echo "$TREND_JSON" | python3 -c "import sys,json;d=json.load(sys.stdin).get('trend',{});print(d.get('baseline','-'))" 2>/dev/null)
+        TREND_SLOPE=$(echo "$TREND_JSON" | python3 -c "import sys,json;d=json.load(sys.stdin).get('trend',{});print(d.get('slope_per_second','-'))" 2>/dev/null)
+        TREND_POINTS=$(echo "$TREND_JSON" | python3 -c "import sys,json;d=json.load(sys.stdin).get('trend',{});print(d.get('points','-'))" 2>/dev/null)
+        if [ "$TREND_VERDICT" = "drift_down" ]; then
+            gap "composite-ω drift_down: last=$TREND_LAST baseline=$TREND_BASELINE slope=$TREND_SLOPE (n=$TREND_POINTS)" \
+                "review .control/rcs-parameters.toml; investigate which layer's λ is shrinking"
+        else
+            ok "composite-ω trend: last=$TREND_LAST baseline=$TREND_BASELINE slope=$TREND_SLOPE verdict=$TREND_VERDICT (n=$TREND_POINTS)"
+        fi
+    fi
+fi
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 TOTAL=$((PASSES + GAPS))
