@@ -46,6 +46,9 @@ Then, in your agent session:
 /bstack workspace info            → is the current workspace registered?
 /bstack workspace deregister      → remove a workspace by --name or --path
 /bstack status --aggregate        → federation rollup: name × bstack_version × composite_ω × verdict
+/bstack cross-review <pr> --repo <owner/name>
+                                  → P20 cross-model adversarial review via remote
+                                    git fetch (≥ 0.20.0, BRO-1227 Fix B)
 ```
 
 ## What bstack enforces

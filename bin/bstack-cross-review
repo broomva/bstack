@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# bstack-cross-review — P20 cross-model adversarial review for GitHub PRs.
+#
+# Thin shim that dispatches to scripts/cross-review.py. Mirrors the
+# bstack-wave shim pattern. Forwards argv unchanged.
+#
+# See BRO-1227 — fixes the Cato sub-agent cwd-mismatch failure mode by
+# reading PR contents via `gh api …/contents/<path>?ref=<sha>` instead
+# of the local working tree.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PY="$SCRIPT_DIR/scripts/cross-review.py"
+
+if [ ! -f "$PY" ]; then
+  echo "bstack-cross-review: scripts/cross-review.py not found at $PY" >&2
+  exit 1
+fi
+
+exec python3 "$PY" "$@"
