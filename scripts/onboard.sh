@@ -289,14 +289,19 @@ if [ -f "$WORKSPACE/AGENTS.md" ] && grep -q '^## Dogfood Plan (Stack: TBD)' "$WO
     echo "          → cookbook: $BSTACK_REPO/references/dogfood-patterns.md"
 fi
 
-# ─── Install L3 stability gate flow (v0.14.0+) ───────────────────────────
-# Deploys: .control/rcs-parameters.toml + .githooks/pre-commit (G1)
-#        + .github/workflows/l3-stability.yml (G2)
-#        + .claude/settings.json PreToolUse hook (G0)
-# Idempotent — safe to re-run; existing files preserved unless --force.
+# ─── Install RCS multi-layer stability gate flow (v0.15.0+) ──────────────
+# Deploys L3 (PreToolUse + git pre-commit + GH Actions + rcs-parameters.toml)
+# AND L0 PostToolUse audit hook AND L1 Stop hook reflex audit + audit dir.
+# Composes via install-rcs-stability.sh (which internally calls
+# install-l3-stability.sh for L3-specific pieces). Idempotent.
+RCS_INSTALLER="$BSTACK_REPO/scripts/install-rcs-stability.sh"
 L3_INSTALLER="$BSTACK_REPO/scripts/install-l3-stability.sh"
-if [ -x "$L3_INSTALLER" ] || [ -f "$L3_INSTALLER" ]; then
-    echo "[onboard] installing L3 stability gate flow"
+if [ -x "$RCS_INSTALLER" ] || [ -f "$RCS_INSTALLER" ]; then
+    echo "[onboard] installing RCS multi-layer stability gate flow"
+    BROOMVA_WORKSPACE="$WORKSPACE" bash "$RCS_INSTALLER" 2>&1 | sed 's/^/  /' || true
+elif [ -x "$L3_INSTALLER" ] || [ -f "$L3_INSTALLER" ]; then
+    # Fallback to v0.14.0 installer if multi-layer one isn't present
+    echo "[onboard] installing L3 stability gate flow (v0.14.0 fallback)"
     BROOMVA_WORKSPACE="$WORKSPACE" bash "$L3_INSTALLER" 2>&1 | sed 's/^/  /' || true
 fi
 

@@ -243,18 +243,26 @@ echo "$GAPS_OUTPUT" | grep -q "ci_watch: block missing" && append_policy_block_i
 echo "$GAPS_OUTPUT" | grep -q "ci_heal: block missing" && append_policy_block_if_missing "ci_heal"
 echo "$GAPS_OUTPUT" | grep -q "auto_merge: block missing" && append_policy_block_if_missing "auto_merge"
 
-# ── L3 stability gate flow (v0.14.0+) ─────────────────────────────────────
-# §14 + §15 surface missing G0/G1/G2 wiring + missing rcs-parameters.toml.
-# Run the dedicated installer if any of these are flagged. The installer is
-# idempotent; safe to call even if some pieces are already present.
-L3_NEEDED=0
-echo "$GAPS_OUTPUT" | grep -qE "G[012] (Claude Code|git pre-commit|GitHub Actions)" && L3_NEEDED=1
-echo "$GAPS_OUTPUT" | grep -q "no .control/rcs-parameters.toml" && L3_NEEDED=1
-echo "$GAPS_OUTPUT" | grep -q "RCS lambda <= 0" && L3_NEEDED=1
-if [ "$L3_NEEDED" = "1" ]; then
+# ── RCS multi-layer stability gate flow (v0.15.0+) ───────────────────────
+# §14, §15 (L3), §16 (L0), §17 (L1), §18 (L2), §19 (composite) surface
+# missing audit logs, missing hooks, missing parameters.toml. Run the
+# unified installer if any are flagged. Installer is idempotent.
+RCS_NEEDED=0
+echo "$GAPS_OUTPUT" | grep -qE "G[012] (Claude Code|git pre-commit|GitHub Actions)" && RCS_NEEDED=1
+echo "$GAPS_OUTPUT" | grep -q "no .control/rcs-parameters.toml" && RCS_NEEDED=1
+echo "$GAPS_OUTPUT" | grep -q "RCS lambda <= 0" && RCS_NEEDED=1
+echo "$GAPS_OUTPUT" | grep -q "no L0 audit log" && RCS_NEEDED=1
+echo "$GAPS_OUTPUT" | grep -q "no L1 audit log" && RCS_NEEDED=1
+if [ "$RCS_NEEDED" = "1" ]; then
+    RCS_INSTALLER="$SKILL_ROOT/scripts/install-rcs-stability.sh"
     L3_INSTALLER="$SKILL_ROOT/scripts/install-l3-stability.sh"
-    if [ -f "$L3_INSTALLER" ]; then
-        if [ "$DRY_RUN" = "1" ] || confirm "Run install-l3-stability.sh to deploy missing L3 gate flow?"; then
+    if [ -f "$RCS_INSTALLER" ]; then
+        if [ "$DRY_RUN" = "1" ] || confirm "Run install-rcs-stability.sh to deploy missing multi-layer gate flow?"; then
+            BROOMVA_WORKSPACE="$WORKSPACE_DIR" bash "$RCS_INSTALLER" 2>&1 | sed 's/^/  /'
+        fi
+    elif [ -f "$L3_INSTALLER" ]; then
+        # Fallback to v0.14.0 installer if rcs one isn't present
+        if [ "$DRY_RUN" = "1" ] || confirm "Run install-l3-stability.sh to deploy L3 gate flow (v0.14.0 fallback)?"; then
             BROOMVA_WORKSPACE="$WORKSPACE_DIR" bash "$L3_INSTALLER" 2>&1 | sed 's/^/  /'
         fi
     fi

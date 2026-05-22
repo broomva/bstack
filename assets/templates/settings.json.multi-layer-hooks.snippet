@@ -1,0 +1,28 @@
+{
+  "_doc": "bstack RCS multi-layer audit — Claude Code PostToolUse (L0) + Stop (L1) hook entries. Merged into .claude/settings.json by bstack/scripts/install-rcs-stability.sh. Composes with the existing L3-G0 PreToolUse hook from v0.14.0 (see settings.json.l3-stability-hook.snippet).",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$BSTACK_REPO/scripts/l0-tool-audit-hook.sh",
+            "_bstack_primitive": "L0-audit"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$BSTACK_REPO/scripts/l1-reflex-audit-hook.sh",
+            "_bstack_primitive": "L1-audit"
+          }
+        ]
+      }
+    ]
+  }
+}

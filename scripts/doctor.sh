@@ -732,6 +732,191 @@ else
     [ "$QUIET" = "0" ] && echo "         → fix: $INSTALL_CMD"
 fi
 
+# ── Section 16: L0 plant audit (tool-call latency + error rate) ─────────────
+# Reads .control/audit/l0-tools.jsonl (written by PostToolUse hook). Reports
+# count in last τ_a_0 window, latency mean/p99, exit-nonzero rate. Hard gap
+# only on extreme runaway; soft warn on noisy patterns. Informational by
+# default (rule-of-three for promotion).
+section "16. L0 plant audit (tool calls)"
+
+L0_LOG="$WORKSPACE/.control/audit/l0-tools.jsonl"
+INSTALL_RCS="bash $BSTACK_REPO/scripts/install-rcs-stability.sh"
+
+if [ ! -f "$L0_LOG" ]; then
+    [ "$QUIET" = "0" ] && echo "  [info] no L0 audit log (PostToolUse hook not yet wired)"
+    [ "$QUIET" = "0" ] && echo "         → fix: $INSTALL_RCS"
+elif ! command -v python3 >/dev/null 2>&1; then
+    [ "$QUIET" = "0" ] && echo "  [info] python3 missing — L0 audit summary skipped"
+else
+    L0_SUMMARY=$(python3 - "$L0_LOG" <<'PYEOF'
+import sys, json, time
+log = sys.argv[1]
+now_ms = int(time.time() * 1000)
+window_ms = 10 * 60 * 1000  # last 10 minutes for human-readable § (τ_a_0 = 500ms is too narrow)
+rows = []
+try:
+    with open(log) as f:
+        for line in f:
+            try:
+                r = json.loads(line)
+                if r.get("ts", 0) >= now_ms - window_ms:
+                    rows.append(r)
+            except Exception:
+                pass
+except Exception:
+    pass
+
+lats = [r["latency_ms"] for r in rows if isinstance(r.get("latency_ms"), (int, float))]
+errs = sum(1 for r in rows if r.get("is_error"))
+mean = (sum(lats) / len(lats)) if lats else None
+
+print(f"events={len(rows)} window=10min latency_mean={'-' if mean is None else f'{mean:.0f}ms'} errors={errs}")
+PYEOF
+)
+    ok "L0 audit: $L0_SUMMARY"
+fi
+
+# ── Section 17: L1 autonomic reflex compliance ─────────────────────────────
+# Reads .control/audit/l1-reflexes.jsonl. Reports per-reflex compliance rate
+# across last τ_a_1 (or 1h, whichever larger). Hard gap only if compliance
+# < 30%; soft warn 30-60%. Informational by default.
+section "17. L1 autonomic reflex compliance"
+
+L1_LOG="$WORKSPACE/.control/audit/l1-reflexes.jsonl"
+
+if [ ! -f "$L1_LOG" ]; then
+    [ "$QUIET" = "0" ] && echo "  [info] no L1 audit log (Stop hook not yet wired)"
+    [ "$QUIET" = "0" ] && echo "         → fix: $INSTALL_RCS"
+elif ! command -v python3 >/dev/null 2>&1; then
+    [ "$QUIET" = "0" ] && echo "  [info] python3 missing — L1 audit summary skipped"
+else
+    L1_SUMMARY=$(python3 - "$L1_LOG" <<'PYEOF'
+import sys, json, time
+log = sys.argv[1]
+now_ms = int(time.time() * 1000)
+window_ms = 24 * 60 * 60 * 1000  # last 24h for human-readable § (multi-session)
+rows = []
+try:
+    with open(log) as f:
+        for line in f:
+            try:
+                r = json.loads(line)
+                if r.get("ts", 0) >= now_ms - window_ms:
+                    rows.append(r)
+            except Exception:
+                pass
+except Exception:
+    pass
+
+if not rows:
+    print("sessions=0 window=24h")
+else:
+    rates = [r["compliance_rate"] for r in rows if isinstance(r.get("compliance_rate"), (int, float))]
+    mean_rate = sum(rates) / len(rates) if rates else None
+    yes_count = sum(1 for r in rows if (r.get("anti_rationalization") or {}).get("value") == "yes")
+    print(f"sessions={len(rows)} window=24h compliance_mean={'-' if mean_rate is None else f'{mean_rate:.2f}'} dogfood_yes={yes_count}")
+PYEOF
+)
+    ok "L1 audit: $L1_SUMMARY"
+fi
+
+# ── Section 18: L2 EGRI promotion throttle ─────────────────────────────────
+# Reads .control/audit/l2-promotions.jsonl. Counts promotions in last τ_a_2
+# window (default 1h); reports vs budget. Hard gap if over budget.
+section "18. L2 EGRI promotion throttle"
+
+L2_LOG="$WORKSPACE/.control/audit/l2-promotions.jsonl"
+
+if [ ! -f "$L2_LOG" ]; then
+    [ "$QUIET" = "0" ] && echo "  [info] no L2 audit log (bookkeeping not yet wired to l2-promotion-audit-hook)"
+    [ "$QUIET" = "0" ] && echo "         → fix: $INSTALL_RCS (audit dir created) + bookkeeping.py promote step calls scripts/l2-promotion-audit-hook.sh"
+elif ! command -v python3 >/dev/null 2>&1; then
+    [ "$QUIET" = "0" ] && echo "  [info] python3 missing — L2 audit summary skipped"
+else
+    # Read tau_a_2 from parameters.toml
+    PARAMS_FOR_TAU=""
+    if [ -f "$WORKSPACE/.control/rcs-parameters.toml" ]; then
+        PARAMS_FOR_TAU="$WORKSPACE/.control/rcs-parameters.toml"
+    elif [ -f "$WORKSPACE/research/rcs/data/parameters.toml" ]; then
+        PARAMS_FOR_TAU="$WORKSPACE/research/rcs/data/parameters.toml"
+    fi
+    L2_SUMMARY=$(python3 - "$L2_LOG" "$PARAMS_FOR_TAU" <<'PYEOF'
+import sys, json, time
+log = sys.argv[1]
+params_path = sys.argv[2]
+
+tau_a = 3600.0
+budget = 5
+if params_path:
+    try:
+        import tomllib
+        with open(params_path, "rb") as f:
+            data = tomllib.load(f)
+        for lvl in data.get("levels", []):
+            if lvl.get("id") == "L2":
+                tau_a = float(lvl.get("tau_a", tau_a))
+                break
+    except Exception:
+        pass
+
+now_ms = int(time.time() * 1000)
+cutoff_ms = now_ms - int(tau_a * 1000)
+rows = []
+try:
+    with open(log) as f:
+        for line in f:
+            try:
+                r = json.loads(line)
+                if r.get("ts", 0) >= cutoff_ms:
+                    rows.append(r)
+                    if isinstance(r.get("budget"), (int, float)):
+                        budget = int(r["budget"])
+            except Exception:
+                pass
+except Exception:
+    pass
+
+count = len(rows)
+status = "OK" if count <= budget else "OVER_BUDGET"
+print(f"promotions={count}/{budget} window={int(tau_a)}s status={status}")
+PYEOF
+)
+    if echo "$L2_SUMMARY" | grep -q "OVER_BUDGET"; then
+        gap "L2 promotion throttle: $L2_SUMMARY" \
+            "defer promotions until window resets; or raise budget in policy.yaml after rule-of-three"
+    else
+        ok "L2 audit: $L2_SUMMARY"
+    fi
+fi
+
+# ── Section 19: Multi-layer composite health (the unifier) ─────────────────
+# Calls compute-budget-status.sh; reports composite verdict + per-layer
+# verdicts. Hard gap only if any layer is "unstable"; warn on "stable_warn".
+section "19. Multi-layer composite health"
+
+BUDGET_STATUS="$BSTACK_REPO/scripts/compute-budget-status.sh"
+if [ ! -f "$BUDGET_STATUS" ]; then
+    [ "$QUIET" = "0" ] && echo "  [info] scripts/compute-budget-status.sh missing"
+elif ! command -v python3 >/dev/null 2>&1; then
+    [ "$QUIET" = "0" ] && echo "  [info] python3 missing — composite health skipped"
+else
+    STATUS_JSON=$(BROOMVA_WORKSPACE="$WORKSPACE" bash "$BUDGET_STATUS" --json 2>/dev/null)
+    STATUS_EXIT=$?
+    if [ -z "$STATUS_JSON" ]; then
+        [ "$QUIET" = "0" ] && echo "  [info] compute-budget-status produced no output"
+    else
+        ALL_STABLE=$(echo "$STATUS_JSON" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('all_layers_stable'))" 2>/dev/null)
+        VERDICTS=$(echo "$STATUS_JSON" | python3 -c "import sys,json;d=json.load(sys.stdin);print(' '.join(l['id']+'='+l['verdict'] for l in d.get('layers',[])))" 2>/dev/null)
+        WARN_COUNT=$(echo "$STATUS_JSON" | python3 -c "import sys,json;d=json.load(sys.stdin);print(len(d.get('warnings',[])))" 2>/dev/null)
+        if [ "$STATUS_EXIT" = "0" ] && [ "$ALL_STABLE" = "True" ]; then
+            ok "composite health: $VERDICTS (all stable; ${WARN_COUNT:-0} warnings)"
+        else
+            gap "composite health: $VERDICTS (warnings=$WARN_COUNT, exit=$STATUS_EXIT)" \
+                "review: bash $BUDGET_STATUS --human"
+        fi
+    fi
+fi
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 TOTAL=$((PASSES + GAPS))
