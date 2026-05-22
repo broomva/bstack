@@ -292,10 +292,33 @@ if [ -f "$_CATALOG" ]; then
     fi
     _now=$(date +%s)
     _age_h=$(( (_now - _catalog_mtime) / 3600 ))
-    if [ "$_age_h" -le 48 ]; then
-        ok "P6 catalog fresh: docs/knowledge-index.md (${_age_h}h old)"
+    # Threshold precedence: .control/policy.yaml catalog.stale_doctor_hours,
+    # then hardcoded 48h fallback. Single source of truth for catalog
+    # thresholds — see BRO-1223 I1 (was: three different "stale" values
+    # across kg.py / doctor.sh / hook).
+    #
+    # Defensive: argv-passing avoids SyntaxError on single-quote-in-path
+    # (P20 I1); regex validation handles empty/non-numeric stdout (P20 C3).
+    _policy_file="$WORKSPACE/.control/policy.yaml"
+    _stale_h=48
+    if [ -f "$_policy_file" ] && command -v python3 >/dev/null 2>&1; then
+        _raw=$(python3 -c '
+import sys
+try:
+    import yaml
+    with open(sys.argv[1]) as f: d = yaml.safe_load(f) or {}
+    print(int((d.get("catalog") or {}).get("stale_doctor_hours", 48)))
+except Exception:
+    print(48)
+' "$_policy_file" 2>/dev/null)
+        if [[ "$_raw" =~ ^[0-9]+$ ]]; then
+            _stale_h="$_raw"
+        fi
+    fi
+    if [ "$_age_h" -le "$_stale_h" ]; then
+        ok "P6 catalog fresh: docs/knowledge-index.md (${_age_h}h old; threshold ${_stale_h}h)"
     else
-        gap "P6 catalog stale: docs/knowledge-index.md (${_age_h}h old; threshold 48h)" \
+        gap "P6 catalog stale: docs/knowledge-index.md (${_age_h}h old; threshold ${_stale_h}h)" \
             "run 'python3 skills/bookkeeping/scripts/bookkeeping.py index'"
     fi
 else
@@ -303,12 +326,20 @@ else
         "run 'python3 skills/bookkeeping/scripts/bookkeeping.py index'"
 fi
 
-# /kg load skill (Claude-installed at ~/.claude/skills/kg/ — workspace-local v1)
-if [ -f "$HOME/.claude/skills/kg/SKILL.md" ] && [ -f "$HOME/.claude/skills/kg/scripts/kg.py" ]; then
-    ok "/kg load skill installed at ~/.claude/skills/kg/"
-else
-    gap "/kg load skill missing at ~/.claude/skills/kg/" \
-        "install per docs/skills/kg.md (workspace-local v1; promotes to broomva/kg GitHub repo after rule-of-three)"
+# /kg load skill — broomva/kg published as a managed skill in v0.14.0.
+# Accepts either an `npx skills add broomva/kg` install (under ~/.claude/skills/kg/
+# or ~/.agents/skills/kg/) or a legacy workspace-local v1 install.
+_kg_installed=0
+for _kg_path in "$HOME/.claude/skills/kg" "$HOME/.agents/skills/kg"; do
+    if [ -f "$_kg_path/SKILL.md" ] && [ -f "$_kg_path/scripts/kg.py" ]; then
+        ok "/kg load skill installed at $_kg_path"
+        _kg_installed=1
+        break
+    fi
+done
+if [ "$_kg_installed" = "0" ]; then
+    gap "/kg load skill missing at ~/.claude/skills/kg/ or ~/.agents/skills/kg/" \
+        "install via 'npx skills add broomva/kg' (managed roster entry, v0.14.0+) — see references/skills-roster.md"
 fi
 
 # ── L3 trust gates (G-L3-1 + G-L3-2) ───────────────────────────────────────

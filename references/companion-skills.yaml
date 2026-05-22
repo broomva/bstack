@@ -76,6 +76,15 @@ skills:
     introduced_in: 0.1.0
     description: "Conversation logs → Obsidian-shaped knowledge graph"
 
+  - name: kg
+    repo: broomva/kg
+    category: knowledge
+    primitive: P6
+    required: true
+    introduced_in: 0.14.0
+    min_bstack_version: 0.14.0
+    description: "LLM-as-index loader for research/entities/. Two-tier scoring (catalog tier-1, body-grep tier-2 fallback) routes a topic to top-N entity bodies the agent reasons over. Pairs with bookkeeping's cmd_index (catalog generator) and the workspace's knowledge-catalog-refresh-hook.sh Stop hook (P6)."
+
   - name: prompt-library
     repo: broomva/prompt-library
     category: meta

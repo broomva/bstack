@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.15.0 — 2026-05-22
+
+### Add `broomva/kg` to managed-skill registry + catalog policy reader (BRO-1223 follow-up)
+
+Promotes the LLM-as-index `/kg load` skill from workspace-local v1 (shipped in 0.12.0 at `~/.claude/skills/kg/`) to a managed bstack companion skill. This closes the **Future work** item explicitly anchored in the 0.12.0 CHANGELOG: *"Promote `broomva/kg` to its own GitHub repo + bstack skills-lock entry once usage exceeds rule-of-three (≥3 sessions with load-bearing `/kg load` invocations)."*
+
+The skill is what makes the LLM-as-index architecture (BRO-1223) ergonomic in agent sessions: tier-1 (catalog-only, ~5ms) routes via `docs/knowledge-index.md` for the common case; tier-2 (body-grep fallback, ~300ms) auto-fires when tier-1 returns fewer than N matches, recovering topics whose vocabulary lives in entity prose but not the dense catalog. Empirical receipts from rule-of-three: peak per-query context drops from 29% → 4.6% of 1M (6.3× reduction); cumulative session tokens 23.8× fewer over 10 queries.
+
+- **CHANGED** `references/companion-skills.yaml` — adds `kg` as a `required: true` knowledge-category skill under primitive **P6**, placed alongside `knowledge-graph-memory` (its sibling in the P6 family).
+- **CHANGED** `scripts/doctor.sh` §7 — the `/kg load` check now (a) accepts either a managed install (`~/.claude/skills/kg/` OR `~/.agents/skills/kg/`) or a legacy workspace-local v1 install, and (b) the gap message points at `npx skills add broomva/kg`.
+- **CHANGED** `references/skills-roster.md` — adds `kg` as row #6 in **Memory & Consciousness**, between `knowledge-graph-memory` and `prompt-library`. Header count 27 → 28.
+- **CHANGED** `VERSION` — `0.14.0` → `0.15.0`. Minor bump because this adds a new **required** managed skill.
+
+### `scripts/doctor.sh` §7 catalog stale threshold now reads from `.control/policy.yaml` (closes BRO-1223 I1)
+
+§7 catalog freshness check previously hardcoded `48h`. Three components used three different "stale" values across the workspace (kg.py: 24h, doctor.sh: 48h, hook: 5-min cooldown) — BRO-1223 P20 flagged this as I1.
+
+- **CHANGED** `scripts/doctor.sh` §7 — `_stale_h` sourced from `.control/policy.yaml` `catalog.stale_doctor_hours` (single source of truth), falling back to 48h when policy.yaml is absent/malformed/PyYAML-missing. Active threshold reported in OK message.
+- **P20 round-1 defensive coding**: argv-passed key/default via `sys.argv` (avoids `SyntaxError` on single-quote-in-path); regex-validated output (`[[ "$_raw" =~ ^[0-9]+$ ]]`) — empty/non-numeric stdout falls back cleanly.
+
+Pairs with `broomva/workspace` PR (adds the `catalog:` block to `.control/policy.yaml` + rewires `kg.py` + `knowledge-catalog-refresh-hook.sh` to read from it via the same pattern). All three consumers now sit behind a single source of truth. Also pairs with `broomva/kg` v0.2.0 push (BROOMVA_ROOT env var + `_load_catalog_policy()` at the skill source — closes the P20 C2 self-regression vector).
+
+### Cross-repo composition
+
+- **`broomva/kg`** — live at https://github.com/broomva/kg, now at v0.2.0 (MIT-licensed; ships `SKILL.md`, `scripts/kg.py` with BROOMVA_ROOT env var + policy.yaml reader, `README.md`, `LICENSE`). Pushed BEFORE this PR merges to prevent the self-regression vector flagged by P20.
+- **`broomva/workspace`** — adds the `catalog:` policy block + env-var overrides in `kg.py` mirror + `bench-kg.py`.
+- **`broomva/bookkeeping`** — adds `BROOMVA_ROOT`/`KG_PY` env-var lookup in the tier-2 regression test.
+
+### Why P6, not a new primitive
+
+`kg` operationalizes P6 (Bookkeeping) at the **load** end of the loop — the dual of `knowledge-graph-memory` (which captures conversation logs into the knowledge graph). Same primitive, opposite arrow. No L3 stability-budget impact because no new P-N row.
+
+---
+
+<<<<<<< HEAD
 ## 0.14.0 — 2026-05-22
 
 ### L3 stability closure — compute + enforce λ in every bstack workspace
