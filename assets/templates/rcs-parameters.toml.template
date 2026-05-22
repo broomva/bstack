@@ -1,0 +1,155 @@
+# =============================================================================
+# RCS — Workspace Stability Parameters (bstack default)
+# =============================================================================
+#
+# Per-level parameters for the Recursive Controlled Systems (RCS) stability
+# budget. These values are read by bstack/scripts/compute-lambda.sh and by
+# bstack doctor §14 to verify the composite system is exponentially stable.
+#
+# Formula (papers/p0-foundations/main.tex, Theorem 1):
+#
+#     lambda_i = gamma_i
+#              - L_theta_i * rho_i        (adaptation cost)
+#              - L_d_i * eta_i            (design evolution cost)
+#              - beta_i * tau_bar_i       (delay cost)
+#              - ln(nu_i) / tau_a_i       (switching cost)
+#
+# A level is stable iff lambda_i > 0. The composite hierarchy is exponentially
+# stable iff every level is individually stable.
+#
+# Defaults below are calibrated from broomva's Life runtime (research/rcs/
+# data/parameters.toml). For a generic bstack repo without Life, customize:
+#   - L0 (plant): match your runtime's inner loop (sub-second tool execution)
+#   - L1 (autonomic): match your agent's hysteresis / mode-transition layer
+#   - L2 (meta-control): match your EGRI / promotion cadence (default: hours)
+#   - L3 (governance): KEEP CONSERVATIVE — tau_a = 86400s (1 day) is the
+#     stability budget's load-bearing assumption. Faster governance churn
+#     destabilizes the whole hierarchy.
+#
+# Editing rules:
+#   - Bump schema_version below when adding/removing fields.
+#   - bstack doctor --strict verifies the cached [derived.lambda] block
+#     matches recomputed values; CI will fail if they drift.
+#   - Run `bash scripts/compute-lambda.sh --human` after edits to see the
+#     per-level impact before committing.
+
+schema_version = 1
+
+# -----------------------------------------------------------------------------
+# L0 — Plant (agent inner loop)
+# -----------------------------------------------------------------------------
+# Sub-second timescale: tool execution, streaming output, immediate response.
+# Source: Arcan agent loop default (or your equivalent).
+
+[[levels]]
+id             = "L0"
+name           = "plant"
+system         = "Agent loop / tool execution"
+gamma          = 2.0
+L_theta        = 0.3
+rho            = 0.5
+L_d            = 0.1
+eta            = 0.2
+beta           = 1.0
+tau_bar        = 0.01
+nu             = 1.2
+tau_a          = 0.5
+display_digits = 3
+
+# -----------------------------------------------------------------------------
+# L1 — Autonomic (per-session reasoning + hysteresis)
+# -----------------------------------------------------------------------------
+# Seconds timescale: hysteresis gates, mode transitions, validation backpressure.
+
+[[levels]]
+id             = "L1"
+name           = "autonomic"
+system         = "Agent reasoning / per-session loop"
+gamma          = 0.5
+L_theta        = 0.2
+rho            = 0.1
+L_d            = 0.1
+eta            = 0.05
+beta           = 0.5
+tau_bar        = 0.1
+nu             = 1.5
+tau_a          = 30.0
+display_digits = 3
+
+# -----------------------------------------------------------------------------
+# L2 — EGRI / meta-control
+# -----------------------------------------------------------------------------
+# Hours timescale: cross-session synthesis, candidate promotion, evaluator runs.
+
+[[levels]]
+id             = "L2"
+name           = "EGRI"
+system         = "EGRI / Crystallize (P16) / Bookkeeping (P6)"
+gamma          = 0.1
+L_theta        = 0.05
+rho            = 0.01
+L_d            = 0.02
+eta            = 0.01
+beta           = 0.0005
+tau_bar        = 60.0
+nu             = 1.1
+tau_a          = 3600.0
+display_digits = 3
+
+# -----------------------------------------------------------------------------
+# L3 — Governance
+# -----------------------------------------------------------------------------
+# Days timescale: CLAUDE.md / AGENTS.md / .control/policy.yaml mutations.
+#
+# CRITICAL: tau_a = 86400s (1 day) is the load-bearing assumption. Faster
+# governance churn destabilizes the entire RCS hierarchy. The bstack pre-commit
+# hook (`githook-pre-commit-l3-rate.sh`) enforces this rate by counting L3-class
+# commits in the last tau_a window.
+
+[[levels]]
+id             = "L3"
+name           = "governance"
+system         = "CLAUDE.md + AGENTS.md + .control/policy.yaml"
+gamma          = 0.01
+L_theta        = 0.001
+rho            = 0.001
+L_d            = 0.001
+eta            = 0.0005
+beta           = 0.000001
+tau_bar        = 3600.0
+nu             = 1.05
+tau_a          = 86400.0
+display_digits = 4
+
+# -----------------------------------------------------------------------------
+# Derived values — cached for human readers, verified by compute-lambda.sh
+# -----------------------------------------------------------------------------
+# scripts/compute-lambda.sh --strict recomputes these and fails if drift > 1e-4.
+
+[derived.lambda]
+L0 = 1.455357
+L1 = 0.411484
+L2 = 0.069274
+L3 = 0.006398
+
+[derived.omega]
+value = 0.006398
+level = "L3"
+
+# -----------------------------------------------------------------------------
+# Governance path patterns (read by l3-rate-gate.sh)
+# -----------------------------------------------------------------------------
+# Files that match these git-pathspec patterns count as L3 mutations.
+# Used by:
+#   - .githooks/pre-commit (pre-commit gate G1)
+#   - .github/workflows/l3-stability.yml (CI gate G2)
+#   - .claude/settings.json PreToolUse hook (Claude Code gate G0)
+
+[gates.l3_paths]
+patterns = [
+    "CLAUDE.md",
+    "AGENTS.md",
+    ".control/policy.yaml",
+    ".control/rcs-parameters.toml",
+    "METALAYER.md",
+]

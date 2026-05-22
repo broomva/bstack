@@ -73,6 +73,9 @@ if [ ! -d "$WORKSPACE/.git" ] && [ ! -d "$WORKSPACE/.control" ]; then
     exit 0
 fi
 
+# ── locate bstack repo (needed by §14 + §15 L3 stability checks) ────────────
+BSTACK_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
 # ── helpers ─────────────────────────────────────────────────────────────────
 GAPS=0
 PASSES=0
@@ -606,6 +609,96 @@ else
     [ "$QUIET" = "0" ] && echo "  [info] no Dogfood Plan anchor in AGENTS.md or docs/dogfood-plan.md"
     [ "$QUIET" = "0" ] && echo "         → for substantive feature PRs, include plan in PR body OR run \`bstack onboard\` to stub one"
     [ "$QUIET" = "0" ] && echo "         → reference: bstack/references/dogfood-patterns.md for the per-stack cookbook (informational; not blocking until rule-of-three)"
+fi
+
+# ── Section 14: RCS stability budget (compute lambda) ───────────────────────
+# Recompute lambda_i from the workspace's .control/rcs-parameters.toml (or
+# fallback to research/rcs/data/parameters.toml or bstack's template). Report
+# per-level lambda + drift vs cached values + composite omega. A level with
+# lambda <= 0 is a HARD gap (counts against doctor's gap total). Drift > 1e-4
+# is a soft warning unless --strict is set.
+section "14. RCS stability budget"
+
+COMPUTE_LAMBDA="$BSTACK_REPO/scripts/compute-lambda.sh"
+if [ ! -x "$COMPUTE_LAMBDA" ] && [ -f "$COMPUTE_LAMBDA" ]; then
+    chmod +x "$COMPUTE_LAMBDA" 2>/dev/null || true
+fi
+
+if [ ! -f "$COMPUTE_LAMBDA" ]; then
+    [ "$QUIET" = "0" ] && echo "  [info] scripts/compute-lambda.sh missing — RCS check skipped"
+elif ! command -v python3 >/dev/null 2>&1; then
+    [ "$QUIET" = "0" ] && echo "  [info] python3 missing — RCS lambda computation skipped"
+else
+    LAMBDA_OUT=$(BROOMVA_WORKSPACE="$WORKSPACE" bash "$COMPUTE_LAMBDA" --json 2>/dev/null)
+    LAMBDA_EXIT=$?
+    if [ "$LAMBDA_EXIT" = "2" ]; then
+        [ "$QUIET" = "0" ] && echo "  [info] no parameters.toml in workspace — install with: bash $BSTACK_REPO/scripts/install-l3-stability.sh"
+    elif [ "$LAMBDA_EXIT" = "0" ]; then
+        # All stable — report compactly
+        omega=$(echo "$LAMBDA_OUT" | python3 -c "import json,sys;print(json.load(sys.stdin)['composite_omega'])" 2>/dev/null)
+        ok "RCS composite stability ω = ${omega:-?} (min λᵢ; all levels stable)"
+        # Drift check (informational unless --strict)
+        if [ "$STRICT" = "1" ]; then
+            DRIFT_OUT=$(BROOMVA_WORKSPACE="$WORKSPACE" bash "$COMPUTE_LAMBDA" --json --strict 2>&1 >/dev/null)
+            DRIFT_EXIT=$?
+            if [ "$DRIFT_EXIT" = "3" ]; then
+                gap "RCS lambda drift > 1e-4 (--strict)" \
+                    "recompute and commit cached values: bash $COMPUTE_LAMBDA --human"
+            fi
+        fi
+    else
+        # Unstable — hard gap
+        gap "RCS lambda <= 0 at some level (composite system unstable)" \
+            "review .control/rcs-parameters.toml; run: bash $COMPUTE_LAMBDA --human"
+    fi
+fi
+
+# ── Section 15: L3 stability gate-flow wiring ───────────────────────────────
+# Verify the four-gate flow (G0 Claude Code, G1 git pre-commit, G2 GH Actions,
+# G3 doctor §14 which we just ran) is wired into this workspace. Each missing
+# gate is an INFORMATIONAL gap (not blocking) — the install command is
+# surfaced as the fix.
+section "15. L3 stability gate-flow wiring"
+
+INSTALL_CMD="bash $BSTACK_REPO/scripts/install-l3-stability.sh"
+
+# G0 — Claude Code PreToolUse hook in .claude/settings.json
+SETTINGS_FILE="$WORKSPACE/.claude/settings.json"
+if [ -f "$SETTINGS_FILE" ] && grep -q '"_bstack_primitive": *"L3-G0"' "$SETTINGS_FILE"; then
+    ok "G0 Claude Code PreToolUse hook wired (.claude/settings.json)"
+else
+    [ "$QUIET" = "0" ] && echo "  [info] G0 Claude Code PreToolUse hook missing (.claude/settings.json)"
+    [ "$QUIET" = "0" ] && echo "         → fix: $INSTALL_CMD"
+fi
+
+# G1 — git pre-commit hook
+PRE_COMMIT_HOOK="$WORKSPACE/.githooks/pre-commit"
+if [ -f "$PRE_COMMIT_HOOK" ] && grep -q "L3 rate gate" "$PRE_COMMIT_HOOK"; then
+    ok "G1 git pre-commit hook wired (.githooks/pre-commit)"
+else
+    [ "$QUIET" = "0" ] && echo "  [info] G1 git pre-commit hook missing (.githooks/pre-commit)"
+    [ "$QUIET" = "0" ] && echo "         → fix: $INSTALL_CMD"
+fi
+
+# G2 — GitHub Actions workflow
+GH_WORKFLOW="$WORKSPACE/.github/workflows/l3-stability.yml"
+if [ -f "$GH_WORKFLOW" ]; then
+    ok "G2 GitHub Actions workflow wired (.github/workflows/l3-stability.yml)"
+else
+    [ "$QUIET" = "0" ] && echo "  [info] G2 GitHub Actions workflow missing (.github/workflows/l3-stability.yml)"
+    [ "$QUIET" = "0" ] && echo "         → fix: $INSTALL_CMD"
+fi
+
+# G3 — workspace parameters.toml (the data the other gates read)
+PARAMS_FILE="$WORKSPACE/.control/rcs-parameters.toml"
+PAPER_PARAMS="$WORKSPACE/research/rcs/data/parameters.toml"
+if [ -f "$PARAMS_FILE" ]; then
+    ok "RCS parameters config present (.control/rcs-parameters.toml)"
+elif [ -f "$PAPER_PARAMS" ]; then
+    ok "RCS parameters config present (research/rcs/data/parameters.toml — paper canonical)"
+else
+    [ "$QUIET" = "0" ] && echo "  [info] no .control/rcs-parameters.toml in workspace"
+    [ "$QUIET" = "0" ] && echo "         → fix: $INSTALL_CMD"
 fi
 
 # ── summary ─────────────────────────────────────────────────────────────────

@@ -1,0 +1,17 @@
+{
+  "_doc": "bstack L3 stability — Claude Code PreToolUse hook entry (Gate G0). Merged into .claude/settings.json by bstack/scripts/install-l3-stability.sh. Fires on Edit/Write tool calls against L3-class paths and surfaces a warning to the agent reflecting that the edit is consuming stability budget.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$BSTACK_REPO/scripts/l3-stability-pretool-hook.sh",
+            "_bstack_primitive": "L3-G0"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -289,6 +289,17 @@ if [ -f "$WORKSPACE/AGENTS.md" ] && grep -q '^## Dogfood Plan (Stack: TBD)' "$WO
     echo "          → cookbook: $BSTACK_REPO/references/dogfood-patterns.md"
 fi
 
+# ─── Install L3 stability gate flow (v0.14.0+) ───────────────────────────
+# Deploys: .control/rcs-parameters.toml + .githooks/pre-commit (G1)
+#        + .github/workflows/l3-stability.yml (G2)
+#        + .claude/settings.json PreToolUse hook (G0)
+# Idempotent — safe to re-run; existing files preserved unless --force.
+L3_INSTALLER="$BSTACK_REPO/scripts/install-l3-stability.sh"
+if [ -x "$L3_INSTALLER" ] || [ -f "$L3_INSTALLER" ]; then
+    echo "[onboard] installing L3 stability gate flow"
+    BROOMVA_WORKSPACE="$WORKSPACE" bash "$L3_INSTALLER" 2>&1 | sed 's/^/  /' || true
+fi
+
 # ─── Mark initialized ─────────────────────────────────────────────────────
 mkdir -p "$STATE_DIR"
 {

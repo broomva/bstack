@@ -1,5 +1,73 @@
 # Changelog
 
+## 0.14.0 — 2026-05-22
+
+### L3 stability closure — compute + enforce λ in every bstack workspace
+
+Closes the gap between the RCS paper (`research/rcs/papers/p0-foundations/`) and operational reality. Previously, `λ₃ ≈ 0.006` was cited in CLAUDE.md and AGENTS.md as static text — no bstack script or hook computed or enforced it. This release wires the math + a four-gate flow (Claude Code hook → git pre-commit → CI → doctor) so every bstack-using workspace inherits computational stability checking on first onboard.
+
+### New scripts
+
+- **NEW** `scripts/compute-lambda.sh` — bash CLI that recomputes per-level λᵢ from a workspace's `parameters.toml` (looks at `.control/rcs-parameters.toml`, `research/rcs/data/parameters.toml`, or the bundled template). Implements the formula `λᵢ = γᵢ − L_θᵢ·ρᵢ − L_dᵢ·ηᵢ − βᵢ·τ̄ᵢ − ln(νᵢ)/τ_aᵢ`. Emits JSON or human-readable; exit 0 if all stable, 1 if any λᵢ ≤ 0, 3 on drift > 1e-4 (`--strict`).
+
+- **NEW** `scripts/l3-rate-gate.sh` — governance commit rate limiter. Reads L3-class path patterns from `.control/rcs-parameters.toml` `[gates.l3_paths]` (default: CLAUDE.md, AGENTS.md, .control/policy.yaml, .control/rcs-parameters.toml, METALAYER.md). Counts L3-class commits in the last τ_a₃ window (default 86400s = 1 day). Exits 0 within budget, 1 exceeded. Supports `--staged` (include uncommitted-but-staged for pre-commit use) and `--warn-only`.
+
+- **NEW** `scripts/install-l3-stability.sh` — one-shot installer that deploys the L3 gate flow into a workspace: `.control/rcs-parameters.toml` + `.githooks/pre-commit` (G1) + `.github/workflows/l3-stability.yml` (G2) + `.claude/settings.json` PreToolUse hook entry (G0). Idempotent; existing files preserved unless `--force`. Settings.json merge is structurally idempotent (skips if `_bstack_primitive: "L3-G0"` already present).
+
+- **NEW** `scripts/l3-stability-pretool-hook.sh` — Claude Code PreToolUse hook backend. Receives tool-call JSON on stdin; emits warning + audit-log entry when an Edit/Write/MultiEdit targets an L3 path. Defaults to `approve` (informational) — never blocks the agent; emits a `reason` string Claude Code surfaces into context.
+
+### New templates
+
+- **NEW** `assets/templates/rcs-parameters.toml.template` — default workspace parameters (L0–L3 calibrated from `research/rcs/data/parameters.toml`). Includes `[derived.lambda]` cached values + `[gates.l3_paths]` patterns. Self-documenting with the formula and customization notes for non-Life runtimes.
+
+- **NEW** `assets/templates/githook-pre-commit-l3-rate.sh.template` — Gate G1 git pre-commit hook. Calls `l3-rate-gate.sh --staged`; blocks commit if rate exceeded (override with `git commit --no-verify`). Chains to existing `.githooks/pre-commit.local` if user had a hook before bstack onboarded.
+
+- **NEW** `assets/templates/gh-workflow-l3-stability.yml.template` — Gate G2 GitHub Actions workflow. Triggers on PRs touching L3 paths; runs `compute-lambda.sh` + `l3-rate-gate.sh`; comments on the PR with the per-level λ + composite ω + rate verdict; status check `stability-check` fails if any λᵢ ≤ 0 (can be made required via branch protection).
+
+- **NEW** `assets/templates/settings.json.l3-stability-hook.snippet` — Gate G0 Claude Code PreToolUse hook entry. Merged into `.claude/settings.json` by `install-l3-stability.sh`. Fires on Edit/Write/MultiEdit; backend is `scripts/l3-stability-pretool-hook.sh`.
+
+### Doctor extensions
+
+- **CHANGED** `scripts/doctor.sh` adds two sections:
+  - **§14 RCS stability budget** — calls `compute-lambda.sh`; reports composite ω; HARD gap if any λᵢ ≤ 0; SOFT gap on drift > 1e-4 under `--strict`.
+  - **§15 L3 stability gate-flow wiring** — verifies G0 (settings.json hook), G1 (.githooks/pre-commit), G2 (.github/workflows/l3-stability.yml), and rcs-parameters.toml are present in the workspace. Each missing piece prints an `[info]` line with the install command. Informational only (not a hard gap).
+
+### Onboarding + repair
+
+- **CHANGED** `scripts/onboard.sh` calls `install-l3-stability.sh` after bootstrap. New workspaces get the full L3 gate flow on first install.
+- **CHANGED** `scripts/repair.sh` runs `install-l3-stability.sh` when doctor reports any G0/G1/G2 piece missing, parameters.toml absent, or λᵢ ≤ 0. Idempotent.
+
+### What this changes operationally
+
+Before: `λ₃ ≈ 0.006` was a citation. The agent could read it in CLAUDE.md and reason about it, but no machine path computed or enforced it.
+
+After: every bstack-using workspace can run `bash scripts/compute-lambda.sh --human` and see the live λ values for its own parameters. `bstack doctor` recomputes on every run. `bstack onboard` installs the four gates. CI fails on `λᵢ ≤ 0`. Git pre-commit blocks excess governance churn. Claude Code agents see warnings when editing L3 files.
+
+The 4-gate flow:
+
+| Gate | Trigger | Action | Blocking? |
+|---|---|---|---|
+| G0 — Claude Code PreToolUse | Edit/Write to L3 path | Warning to agent + audit log entry | No |
+| G1 — git pre-commit | Staged L3 path + over-rate | Block commit (bypassable with --no-verify) | Yes (bypassable) |
+| G2 — GitHub Actions on PR | L3 path changed | Comment with λ + rate verdict; fail status if λ ≤ 0 | Yes (if branch protection) |
+| G3 — bstack doctor §14 + §15 | Every SessionStart + on demand | Recompute λ + verify wiring | Informational |
+
+### Test plan executed
+
+- `compute-lambda.sh --human` against broomva's `parameters.toml` → all 4 λᵢ match cached (drift ~ 0)
+- `compute-lambda.sh` with `γ₃` perturbed from 0.01 → 0.001 → λ₃ = −0.0026; exit 1
+- `l3-rate-gate.sh` 24h window against ~/broomva → 0 commits, within budget, exit 0
+- `l3-rate-gate.sh --window=2592000` (30-day) → 142 L3 commits, exceeded, exit 1
+- `install-l3-stability.sh` against fake workspace → 4 files installed; re-run skipped 3 + idempotent settings.json merge
+- `l3-stability-pretool-hook.sh` with `{"file_path": ".../CLAUDE.md"}` → emits reason warning; with `{"file_path": ".../foo.ts"}` → silent approve
+- `doctor.sh` against ~/broomva → §14 reports composite ω = 0.006398, all stable; §15 reports G0/G1/G2 missing (informational, since broomva hasn't run `install-l3-stability.sh` yet)
+
+### Why this isn't a new primitive
+
+The four gates are *mechanisms*, not new primitives. The primitive is the existing RCS L3 stability constraint (cited in CLAUDE.md `RCS Hierarchy` section and `Self-Evolution Protocol`). This release implements that constraint in code, where v0.13.0 implemented P11 Empirical operationalization in code. No bstack primitive count change.
+
+---
+
 ## 0.13.0 — 2026-05-22
 
 ### P11 Empirical operationalization — Dogfood Plan reflex + per-stack cookbook + doctor §13

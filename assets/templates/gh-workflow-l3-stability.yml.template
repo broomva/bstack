@@ -1,0 +1,133 @@
+name: L3 stability gate
+
+# bstack Gate G2 — RCS stability + governance rate enforcement on PRs.
+# Installed by bstack/scripts/install-l3-stability.sh into
+# .github/workflows/l3-stability.yml.
+#
+# Triggers on PRs touching L3-class paths (CLAUDE.md, AGENTS.md,
+# .control/policy.yaml, .control/rcs-parameters.toml, METALAYER.md).
+# Comments on the PR with per-level lambda + drift + rate-gate status.
+# Status check `L3 stability gate / stability-check` can be made required via
+# branch protection rules to block merges when lambda <= 0.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'CLAUDE.md'
+      - 'AGENTS.md'
+      - '.control/policy.yaml'
+      - '.control/rcs-parameters.toml'
+      - 'METALAYER.md'
+
+jobs:
+  stability-check:
+    name: stability-check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 50
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install bstack (skill snapshot)
+        run: |
+          # Resolve bstack — for repos that have it vendored or use the GitHub fetch.
+          if [ -d ".agents/skills/bstack" ]; then
+            BSTACK=".agents/skills/bstack"
+          else
+            git clone --depth 1 https://github.com/broomva/bstack.git /tmp/bstack
+            BSTACK=/tmp/bstack
+          fi
+          echo "BSTACK=$BSTACK" >> $GITHUB_ENV
+
+      - name: Compute lambda (RCS stability budget)
+        id: compute
+        run: |
+          set +e
+          out=$(bash $BSTACK/scripts/compute-lambda.sh --human)
+          status=$?
+          echo "$out"
+          {
+            echo "result<<EOF"
+            echo "$out"
+            echo "EOF"
+            echo "status=$status"
+          } >> $GITHUB_OUTPUT
+          # Always continue so the comment step runs; final exit is below
+          exit 0
+
+      - name: Run L3 rate gate
+        id: rate
+        run: |
+          set +e
+          out=$(BROOMVA_WORKSPACE="$PWD" bash $BSTACK/scripts/l3-rate-gate.sh)
+          status=$?
+          echo "$out"
+          {
+            echo "result<<EOF"
+            echo "$out"
+            echo "EOF"
+            echo "status=$status"
+          } >> $GITHUB_OUTPUT
+          exit 0
+
+      - name: Comment on PR
+        if: github.event.pull_request != null
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const compute = `${{ steps.compute.outputs.result }}`;
+            const rate    = `${{ steps.rate.outputs.result }}`;
+            const computeStatus = `${{ steps.compute.outputs.status }}`;
+            const rateStatus    = `${{ steps.rate.outputs.status }}`;
+
+            const verdict =
+              computeStatus !== "0"
+                ? "🔴 **lambda_i <= 0** — composite system unstable; do not merge"
+                : rateStatus !== "0"
+                  ? "🟡 **L3 rate exceeded** — RCS stability budget assumes <= 1 governance commit per tau_a_3 window"
+                  : "🟢 **All gates pass** — composite stable, rate within budget";
+
+            const body = [
+              "## L3 stability gate report",
+              "",
+              verdict,
+              "",
+              "### Per-level lambda (compute-lambda.sh)",
+              "```",
+              compute,
+              "```",
+              "",
+              "### L3 rate gate (l3-rate-gate.sh)",
+              "```",
+              rate,
+              "```",
+              "",
+              "<sub>bstack Gate G2 — see `.github/workflows/l3-stability.yml`. RCS background: https://github.com/broomva/bstack/blob/main/references/primitives.md</sub>",
+            ].join("\n");
+
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body
+            });
+
+      - name: Set final status
+        run: |
+          # Fail the check if lambda <= 0 (unstable) — this is the gate.
+          # L3 rate exceeded is informational (passes here; pre-commit blocks locally).
+          if [ "${{ steps.compute.outputs.status }}" != "0" ]; then
+            echo "FAIL: lambda_i <= 0; composite unstable"
+            exit 1
+          fi
+          echo "OK: all lambda_i > 0"
