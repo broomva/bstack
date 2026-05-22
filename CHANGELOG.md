@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.17.0 — 2026-05-22
+
+### Crystallize `BROOMVA_ROOT` env-var convention (BRO-1223 follow-up)
+
+Adds `references/conventions.md` — a new home for cross-cutting workspace conventions (the things every script should follow but no single primitive owns). First entry: **C1 — `BROOMVA_ROOT` env-var as the workspace-root override**, with rule-of-three earned across 6 callsites in 3 repos (broomva/kg, broomva/bookkeeping, broomva/workspace).
+
+The convention prevents the failure mode surfaced by the haystack benchmark suite (BRO-1223): scripts that hardcode `~/broomva` silently overwrote the live workspace when invoked with non-standard layouts (e.g., isolated `/tmp/` fixtures). Documented patterns for Python + bash; documented `BROOMVA_WORKSPACE` (used by `bstack doctor`) as a historical synonym treated as semantically equivalent.
+
+- **NEW** `references/conventions.md` — first cross-cutting workspace convention reference. Includes a candidate ledger for 4 additional patterns observed once during this session (LLM-as-index architecture, auto-compact catalog, haystack benchmark pattern, defensive post-conversion bounds check) — all awaiting rule-of-three before promotion.
+- **CHANGED** `VERSION` — `0.16.0` → `0.17.0`. Additive minor bump — no behavior change, new reference doc.
+
+### Why a new file (not extending an existing one)
+
+`references/primitives.md` defines primitive contracts; `dogfood-patterns.md` defines per-stack validation patterns; `stack-architecture.md` describes the architectural composition. None is the right home for cross-cutting workspace conventions that span all primitives. A dedicated file keeps each reference doc's scope clean.
+
+### Candidate ledger philosophy
+
+The ledger at the bottom of `references/conventions.md` mirrors the workspace-side `research/entities/pattern/bstack-engine.md` candidate ledger — but listed here for bstack agents who don't have the workspace substrate available. The 4 listed candidates (LLM-as-index, auto-compact, haystack pattern, defensive bounds check) all derive from BRO-1223 work but are single-instance today; promotion to a full convention entry awaits 2 more recurrences each. Per the P16 Crystallize discipline: ≥3 instances + concrete mechanism + stated invariant + stated failure mode.
+
+### Refs
+
+BRO-1223 follow-up. Linear MCP still down at session ship time — ticket creation deferred.
+
 ## 0.16.0 — 2026-05-22
 
 ### Multi-layer RCS closure — extending the control loop across L0/L1/L2
