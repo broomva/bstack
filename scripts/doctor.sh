@@ -296,18 +296,24 @@ if [ -f "$_CATALOG" ]; then
     # then hardcoded 48h fallback. Single source of truth for catalog
     # thresholds — see BRO-1223 I1 (was: three different "stale" values
     # across kg.py / doctor.sh / hook).
+    #
+    # Defensive: argv-passing avoids SyntaxError on single-quote-in-path
+    # (P20 I1); regex validation handles empty/non-numeric stdout (P20 C3).
     _policy_file="$WORKSPACE/.control/policy.yaml"
     _stale_h=48
     if [ -f "$_policy_file" ] && command -v python3 >/dev/null 2>&1; then
-        _stale_h=$(python3 -c "
+        _raw=$(python3 -c '
 import sys
 try:
     import yaml
-    with open('$_policy_file') as f: d = yaml.safe_load(f) or {}
-    print(int((d.get('catalog') or {}).get('stale_doctor_hours', 48)))
+    with open(sys.argv[1]) as f: d = yaml.safe_load(f) or {}
+    print(int((d.get("catalog") or {}).get("stale_doctor_hours", 48)))
 except Exception:
     print(48)
-" 2>/dev/null || echo 48)
+' "$_policy_file" 2>/dev/null)
+        if [[ "$_raw" =~ ^[0-9]+$ ]]; then
+            _stale_h="$_raw"
+        fi
     fi
     if [ "$_age_h" -le "$_stale_h" ]; then
         ok "P6 catalog fresh: docs/knowledge-index.md (${_age_h}h old; threshold ${_stale_h}h)"

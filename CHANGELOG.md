@@ -34,6 +34,7 @@ Pairs with `broomva/workspace` PR (adds the `catalog:` block to `.control/policy
 
 ---
 
+<<<<<<< HEAD
 ## 0.14.0 — 2026-05-22
 
 ### L3 stability closure — compute + enforce λ in every bstack workspace
