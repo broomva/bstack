@@ -1,0 +1,98 @@
+# =============================================================================
+# bstack — Closure-Contract Arcs (the (X, U, h, Π, T) 5-tuple, generalized)
+# =============================================================================
+#
+# A closure-contract *arc* lifts the same 5-tuple already used at the 4 hard-
+# coded RCS layers (see assets/templates/rcs-parameters.toml.template) to the
+# N user-declared domain arcs the workspace actually runs every day. Each arc
+# names one feedback loop the workspace promises to close:
+#
+#     (plant_surfaces, sensor, actuator, termination, tau_a)
+#
+# read as:
+#
+#     "for these plant surfaces, observe via this sensor, act via this
+#      actuator, terminate when this condition holds, within tau_a seconds."
+#
+# The agent's reasoning is the universal Π (controller). When
+# actuator.kind == "agent_reasoning" the controller binding is implicit —
+# the agent loop closes the arc by reading the sensor, deciding, and acting.
+# Script / mcp_tool / http actuators bind specific mechanisms while keeping
+# the agent in the supervisory role.
+#
+# Read by:
+#   - scripts/compute-arc-status.sh   (per-arc verdict reader; mirrors
+#                                      compute-budget-status.sh shape)
+#   - scripts/doctor.sh §20            (arcs-declared health)
+#   - schemas/arcs.v1.json             (declarative shape; bstack doctor
+#                                      runs json-schema validation in §10)
+#
+# Editing rules:
+#   - Bump schema_version below when adding/removing fields.
+#   - Run `bash scripts/compute-arc-status.sh --human` after edits to verify
+#     each arc still resolves to a verdict.
+#   - tau_a is in seconds (per-arc switching cost denominator). Keep it
+#     proportional to the natural cadence of the loop: PR CI is ~1800s,
+#     bookkeeping promotion-quality is ~86400s, etc.
+#   - Workspace files override this template: copy to .control/arcs.yaml,
+#     edit, and compute-arc-status.sh will prefer the workspace file.
+
+schema_version: 1
+
+arcs:
+  # ---------------------------------------------------------------------------
+  # Arc 1 — code-pr-greenflow
+  # ---------------------------------------------------------------------------
+  # Closes the loop: "every PR I open ends up merged with all checks green."
+  # Plant: GitHub PR checks. Sensor: `gh pr checks --json`. Actuator: agent
+  # reasoning (which calls heal-recipes from .control/policy.yaml ci_heal:
+  # block). Termination: predicate over checks_green AND merged. Window:
+  # 30 minutes (PR CI ceiling — beyond this the human steps in).
+  - id: code-pr-greenflow
+    description: PR CI greenflow — open, watch, heal, merge.
+    plant_surfaces:
+      - gh://${repo}/pulls
+      - fs://.github/workflows/
+    sensor:
+      kind: json_path
+      source: gh pr checks --json conclusion,name --jq '[.[] | select(.conclusion != null)]'
+      expr: all(.conclusion == "SUCCESS")
+    actuator:
+      kind: agent_reasoning
+      tools:
+        - gh
+        - skills/p9/scripts/p9.py
+        - skills/bookkeeping/scripts/bookkeeping.py
+    termination:
+      kind: predicate
+      expr: checks_green AND merged
+    tau_a: 1800
+    shield_ref: gates.hard.G-PR-MERGE
+
+  # ---------------------------------------------------------------------------
+  # Arc 2 — bookkeeping-promotion-quality
+  # ---------------------------------------------------------------------------
+  # Closes the loop: "every Layer-2 raw extract that ends up an entity page
+  # in research/entities/ scored ≥7/9 on the Nous gate." Plant: research/
+  # notes/ + research/entities/. Sensor: a hypothetical eval script that
+  # exits 0 when the most recent promotion run scored ≥ threshold.
+  # Actuator: agent reasoning (the agent re-runs bookkeeping replay if the
+  # score dips). Termination: score_threshold. Window: 1 day (matches the
+  # bookkeeping cadence and the L3 governance budget).
+  - id: bookkeeping-promotion-quality
+    description: Bookkeeping promotion quality — every entity page meets the Nous gate.
+    plant_surfaces:
+      - fs://research/entities/
+      - fs://research/notes/
+    sensor:
+      kind: exit_code
+      source: skills/bookkeeping/scripts/eval-promotion-quality.sh
+    actuator:
+      kind: agent_reasoning
+      tools:
+        - skills/bookkeeping/scripts/bookkeeping.py
+    termination:
+      kind: score_threshold
+      expr: score >= 7
+    tau_a: 86400
+    shield_ref: gates.governed.G-PROMOTION-NOUS
