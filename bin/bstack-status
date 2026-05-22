@@ -77,10 +77,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-if [ "$AGGREGATE" = "1" ]; then
-    echo "bstack-status: --aggregate not implemented until Phase 8 (federation)" >&2
-    exit 3
-fi
+# --aggregate is wired below (after helpers are defined); keep flag-only check here.
 
 # ─── Color setup (TTY + NO_COLOR aware) ────────────────────────────────
 if [ -t 1 ] && [ -z "$NO_COLOR" ] && [ -z "${NO_COLOR_ENV:-}" ]; then
@@ -260,6 +257,154 @@ severity_emoji_for_setpoint() {
           else "ok" end
     ' "$LATEST" 2>/dev/null
 }
+
+# ─── --aggregate path (Phase 8 federation rollup) ─────────────────────
+# Reads the workspace registry via `bstack-workspace list --json` and walks
+# each registered workspace, calling `compute-budget-status.sh --json` (if
+# present) per workspace to fetch composite_omega + per-layer verdict. The
+# rollup is idempotent and never writes (Federation is read-only aggregation).
+#
+# Empty registry → exits 0 with a friendly nudge. Missing per-workspace
+# substrate (no .control/audit/, no compute-budget-status.sh) → entry marked
+# "no-data" but the rollup still succeeds. Federation is opt-in; absence is
+# not an error.
+if [ "$AGGREGATE" = "1" ]; then
+    WORKSPACE_BIN="$BSTACK_DIR/bin/bstack-workspace"
+    if [ ! -x "$WORKSPACE_BIN" ]; then
+        echo "bstack-status: bstack-workspace not found at $WORKSPACE_BIN" >&2
+        exit 3
+    fi
+
+    REG_JSON=$(BSTACK_DIR="$BSTACK_DIR" bash "$WORKSPACE_BIN" list --json 2>/dev/null)
+    if [ -z "$REG_JSON" ]; then
+        echo "bstack-status --aggregate: registry read failed" >&2
+        exit 3
+    fi
+    REG_COUNT=$(echo "$REG_JSON" | jq -r '.count')
+    REG_PATH=$(echo "$REG_JSON" | jq -r '.registry')
+
+    if [ "$REG_COUNT" = "0" ]; then
+        if [ "$JSON_MODE" = "1" ]; then
+            echo "$REG_JSON" | jq '{
+                aggregate: true,
+                registry: .registry,
+                count: .count,
+                workspaces: [],
+                generated_at: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
+            }'
+        else
+            echo "${BOLD}bstack federation${RESET} — empty registry ($REG_PATH)"
+            echo "  Register this workspace with: bstack workspace register"
+        fi
+        exit 0
+    fi
+
+    # Walk each workspace and gather (name, bstack_version, composite_omega,
+    # last_seen, verdict). Python is the simplest carrier here — jq cannot
+    # cleanly fork subprocesses, and we may need to call compute-budget-
+    # status per workspace when an audit log is absent.
+    BUDGET_SCRIPT="$BSTACK_DIR/scripts/compute-budget-status.sh"
+    AGG_PAYLOAD=$(REG_JSON="$REG_JSON" BUDGET_SCRIPT="$BUDGET_SCRIPT" python3 - <<'PYEOF'
+import json, os, subprocess
+from datetime import datetime, timezone
+from pathlib import Path
+
+reg = json.loads(os.environ["REG_JSON"])
+budget_script = os.environ.get("BUDGET_SCRIPT") or ""
+
+rows = []
+for ws in reg.get("workspaces", []):
+    path = ws.get("path", "")
+    name = ws.get("name", "?")
+    bs_ver = ws.get("bstack_version", "?")
+    last_seen = ws.get("last_seen_at") or ws.get("registered_at", "?")
+    composite = None
+    verdict = "no-data"
+
+    audit = Path(path) / ".control" / "audit" / "composite-omega.jsonl"
+    if audit.is_file():
+        try:
+            lines = [ln for ln in audit.read_text().splitlines() if ln.strip()]
+            if lines:
+                last = json.loads(lines[-1])
+                composite = last.get("composite_omega")
+                verdict = last.get("verdict") or last.get("status") or "stable"
+        except Exception:
+            pass
+
+    if composite is None and budget_script and os.path.isfile(budget_script):
+        env = os.environ.copy()
+        env["BROOMVA_WORKSPACE"] = path
+        try:
+            out = subprocess.run(
+                ["bash", budget_script, "--json"],
+                capture_output=True, text=True, env=env, timeout=5,
+            )
+            if out.stdout.strip():
+                data = json.loads(out.stdout)
+                composite = data.get("composite_omega")
+                if data.get("all_layers_stable") is True:
+                    verdict = "stable"
+                elif data.get("all_layers_stable") is False:
+                    verdict = "unstable"
+        except Exception:
+            pass
+
+    rows.append({
+        "name": name,
+        "path": path,
+        "bstack_version": bs_ver,
+        "composite_omega": composite,
+        "last_seen": last_seen,
+        "verdict": verdict,
+    })
+
+payload = {
+    "aggregate": True,
+    "registry": reg.get("registry"),
+    "count": len(rows),
+    "workspaces": rows,
+    "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+}
+print(json.dumps(payload))
+PYEOF
+)
+
+    if [ -z "$AGG_PAYLOAD" ]; then
+        echo "bstack-status --aggregate: rollup produced no output" >&2
+        exit 3
+    fi
+
+    if [ "$JSON_MODE" = "1" ]; then
+        echo "$AGG_PAYLOAD" | jq '.'
+        exit 0
+    fi
+
+    # Text rendering
+    echo "${BOLD}bstack federation${RESET} — $REG_COUNT registered workspace(s)"
+    echo "$SEP"
+    printf "%-20s %-10s %-12s %-22s %s\n" "NAME" "VERSION" "COMPOSITE_ω" "LAST_SEEN" "VERDICT"
+    echo "$SEP"
+    echo "$AGG_PAYLOAD" | jq -r '.workspaces[] | [
+        .name,
+        .bstack_version,
+        (if .composite_omega == null then "—" else (.composite_omega | tostring) end),
+        .last_seen,
+        .verdict
+    ] | @tsv' | while IFS=$'\t' read -r n v c s vd; do
+        case "$vd" in
+            stable)        marker="$OK" ;;
+            stable_warn)   marker="$WARN" ;;
+            unstable)      marker="$FAIL" ;;
+            no-data)       marker="${DIM}-${RESET}" ;;
+            *)             marker="$WARN" ;;
+        esac
+        printf "%-20s %-10s %-12s %-22s %b %s\n" "$n" "$v" "$c" "$s" "$marker" "$vd"
+    done
+    echo "$SEP"
+    echo "Registry: $REG_PATH"
+    exit 0
+fi
 
 # ─── --setpoint <S-id> path ───────────────────────────────────────────
 if [ -n "$SETPOINT_FILTER" ]; then

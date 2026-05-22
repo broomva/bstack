@@ -917,6 +917,74 @@ else
     fi
 fi
 
+# ── Section 20: Workspace federation registry (Phase 8, v0.18.0) ───────────
+# Reports whether the host-level federation registry at
+# ~/.broomva/global/registry.yaml exists, how many workspaces are registered,
+# and (if any) flags entries whose last_seen_at is > 30 days old.
+#
+# Federation is OPT-IN — a missing registry is INFORMATIONAL, never a gap.
+# The only hard gap is schema_version drift (registry file exists but the
+# header says schema_version != 1) — that's a corrupt/mismatched registry
+# the user installed by hand or with a future bstack version.
+section "20. Workspace federation registry"
+
+REGISTRY_DEFAULT="$HOME/.broomva/global/registry.yaml"
+REGISTRY_PATH="${BSTACK_REGISTRY:-$REGISTRY_DEFAULT}"
+WORKSPACE_BIN="$BSTACK_REPO/bin/bstack-workspace"
+
+if [ ! -x "$WORKSPACE_BIN" ]; then
+    [ "$QUIET" = "0" ] && echo "  [info] bin/bstack-workspace not present (federation not installed)"
+elif [ ! -f "$REGISTRY_PATH" ]; then
+    [ "$QUIET" = "0" ] && echo "  [info] no registry present (federation not in use)"
+    [ "$QUIET" = "0" ] && echo "         → fix: bash $WORKSPACE_BIN register"
+elif ! command -v python3 >/dev/null 2>&1; then
+    [ "$QUIET" = "0" ] && echo "  [info] python3 missing — federation registry summary skipped"
+else
+    FED_SUMMARY=$(BSTACK_REGISTRY="$REGISTRY_PATH" BSTACK_DIR="$BSTACK_REPO" \
+        bash "$WORKSPACE_BIN" list --json 2>/dev/null)
+    FED_EXIT=$?
+    # Exit 3 = schema mismatch / parse error (per bstack-workspace contract).
+    if [ "$FED_EXIT" = "3" ]; then
+        gap "workspace registry schema_version mismatch or parse error ($REGISTRY_PATH)" \
+            "inspect: cat $REGISTRY_PATH; fix header to 'schema_version: 1' or re-create with 'bstack workspace register'"
+    elif [ -z "$FED_SUMMARY" ]; then
+        [ "$QUIET" = "0" ] && echo "  [info] registry present but list --json produced no output"
+    else
+        SCHEMA_OK=$(echo "$FED_SUMMARY" | python3 -c "import sys,json;d=json.load(sys.stdin);print('1' if d.get('count') is not None else '0')" 2>/dev/null)
+        if [ "$SCHEMA_OK" != "1" ]; then
+            gap "workspace registry malformed JSON output ($REGISTRY_PATH)" \
+                "inspect: bash $WORKSPACE_BIN list --json"
+        else
+            FED_COUNT=$(echo "$FED_SUMMARY" | python3 -c "import sys,json;print(json.load(sys.stdin).get('count', 0))" 2>/dev/null)
+            FED_STALE=$(echo "$FED_SUMMARY" | python3 - "$REGISTRY_PATH" <<'PYEOF' 2>/dev/null
+import json, sys
+from datetime import datetime, timedelta, timezone
+data = json.load(sys.stdin)
+cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+stale = []
+for ws in data.get("workspaces", []):
+    raw = ws.get("last_seen_at") or ws.get("registered_at")
+    if not raw:
+        continue
+    try:
+        # Accept 'Z' suffix as UTC.
+        ts = datetime.strptime(raw, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except Exception:
+        continue
+    if ts < cutoff:
+        stale.append(ws.get("name", "?"))
+print(",".join(stale))
+PYEOF
+)
+            if [ -n "$FED_STALE" ]; then
+                [ "$QUIET" = "0" ] && echo "  [info] federation: $FED_COUNT workspace(s); stale (>30d): $FED_STALE"
+                [ "$QUIET" = "0" ] && echo "         → fix: refresh with 'bstack workspace register' from each stale workspace"
+            fi
+            ok "workspace registry present: $FED_COUNT workspace(s) at $REGISTRY_PATH"
+        fi
+    fi
+fi
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 TOTAL=$((PASSES + GAPS))

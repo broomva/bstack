@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# bstack-workspace — multi-workspace registry dispatcher (Phase 8, v0.10.0).
+#
+# Thin bash wrapper around scripts/workspace.py. Manages the opt-in
+# registry at ~/.broomva/global/registry.yaml that backs
+# `bstack status --aggregate`.
+#
+# Subcommands:
+#   register [--path PATH] [--name NAME] [--tag TAG]... [--json]
+#                                Add (or refresh) a workspace entry
+#   list [--json]                Print registered workspaces
+#   info [--path PATH] [--json]  Show this workspace's registration state
+#   deregister [--name NAME | --path PATH] [--json]
+#                                Remove a workspace entry
+#   help | --help                This message
+#
+# Env overrides:
+#   BSTACK_REGISTRY              Override default registry path
+#                                (default: ~/.broomva/global/registry.yaml)
+#
+# Exit codes:
+#   0  success
+#   2  invalid arguments / unknown subcommand
+#   3  registry parse error / schema mismatch
+#   4  target not found (deregister missing name/path)
+#   5  duplicate name on register (with different path)
+#
+# SLO targets:
+#   register  / deregister / info: p50 < 100ms, p99 < 500ms
+#   list (10 entries):              p50 < 100ms, p99 < 500ms
+set -euo pipefail
+
+BSTACK_DIR="${BSTACK_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
+DETECTOR="$BSTACK_DIR/scripts/workspace.py"
+
+usage() {
+    cat <<'EOF'
+bstack-workspace — multi-workspace registry manager (Phase 8)
+
+Subcommands:
+  register [--path PATH] [--name NAME] [--tag TAG]... [--json]
+                                 Add (or refresh) a workspace entry
+  list [--json]                  Print registered workspaces
+  info [--path PATH] [--json]    Show this workspace's registration state
+  deregister [--name NAME | --path PATH] [--json]
+                                 Remove a workspace entry
+  help | --help                  This message
+
+Defaults:
+  registry path  $BSTACK_REGISTRY  (default: ~/.broomva/global/registry.yaml)
+  name           basename of --path  (or basename of $PWD)
+  path           $PWD  on `register` / `info`
+
+Exit codes:
+  0  success
+  2  invalid arguments / unknown subcommand
+  3  registry parse error / schema mismatch
+  4  target not found
+  5  name conflict (different path)
+
+Examples:
+  bstack workspace register
+  bstack workspace register --path ~/projects/foo --tag client-x
+  bstack workspace list --json | jq '.workspaces[] | .name'
+  bstack workspace info
+  bstack workspace deregister --name foo
+EOF
+}
+
+if [ $# -eq 0 ]; then
+    usage
+    exit 0
+fi
+
+cmd="$1"
+shift || true
+
+case "$cmd" in
+    help|--help|-h)
+        usage
+        ;;
+    register|list|deregister|info)
+        exec python3 "$DETECTOR" "$cmd" "$@"
+        ;;
+    *)
+        echo "bstack workspace: unknown subcommand '$cmd' — try 'bstack workspace --help'." >&2
+        exit 2
+        ;;
+esac
