@@ -188,6 +188,60 @@ If the agent cannot fill a row, it states why ("backend requires real cloud cred
 
 ---
 
+## Pattern G — Trading bot (webhook receiver + multi-broker + Pine scripts)
+
+**Signals**: a `services/tradingview-bridge/` (or similarly-named) subdir containing FastAPI/Hono routes + a `strategies/pine/*.pine` directory + a SQLite idempotency DB (`*.sqlite` referenced by code) + broker-client modules. Often combined with Pattern E signals (it IS a REST API at the receiver layer); the trading-bot variant adds the Pine-Script side and the broker-execution side.
+
+| Surface | Use for | How |
+|---|---|---|
+| **curl + jq** | Webhook receiver behavior | `curl -sS -X POST $BASE/webhook -d '<TVAlert JSON>' \| jq` — verify accepted/duplicate/rejected status + order_id |
+| **Pine alert simulator** | Fire a synthetic alert without TradingView | Construct the alert JSON from `services/tradingview-bridge/src/tradingview_bridge/schemas.py:TVAlert` shape; POST directly; assert the dispatcher routed to the expected broker |
+| **SQLite idempotency inspector** | Verify alert_id dedup is working | `sqlite3 $TVBRIDGE_DB_PATH 'SELECT * FROM alert_idempotency ORDER BY created_at DESC LIMIT 10'` |
+| **Broker mock state** | Verify the right broker received the order | In tests: `MockClient.placed_orders` list; in dev: structured log greps for `mock_order_placed broker=<...>` |
+| **Interceptor** | Capture TradingView chart at alert moment | `services/tradingview-bridge/scripts/capture_chart.sh <chart_url> <out.png>` (drives Interceptor extension) |
+| **Bookkeeping journal grep** | Cross-reference alerts that landed in the knowledge graph | `grep "alert_dispatched" research/entities/pattern/strategy-*.md` (workspace bookkeeping P6) |
+| **Server logs** | Full pipeline trace | `run_in_background` tailing uvicorn stdout; filter for `alert_dispatched`, `dispatch_duplicate`, `broker_not_configured` events |
+| **Structured-log curl loop** | Stress test (rate limiter + idempotency) | `for i in {1..120}; do curl ...; done; jq` against the log — verify ~60 accepted + ~60 429s with one source IP |
+
+**Canonical arc** (paper-only; real-paper variant requires broker onboarding):
+
+1. Start uvicorn in `run_in_background`; capture stdout to a log file
+2. Smoke: `curl -sSI $BASE/health` → 200; body shows `mode=paper`, `broker_mode=mock`, `brokers={ibkr:true,kraken:true,polymarket:true}`
+3. Asset-class routing: for each `asset_class` in `[stock, etf, bond, fx, crypto, prediction]`, POST a synthetic TVAlert with a unique `alert_id`; assert the response's `broker` field matches the expected route (stock→ibkr, crypto→kraken, prediction→polymarket)
+4. Idempotency: re-fire one of the alerts with the same `alert_id`; assert `status="duplicate"` + same `order_id` as the original
+5. Auth gates: bad secret → 401; bad source IP → 403; bad action → 422; bad JSON → 400; all four in one rapid sequence to verify error ordering
+6. Rate limit: with `TVBRIDGE_RATE_LIMIT_PER_MINUTE=2`, fire 3 alerts rapidly with distinct `alert_id` (to bypass idempotency); assert the third returns 429
+7. Bookkeeping evidence: confirm `research/entities/pattern/strategy-<name>.md` got a journal line (or, in test env, that `TVBRIDGE_BOOKKEEPING_CLI=/nonexistent` and the no-op log fires)
+8. Chart receipt (operator-driven): for one alert, invoke `capture_chart.sh` to attach a PNG of the TradingView chart at the alert moment
+
+**Gotchas**:
+- **Paper-only is enforced at startup**, not runtime — a `TVBRIDGE_TRADING_MODE=live` env var crashes the process before serving any traffic. P11-relevant: the receipt must include "process started in paper mode" as binary evidence, not just "tests pass."
+- **Mock-default broker mode** means absence of `TVBRIDGE_BROKER_MODE=real-paper` → no broker contact. Operators flipping to real-paper without TWS / sandbox creds get `NotConfiguredError` → `rejected` DispatchResult (not a crash).
+- **Idempotency can mask bugs** — if the dispatcher is broken AND a duplicate fires, the second call returns the (broken) first call's order_id. Always test idempotency with a *new* alert_id, not by re-firing.
+- **Rate limit per-IP** — distributed tests using one source IP can self-trip the limiter; either bump the env var temporarily OR rotate the X-Forwarded-For header.
+- **Pine Script syntax errors** only surface in TradingView's Pine Editor — there's no local linter. Operator-driven syntax check is part of the dogfood plan for any Pine change.
+- **CFDs forbidden** by policy.yaml `cfd-broker-blocked` (deferred to PR 4 — receipt should confirm no executor path points at a CFD endpoint when policy.yaml is read).
+
+**Receipt template**:
+
+```markdown
+**Dogfood Plan** (stack: trading-bot)
+
+- **Entry surface**: webhook receiver at $BASE/webhook + Pine alerts from TradingView (or synthetic via curl)
+- **Driver**: curl + jq + sqlite3 + Interceptor (chart capture) + uvicorn server logs
+- **Evidence**: log file path + idempotency DB snapshot + (operator-driven) chart PNG
+- **Smoke**: GET /health → 200 with mode=paper, broker_mode=mock, brokers all true
+- **End-to-end**: 7+ POST cases — 6 asset-class routes + 1 idempotency hit + 4 error paths + 1 rate-limit trip
+- **Receipt anchor**: PR body / commit message / strategy-{name}.md bookkeeping entry
+```
+
+**Where this sits in the workspace** (reference instance):
+- Service: `github.com/broomva/investment-management services/tradingview-bridge/` (PR 1 ships the receiver, PR 2 the executor, PR 3 the Pine library)
+- ADR: `github.com/broomva/workspace docs/specs/2026-05-22-broker-selection-cross-asset.html`
+- Linear ticket: `github.com/broomva/workspace tasks/bro-167-cross-asset-trading-platform.md`
+
+---
+
 ## Skills inventory (when to reach for which)
 
 Ranked by P11 utility for dogfooding-from-client-POV. All are existing skills; the cookbook composes them per stack.
@@ -220,12 +274,17 @@ if   exists(Cargo.toml) and exists(src-tauri/)         → Pattern A — Tauri +
 elif exists(next.config.*) or has_dep("next")          → Pattern B — Next.js
 elif exists(app.json) and json_has("expo")            → Pattern C — Expo / RN
 elif exists(Cargo.toml) and not exists(src-tauri/)    → Pattern D — Rust CLI
+elif exists("services/tradingview-bridge/") or
+     glob("**/strategies/pine/*.pine") or
+     has_dep(["ib-async","ccxt","py-clob-client"])     → Pattern G — Trading bot
 elif exists(openapi.*) or has_dep(["fastapi","hono","axum","express"])
                                                        → Pattern E — REST API
 elif frontmatter_has("tools:") or exists(mcp.{json,yaml})
                                                        → Pattern F — MCP server
 else                                                   → Pattern Z — Unknown; agent declares stack in plan
 ```
+
+Trading-bot is checked *before* REST API because a trading-bot repo also matches the REST API signals (it has FastAPI / Hono routes). The more-specific match wins.
 
 Multi-stack repos (e.g. Next.js + REST API combined; Tauri + MCP-server-as-tool) produce *multiple* dogfood plans — one per surface the user perceives.
 
