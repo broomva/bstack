@@ -47,7 +47,12 @@
 | # | Skill | Install | Description |
 |---|-------|---------|-------------|
 | 16 | `alkosto-wait-optimizer` | `npx skills add broomva/alkosto-wait-optimizer-skill` | Probability-based decision tool for optimal waiting times. Bayesian estimation with uncertainty. |
-| 17 | `content-creation` | (bundled with bstack) | Full content pipeline: blog posts, social threads, video scripts, SEO optimization. |
+| 17 | `content-creation` | `npx skills add broomva/skills --skill content-creation` | Full-stack content pipeline — research → narrative → visual assets → video → social → deploy; ships bstack-launch + open-source-stack example campaigns. (Migrated 2026-05-25 from `broomva/content-creation` — Phase 4b.) |
+| 17a | `content-engine` | `npx skills add broomva/skills --skill content-engine` | Full-stack AI content studio — visual DNA compiler, cinematic generation, browser autopilot, content loop; bundles 4 sub-skills. (Migrated 2026-05-25 from `broomva/content-engine` — Phase 4b.) |
+| 17b | `launch-video` | `npx skills add broomva/skills --skill launch-video` | Liquid Glass product launch video — dark void, 3D floating panels, spring animations via Remotion. (Migrated 2026-05-25 from `broomva/launch-video` — Phase 4b.) |
+| 17c | `ltx-video` | `npx skills add broomva/skills --skill ltx-video` | LTX-2.3 video generation — setup, inference, prompting, ComfyUI integration for Lightricks 22B DiT audio-video model. (Migrated 2026-05-25 from `broomva/ltx-video` — Phase 4b.) |
+| 17d | `creative-review` | `npx skills add broomva/skills --skill creative-review` | Meta creative review — style adherence scoring, feedback loops, self-improving creative pipeline. (Migrated 2026-05-25 from `broomva/creative-review` — Phase 4b.) |
+| 17e | `brainrot-for-good` | `npx skills add broomva/skills --skill brainrot-for-good` | High-retention video production using dopamine-aware editing for genuinely valuable content. (Migrated 2026-05-25 from `broomva/brainrot-for-good` — Phase 4b.) |
 | 18 | `finance-substrate` | `npx skills add broomva/finance-substrate` | Personal finance & Colombian tax management. Bank CSV import, TRM rates, DIAN tax projection, withholdings, e-invoicing. Zero paid deps. |
 | 19 | `seo-llmeo` | `npx skills add broomva/skills --skill seo-llmeo` | SEO and LLM Engine Optimization — audits, meta tags, structured data (JSON-LD), llms.txt generation. (Migrated 2026-05-25 from `broomva/seo-llmeo` — Phase 4a.) |
 | 20 | `brand-icons` | `npx skills add broomva/skills --skill brand-icons` | Brand icon and visual identity asset generation — favicons, app icons, OG images, social avatars. (Migrated 2026-05-25 from `broomva/brand-icons` — Phase 4a.) |

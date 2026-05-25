@@ -188,12 +188,61 @@ skills:
     min_bstack_version: 0.21.0
     description: "Full-stack blog post production — research → angle → draft → multi-platform distribution (X, LinkedIn, Instagram, Substack)"
 
+  # Phase 4b migration 2026-05-25 (broomva/skills PR #5 merge e932c7b):
+  # 6 standalone content/media repos consolidated into Tier-2 monorepo.
   - name: content-creation
-    repo: broomva/content-creation
+    repo: broomva/skills
+    skillPath: skills/content-creation/SKILL.md
     category: content
     required: false
     introduced_in: 0.1.0
-    description: "Content production pipeline (pending Phase 4b migration to broomva/skills monorepo)"
+    min_bstack_version: 0.21.0
+    description: "Full-stack content pipeline — research → narrative → visual assets → video → social → deploy; ships bstack-launch + open-source-stack example campaigns"
+
+  - name: content-engine
+    repo: broomva/skills
+    skillPath: skills/content-engine/SKILL.md
+    category: content
+    required: false
+    introduced_in: 0.21.2
+    min_bstack_version: 0.21.0
+    description: "Full-stack AI content studio — visual DNA compiler, cinematic generation, browser autopilot, content loop; bundles 4 sub-skills (autopilot, cinema, dna, loop)"
+
+  - name: launch-video
+    repo: broomva/skills
+    skillPath: skills/launch-video/SKILL.md
+    category: content
+    required: false
+    introduced_in: 0.21.2
+    min_bstack_version: 0.21.0
+    description: "Liquid Glass product launch video — dark void, 3D floating panels, spring animations via Remotion"
+
+  - name: ltx-video
+    repo: broomva/skills
+    skillPath: skills/ltx-video/SKILL.md
+    category: content
+    required: false
+    introduced_in: 0.21.2
+    min_bstack_version: 0.21.0
+    description: "LTX-2.3 video generation — setup, inference, prompting, ComfyUI integration for Lightricks 22B DiT audio-video model"
+
+  - name: creative-review
+    repo: broomva/skills
+    skillPath: skills/creative-review/SKILL.md
+    category: content
+    required: false
+    introduced_in: 0.21.2
+    min_bstack_version: 0.21.0
+    description: "Meta creative review — style adherence scoring, feedback loops, self-improving creative pipeline"
+
+  - name: brainrot-for-good
+    repo: broomva/skills
+    skillPath: skills/brainrot-for-good/SKILL.md
+    category: content
+    required: false
+    introduced_in: 0.21.2
+    min_bstack_version: 0.21.0
+    description: "High-retention video production using dopamine-aware editing for genuinely valuable content"
 
   - name: seo-llmeo
     repo: broomva/skills
