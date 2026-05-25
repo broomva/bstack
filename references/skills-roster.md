@@ -49,8 +49,9 @@
 | 16 | `alkosto-wait-optimizer` | `npx skills add broomva/alkosto-wait-optimizer-skill` | Probability-based decision tool for optimal waiting times. Bayesian estimation with uncertainty. |
 | 17 | `content-creation` | (bundled with bstack) | Full content pipeline: blog posts, social threads, video scripts, SEO optimization. |
 | 18 | `finance-substrate` | `npx skills add broomva/finance-substrate` | Personal finance & Colombian tax management. Bank CSV import, TRM rates, DIAN tax projection, withholdings, e-invoicing. Zero paid deps. |
-| 19 | `seo-llmeo` | `npx skills add aaron-he-zhu/seo-geo-claude-skills@technical-seo-checker` | Technical SEO audit: robots.txt, sitemap, meta tags, structured data, canonical URLs, llms.txt validation. |
-| 20 | `brand-icons` | (bundled with content-creation) | AI-generated logo/icon pipeline via nano-banana. Generates multi-size icons (favicon, PWA, Apple) from a single AI prompt. |
+| 19 | `seo-llmeo` | `npx skills add broomva/skills --skill seo-llmeo` | SEO and LLM Engine Optimization — audits, meta tags, structured data (JSON-LD), llms.txt generation. (Migrated 2026-05-25 from `broomva/seo-llmeo` — Phase 4a.) |
+| 20 | `brand-icons` | `npx skills add broomva/skills --skill brand-icons` | Brand icon and visual identity asset generation — favicons, app icons, OG images, social avatars. (Migrated 2026-05-25 from `broomva/brand-icons` — Phase 4a.) |
+| 20b | `blog-post` | `npx skills add broomva/skills --skill blog-post` | Full-stack blog post production — research → angle → draft → multi-platform distribution (X, LinkedIn, Instagram, Substack). (Migrated 2026-05-25 from `broomva/blog-post` — Phase 4a.) |
 
 ## Strategy & Decision Intelligence
 
