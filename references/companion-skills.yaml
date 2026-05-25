@@ -168,26 +168,41 @@ skills:
     description: "Next.js project scaffolding"
 
   - name: brand-icons
-    repo: broomva/brand-icons
+    repo: broomva/skills
+    skillPath: skills/brand-icons/SKILL.md
     category: design
     required: false
     introduced_in: 0.1.0
-    description: "Brand icon library"
+    min_bstack_version: 0.21.0
+    description: "Brand icon and visual identity asset generation — favicons, app icons, OG images, social avatars"
 
   # ── Content + marketing ─────────────────────────────────────────────────
+  # Phase 4a migration 2026-05-25: blog-post + seo-llmeo moved to broomva/skills Tier-2 monorepo.
+  # content-creation pending Phase 4b (substantial repo with shared assets).
+  - name: blog-post
+    repo: broomva/skills
+    skillPath: skills/blog-post/SKILL.md
+    category: content
+    required: false
+    introduced_in: 0.21.1
+    min_bstack_version: 0.21.0
+    description: "Full-stack blog post production — research → angle → draft → multi-platform distribution (X, LinkedIn, Instagram, Substack)"
+
   - name: content-creation
     repo: broomva/content-creation
     category: content
     required: false
     introduced_in: 0.1.0
-    description: "Content production pipeline"
+    description: "Content production pipeline (pending Phase 4b migration to broomva/skills monorepo)"
 
   - name: seo-llmeo
-    repo: broomva/seo-llmeo
+    repo: broomva/skills
+    skillPath: skills/seo-llmeo/SKILL.md
     category: content
     required: false
     introduced_in: 0.1.0
-    description: "SEO + LLM-optimized content"
+    min_bstack_version: 0.21.0
+    description: "SEO and LLM Engine Optimization — audits, meta tags, structured data, llms.txt generation"
 
   # ── Strategy + decision intelligence ────────────────────────────────────
   # Migrated 2026-05-25 from per-skill broomva/<name> repos (which never

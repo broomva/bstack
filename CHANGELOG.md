@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.21.1 — 2026-05-25
+
+### Phase 4a content & media migration
+
+Three more skills migrated from standalone `broomva/<name>` repos into the `broomva/skills` Tier-2 monorepo (broomva/skills PR #4 merge `2f5aec4`):
+
+- `blog-post` — full-stack blog post production (substantial: 28KB SKILL.md + examples/ + references/ + scripts/publish.sh + templates/). **NEW** registry entry (was previously bundled / not registered separately).
+- `brand-icons` — brand icon and visual identity asset generation. Registry entry updated from `repo: broomva/brand-icons` → `repo: broomva/skills, skillPath: skills/brand-icons/SKILL.md`.
+- `seo-llmeo` — SEO and LLM Engine Optimization (audits, meta tags, structured data, llms.txt). Registry entry updated to monorepo path.
+
+Each source repo carries a redirect-stub README during a 6-month deprecation window (until 2026-11-25):
+- broomva/blog-post PR #1 (merge `a7d90b6`)
+- broomva/brand-icons PR #1 (merge `2e20534`)
+- broomva/seo-llmeo PR #1 (merge `2b635d6`)
+
+### Files changed
+
+- `references/companion-skills.yaml` — 2 entries rewritten (`brand-icons`, `seo-llmeo`), 1 new entry added (`blog-post`)
+- `references/skills-roster.md` — install commands updated to monorepo paths
+- `VERSION` — `0.21.0` → `0.21.1` (additive patch — new entries + corrected install paths)
+- `CHANGELOG.md` — this entry
+
+### Pattern note: multi-source-repo migration
+
+Phase 3 migrated 9 sub-skills from ONE bundled source (`broomva/strategy-skills/.skills/`). Phase 4a tests the multi-source pattern — 3 separate standalone source repos, each with full skill layout (`SKILL.md` + scripts/ + references/ + assets/). The migration command is now well-rehearsed and ready to crystallize into the `bstack skill graduate` CLI (Phase 6b).
+
+`broomva/blog-post`'s root canonical content was preserved; 24 IDE-specific dotfile-mirror dirs (`.agent/`, `.claude/`, `.continue/`, etc.) were excluded as deployment artifacts — downstream agents resolve to `skills/blog-post/SKILL.md` per the agentskills.io spec.
+
+---
+
 ## 0.21.0 — 2026-05-25
 
 ### Schema additive bump — `skillPath` field for monorepo support
