@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.21.2 — 2026-05-25
+
+### Phase 4b content & media migration (final content batch)
+
+Six more standalone-repo skills migrated into the broomva/skills Tier-2 monorepo (broomva/skills PR #5 merge `e932c7b`). After this release, all 9 content/media skills identified in the strategy doc inventory are in the monorepo:
+
+- `content-creation` — full-stack content pipeline; ships 45MB of demonstration campaigns (bstack-launch, open-source-stack). Registry entry updated to monorepo path.
+- `content-engine` — **NEW** registry entry. AI content studio bundling 4 sub-skills (autopilot, cinema, dna, loop) under `skills/content-engine/skills/`.
+- `launch-video` — **NEW** entry. Remotion-based Liquid Glass launch video.
+- `ltx-video` — **NEW** entry. LTX-2.3 video generation (Lightricks 22B DiT model).
+- `creative-review` — **NEW** entry. Meta creative review with style scoring.
+- `brainrot-for-good` — **NEW** entry. Dopamine-aware video editing for valuable content.
+
+### Source repos deprecated (6mo window until 2026-11-25)
+
+- broomva/content-creation PR #5 (merge `88c7ff7`)
+- broomva/content-engine PR #2 (merge `9761756`)
+- broomva/launch-video PR #1 (merge `dfe48e6`)
+- broomva/ltx-video PR #1 (merge `f8962ab`)
+- broomva/creative-review PR #1 (merge `bcaea5a`)
+- broomva/brainrot-for-good PR #1 (merge `7f22dd6`)
+
+### Files changed
+
+- `references/companion-skills.yaml` — 5 new entries + 1 entry rewritten; total 35 → 40 entries
+- `references/skills-roster.md` — install commands updated for 6 entries
+- `VERSION` — `0.21.1` → `0.21.2` (additive patch)
+- `CHANGELOG.md` — this entry
+
+### Monorepo state after this release
+
+20 skills installed in `broomva/skills/skills/`:
+- 2 workflow & lifecycle (handoff, make-spec)
+- 9 strategy & decision intelligence
+- 9 content & media (this release completes the content batch)
+
+---
+
+
 ## 0.21.1 — 2026-05-25
 
 ### Phase 4a content & media migration
