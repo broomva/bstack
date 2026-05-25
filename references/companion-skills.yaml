@@ -190,61 +190,110 @@ skills:
     description: "SEO + LLM-optimized content"
 
   # ── Strategy + decision intelligence ────────────────────────────────────
+  # Migrated 2026-05-25 from per-skill broomva/<name> repos (which never
+  # existed as standalones) to the broomva/skills Tier-2 monorepo
+  # (broomva/skills PR #3 merged af42d83). The bundled install via
+  # broomva/strategy-skills remains available during a 6-month deprecation
+  # window (until 2026-11-25) for backward compat.
   - name: pre-mortem
-    repo: broomva/pre-mortem
+    repo: broomva/skills
+    skillPath: skills/pre-mortem/SKILL.md
     category: strategy
     required: false
     introduced_in: 0.1.0
-    description: "Pre-mortem risk analysis"
+    min_bstack_version: 0.21.0
+    description: "Pre-mortem failure-mode analysis (4-category scoring + mitigation plan)"
+
+  - name: premortem
+    repo: broomva/skills
+    skillPath: skills/premortem/SKILL.md
+    category: strategy
+    required: false
+    introduced_in: 0.21.0
+    min_bstack_version: 0.21.0
+    description: "Klein/Kahneman premortem with parallel sub-agent deep-dives + HTML report"
 
   - name: braindump
-    repo: broomva/braindump
+    repo: broomva/skills
+    skillPath: skills/braindump/SKILL.md
     category: strategy
     required: false
     introduced_in: 0.1.0
-    description: "Structured idea capture + triage"
+    min_bstack_version: 0.21.0
+    description: "Structured idea capture → Obsidian vault with auto-categorization"
 
   - name: morning-briefing
-    repo: broomva/morning-briefing
+    repo: broomva/skills
+    skillPath: skills/morning-briefing/SKILL.md
     category: strategy
     required: false
     introduced_in: 0.1.0
-    description: "Daily context briefing"
+    min_bstack_version: 0.21.0
+    description: "Daily focused brief from vault priorities + action items"
 
   - name: drift-check
-    repo: broomva/drift-check
+    repo: broomva/skills
+    skillPath: skills/drift-check/SKILL.md
     category: strategy
     required: false
     introduced_in: 0.1.0
-    description: "Detect drift from stated plan"
+    min_bstack_version: 0.21.0
+    description: "Priority drift report (stated priorities vs actual effort via git + vault)"
 
   - name: strategy-critique
-    repo: broomva/strategy-critique
+    repo: broomva/skills
+    skillPath: skills/strategy-critique/SKILL.md
     category: strategy
     required: false
     introduced_in: 0.1.0
-    description: "Strategic decision critique"
+    min_bstack_version: 0.21.0
+    description: "Red-team critique of strategy documents with gaps + missing assumptions"
 
   - name: stakeholder-update
-    repo: broomva/stakeholder-update
+    repo: broomva/skills
+    skillPath: skills/stakeholder-update/SKILL.md
     category: strategy
     required: false
     introduced_in: 0.1.0
-    description: "Stakeholder communication drafting"
+    min_bstack_version: 0.21.0
+    description: "Multi-audience communication generator (technical / business / customer)"
 
   - name: decision-log
-    repo: broomva/decision-log
+    repo: broomva/skills
+    skillPath: skills/decision-log/SKILL.md
     category: strategy
     required: false
     introduced_in: 0.1.0
-    description: "Structured decision log + ADR"
+    min_bstack_version: 0.21.0
+    description: "Structured decision capture with context, alternatives, rationale → vault"
 
   - name: weekly-review
-    repo: broomva/weekly-review
+    repo: broomva/skills
+    skillPath: skills/weekly-review/SKILL.md
     category: strategy
     required: false
     introduced_in: 0.1.0
-    description: "Weekly retrospective + planning"
+    min_bstack_version: 0.21.0
+    description: "Weekly vault change scan + attention flags"
+
+  # ── Workflow & lifecycle (Tier-2 monorepo) ──────────────────────────────
+  - name: handoff
+    repo: broomva/skills
+    skillPath: skills/handoff/SKILL.md
+    category: lifecycle
+    required: false
+    introduced_in: 0.21.0
+    min_bstack_version: 0.21.0
+    description: "Fresh-session handoff doc drafting — compress an arc into a resumable doc for the next agent context"
+
+  - name: make-spec
+    repo: broomva/skills
+    skillPath: skills/make-spec/SKILL.md
+    category: design
+    required: false
+    introduced_in: 0.21.0
+    min_bstack_version: 0.21.0
+    description: "Native-HTML design-doc scaffold (spec / plan / ADR / report / pr-explainer) using the canonical Broomva dark theme — implements P18 Category-C"
 
   # ── Platform + finance ──────────────────────────────────────────────────
   - name: finance-substrate

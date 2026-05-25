@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.21.0 — 2026-05-25
+
+### Schema additive bump — `skillPath` field for monorepo support
+
+`schemas/companion-skills.v1.json` gains an optional `skillPath` field on each skill entry. When a skill lives inside a monorepo (e.g. `broomva/skills`), `skillPath` is the relative path to its `SKILL.md` within that repo, e.g. `skills/<name>/SKILL.md`. Combined with `repo`, install becomes `npx skills add <repo> --skill <name>`. The field is **purely additive** — existing entries that omit it continue to work as standalone per-skill installs. Schema version remains 1 (no breaking change).
+
+### Strategy & decision-intelligence migration (Phase 3 of skills-packaging strategy)
+
+Per [`broomva/workspace docs/specs/2026-05-25-skills-packaging-strategy.html`](https://github.com/broomva/workspace/blob/main/docs/specs/2026-05-25-skills-packaging-strategy.html) §8 Phase 3, the 9 strategy sub-skills migrated from the bundled `broomva/strategy-skills` repo (where they lived under `.skills/<name>/SKILL.md`) into the `broomva/skills` Tier-2 monorepo at `skills/<name>/SKILL.md`. The registry entries previously pointed at per-skill `broomva/<name>` repos that never existed as standalones (stale-registry condition). This release fixes the install paths.
+
+Migrated entries (now using monorepo `skillPath`):
+
+- `pre-mortem` — 4-category failure-mode analysis + mitigation plan
+- `premortem` — Klein/Kahneman premortem with parallel sub-agent deep-dives (NEW — was missing from registry)
+- `braindump` — raw thoughts → Obsidian with auto-categorization
+- `morning-briefing` — daily brief from vault priorities + action items
+- `drift-check` — priority drift report (stated vs actual effort)
+- `strategy-critique` — red-team critique of strategy documents
+- `stakeholder-update` — multi-audience generator (technical / business / customer)
+- `decision-log` — structured decision capture → vault
+- `weekly-review` — weekly vault change scan + attention flags
+
+Install paths:
+```bash
+# New (per-skill from monorepo)
+npx skills add broomva/skills --skill pre-mortem
+npx skills add broomva/skills --skill braindump
+# ... etc
+
+# Backward-compat (bundled install via deprecated repo, 6mo window until 2026-11-25)
+npx skills add broomva/strategy-skills
+```
+
+Related: `broomva/skills` PR #3 (merge `af42d83`); `broomva/strategy-skills` redirect-stub PR #1.
+
+### Workflow & lifecycle skills registered
+
+The two Tier-2 prototypes that graduated in `broomva/skills` PR #2 (merge `f21515e`) — `handoff` and `make-spec` — are now in the registry. Both `min_bstack_version: 0.21.0` (need `skillPath` field added by this release).
+
+- `handoff` — fresh-session handoff doc drafting (workflow & lifecycle category)
+- `make-spec` — native-HTML design-doc scaffold per P18 Category-C (design category)
+
+### Files changed
+
+- `schemas/companion-skills.v1.json` — adds optional `skillPath` field with pattern validation
+- `references/companion-skills.yaml` — replaces 8 strategy entries with 9 monorepo entries; adds `handoff` + `make-spec`; total entries +3 net (was 32, now 35)
+- `VERSION` — `0.20.0` → `0.21.0`
+- `CHANGELOG.md` — this entry
+
+### Migration notes for downstream consumers
+
+- Workspaces with `companion-skills.yaml` `schema_version: 1` continue to validate — `skillPath` is additive.
+- The 8 old strategy entries pointed at `repo: broomva/<name>` repos that never existed; downstream `bstack doctor` runs that tried to resolve those installs would have errored. After this release, those installs resolve via the monorepo path.
+- `min_bstack_version: 0.21.0` is set on every new/changed entry to signal that the consumer's `bstack` must be `≥ 0.21.0` to recognize `skillPath`.
+
+---
+
 ## 0.20.0 — 2026-05-22
 
 ### Cross-review CLI — restore the P20 mechanism (BRO-1227 Fix B)

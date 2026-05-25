@@ -27,6 +27,11 @@
             "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
             "description": "GitHub-style repo handle (e.g. broomva/p9) used by `npx skills add`."
           },
+          "skillPath": {
+            "type": "string",
+            "pattern": "^skills/[a-z0-9][a-z0-9-]*/SKILL\\.md$",
+            "description": "Optional: when this skill lives inside a monorepo (e.g. broomva/skills), the relative path to the SKILL.md within that repo. Combined with `repo`, the install command becomes `npx skills add <repo> --skill <name>`. Omit for standalone per-skill repos."
+          },
           "category": {
             "enum": ["lifecycle", "knowledge", "orchestration", "safety", "meta", "design", "platform", "strategy", "content", "observability"]
           },
