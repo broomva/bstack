@@ -54,13 +54,25 @@
 
 ## Strategy & Decision Intelligence
 
+> Migrated 2026-05-25 to `broomva/skills` Tier-2 monorepo (was bundled in `broomva/strategy-skills`; bundle remains backward-compatible for 6-month deprecation window until 2026-11-25). 9 individual skills now installable separately.
+
 | # | Skill | Install | Description |
 |---|-------|---------|-------------|
-| 21 | `pre-mortem` | `npx skills add broomva/strategy-skills` | Assumes project failure, works backward to identify top causes, scores by likelihood × impact, outputs mitigation plan. |
-| 22 | `braindump` | `npx skills add broomva/strategy-skills` | Takes raw unstructured thoughts or transcripts, auto-files into vault folders with tags and backlinks. |
-| 23 | `morning-briefing` | `npx skills add broomva/strategy-skills` | Reads action items, priorities, and vault updates → produces a focused daily brief. |
-| 24 | `drift-check` | `npx skills add broomva/strategy-skills` | Compares stated priorities vs actual effort (git log + vault) → strategy drift report. |
-| 25 | `strategy-critique` | `npx skills add broomva/strategy-skills` | Red-team critique of a strategy doc with gaps, risks, and missing assumptions. |
-| 26 | `stakeholder-update` | `npx skills add broomva/strategy-skills` | Takes one set of facts → generates 3 versions: technical, business, customer-facing. |
-| 27 | `decision-log` | `npx skills add broomva/strategy-skills` | Captures decisions with context, alternatives, rationale → links to project doc in vault. |
-| 28 | `weekly-review` | `npx skills add broomva/strategy-skills` | Scans vault for weekly changes, surfaces what changed, flags what needs attention. |
+| 21 | `pre-mortem` | `npx skills add broomva/skills --skill pre-mortem` | 4-category failure-mode analysis (likelihood × impact) with mitigation plan. |
+| 22 | `premortem` | `npx skills add broomva/skills --skill premortem` | Klein/Kahneman premortem with parallel sub-agent deep-dives + HTML report. |
+| 23 | `braindump` | `npx skills add broomva/skills --skill braindump` | Raw thoughts → Obsidian vault with auto-categorization, tags, and backlinks. |
+| 24 | `morning-briefing` | `npx skills add broomva/skills --skill morning-briefing` | Daily focused brief from vault priorities + action items + updates. |
+| 25 | `drift-check` | `npx skills add broomva/skills --skill drift-check` | Priority drift report — stated priorities vs actual effort (git log + vault). |
+| 26 | `strategy-critique` | `npx skills add broomva/skills --skill strategy-critique` | Red-team critique of strategy documents with gaps, risks, missing assumptions. |
+| 27 | `stakeholder-update` | `npx skills add broomva/skills --skill stakeholder-update` | One fact set → 3 audience versions (technical / business / customer). |
+| 28 | `decision-log` | `npx skills add broomva/skills --skill decision-log` | Structured decision capture with context, alternatives, rationale → vault. |
+| 29 | `weekly-review` | `npx skills add broomva/skills --skill weekly-review` | Weekly vault change scan + attention flags. |
+
+## Workflow & Lifecycle (Tier-2 monorepo)
+
+> Graduated from workspace-local prototypes 2026-05-25 (`broomva/skills` PR #2).
+
+| # | Skill | Install | Description |
+|---|-------|---------|-------------|
+| 30 | `handoff` | `npx skills add broomva/skills --skill handoff` | Fresh-session handoff doc drafting — compress an arc into a resumable doc for the next agent context. |
+| 31 | `make-spec` | `npx skills add broomva/skills --skill make-spec` | Native-HTML design-doc scaffold (spec / plan / ADR / report / pr-explainer) using the canonical Broomva dark theme — implements P18 Category-C. |
