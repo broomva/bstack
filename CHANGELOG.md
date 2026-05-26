@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.21.3 — 2026-05-25
+
+### Phase 4c research + finance migration
+
+Six more skills migrated from standalone `broomva/<name>` repos into `broomva/skills` Tier-2 monorepo (broomva/skills PR #6 merge `e2bdf14`). Three renamed during migration to drop the `-skill` suffix per ecosystem norm:
+
+| Old repo | New monorepo path | Notes |
+|---|---|---|
+| `broomva/deep-dive-research-skill` | `skills/deep-dive-research-orchestrator/` | Renamed to match canonical skill name in registry |
+| `broomva/social-intelligence` | `skills/social-intelligence/` | NEW registry entry |
+| `broomva/harness-engineering-skill` | `skills/harness-engineering-playbook/` | Renamed; preserves `required: true` |
+| `broomva/investment-management` | `skills/investment-management/` | NEW registry entry |
+| `broomva/wealth-management` | `skills/wealth-management/` | NEW registry entry |
+| `broomva/haima-skill` | `skills/haima/` | Renamed; runtime crate stays at `broomva/haima` (separate concern) |
+
+### Source repos deprecated (6mo window until 2026-11-25)
+
+- broomva/deep-dive-research-skill PR #1 (merge `c39a293`)
+- broomva/social-intelligence PR #3 (merge `b0d2bc5`)
+- broomva/harness-engineering (renamed from -skill at GitHub level) PR #1 (merge `55edcde`)
+- broomva/investment-management PR #7 (merge `557a950`)
+- broomva/wealth-management PR #1 (merge `5022c12`)
+- broomva/haima-skill PR #2 (merge `c8f5014`)
+
+### Files changed
+
+- `references/companion-skills.yaml` — 4 NEW entries (social-intelligence, investment-management, wealth-management, haima) + 2 entries rewritten (deep-dive-research-orchestrator, harness-engineering-playbook) — total 40 → 44
+- `references/skills-roster.md` — install commands updated
+- `VERSION` — `0.21.2` → `0.21.3`
+- `CHANGELOG.md` — this entry
+
+### Cumulative monorepo state
+
+26 skills under `broomva/skills/skills/`:
+- 2 workflow & lifecycle (handoff, make-spec)
+- 9 strategy & decision intelligence
+- 9 content & media
+- 3 research (deep-dive-research-orchestrator, social-intelligence, harness-engineering-playbook)
+- 3 finance (investment-management, wealth-management, haima)
+
+---
+
+
 ## 0.21.2 — 2026-05-25
 
 ### Phase 4b content & media migration (final content batch)

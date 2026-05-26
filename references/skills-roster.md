@@ -8,7 +8,7 @@
 |---|-------|---------|-------------|
 | 1 | `agentic-control-kernel` | `npx skills add broomva/agentic-control-kernel` | LLM-as-controller with safety shields, typed plant/action/trace schemas, multi-rate loop hierarchy. The governance backbone. |
 | 2 | `control-metalayer-loop` | `npx skills add broomva/control-metalayer` | Control primitives: setpoints, sensors, actuators, stability gates, policy profiles. Bootstraps `.control/policy.yaml`. |
-| 3 | `harness-engineering-playbook` | `npx skills add broomva/harness-engineering-skill` | Agent-first workflow: AGENTS.md, PLANS.md, smoke/test/lint/typecheck harness, entropy control checks. |
+| 3 | `harness-engineering-playbook` | `npx skills add broomva/skills --skill harness-engineering-playbook` | Agent-first workflow: AGENTS.md, smoke/test/lint/typecheck harness, entropy-control checks. (Migrated 2026-05-25 from `broomva/harness-engineering-skill` — Phase 4c.) |
 
 ## Memory & Consciousness
 
@@ -31,7 +31,8 @@
 
 | # | Skill | Install | Description |
 |---|-------|---------|-------------|
-| 11 | `deep-dive-research-orchestrator` | `npx skills add broomva/deep-dive-research-skill` | Multi-dimensional research with coordinated AI specialists. 10+ source synthesis with citations. |
+| 11 | `deep-dive-research-orchestrator` | `npx skills add broomva/skills --skill deep-dive-research-orchestrator` | Multi-dimensional research with coordinated AI specialists. 10+ source synthesis with citations. (Migrated 2026-05-25 from `broomva/deep-dive-research-skill` — Phase 4c.) |
+| 11a | `social-intelligence` | `npx skills add broomva/skills --skill social-intelligence` | Autonomous social engagement + knowledge extraction loop for Moltbook and X — compounds with `blog-post` and `content-creation`. (Migrated 2026-05-25 from `broomva/social-intelligence` — Phase 4c.) |
 | 12 | `skills` | `npx skills add broomva/skills` | Canonical reference inventory of 83 agent skills across 15 domains. Browsable catalog. |
 | 13 | `skills-showcase` | `npx skills add broomva/skills` | Remotion video + X thread generator for the skills inventory. Animated showcase content. |
 
@@ -53,7 +54,10 @@
 | 17c | `ltx-video` | `npx skills add broomva/skills --skill ltx-video` | LTX-2.3 video generation — setup, inference, prompting, ComfyUI integration for Lightricks 22B DiT audio-video model. (Migrated 2026-05-25 from `broomva/ltx-video` — Phase 4b.) |
 | 17d | `creative-review` | `npx skills add broomva/skills --skill creative-review` | Meta creative review — style adherence scoring, feedback loops, self-improving creative pipeline. (Migrated 2026-05-25 from `broomva/creative-review` — Phase 4b.) |
 | 17e | `brainrot-for-good` | `npx skills add broomva/skills --skill brainrot-for-good` | High-retention video production using dopamine-aware editing for genuinely valuable content. (Migrated 2026-05-25 from `broomva/brainrot-for-good` — Phase 4b.) |
-| 18 | `finance-substrate` | `npx skills add broomva/finance-substrate` | Personal finance & Colombian tax management. Bank CSV import, TRM rates, DIAN tax projection, withholdings, e-invoicing. Zero paid deps. |
+| 18 | `finance-substrate` | `npx skills add broomva/finance-substrate` | Personal finance & Colombian tax management. Bank CSV import, TRM rates, DIAN tax projection, withholdings, e-invoicing. Zero paid deps. *(Pending Tier-1 vs Tier-2 lock-in.)* |
+| 18a | `investment-management` | `npx skills add broomva/skills --skill investment-management` | Portfolio construction, factor models, backtesting, multi-platform execution (Alpaca, Coinbase, Polymarket). (Migrated 2026-05-25 from `broomva/investment-management` — Phase 4c.) |
+| 18b | `wealth-management` | `npx skills add broomva/skills --skill wealth-management` | Wealth planning + Monte Carlo simulations + tax-optimized allocation + net worth forecasting. (Migrated 2026-05-25 from `broomva/wealth-management` — Phase 4c.) |
+| 18c | `haima` | `npx skills add broomva/skills --skill haima` | Agent guide for x402 machine-to-machine payments, secp256k1 wallets, per-task billing, on-chain USDC settlement. (Migrated 2026-05-25 from `broomva/haima-skill` — Phase 4c; renamed to drop `-skill` suffix. Runtime crate stays at `broomva/haima`.) |
 | 19 | `seo-llmeo` | `npx skills add broomva/skills --skill seo-llmeo` | SEO and LLM Engine Optimization — audits, meta tags, structured data (JSON-LD), llms.txt generation. (Migrated 2026-05-25 from `broomva/seo-llmeo` — Phase 4a.) |
 | 20 | `brand-icons` | `npx skills add broomva/skills --skill brand-icons` | Brand icon and visual identity asset generation — favicons, app icons, OG images, social avatars. (Migrated 2026-05-25 from `broomva/brand-icons` — Phase 4a.) |
 | 20b | `blog-post` | `npx skills add broomva/skills --skill blog-post` | Full-stack blog post production — research → angle → draft → multi-platform distribution (X, LinkedIn, Instagram, Substack). (Migrated 2026-05-25 from `broomva/blog-post` — Phase 4a.) |

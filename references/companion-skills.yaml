@@ -55,11 +55,13 @@ skills:
     description: "Governance feedback loop"
 
   - name: harness-engineering-playbook
-    repo: broomva/harness-engineering-playbook
+    repo: broomva/skills
+    skillPath: skills/harness-engineering-playbook/SKILL.md
     category: meta
     required: true
     introduced_in: 0.1.0
-    description: "Patterns for agent harness design"
+    min_bstack_version: 0.21.0
+    description: "Patterns for agent harness design — AGENTS.md, smoke/test/lint/typecheck harness, entropy-control checks (migrated 2026-05-25 from broomva/harness-engineering-skill — Phase 4c; renamed)"
 
   - name: agent-consciousness
     repo: broomva/agent-consciousness
@@ -130,12 +132,24 @@ skills:
     description: "Domain-specific wait-time optimizer (P9 variant)"
 
   # ── Research + knowledge work ───────────────────────────────────────────
+  # Phase 4c migration 2026-05-25 (broomva/skills PR #6 merge e2bdf14)
   - name: deep-dive-research-orchestrator
-    repo: broomva/deep-dive-research-orchestrator
+    repo: broomva/skills
+    skillPath: skills/deep-dive-research-orchestrator/SKILL.md
     category: knowledge
     required: true
     introduced_in: 0.1.0
-    description: "Multi-source research with citation tracking"
+    min_bstack_version: 0.21.0
+    description: "Multi-source research with citation tracking — 10+ source synthesis (migrated from broomva/deep-dive-research-skill; renamed)"
+
+  - name: social-intelligence
+    repo: broomva/skills
+    skillPath: skills/social-intelligence/SKILL.md
+    category: knowledge
+    required: false
+    introduced_in: 0.21.3
+    min_bstack_version: 0.21.0
+    description: "Autonomous social engagement + knowledge extraction loop for Moltbook and X — compounds with blog-post and content-creation"
 
   # ── Discovery + skill management ────────────────────────────────────────
   - name: skills
@@ -365,4 +379,32 @@ skills:
     category: platform
     required: false
     introduced_in: 0.1.0
-    description: "Financial workflow substrate"
+    description: "Financial workflow substrate (pending Tier-1 vs Tier-2 lock-in — see workspace Phase-0 decision card)"
+
+  # Phase 4c finance migrations 2026-05-25 (broomva/skills PR #6 merge e2bdf14)
+  - name: investment-management
+    repo: broomva/skills
+    skillPath: skills/investment-management/SKILL.md
+    category: platform
+    required: false
+    introduced_in: 0.21.3
+    min_bstack_version: 0.21.0
+    description: "Portfolio construction, factor models, backtesting, multi-platform execution (Alpaca, Coinbase, Polymarket)"
+
+  - name: wealth-management
+    repo: broomva/skills
+    skillPath: skills/wealth-management/SKILL.md
+    category: platform
+    required: false
+    introduced_in: 0.21.3
+    min_bstack_version: 0.21.0
+    description: "Wealth planning + Monte Carlo simulations + tax-optimized allocation + net worth forecasting"
+
+  - name: haima
+    repo: broomva/skills
+    skillPath: skills/haima/SKILL.md
+    category: platform
+    required: false
+    introduced_in: 0.21.3
+    min_bstack_version: 0.21.0
+    description: "Agent guide for x402 machine-to-machine payments, secp256k1 wallets, per-task billing, on-chain USDC settlement (renamed from broomva/haima-skill; runtime crate stays at broomva/haima)"
