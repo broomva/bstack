@@ -13,16 +13,17 @@
 #   1. Clone source repo + monorepo into temp worktrees
 #   2. Copy canonical content into monorepo skills/<target>/ — EXCLUDING
 #      .git, dot-prefixed IDE-mirror dirs, LICENSE, skills-lock.json
-#   3. Append a row to the monorepo README Tier-2 table
-#   4. Commit + push branch + open PR on the monorepo
-#   5. (--stub)     add redirect-stub README to the source repo + open PR
-#   6. (--merge)    merge the opened PR(s)  [default: leave open for review]
-#   7. Cleanup temp clones (always, via trap)
+#   3. Commit + push branch + open PR on the monorepo
+#   4. (--stub)     add redirect-stub README to the source repo + open PR
+#   5. (--merge)    merge the opened PR(s)  [default: leave open for review]
+#   6. Cleanup temp clones (always, via trap)
 #
-# Registry update (companion-skills.yaml + skills-roster.md + VERSION +
-# CHANGELOG) is intentionally NOT automated here — it requires a coordinated
-# bstack version bump that a human/agent should review. The script PRINTS the
-# exact registry entry to add so the follow-up is copy-paste.
+# NOT automated (printed for manual follow-up, since both need human judgment):
+#   - The monorepo README Tier-2 table row — category placement varies; the
+#     script prints a ready-to-paste row instead of guessing the section.
+#   - The bstack registry (companion-skills.yaml + skills-roster.md + VERSION
+#     + CHANGELOG) — needs a coordinated version bump a human/agent reviews.
+#   Both are printed copy-paste-ready in the closing "NEXT" block.
 #
 # Env overrides (test fixtures use these to avoid network):
 #   BSTACK_GRADUATE_GH        gh command (default: gh)
@@ -149,12 +150,25 @@ fi
 
 # ---- real execution ----
 TMP="${BSTACK_GRADUATE_TMPDIR:-$(mktemp -d)}"
-cleanup() { [ -n "${TMP:-}" ] && [ -d "$TMP" ] && rm -rf "$TMP"; }
+# BSTACK_GRADUATE_NO_CLEANUP=1 leaves TMP in place (test fixtures inspect the
+# copied tree). Default: always clean up.
+cleanup() {
+    [ "${BSTACK_GRADUATE_NO_CLEANUP:-0}" = 1 ] && return 0
+    [ -n "${TMP:-}" ] && [ -d "$TMP" ] && rm -rf "$TMP"
+}
 trap cleanup EXIT
 
 MONO_DIR="$TMP/monorepo"
 SRC_DIR="$TMP/source"
 BRANCH="feat/graduate-$TARGET"
+
+# Idempotency pre-flight: bail if a PR for this branch already exists, rather
+# than re-pushing + failing opaquely inside the subshell on the 2nd run.
+if $GH pr list --repo "$MONOREPO" --head "$BRANCH" --state open --json number --jq '.[0].number' 2>/dev/null | grep -q '[0-9]'; then
+    echo "skill-graduate: an open PR for branch '$BRANCH' already exists on $MONOREPO." >&2
+    echo "  Close/merge it first, or pass --target to use a different skill name." >&2
+    exit 1
+fi
 
 echo "==> cloning $MONOREPO + $SOURCE_REPO"
 $GH repo clone "$MONOREPO" "$MONO_DIR" -- --depth=10 >/dev/null 2>&1
@@ -175,11 +189,16 @@ should_exclude() {
     return 1
 }
 copied=0
-for item in $(ls -A "$SRC_DIR" 2>/dev/null); do
+# Null-delimited iteration: robust against filenames with spaces, globs,
+# or newlines. `ls`-based word-splitting (the obvious naive loop) breaks on
+# spaced filenames under `set -e` mid-copy — regression-tested in
+# tests/skill-graduate.test.sh T10.
+while IFS= read -r -d '' path; do
+    item="$(basename "$path")"
     if should_exclude "$item"; then continue; fi
-    cp -R "$SRC_DIR/$item" "$MONO_DIR/skills/$TARGET/"
+    cp -R "$path" "$MONO_DIR/skills/$TARGET/"
     copied=$((copied + 1))
-done
+done < <(find "$SRC_DIR" -mindepth 1 -maxdepth 1 -print0)
 echo "    copied $copied top-level items ($(find "$MONO_DIR/skills/$TARGET" -type f | wc -l | tr -d ' ') files total)"
 
 # Sanity: a SKILL.md must exist after copy.
@@ -205,8 +224,13 @@ Install: npx skills add $MONOREPO --skill $TARGET"
 
 $DESCRIPTION}" >/dev/null 2>&1
     if [ "$DO_MERGE" = 1 ]; then
-        $GH pr merge "$BRANCH" --squash --delete-branch >/dev/null 2>&1 || \
-          $GH pr merge "$BRANCH" --squash >/dev/null 2>&1 || true
+        # Try delete-branch first; fall back to plain squash if branch
+        # deletion is blocked (protected). A genuine merge failure (red CI,
+        # conflicts) is surfaced, not swallowed.
+        if ! $GH pr merge "$BRANCH" --squash --delete-branch >/dev/null 2>&1 \
+           && ! $GH pr merge "$BRANCH" --squash >/dev/null 2>&1; then
+            echo "    WARNING: auto-merge of monorepo PR failed (CI red, conflicts, or gate) — leaving PR open for manual review." >&2
+        fi
     fi
 )
 MONO_PR=$($GH pr list --repo "$MONOREPO" --head "$BRANCH" --state all --json url --jq '.[0].url' 2>/dev/null || echo "(see $MONOREPO PRs)")
