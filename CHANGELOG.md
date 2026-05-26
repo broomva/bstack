@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.21.4 — 2026-05-26
+
+### Phase 4d specialty domain migration (largest batch)
+
+17 standalone-repo skills migrated to broomva/skills Tier-2 monorepo (broomva/skills PR #7 merge `1be5fd9`). 2 renamed during migration to drop `-skill` suffix per ecosystem norm.
+
+By sub-category:
+
+**Hardware, robotics, physical (6):** bitnet, capx-agentic-robotics, openrocket-sim, sdr-satellite, ocean-genomics, microgrid-agent
+
+**Compute & remote infrastructure (4):** colab-remote, remote-gpu, claude-code-channels, claude-remote-sessions
+
+**Audio, voice, media (2, both renamed):** omnivoice (from omnivoice-skill), livecoding
+
+**Advisory & consulting (3, one renamed):** phronesis, procurer, alkosto-wait-optimizer (from alkosto-wait-optimizer-skill)
+
+**Health & body (2):** health, founder-mode-oncology (Phase-0 contested case lean accepted)
+
+### Source repos deprecated (17 redirect-stubs merged 2026-05-26)
+
+bitnet · livecoding · openrocket-sim · sdr-satellite · capx-agentic-robotics · ocean-genomics · phronesis · procurer · alkosto-wait-optimizer-skill · omnivoice-skill · microgrid-agent · claude-code-channels · claude-remote-sessions · colab-remote · remote-gpu · health · founder-mode-oncology — all archived after 6mo deprecation (2026-11-26).
+
+### Excluded from this batch
+
+- `broomva/mirage` — repository does not exist on GitHub (anomaly flagged in inventory § 8)
+- `broomva/orcahand` — Phase-0 contested dedup decision between `broomva/orcahand` (runtime) and `broomva/orcahand-skill` (duplicate); deferred to Phase 4f
+
+### Files changed
+
+- `references/companion-skills.yaml` — 16 NEW entries + 1 entry rewritten (alkosto-wait-optimizer)
+- `references/skills-roster.md` — install commands updated
+- `VERSION` — `0.21.3` → `0.21.4`
+- `CHANGELOG.md` — this entry
+
+### Total registry size
+
+44 → 60 entries (+16 net)
+
+### Cumulative monorepo state
+
+43 skills under `broomva/skills/skills/`:
+- 2 workflow & lifecycle
+- 9 strategy & decision intelligence
+- 9 content & media
+- 3 research & intelligence
+- 3 finance
+- 6 hardware/robotics/physical
+- 4 compute & remote
+- 2 audio/voice/media
+- 3 advisory/consulting
+- 2 health & body
+
+---
+
+
 ## 0.21.3 — 2026-05-25
 
 ### Phase 4c research + finance migration

@@ -125,11 +125,165 @@ skills:
     description: "EGRI L2 meta-controller (self-improvement)"
 
   - name: alkosto-wait-optimizer
-    repo: broomva/alkosto-wait-optimizer
+    repo: broomva/skills
+    skillPath: skills/alkosto-wait-optimizer/SKILL.md
     category: lifecycle
     required: false
     introduced_in: 0.1.0
-    description: "Domain-specific wait-time optimizer (P9 variant)"
+    min_bstack_version: 0.21.0
+    description: "Probability-based wait-time optimizer for Alkosto promotions — Bayesian estimation (migrated 2026-05-26 from broomva/alkosto-wait-optimizer-skill; renamed)"
+
+  # ── Specialty domain — Phase 4d batch (2026-05-26) ──────────────────────
+  # 17 standalone-repo skills consolidated. Source: broomva/skills PR #7 (merge 1be5fd9)
+
+  # Hardware, robotics, physical systems
+  - name: bitnet
+    repo: broomva/skills
+    skillPath: skills/bitnet/SKILL.md
+    category: platform
+    required: false
+    introduced_in: 0.21.4
+    min_bstack_version: 0.21.0
+    description: "Microsoft BitNet — 1-bit LLM setup, model download, inference, benchmarking on CPU"
+
+  - name: capx-agentic-robotics
+    repo: broomva/skills
+    skillPath: skills/capx-agentic-robotics/SKILL.md
+    category: platform
+    required: false
+    introduced_in: 0.21.4
+    min_bstack_version: 0.21.0
+    description: "CaP-X LLM-driven robot manipulation via code generation — CaP-Gym (187 tasks), CaP-Bench, CaP-Agent0, CaP-RL, sim-to-real"
+
+  - name: openrocket-sim
+    repo: broomva/skills
+    skillPath: skills/openrocket-sim/SKILL.md
+    category: platform
+    required: false
+    introduced_in: 0.21.4
+    min_bstack_version: 0.21.0
+    description: "Headless rocket design + simulation + EGRI optimization using OpenRocket"
+
+  - name: sdr-satellite
+    repo: broomva/skills
+    skillPath: skills/sdr-satellite/SKILL.md
+    category: platform
+    required: false
+    introduced_in: 0.21.4
+    min_bstack_version: 0.21.0
+    description: "Software-defined radio + satellite reception toolkit"
+
+  - name: ocean-genomics
+    repo: broomva/skills
+    skillPath: skills/ocean-genomics/SKILL.md
+    category: platform
+    required: false
+    introduced_in: 0.21.4
+    min_bstack_version: 0.21.0
+    description: "Deep-ocean genomics research — eDNA, AlphaFold, ESMFold, Evo 2, marine biodiversity, agentic bioinformatics"
+
+  - name: microgrid-agent
+    repo: broomva/skills
+    skillPath: skills/microgrid-agent/SKILL.md
+    category: platform
+    required: false
+    introduced_in: 0.21.4
+    min_bstack_version: 0.21.0
+    description: "Edge AI agent for autonomous renewable energy microgrid management on Raspberry Pi"
+
+  # Compute & remote infrastructure
+  - name: colab-remote
+    repo: broomva/skills
+    skillPath: skills/colab-remote/SKILL.md
+    category: lifecycle
+    required: false
+    introduced_in: 0.21.4
+    min_bstack_version: 0.21.0
+    description: "Colab Remote — SSH-operated GPU training on Google Colab"
+
+  - name: remote-gpu
+    repo: broomva/skills
+    skillPath: skills/remote-gpu/SKILL.md
+    category: lifecycle
+    required: false
+    introduced_in: 0.21.4
+    min_bstack_version: 0.21.0
+    description: "Remote GPU orchestrator — headless GPU servers, jobs, remote sessions over SSH/HTTP"
+
+  - name: claude-code-channels
+    repo: broomva/skills
+    skillPath: skills/claude-code-channels/SKILL.md
+    category: lifecycle
+    required: false
+    introduced_in: 0.21.4
+    min_bstack_version: 0.21.0
+    description: "Telegram + Discord messaging bots for Claude Code with per-channel access control"
+
+  - name: claude-remote-sessions
+    repo: broomva/skills
+    skillPath: skills/claude-remote-sessions/SKILL.md
+    category: lifecycle
+    required: false
+    introduced_in: 0.21.4
+    min_bstack_version: 0.21.0
+    description: "Per-channel Discord + Telegram sessions for Claude Code — isolated tmux + auto-discovery + thread-context injection"
+
+  # Audio, voice, media
+  - name: omnivoice
+    repo: broomva/skills
+    skillPath: skills/omnivoice/SKILL.md
+    category: content
+    required: false
+    introduced_in: 0.21.4
+    min_bstack_version: 0.21.0
+    description: "OmniVoice Studio — local TTS, voice cloning, voice design, video dubbing in 646 languages (renamed from broomva/omnivoice-skill)"
+
+  - name: livecoding
+    repo: broomva/skills
+    skillPath: skills/livecoding/SKILL.md
+    category: content
+    required: false
+    introduced_in: 0.21.4
+    min_bstack_version: 0.21.0
+    description: "Algorave-grade livecoded music workflow — TidalCycles patterns + Hydra visuals"
+
+  # Advisory & consulting
+  - name: phronesis
+    repo: broomva/skills
+    skillPath: skills/phronesis/SKILL.md
+    category: strategy
+    required: false
+    introduced_in: 0.21.4
+    min_bstack_version: 0.21.0
+    description: "AI-native advisory practice — top-firm consulting methodology (Three Horizons, MIT CISR, JTBD, RICE, QuantumBlack ML, Wardley) as runnable typed primitives"
+
+  - name: procurer
+    repo: broomva/skills
+    skillPath: skills/procurer/SKILL.md
+    category: knowledge
+    required: false
+    introduced_in: 0.21.4
+    min_bstack_version: 0.21.0
+    description: "Grounded procurement research — turn any real-world need into a decision-shaped report with cited alternatives, price bands, recommendation"
+
+  # Health & body
+  - name: health
+    repo: broomva/skills
+    skillPath: skills/health/SKILL.md
+    category: platform
+    required: false
+    introduced_in: 0.21.4
+    min_bstack_version: 0.21.0
+    description: "Personal health knowledge graph — local-first ingest of Garmin/Apple/Whoop/Oura to SQLite, projected to Obsidian frontmatter. Hex architecture"
+
+  - name: founder-mode-oncology
+    repo: broomva/skills
+    skillPath: skills/founder-mode-oncology/SKILL.md
+    category: platform
+    required: false
+    introduced_in: 0.21.4
+    min_bstack_version: 0.21.0
+    description: "Personalized cancer-treatment navigation — Sid Sijbrandij founder-mode framework + AlphaFold integration (runtime stays at broomva/founder-mode-cancer)"
 
   # ── Research + knowledge work ───────────────────────────────────────────
   # Phase 4c migration 2026-05-25 (broomva/skills PR #6 merge e2bdf14)
