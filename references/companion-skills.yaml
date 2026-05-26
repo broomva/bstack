@@ -305,6 +305,34 @@ skills:
     min_bstack_version: 0.21.0
     description: "Autonomous social engagement + knowledge extraction loop for Moltbook and X — compounds with blog-post and content-creation"
 
+  # ── Neuroscience & BCI — Phase 4e (2026-05-26, broomva/skills PR #8 merge ca7de88) ──
+  - name: tribe-v2-agent-alignment
+    repo: broomva/skills
+    skillPath: skills/tribe-v2-agent-alignment/SKILL.md
+    category: knowledge
+    required: false
+    introduced_in: 0.21.5
+    min_bstack_version: 0.21.0
+    description: "Cortical alignment benchmarking for AI encoders using Meta's TRIBE v2 — neuro-informed model selection for the Life/Arcan stack"
+
+  - name: tribe-v2-bci-applied
+    repo: broomva/skills
+    skillPath: skills/tribe-v2-bci-applied/SKILL.md
+    category: knowledge
+    required: false
+    introduced_in: 0.21.5
+    min_bstack_version: 0.21.0
+    description: "Applied BCI research + neuro-informed content optimization using Meta's TRIBE v2 — predict neural responses to media/UI/content"
+
+  - name: tribe-v2-neuroscience
+    repo: broomva/skills
+    skillPath: skills/tribe-v2-neuroscience/SKILL.md
+    category: knowledge
+    required: false
+    introduced_in: 0.21.5
+    min_bstack_version: 0.21.0
+    description: "In-silico neuroscience experiments using Meta's TRIBE v2 — predict fMRI cortical responses to video, audio & text without brain scanners"
+
   # ── Discovery + skill management ────────────────────────────────────────
   - name: skills
     repo: broomva/skills

@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.21.5 — 2026-05-26
+
+### Phase 4e neuroscience migration (TRIBE v2 family)
+
+3 standalone-repo neuroscience skills migrated to broomva/skills Tier-2 monorepo (broomva/skills PR #8 merge `ca7de88`):
+
+- `tribe-v2-agent-alignment` — cortical alignment benchmarking for AI encoders
+- `tribe-v2-bci-applied` — applied BCI + neuro-informed content optimization
+- `tribe-v2-neuroscience` — in-silico fMRI prediction
+
+All NEW registry entries (none were previously registered).
+
+### Finding: `_shared/` is demand-driven
+
+The strategy doc anticipated a `_shared/tribe-v2/` directory. On inspection, the 3 skills have DISJOINT reference sets (arcan-integration / cortical-region-atlas / brain-regions — no file overlap). No `_shared/` extraction warranted. This validates the principle: `_shared/<category>/` is created only when concrete shared content exists, never speculatively.
+
+### Source repos deprecated (6mo window until 2026-11-26)
+
+- broomva/tribe-v2-agent-alignment PR #1 (merge `7bca620`)
+- broomva/tribe-v2-bci-applied PR #1 (merge `1e3ea14`)
+- broomva/tribe-v2-neuroscience PR #1 (merge `64165b7`)
+
+### Files changed
+
+- `references/companion-skills.yaml` — 3 NEW entries (60 → 63 total)
+- `VERSION` — `0.21.4` → `0.21.5`
+- `CHANGELOG.md` — this entry
+
+### Cumulative monorepo state: 46 skills
+
+---
+
+
 ## 0.21.4 — 2026-05-26
 
 ### Phase 4d specialty domain migration (largest batch)
