@@ -269,8 +269,10 @@ Migrated to $MONOREPO/skills/$TARGET via \`bstack skills graduate\`."
             --title "chore(deprecate): redirect to $MONOREPO monorepo" \
             --body "Migrated to \`$MONOREPO/skills/$TARGET\` via \`bstack skills graduate\`. Install: \`npx skills add $MONOREPO --skill $TARGET\`." >/dev/null 2>&1
         if [ "$DO_MERGE" = 1 ]; then
-            $GH pr merge chore/deprecate-redirect --squash --delete-branch >/dev/null 2>&1 || \
-              $GH pr merge chore/deprecate-redirect --squash >/dev/null 2>&1 || true
+            if ! $GH pr merge chore/deprecate-redirect --squash --delete-branch >/dev/null 2>&1 \
+               && ! $GH pr merge chore/deprecate-redirect --squash >/dev/null 2>&1; then
+                echo "    WARNING: auto-merge of source redirect-stub PR failed — leaving it open." >&2
+            fi
         fi
     )
     STUB_PR=$($GH pr list --repo "$SOURCE_REPO" --head chore/deprecate-redirect --state all --json url --jq '.[0].url' 2>/dev/null || echo "(see $SOURCE_REPO PRs)")
