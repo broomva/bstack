@@ -43,6 +43,8 @@ Observability:
   status [--json|--setpoint X]    Substrate health summary (≥ 0.5.0).
   status --aggregate              Federation rollup across registered workspaces (≥ 0.18.0).
   skills install|status|list      Companion skill roster manager (≥ 0.7.0).
+  skills graduate <name>          Migrate a standalone skill repo into the
+                                  broomva/skills Tier-2 monorepo (≥ 0.21.7).
   crystallize candidates|promote  P16 rule-of-three candidate detector (≥ 0.9.5).
   bench run|compare|tasks|status  Skill-evolution benchmark harness (≥ 0.10.0).
 

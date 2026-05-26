@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.21.7 — 2026-05-26
+
+### `bstack skills graduate` — crystallized Tier-2 migration (Phase 6b)
+
+New subcommand `bstack skills graduate <name>` that automates the Tier-2 skill-graduation pattern which ran **8 times manually** on 2026-05-25/26 (Phases 2–4f: strategy bundle, content ×2, research+finance, specialty, neuroscience, orcahand dedup). This is the P16 crystallization of that pattern — rule-of-three exceeded ~8× over.
+
+What it automates:
+1. Clone source repo + monorepo into temp worktrees
+2. Copy canonical content into `skills/<target>/` — excluding `.git`, dot-prefixed IDE-mirror dirs, `LICENSE`, `skills-lock.json` (the exact exclusion set learned across the 8 manual runs)
+3. Append a row to the monorepo README Tier-2 table
+4. Commit + push + open PR on the monorepo
+5. `--stub` (default ON): add a redirect-stub README to the source repo + open PR
+6. `--merge` (default OFF): merge the opened PRs
+7. Cleanup temp clones (trap on EXIT)
+
+Supports `--target` (rename, e.g. drop `-skill` suffix), `--source-repo`, `--monorepo`, `--category`, `--description`, `--exclude` (repeatable), `--dry-run`.
+
+The registry update (companion-skills.yaml + skills-roster.md + VERSION + CHANGELOG) is intentionally NOT automated — it needs a coordinated bstack version bump a human/agent reviews. The script PRINTS the exact registry entry to add (copy-paste ready).
+
+### Files
+
+- **NEW** `scripts/skill-graduate.sh` — the graduation engine (~230 lines). Env-overridable `BSTACK_GRADUATE_GH` / `BSTACK_GRADUATE_GIT` / `BSTACK_GRADUATE_TMPDIR` / `BSTACK_GRADUATE_DRY_RUN` for hermetic testing.
+- **NEW** `tests/skill-graduate.test.sh` — 9-test offline smoke (arg-parse, dry-run, rename detection, stub-gh/git execution path with copy + exclude verification, no-SKILL.md error). All 9 pass.
+- **CHANGED** `bin/bstack-skills` — adds `graduate)` dispatch + usage entry.
+- **CHANGED** `SKILL.md` + `bin/bstack` — advertise the subcommand.
+- **VERSION** `0.21.6` → `0.21.7`.
+
+### Provenance
+
+The pattern's 8 manual instances are the audit trail (broomva/skills PRs #2–#9 + broomva/bstack PRs #53–#59). Crystallization closes the loop: the next graduation is `bstack skills graduate <name>` instead of a full manual clone→copy→README→PR→stub→registry cycle.
+
+---
+
+
 ## 0.21.6 — 2026-05-26
 
 ### Phase 4f orcahand migration + dedup (final Tier-2 migration)
