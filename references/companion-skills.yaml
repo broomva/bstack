@@ -155,6 +155,15 @@ skills:
     min_bstack_version: 0.21.0
     description: "CaP-X LLM-driven robot manipulation via code generation — CaP-Gym (187 tasks), CaP-Bench, CaP-Agent0, CaP-RL, sim-to-real"
 
+  - name: orcahand
+    repo: broomva/skills
+    skillPath: skills/orcahand/SKILL.md
+    category: platform
+    required: false
+    introduced_in: 0.21.6
+    min_bstack_version: 0.21.0
+    description: "Full-stack ORCA Hand skill — 17-DOF tendon-driven robotic hand: plant interface, safety shields, MuJoCo sim, RL training, teleoperation, sim-to-real, EGRI (Phase 4f; deduplicated broomva/orcahand + broomva/orcahand-skill — both archived)"
+
   - name: openrocket-sim
     repo: broomva/skills
     skillPath: skills/openrocket-sim/SKILL.md

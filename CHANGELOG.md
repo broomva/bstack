@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.21.6 — 2026-05-26
+
+### Phase 4f orcahand migration + dedup (final Tier-2 migration)
+
+The last Tier-2 migration. `orcahand` consolidated to broomva/skills Tier-2 monorepo (broomva/skills PR #9 merge `df4fb13`), resolving the Phase-0 contested dedup case.
+
+`broomva/orcahand` and `broomva/orcahand-skill` were true duplicates (both 180K, identical SKILL.md + assets/ + references/ + schemas/ + scripts/, both `name: orcahand`). Per user decision: migrate the canonical (`.agents`-symlinked) `broomva/orcahand` → `skills/orcahand/`; archive BOTH source repos with redirect-stubs.
+
+### Source repos deprecated (both, 6mo window until 2026-11-26)
+
+- broomva/orcahand PR #1 (merge `4e637ed`)
+- broomva/orcahand-skill PR #1 (merge `f753966`)
+
+### Files changed
+
+- `references/companion-skills.yaml` — 1 NEW entry (orcahand); 63 → 64 total
+- `VERSION` — `0.21.5` → `0.21.6`
+- `CHANGELOG.md` — this entry
+
+### Migration complete
+
+**47 skills now in broomva/skills monorepo.** All Tier-2 candidates from the inventory doc are migrated, except `broomva/mirage` (no remote on GitHub — flagged as an anomaly, not actionable). The skills-monorepo migration arc (Phases 2–4f) is complete.
+
+---
+
+
 ## 0.21.5 — 2026-05-26
 
 ### Phase 4e neuroscience migration (TRIBE v2 family)
