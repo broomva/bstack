@@ -49,6 +49,8 @@ Subcommands:
   graduate <name> [options]      Migrate a standalone broomva/<name> skill repo
                                  into the broomva/skills Tier-2 monorepo
                                  (≥ 0.21.7). Run `bstack skills graduate --help`.
+  audit [--json] [--no-logs]     Registry audit: budget, duplicates, registry
+                                 coherence, unused, roots (≥ 0.21.8).
   help | --help                  This message
 
 Examples:
@@ -56,6 +58,8 @@ Examples:
   bstack skills install --required-only
   bstack skills install --dry-run
   bstack skills status --json
+  bstack skills audit
+  bstack skills audit --no-logs --json
   bstack skills graduate handoff --category lifecycle --dry-run
 EOF
 }
@@ -271,6 +275,7 @@ case "${1:-}" in
     status)             shift; cmd_status "$@" ;;
     list)               shift; cmd_list "$@" ;;
     graduate)           shift; exec "$BSTACK_DIR/scripts/skill-graduate.sh" "$@" ;;
+    audit)              shift; exec python3 "$BSTACK_DIR/scripts/skill-audit.py" "$@" ;;
     -h|--help|help|"")  usage ;;
     *)
         echo "bstack-skills: unknown subcommand '$1'" >&2
