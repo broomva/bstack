@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.21.8 — 2026-05-26
+
+### `bstack skills audit` — skill registry audit (Phase 6c)
+
+New subcommand `bstack skills audit` — crystallizes the "Skill Registry Audit" pattern (bstack-engine candidate ledger, 3/3 instances: Steipete's skill-cleaner + the 2026-05-25 manual inventory + P7 Freshness as a degenerate single-dimension case). Adapts Steipete's skill-cleaner (steipete/agent-scripts) algorithm for Claude Code + bstack.
+
+Five reports:
+1. **Budget** — total description token cost (`ceil(utf8_bytes / chars_per_token)`, identical to Steipete) vs a ceiling (default 20,000 = 2% of 1M). Flags over-budget.
+2. **Duplicates** — same skill name across >1 distinct realpath (symlink-deduped, so the `.agents` ↔ workspace symlink case doesn't false-positive).
+3. **Registry coherence** — `companion-skills.yaml` vs installed roots: registered-but-missing + installed-but-unregistered.
+4. **Unused** — no invocation trace in recent Claude Code session logs (`~/.claude/projects/**/*.jsonl`, replacing Codex's `~/.codex/history.jsonl`); `--months` window; `--no-logs` to skip.
+5. **Roots** — skill count per root.
+
+`--json` for machine output. Env-overridable (`BSTACK_AUDIT_ROOTS`, `BSTACK_DIR`, `BSTACK_AUDIT_LOG_GLOB`) for hermetic testing.
+
+### First real-run findings (2026-05-26, against the 3 broomva skill roots)
+
+- 362 skills, 331 unique names across `~/.claude/skills` + `~/.agents/skills` + `~/broomva/skills`
+- Description budget at **223% of the 2% ceiling** (44,681 tokens / 20,000) — corroborates the 2026-05-25 skill-cleaner reading (269% over the broader Codex+plugin set)
+- 31 cross-root duplicates (mostly snapshot-in-.claude + source-in-workspace — expected, but worth surfacing)
+
+### Files
+
+- **NEW** `scripts/skill-audit.py` (~250 lines) — the auditor; pyyaml-based; env-overridable for hermetic tests
+- **NEW** `tests/skill-audit.test.sh` — 9 hermetic tests (fake roots + registry + logs; realpath-dedupe, duplicate detection, registry coherence, unused detection, budget flag). All pass.
+- **CHANGED** `bin/bstack-skills` — `audit)` dispatch + usage
+- **VERSION** `0.21.7` → `0.21.8`
+
+This completes the skills-monorepo meta-tooling: `graduate` (migrate skills in) + `audit` (keep the registry healthy).
+
+---
+
+
 ## 0.21.7 — 2026-05-26
 
 ### `bstack skills graduate` — crystallized Tier-2 migration (Phase 6b)
