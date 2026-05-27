@@ -120,6 +120,11 @@ if run_audit --no-logs --budget-tokens 1 2>/dev/null | grep -q 'OVER BUDGET'; th
 t="--no-logs skips usage scan"
 if run_audit --no-logs 2>/dev/null | grep -q 'skipped — --no-logs'; then ap "$t"; else af "$t"; fi
 
+# T9b: --chars-per-token 0 does not crash (clamped to >=1)
+t="--chars-per-token 0 clamped (no ZeroDivisionError)"
+out=$(run_audit --no-logs --chars-per-token 0 2>&1); rc=$?
+if [ "$rc" -eq 0 ] && ! echo "$out" | grep -q 'ZeroDivisionError'; then ap "$t"; else af "$t" "rc=$rc"; fi
+
 # T9: human report has all 5 sections
 t="human report has 5 sections"
 out=$(run_audit --no-logs 2>/dev/null)

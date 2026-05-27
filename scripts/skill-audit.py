@@ -175,8 +175,9 @@ def main() -> int:
     skills = discover_skills(roots)
     names = sorted({s["name"] for s in skills})
 
-    # 1. Budget
-    total_tokens = sum(token_cost(s["description"], args.chars_per_token) for s in skills)
+    # 1. Budget. Clamp chars_per_token to >=1 so a bad flag can't ZeroDivision.
+    cpt = max(1, args.chars_per_token)
+    total_tokens = sum(token_cost(s["description"], cpt) for s in skills)
     budget_used_ratio = (total_tokens / args.budget_tokens) if args.budget_tokens else 0.0
 
     # 2. Duplicates — same name across >1 distinct realpath
