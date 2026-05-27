@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.21.9 — 2026-05-26
+
+### fix(install): `--skill` commands require `--full-depth` (dogfood finding)
+
+`/dogfood` validation of the skills-monorepo install path found that `npx skills add broomva/skills --skill <name>` returns **"Found 1 skill"** (only the root catalog) — the `npx skills` CLI short-circuits subdirectory search once it finds a root `SKILL.md`. The monorepo's `skills/<name>/` subdirs are invisible without `--full-depth`.
+
+Empirically verified 2026-05-26: without flag → "Found 1 skill"; with `--full-depth` → "Found 53 skills" + handoff/pre-mortem install correctly (files on disk, content confirmed).
+
+**Fix:**
+- `references/skills-roster.md` — all 26 `--skill` install commands now include `--full-depth`
+- `scripts/skill-graduate.sh` — the 4 generated install commands (commit msg, monorepo PR body, redirect-stub README, stub PR body) now include `--full-depth`, so future graduations produce correct stubs
+- `VERSION` 0.21.8 → 0.21.9
+
+The command was asserted ~58× across the migration arc but never run until the dogfood. Classic P11: compile-time/spec-level correctness ≠ runtime correctness.
+
+---
+
+
 ## 0.21.8 — 2026-05-26
 
 ### `bstack skills audit` — skill registry audit (Phase 6c)
