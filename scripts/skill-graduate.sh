@@ -216,11 +216,11 @@ echo "==> committing + opening PR on $MONOREPO"
     $GIT commit -q -m "feat(monorepo): graduate $TARGET to Tier-2$RENAME_NOTE
 
 Migrated from $SOURCE_REPO via \`bstack skills graduate\`.
-Install: npx skills add $MONOREPO --skill $TARGET"
+Install: npx skills add $MONOREPO --skill $TARGET --full-depth"
     $GIT push -u origin "$BRANCH" >/dev/null 2>&1
     $GH pr create --base main --head "$BRANCH" \
         --title "feat(monorepo): graduate $TARGET to Tier-2$RENAME_NOTE" \
-        --body "Graduated from \`$SOURCE_REPO\` via \`bstack skills graduate\`. Install: \`npx skills add $MONOREPO --skill $TARGET\`.${DESCRIPTION:+
+        --body "Graduated from \`$SOURCE_REPO\` via \`bstack skills graduate\`. Install: \`npx skills add $MONOREPO --skill $TARGET --full-depth\`.${DESCRIPTION:+
 
 $DESCRIPTION}" >/dev/null 2>&1
     if [ "$DO_MERGE" = 1 ]; then
@@ -248,7 +248,7 @@ if [ "$DO_STUB" = 1 ]; then
 ## New install command
 
 \`\`\`bash
-npx skills add $MONOREPO --skill $TARGET
+npx skills add $MONOREPO --skill $TARGET --full-depth
 \`\`\`
 
 ## Skill home
@@ -267,7 +267,7 @@ Migrated to $MONOREPO/skills/$TARGET via \`bstack skills graduate\`."
         $GIT push -u origin chore/deprecate-redirect >/dev/null 2>&1
         $GH pr create --base main --head chore/deprecate-redirect \
             --title "chore(deprecate): redirect to $MONOREPO monorepo" \
-            --body "Migrated to \`$MONOREPO/skills/$TARGET\` via \`bstack skills graduate\`. Install: \`npx skills add $MONOREPO --skill $TARGET\`." >/dev/null 2>&1
+            --body "Migrated to \`$MONOREPO/skills/$TARGET\` via \`bstack skills graduate\`. Install: \`npx skills add $MONOREPO --skill $TARGET --full-depth\`." >/dev/null 2>&1
         if [ "$DO_MERGE" = 1 ]; then
             if ! $GH pr merge chore/deprecate-redirect --squash --delete-branch >/dev/null 2>&1 \
                && ! $GH pr merge chore/deprecate-redirect --squash >/dev/null 2>&1; then
