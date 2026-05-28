@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.21.10 — 2026-05-27
+
+### revert: --full-depth no longer needed after broomva/skills restructure
+
+Companion to [broomva/skills PR #11](https://github.com/broomva/skills/pull/11) (merge `ab2d05b`), which removed the root `SKILL.md` from `broomva/skills` to align with the [`anthropics/skills`](https://github.com/anthropics/skills) ecosystem-canonical monorepo shape (best practice per [`agentskills.io`](https://agentskills.io/specification)).
+
+With the root `SKILL.md` gone, the `npx skills` CLI's default search descends into `skills/<name>/` automatically — `--full-depth` is no longer required.
+
+### Reverted
+
+- `references/skills-roster.md` — dropped `--full-depth` from 26 `--skill` install commands
+- `scripts/skill-graduate.sh` — dropped `--full-depth` from the 4 generated install commands (commit msg, monorepo PR body, redirect-stub README, stub PR body). Future graduations now emit the canonical command form.
+- `VERSION` 0.21.9 → 0.21.10
+
+### Net effect across the 0.21.x line
+
+| Release | What it did |
+|---|---|
+| 0.21.9 | Added `--full-depth` as a workaround for the root-SKILL.md shadowing (post-dogfood) |
+| 0.21.10 | Removed `--full-depth` after the broomva/skills restructure eliminated the root cause |
+
+The roster's `npx skills add broomva/skills --skill <name>` commands are now both **correct AND minimal** — matching the form used by all other monorepos in the ecosystem.
+
+20/20 tests (graduate + audit) still pass.
+
+---
+
+
 ## 0.21.9 — 2026-05-26
 
 ### fix(install): `--skill` commands require `--full-depth` (dogfood finding)
