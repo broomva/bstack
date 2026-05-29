@@ -7,15 +7,18 @@ The concrete sequence from `npx skills add broomva/bstack` to a fully-wired RCS-
 ```bash
 npx skills add broomva/bstack         # clones bstack into ~/.agents/skills/bstack/
 /bstack onboard                       # wizard: workspace · profile · life · auto-merge
+# — or, without the wizard —
+/bstack bootstrap                     # scaffold governance + wire hooks + wire the loop
 ```
 
-`onboard.sh` runs `bootstrap.sh` (scaffolds governance files), detects tech stack from repo signals, then calls `install-rcs-stability.sh` which deploys the multi-layer audit + enforcement plumbing.
+Both paths wire the RCS control loop. `bootstrap.sh` scaffolds governance files (incl. `.control/arcs.yaml`), wires the base hooks, then — in **Phase 3.5** — calls `install-rcs-stability.sh` to deploy the multi-layer audit + enforcement plumbing. `onboard.sh` additionally runs the wizard and detects the tech stack. Skip loop wiring with `BSTACK_SKIP_RCS=1` (governance-only bootstrap). Previously only `onboard` wired the loop; `bootstrap` left it open — that split-brain is closed as of 0.22.0.
 
 ## Files deployed into the workspace
 
 | Path | Source | Purpose |
 |---|---|---|
 | `CLAUDE.md`, `AGENTS.md`, `.control/policy.yaml`, `METALAYER.md` | `assets/templates/*.template` | Governance substrate (P-row primitives table, reflexive trigger rules, gate config) |
+| `.control/arcs.yaml` | `arcs.yaml.template` | Closure-contract arcs — the workspace's own editable loop definitions (5-tuple). Scaffolded by `bootstrap.sh` Phase 2 |
 | `.githooks/pre-commit` | `githook-pre-commit-l3-rate.sh.template` | G1 — blocks `git commit` over τ_a₃ L3 commit rate (bypassable with `--no-verify`) |
 | `.github/workflows/l3-stability.yml` | `gh-workflow-l3-stability.yml.template` | G2 — runs `compute-lambda` + `l3-rate-gate` on every PR touching L3 paths; comments verdict |
 | `.claude/settings.json` (merged) | `settings.json.l3-stability-hook.snippet` + `settings.json.multi-layer-hooks.snippet` | 3 hook entries: PreToolUse `L3-G0`, PostToolUse `L0-audit`, Stop `L1-audit` |
@@ -33,7 +36,7 @@ npx skills add broomva/bstack         # clones bstack into ~/.agents/skills/bsta
 
 ## What `bstack doctor` reports
 
-§1–§13 v0.13.0 substrate checks · §14 RCS λ compute + drift · §15 G0/G1/G2 wiring · §16 L0 tool-call audit summary · §17 L1 reflex compliance · §18 L2 promotion throttle · §19 multi-layer composite health (`L0=stable L1=stable L2=stable L3=stable` form). New workspaces show §16–§18 as informational "no audit log yet" until first events fire.
+§1–§13 v0.13.0 substrate checks · §14 RCS λ compute + drift · §15 G0/G1/G2 wiring · §16 L0 tool-call audit summary · §17 L1 reflex compliance · §18 L2 promotion throttle · §19 multi-layer composite health (`L0=stable L1=stable L2=stable L3=stable` form) · §20 federation registry · §21 closure-contract arcs · §22 composite-ω drift trend · **§23 control-loop closure verdict** — the single "is the loop wired + connected + running?" answer (substrate-absent / wired-but-idle / wired+running+closing). New workspaces show §16–§18 + §23 as informational ("no audit log yet" / "wired but idle") until first events fire; For CI lanes that must fail on an idle loop, run `BSTACK_LOOP_STRICT=1 doctor.sh --strict` — `BSTACK_LOOP_STRICT=1` records the gap but only `--strict` changes the exit code, so **both** are required.
 
 ## Common gotchas
 

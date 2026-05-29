@@ -54,7 +54,7 @@ fi
 # Step 2: governance files scaffolded.
 echo ""
 echo "Step 2: governance files present"
-for f in CLAUDE.md AGENTS.md .control/policy.yaml; do
+for f in CLAUDE.md AGENTS.md .control/policy.yaml .control/arcs.yaml; do
     if [ -f "$TW/$f" ]; then
         pass "$f scaffolded"
     else
@@ -76,8 +76,9 @@ echo ""
 echo "Step 3: .claude/settings.json wires hooks"
 if [ -f "$TW/.claude/settings.json" ]; then
     pass "settings.json present"
-    # Hook events the substrate ships: SessionStart, Stop, PreToolUse.
-    for ev in SessionStart Stop PreToolUse; do
+    # Hook events the substrate ships: SessionStart, Stop, PreToolUse, plus
+    # PostToolUse (L0-audit hook wired by Phase 3.5 loop wiring).
+    for ev in SessionStart Stop PreToolUse PostToolUse; do
         if jq -e --arg ev "$ev" '.hooks[$ev]' "$TW/.claude/settings.json" >/dev/null 2>&1; then
             pass "hooks.$ev present"
         else
@@ -86,6 +87,23 @@ if [ -f "$TW/.claude/settings.json" ]; then
     done
 else
     fail "settings.json missing"
+fi
+
+# Step 3.5: RCS control loop wired (Phase 3.5). BSTACK_SKIP_RCS is unset, so
+# bootstrap calls install-rcs-stability.sh → L0/L1 audit hooks + audit dir.
+echo ""
+echo "Step 3.5: RCS control loop wired"
+if [ -d "$TW/.control/audit" ]; then
+    pass ".control/audit/ created"
+else
+    fail ".control/audit/ missing (Phase 3.5 loop wiring did not run)"
+fi
+if [ -f "$TW/.claude/settings.json" ] \
+   && grep -q '"L0-audit"' "$TW/.claude/settings.json" 2>/dev/null \
+   && grep -q '"L1-audit"' "$TW/.claude/settings.json" 2>/dev/null; then
+    pass "L0-audit + L1-audit hook markers present"
+else
+    fail "L0/L1 audit hook markers missing"
 fi
 
 # Step 4: doctor runs cleanly (no crash) and produces the expected report

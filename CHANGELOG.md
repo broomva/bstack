@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.22.0 — 2026-05-28
+
+### feat: wire the RCS control loop on `bstack bootstrap` (close the split-brain)
+
+`onboard.sh` (the wizard) wired the control loop via `install-rcs-stability.sh`; `bootstrap.sh` (the `/bstack bootstrap` command — what the SKILL.md tells agents to run) **never did**. Freshly-bootstrapped workspaces had governance files but an **open loop** — no L0/L1 audit hooks, no `.control/audit/`, no closure-arc definitions. And `doctor` reported all of that as soft `[info]`, so the loop being open was invisible.
+
+This release makes `/bstack bootstrap` wire the loop, scaffold the loop definitions, and report loop liveness as a first-class verdict.
+
+### Added
+
+- **`bootstrap.sh` Phase 3.5 — RCS loop wiring.** Bootstrap now calls `install-rcs-stability.sh` (L0 PostToolUse + L1 Stop audit hooks + `.control/audit/` + L3 gates), reusing the same idempotent installer the wizard uses. Guarded by `BSTACK_SKIP_RCS=1` (mirrors `BSTACK_SKIP_SKILLS=1`) for governance-only bootstrap. The `|| true` guard preserves bootstrap's non-blocking contract under `set -e`.
+- **`bootstrap.sh` Phase 2 — `.control/arcs.yaml` scaffold.** The closure-contract arcs (the workspace's own editable loop definitions) are now scaffolded from `arcs.yaml.template` alongside CLAUDE.md / AGENTS.md / policy.yaml. (`compute-arc-status.sh` already fell back to the bundled template; scaffolding gives the workspace an editable copy.)
+- **`doctor.sh` §23 — Control-loop closure verdict.** The single verdict answering "is the loop wired + connected + running?" — three states: (a) substrate absent, (b) wired-but-idle, (c) wired + running + closing. Composes W (audit hooks + dir) / R (audit logs fresh < 7d) / C (arcs + composite-ω resolvable). The W check reads **both** `settings.json` and `settings.local.json` — Claude Code merges them at runtime, and shared repos legitimately keep machine-local hook paths in the gitignored `settings.local.json` (surfaced by dogfooding on the stimulus repo, whose tracked `settings.json` uses repo-relative vendored hooks). **Soft by default** (audit logs are empty until the first hook fires; a hard default would redden every fresh bootstrap for purely temporal reasons); `BSTACK_LOOP_STRICT=1` promotes "wired-but-idle" to a hard `--strict` gap for CI lanes. §19 already hard-gates the case that matters (a wired loop genuinely diverging), so §23 doesn't double-count it.
+
+### Changed
+
+- `tests/canary/01-fresh-bootstrap.test.sh` — now asserts `PostToolUse` hook, `.control/audit/`, `.control/arcs.yaml`, and the L0/L1 audit markers (covers Phase 3.5 + arcs scaffold). 14/14.
+- `references/new-workspace-flow.md` — documents that `bootstrap` (not only `onboard`) wires the loop; adds arcs.yaml + §20–§23 to the doctor-report summary.
+- `VERSION` 0.21.10 → 0.22.0.
+
+### Notes
+
+- Idempotent + additive: re-running bootstrap (or bootstrap after onboard, in either order) is a no-op — hook markers (P1/P6/P2/P7/P17 vs L3-G0 vs L0-audit/L1-audit) are all distinct; `scaffold_governance_file` early-returns `[keep]` on existing files.
+- `doctor.sh` resolves `WORKSPACE="${BROOMVA_WORKSPACE:-$HOME/broomva}"` — running it from a sub-repo without `BROOMVA_WORKSPACE` set measures the parent workspace, not `$PWD`. (Surfacing this as a possible future UX fix; out of scope here.)
+
 ## 0.21.10 — 2026-05-27
 
 ### revert: --full-depth no longer needed after broomva/skills restructure

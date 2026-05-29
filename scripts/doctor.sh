@@ -49,6 +49,13 @@
 #   bash scripts/doctor.sh               # full report
 #   bash scripts/doctor.sh --quiet       # only warnings
 #   bash scripts/doctor.sh --strict      # exit 1 if any gap found (CI mode)
+#
+# Env:
+#   BSTACK_LOOP_STRICT=1   §23 only — treat a wired-but-idle control loop as a
+#                          gap. To FAIL CI on it you must ALSO pass --strict
+#                          (i.e. `BSTACK_LOOP_STRICT=1 doctor.sh --strict`);
+#                          BSTACK_LOOP_STRICT alone records the gap but never
+#                          changes the exit code.
 
 set -uo pipefail
 
@@ -1130,6 +1137,85 @@ else
         else
             ok "composite-ω trend: last=$TREND_LAST baseline=$TREND_BASELINE slope=$TREND_SLOPE verdict=$TREND_VERDICT (n=$TREND_POINTS)"
         fi
+    fi
+fi
+
+# ── Section 23: Control-loop closure verdict (the "is it wired + running?") ─
+# The single verdict answering: is the RCS control loop wired, connected, and
+# running on this workspace? Distinct from §19 (the budget/stability lens, which
+# already hard-gates a wired-but-diverging loop). §23 composes three signals:
+#   W (wired)   — .claude/settings.json OR settings.local.json carries the
+#                 L0-audit + L1-audit hook markers AND .control/audit/ exists.
+#   R (running) — an L0/L1 audit log exists, is non-empty, and was written in
+#                 the last 7 days (multi-session cadence).
+#   C (closing) — closure arcs are declared/resolvable AND composite-ω is
+#                 computable (compute-budget-status.sh present).
+# Three states: (a) substrate absent (!W) → info; (b) wired-but-idle (W && !R)
+# → SOFT by default, hard gap only under BSTACK_LOOP_STRICT=1 (audit logs are
+# empty until the first hook fires, so a hard default would redden every fresh
+# bootstrap for purely temporal reasons); (c) W && R → ok.
+section "23. Control-loop closure verdict"
+
+LOOP_AUDIT_DIR="$WORKSPACE/.control/audit"
+LOOP_STRICT="${BSTACK_LOOP_STRICT:-0}"
+
+# W — wired. Claude Code merges settings.json + settings.local.json at runtime,
+# and shared repos legitimately keep machine-local hook paths (which carry an
+# absolute bstack path) out of the tracked settings.json by wiring them in the
+# gitignored settings.local.json. So check BOTH — the loop is wired if either
+# file carries the L0-audit + L1-audit markers.
+W_OK=0
+if [ -d "$LOOP_AUDIT_DIR" ]; then
+    _l0=0; _l1=0
+    for _s in "$WORKSPACE/.claude/settings.json" "$WORKSPACE/.claude/settings.local.json"; do
+        [ -f "$_s" ] || continue
+        grep -q '"L0-audit"' "$_s" 2>/dev/null && _l0=1
+        grep -q '"L1-audit"' "$_s" 2>/dev/null && _l1=1
+    done
+    [ "$_l0" = "1" ] && [ "$_l1" = "1" ] && W_OK=1
+fi
+
+# R — running (any L0/L1 log non-empty AND modified within 7 days)
+R_OK=0
+LOOP_FRESH=""
+for _log in l0-tools.jsonl l1-reflexes.jsonl; do
+    _p="$LOOP_AUDIT_DIR/$_log"
+    if [ -s "$_p" ] && [ -n "$(find "$_p" -mtime -7 2>/dev/null)" ]; then
+        R_OK=1
+        LOOP_FRESH="$LOOP_FRESH $_log"
+    fi
+done
+
+# C — closing: the WORKSPACE has declared its own closure arcs AND composite-ω
+# is computable. We require the workspace's own .control/arcs.yaml (not the
+# bundled template fallback) — otherwise C would be true on every intact bstack
+# checkout and "closing" would mean nothing beyond "the repo shipped its files."
+C_OK=0
+if [ -f "$WORKSPACE/.control/arcs.yaml" ] && [ -f "$BSTACK_REPO/scripts/compute-budget-status.sh" ]; then
+    C_OK=1
+fi
+
+if [ "$W_OK" = "0" ]; then
+    # (a) substrate absent — legitimate under BSTACK_SKIP_RCS=1 governance-only bootstrap
+    [ "$QUIET" = "0" ] && echo "  [info] control loop NOT wired (L0/L1 audit hooks or .control/audit/ absent)"
+    [ "$QUIET" = "0" ] && echo "         → fix: bash $BSTACK_REPO/scripts/install-rcs-stability.sh  (or re-run \`bstack bootstrap\` without BSTACK_SKIP_RCS=1)"
+elif [ "$R_OK" = "0" ]; then
+    # (b) wired but idle — soft by default, hard only under BSTACK_LOOP_STRICT=1
+    _closing_note="arcs resolvable"; [ "$C_OK" = "0" ] && _closing_note="arcs/composite not resolvable"
+    if [ "$LOOP_STRICT" = "1" ]; then
+        gap "control loop WIRED but IDLE (no L0/L1 audit events in last 7d; $_closing_note)" \
+            "exercise a session so PostToolUse/Stop hooks fire; or unset BSTACK_LOOP_STRICT to treat idle as soft"
+    else
+        [ "$QUIET" = "0" ] && echo "  [info] control loop WIRED but IDLE (no L0/L1 audit events in last 7d; $_closing_note)"
+        [ "$QUIET" = "0" ] && echo "         → this is normal for a freshly-bootstrapped or intermittent workspace; events accrue as sessions run"
+        [ "$QUIET" = "0" ] && echo "         → CI lanes: run with BSTACK_LOOP_STRICT=1 AND --strict to fail on idle"
+    fi
+else
+    # (c) wired + running (+ closing)
+    if [ "$C_OK" = "1" ]; then
+        ok "control loop: wired + running + closing (audit live:$LOOP_FRESH; arcs + composite-ω resolvable)"
+    else
+        ok "control loop: wired + running (audit live:$LOOP_FRESH; arcs/composite not yet resolvable)"
     fi
 fi
 
