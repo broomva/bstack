@@ -1144,8 +1144,8 @@ fi
 # The single verdict answering: is the RCS control loop wired, connected, and
 # running on this workspace? Distinct from §19 (the budget/stability lens, which
 # already hard-gates a wired-but-diverging loop). §23 composes three signals:
-#   W (wired)   — .claude/settings.json carries the L0-audit + L1-audit hook
-#                 markers AND .control/audit/ exists.
+#   W (wired)   — .claude/settings.json OR settings.local.json carries the
+#                 L0-audit + L1-audit hook markers AND .control/audit/ exists.
 #   R (running) — an L0/L1 audit log exists, is non-empty, and was written in
 #                 the last 7 days (multi-session cadence).
 #   C (closing) — closure arcs are declared/resolvable AND composite-ω is
@@ -1156,16 +1156,23 @@ fi
 # bootstrap for purely temporal reasons); (c) W && R → ok.
 section "23. Control-loop closure verdict"
 
-LOOP_SETTINGS="$WORKSPACE/.claude/settings.json"
 LOOP_AUDIT_DIR="$WORKSPACE/.control/audit"
 LOOP_STRICT="${BSTACK_LOOP_STRICT:-0}"
 
-# W — wired
+# W — wired. Claude Code merges settings.json + settings.local.json at runtime,
+# and shared repos legitimately keep machine-local hook paths (which carry an
+# absolute bstack path) out of the tracked settings.json by wiring them in the
+# gitignored settings.local.json. So check BOTH — the loop is wired if either
+# file carries the L0-audit + L1-audit markers.
 W_OK=0
-if [ -f "$LOOP_SETTINGS" ] && [ -d "$LOOP_AUDIT_DIR" ] \
-   && grep -q '"L0-audit"' "$LOOP_SETTINGS" 2>/dev/null \
-   && grep -q '"L1-audit"' "$LOOP_SETTINGS" 2>/dev/null; then
-    W_OK=1
+if [ -d "$LOOP_AUDIT_DIR" ]; then
+    _l0=0; _l1=0
+    for _s in "$WORKSPACE/.claude/settings.json" "$WORKSPACE/.claude/settings.local.json"; do
+        [ -f "$_s" ] || continue
+        grep -q '"L0-audit"' "$_s" 2>/dev/null && _l0=1
+        grep -q '"L1-audit"' "$_s" 2>/dev/null && _l1=1
+    done
+    [ "$_l0" = "1" ] && [ "$_l1" = "1" ] && W_OK=1
 fi
 
 # R — running (any L0/L1 log non-empty AND modified within 7 days)
