@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
-# bstack bootstrap — install all 28 Broomva Stack skills + scaffold governance + wire hooks
+# bstack bootstrap — install all 31 Broomva Stack skills + scaffold governance + wire hooks
 #
-# Three phases:
+# Four phases + loop wiring:
 #   1. Skill install: npx skills add for each ROSTER entry
 #   2. Workspace scaffold: install missing CLAUDE.md / AGENTS.md / .control/policy.yaml
-#      from assets/templates/ (idempotent — never overwrites existing files)
+#      / .control/arcs.yaml from assets/templates/ (idempotent — never overwrites)
 #   3. Hooks wire-up: merge bstack hooks into .claude/settings.json (additive only)
+#   3.5 RCS loop wiring: install-rcs-stability.sh deploys L0/L1 audit hooks + audit
+#       dir + L3 gates (G0/G1/G2 + rcs-parameters.toml) so the control loop is
+#       actually wired + connected, not just declared. Skip with BSTACK_SKIP_RCS=1
+#       (governance-only bootstrap). Mirrors the wizard path (onboard.sh).
+#   4. bstack doctor --quiet to verify the primitive contract + loop closure (§23).
 #
-# After completion, runs `bstack doctor --quiet` to verify primitive contract.
+# Env escapes: BSTACK_SKIP_SKILLS=1 (skip Phase 1), BSTACK_SKIP_RCS=1 (skip Phase 3.5).
 set -e
 
 AGENTS_DIR="${HOME}/.agents/skills"
@@ -143,6 +148,9 @@ scaffold_governance_file() {
 scaffold_governance_file "CLAUDE.md" "CLAUDE.md.template"
 scaffold_governance_file "AGENTS.md" "AGENTS.md.template"
 scaffold_governance_file ".control/policy.yaml" "policy.yaml.template"
+# Closure-contract arcs (the loop DEFINITIONS — the workspace's own editable
+# copy; compute-arc-status.sh otherwise falls back to the bundled template).
+scaffold_governance_file ".control/arcs.yaml" "arcs.yaml.template"
 
 echo "  scaffolded: $scaffolded | preserved: $preserved"
 
@@ -209,6 +217,32 @@ PYEOF
 else
     echo "  [skip] python3 not available; cannot merge into existing settings.json"
     echo "  manual: see assets/templates/settings.json.snippet"
+fi
+
+# ─── Phase 3.5: wire the RCS control loop (L0/L1 audit + L3 gates) ─────────
+# Closes the split-brain: onboard.sh (the wizard) wired the loop here; the
+# bootstrap command did not, leaving freshly-bootstrapped workspaces with
+# governance files but an OPEN loop (no audit hooks, no audit dir). This
+# deploys L0 PostToolUse + L1 Stop audit hooks + .control/audit/ + L3 gates
+# via the same idempotent installer the wizard uses. Skip with BSTACK_SKIP_RCS=1.
+if [ "${BSTACK_SKIP_RCS:-0}" = "1" ]; then
+  echo ""
+  echo "=== bstack RCS loop wiring ==="
+  echo "BSTACK_SKIP_RCS=1 — skipping loop wiring (governance-only bootstrap)."
+  echo "(Run \`bash scripts/install-rcs-stability.sh\` later to wire the loop.)"
+else
+  RCS_INSTALLER="${BOOTSTRAP_SCRIPT_DIR}/install-rcs-stability.sh"
+  if [ -f "$RCS_INSTALLER" ]; then
+    echo ""
+    echo "=== bstack RCS loop wiring ==="
+    # Non-blocking contract (matches onboard.sh): loop wiring must never abort
+    # the bootstrap. bootstrap runs `set -e` but NOT `pipefail`, so the
+    # pipeline's status is sed's (≈always 0) and the installer's exit is already
+    # discarded; `|| true` is defensive belt-and-suspenders. The installer's
+    # diagnostics still print through the pipe, and a silently-failed wiring is
+    # caught downstream by doctor §23 + the canary's audit-dir/marker assertions.
+    BROOMVA_WORKSPACE="$WORKSPACE_DIR" bash "$RCS_INSTALLER" 2>&1 | sed 's/^/  /' || true
+  fi
 fi
 
 # ─── Phase 4: bstack doctor verification ───────────────────────────────────
