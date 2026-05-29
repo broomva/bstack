@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.23.0 — 2026-05-29
+
+### fix+feat: gitignore-aware, public-repo-aware, non-destructive bootstrap (issue #67)
+
+Found dogfooding v0.22.0 on existing real repos (stimulus, broomva.tech): bootstrap is built for *fresh* workspaces and did two unsafe things + lacked one needed capability on repos with their own hooks/CI/gitignore.
+
+### Fixed
+
+- **`install-l3-stability.sh` no longer clobbers a TRACKED `.githooks/pre-commit`.** On a repo with a committed pre-commit (e.g. broomva.tech's multimedia-asset validator), bootstrap overwrote it with the bstack L3 rate-gate hook — moving the original to `.pre-commit.local` — **even when `core.hooksPath` ≠ `.githooks`**, so the bstack hook never even fired. Now: if the hook is git-tracked, **skip + warn** (the committed hook is authoritative; `--force` still allows the move-aside). An *untracked* hook is still preserved as `.pre-commit.local` as before.
+
+### Added
+
+- **`bootstrap.sh` Phase 2.6 — gitignore reconciliation + public-repo advisory.** Reconciles `.gitignore` against the committable-vs-machine-local manifest:
+  - machine-local telemetry (`.control/audit/*.jsonl`) → auto-added to `.gitignore` if missing.
+  - committable substrate (`.control/arcs.yaml`, `rcs-parameters.toml`, `policy.yaml`) → **warns** if gitignored (a coverage gap — the loop won't survive a fresh clone), never auto-un-ignores (publishing a maybe-private file is the human's call).
+  - **public-repo advisory** (via `gh repo view --json visibility`, graceful if absent): on a PUBLIC remote, surfaces that scaffolded governance is committable-and-public so the operator reviews for secrets before pushing.
+- `tests/gitignore-aware-bootstrap.test.sh` — 5 assertions covering both fixes (tracked-hook preserved, untracked-hook sidecar still works, audit-glob added, committable-ignored warning). 5/5.
+
+### Notes
+
+- Additive + non-blocking: Phase 2.6 skips gracefully on a non-git workspace; canary 14/14 unaffected.
+- The manual handling on stimulus (#1811) + broomva.tech (broomva.tech#211) is the spec this automates.
+- `VERSION` 0.22.0 → 0.23.0.
+
 ## 0.22.0 — 2026-05-28
 
 ### feat: wire the RCS control loop on `bstack bootstrap` (close the split-brain)
