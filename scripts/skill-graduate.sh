@@ -184,6 +184,9 @@ should_exclude() {
     esac
     local ex
     for ex in "${EXTRA_EXCLUDES[@]:-}"; do
+        # SC2053 intentional: $ex is a glob pattern from EXTRA_EXCLUDES; quoting
+        # the RHS would defeat the pattern match this exclude check depends on.
+        # shellcheck disable=SC2053
         [ -n "$ex" ] && [[ "$item" == $ex ]] && return 0
     done
     return 1
