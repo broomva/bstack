@@ -8,6 +8,11 @@ __pycache__/
 # macOS
 .DS_Store
 
-# Local-only scaffolding produced by `bstack doctor` against a non-bstack workspace
+# Local-only scaffolding produced by running bstack (bootstrap/doctor/install-rcs)
+# against the bstack repo itself (self-dogfood). These are generated artifacts,
+# never committed — the bstack source repo uses .github/workflows/ci.yml and
+# .git/hooks, not the L3 stability workflow / .githooks the installer scaffolds.
 .control/
 .claude/
+.githooks/
+.github/workflows/l3-stability.yml
