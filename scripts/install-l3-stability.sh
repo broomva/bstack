@@ -83,22 +83,37 @@ do_install "$BSTACK_REPO/assets/templates/rcs-parameters.toml.template" \
 
 # ── 2. Deploy git pre-commit hook ───────────────────────────────────────────
 echo "2. Git pre-commit hook (.githooks/pre-commit)"
-# If a pre-commit hook exists and is NOT ours, preserve it as .local sidecar
 PRE_COMMIT="$WORKSPACE/.githooks/pre-commit"
-if [ -f "$PRE_COMMIT" ] && [ "$FORCE" = "0" ]; then
-    if grep -q "L3 rate gate" "$PRE_COMMIT" 2>/dev/null; then
-        echo "  [skip] .githooks/pre-commit (already bstack L3 hook)"
-        SKIPPED=$((SKIPPED + 1))
-    else
-        # Preserve existing as .local
-        echo "  [info] existing .githooks/pre-commit found — preserving as .pre-commit.local"
-        if [ "$DRY_RUN" = "0" ]; then
-            mv "$PRE_COMMIT" "$WORKSPACE/.githooks/pre-commit.local"
-            chmod +x "$WORKSPACE/.githooks/pre-commit.local"
-        fi
-        do_install "$BSTACK_REPO/assets/templates/githook-pre-commit-l3-rate.sh.template" \
-                   "$PRE_COMMIT" "755"
+if [ -f "$PRE_COMMIT" ] && grep -q "L3 rate gate" "$PRE_COMMIT" 2>/dev/null; then
+    # Already our hook — idempotent no-op (even under --force; reinstalling
+    # identical content is pointless).
+    echo "  [skip] .githooks/pre-commit (already bstack L3 hook)"
+    SKIPPED=$((SKIPPED + 1))
+elif [ -f "$PRE_COMMIT" ] \
+     && (cd "$WORKSPACE" && git ls-files --error-unmatch .githooks/pre-commit >/dev/null 2>&1) \
+     && [ "$FORCE" = "0" ]; then
+    # TRACKED hook + no --force → NEVER clobber. The committed pre-commit is
+    # authoritative; overwriting it destroys a tracked file. Skip + warn.
+    # (Bug found dogfooding on a repo with a tracked .githooks/pre-commit: the
+    # repo's own hook got replaced even though core.hooksPath ≠ .githooks, so
+    # the L3 hook never fired.) --force routes to the preserve-then-install
+    # branch below, which DOES create the .pre-commit.local sidecar.
+    echo "  [skip] .githooks/pre-commit is git-tracked — preserving the repo's committed hook"
+    echo "         → to add the L3 rate gate: chain it into the existing hook by hand,"
+    echo "           or re-run with --force (which preserves the current hook as .pre-commit.local)."
+    SKIPPED=$((SKIPPED + 1))
+elif [ -f "$PRE_COMMIT" ]; then
+    # An existing hook we are about to replace: either an UNTRACKED local hook,
+    # or a tracked hook under --force. Preserve it as .pre-commit.local first,
+    # then install ours — so the sidecar recovery path the warning promises
+    # actually exists in both cases.
+    echo "  [info] existing .githooks/pre-commit found — preserving as .pre-commit.local"
+    if [ "$DRY_RUN" = "0" ]; then
+        mv "$PRE_COMMIT" "$WORKSPACE/.githooks/pre-commit.local"
+        chmod +x "$WORKSPACE/.githooks/pre-commit.local"
     fi
+    do_install "$BSTACK_REPO/assets/templates/githook-pre-commit-l3-rate.sh.template" \
+               "$PRE_COMMIT" "755"
 else
     do_install "$BSTACK_REPO/assets/templates/githook-pre-commit-l3-rate.sh.template" \
                "$PRE_COMMIT" "755"

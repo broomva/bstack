@@ -154,6 +154,62 @@ scaffold_governance_file ".control/arcs.yaml" "arcs.yaml.template"
 
 echo "  scaffolded: $scaffolded | preserved: $preserved"
 
+# ─── Phase 2.6: gitignore reconciliation + public-repo advisory ────────────
+# The control loop splits into two file classes (the committable-vs-machine-local
+# manifest). This phase reconciles .gitignore against it:
+#   - machine-local (paths/telemetry) → MUST be ignored; add if missing.
+#   - committable (team-wide, no secrets) → must NOT be ignored; WARN (don't
+#     auto-un-ignore — un-ignoring a deliberately-private file is the human's call).
+# Plus a public-repo advisory: on a public remote, committable governance becomes
+# public — surface that, don't decide it silently. Never blocks.
+echo ""
+echo "=== bstack gitignore reconciliation ==="
+GITIGNORE="$WORKSPACE_DIR/.gitignore"
+# Machine-local globs that should always be ignored (absolute paths / runtime telemetry).
+LOCAL_GLOBS=(".control/audit/*.jsonl")
+# Committable substrate the loop needs — warn if a repo ignores these.
+COMMITTABLE_FILES=(".control/arcs.yaml" ".control/rcs-parameters.toml" ".control/policy.yaml")
+
+if command -v git >/dev/null 2>&1 && git -C "$WORKSPACE_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+    # Ensure machine-local globs are ignored (append the missing ones).
+    _added_ignores=()
+    for glob in "${LOCAL_GLOBS[@]}"; do
+        if ! git -C "$WORKSPACE_DIR" check-ignore -q "${glob/\*/x}" 2>/dev/null; then
+            _added_ignores+=("$glob")
+        fi
+    done
+    if [ ${#_added_ignores[@]} -gt 0 ]; then
+        {
+            echo ""
+            echo "# bstack RCS control-loop machine-local telemetry (not committed)"
+            for g in "${_added_ignores[@]}"; do echo "$g"; done
+        } >> "$GITIGNORE"
+        echo "  [ignore] added ${#_added_ignores[@]} machine-local glob(s) to .gitignore: ${_added_ignores[*]}"
+    else
+        echo "  [ok] machine-local telemetry already ignored"
+    fi
+
+    # Warn if committable substrate is ignored (coverage gap — the loop needs these committed).
+    for f in "${COMMITTABLE_FILES[@]}"; do
+        if git -C "$WORKSPACE_DIR" check-ignore -q "$f" 2>/dev/null; then
+            echo "  [warn] $f is gitignored but the loop needs it committed."
+            echo "         → un-ignore it (after confirming it carries no secrets) so the control loop survives a fresh clone."
+        fi
+    done
+
+    # Public-repo advisory (graceful if gh missing or not a GitHub remote).
+    if command -v gh >/dev/null 2>&1; then
+        _vis=$(gh repo view --json visibility --jq .visibility 2>/dev/null || true)
+        if [ "$_vis" = "PUBLIC" ]; then
+            echo "  [advisory] PUBLIC repo — scaffolded governance (CLAUDE.md/AGENTS.md/METALAYER.md/.control/*)"
+            echo "             is committable and will be PUBLIC. Review for secrets before pushing; keep"
+            echo "             machine-local files (.claude/settings.json, .control/audit/*.jsonl) ignored."
+        fi
+    fi
+else
+    echo "  [skip] not a git repo — gitignore reconciliation skipped"
+fi
+
 # ─── Phase 3: wire missing hooks into .claude/settings.json ────────────────
 # Idempotent: never overwrites existing hook entries. Only adds missing ones.
 echo ""
