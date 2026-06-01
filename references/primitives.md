@@ -112,13 +112,16 @@ Each primitive carries a **short name** for use in agent prose. When referencing
 
 ### P6 Reflexive Trigger Rule (binding on every agent)
 
-Bookkeeping is a reflex, not a request. Agents must invoke `bookkeeping.py run` without being prompted in any of these situations:
+Bookkeeping — and knowledge capture generally — is a reflex, not a request, **and never a question**. Agents must invoke `bookkeeping.py run` and file graph-worthy material without being prompted in any of these situations:
 
 1. Before committing a feature or page that *reads from* the graph (anything consuming `~/.config/bookkeeping/status.json`, `research/entities/`, or a `public/data/bookkeeping.json` snapshot — the data must be fresh at commit time).
 2. Before committing a synced snapshot to a public surface (e.g., `apps/*/public/data/bookkeeping.json`).
 3. At the close of any substantial work session that produced graph-relevant material (new names, decisions, concepts, partnerships, threads, design debates).
+4. The moment a session surfaces a discrete graph-worthy item (a decision, a name, a discovered tool/person/paper, a recurring pattern, a typed relation inferred between entities) — file it proactively (entity page, `related:` edge, or synthesis note) **as part of the work** and report what you filed in one line. Do **not** ask the user whether to record it.
 
-Mental checklist before declaring graph-dependent work done: *Did this session produce material that belongs in the graph? Does my feature read graph state? Am I about to commit a snapshot?* — yes to any → run bookkeeping.
+**Never a question.** The interrogative form — *"do you want me to create an entry / file this into the knowledge graph?"* — is forbidden. Capture is the default action, not an opt-in the user approves; the agent files first and reports after, so the user vetoes *after* (cheap: `git revert` / delete the entity), never gates *before*. Surfacing graph-worthy material and then deferring its capture to a user yes/no is the **permission-to-document anti-pattern**: knowledge that waits for permission is knowledge lost. Two bounds keep this safe rather than spammy: (a) capture is gated by the Nous score (proactive ≠ indiscriminate — low-confidence inferences go to a synthesis note, not a committed entity); (b) an explicit standing instruction not to record, or material the agent treats as sensitive/private, overrides the default — the *only* withholding cases, and the agent withholds *silently* (never by asking permission to document).
+
+Mental checklist before declaring graph-dependent work done: *Did this session produce material that belongs in the graph? Does my feature read graph state? Am I about to commit a snapshot?* — yes to any → file it / run bookkeeping, without asking.
 
 ---
 

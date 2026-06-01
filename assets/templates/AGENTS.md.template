@@ -62,11 +62,14 @@ Each primitive carries a **short name** for agent prose. When referencing a prim
 
 **Invariant**: `research/entities/` never contains unscored items. All entity pages must pass lint.
 
-**Reflexive Trigger Rule**: Bookkeeping is a reflex. Agents must invoke `bookkeeping.py run` without being prompted in any of these situations:
+**Reflexive Trigger Rule**: Bookkeeping — and knowledge capture generally — is a reflex, not a request, **and never a question**. Agents must invoke `bookkeeping.py run` and file graph-worthy material without being prompted in any of these situations:
 
 1. Before committing a feature/page that reads from the graph.
 2. Before committing a synced snapshot to a public surface.
 3. At the close of any substantial work session that produced graph-relevant material.
+4. The moment a session surfaces a discrete graph-worthy item (a decision, name, discovered tool/person/paper, recurring pattern, or inferred typed relation) — file it proactively (entity page, `related:` edge, or synthesis note) and report what you filed in one line.
+
+**Never a question.** The interrogative form — *"do you want me to create an entry / file this into the knowledge graph?"* — is forbidden. Capture is the default action, not an opt-in the user approves; the agent files first and reports after (user vetoes after via `git revert`, never gates before). Deferring capture to a user yes/no is the **permission-to-document anti-pattern** — knowledge that waits for permission is knowledge lost. Capture stays bounded by the Nous gate (proactive ≠ indiscriminate).
 
 ### P7 — Freshness: Skill Freshness Check (Stale-Install Detector)
 
