@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.23.1 — 2026-06-01
+
+### docs: P6 reflex tightening — "a reflex, not a request, **and never a question**" (BRO-1288)
+
+Closes the **permission-to-document anti-pattern**: agents asking *"do you want me to create an entry / file this into the knowledge graph?"* instead of capturing autonomously.
+
+The P6 reflex already said *"a reflex, not a request"* but every statement framed it as *run the `bookkeeping run` pipeline unprompted* — about the pipeline **invocation**, never the **capture act**. So an agent could honor "not a request" (didn't wait to be told to run the pipeline) while still gating *creation of the artifact* behind a user yes/no. Adds the third clause — **"and never a question"** — closing the interrogative leak.
+
+Statement-tightening of P6, **not** a new primitive (same failure-mode class; respects the L3 stability budget λ₃≈0.006; mirrors the 2026-05-29 PR-comment-resolution decision). **Primitive count stays 20.**
+
+### Changed
+
+- **`references/primitives.md`** — P6 Reflexive Trigger Rule: opening tightened to *"a reflex, not a request, and never a question"*; new trigger #4 (file discrete graph-worthy items proactively); a **"Never a question"** paragraph naming the permission-to-document anti-pattern. Capture stays bounded by the Nous gate (proactive ≠ indiscriminate).
+- **`assets/templates/AGENTS.md.template`** — same P6 reflex tightening, so the rule propagates into every workspace `bstack` bootstraps.
+- **`assets/templates/CLAUDE.md.template`** — P6 primitive-table invariant cell now states the proactive-capture rule.
+
+### Notes
+
+- No CLI/behavior change; documentation/governance only. Canary unaffected.
+- `VERSION` 0.23.0 → 0.23.1.
+- Workspace-side surfaces (`CLAUDE.md` §Ritual-vs-Substance, `AGENTS.md`, entity `pattern/proactive-documentation.md`, bstack-engine ledger) ship in the workspace repo PR for BRO-1288.
+
 ## 0.23.0 — 2026-05-29
 
 ### fix+feat: gitignore-aware, public-repo-aware, non-destructive bootstrap (issue #67)

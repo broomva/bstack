@@ -19,7 +19,7 @@ Each primitive carries a **short name** for agent prose. When referencing a prim
 | P3 | **Tickets** — Linear Tickets | Every work unit tracked Backlog → Done | No significant work without a ticket |
 | P4 | **Pipeline** — PR Pipeline | Branch → PR → CI → merge → deploy | Never merge with failing checks |
 | P5 | **Fanout** — Parallel Agents | Concurrent isolated agents via worktrees | No shared mutable file writes |
-| P6 | **Bookkeeping** — Knowledge Bookkeeping | `bookkeeping run` → score → promote → entity pages → synthesize | `research/entities/` never contains unscored items |
+| P6 | **Bookkeeping** — Knowledge Bookkeeping | `bookkeeping run` → score → promote → entity pages → synthesize | `research/entities/` never contains unscored items; knowledge capture is a reflex, not a request, and **never a question** (file proactively, report after — never ask permission to document) |
 | P7 | **Freshness** — Skill Freshness Check | SessionStart hook → reports stale-skill nudge if last update check ≥ 7d ago | Never blocks; closes silent-rot bug for `npx skills add` snapshots |
 | P8 | **Janitor** — Branch + Worktree Janitor | `make janitor` → detects squash-merged branches + dead worktrees, removes safely | Default `--dry-run`; never touches protected branches |
 | P9 | **Wait** — Productive Wait (`broomva/p9` skill) | wait-queue drains while a blocking operation runs (PR CI is the reference impl: `gh pr checks --watch` via `run_in_background` → classifier + evaluator self-heal). For non-PR waits (push-triggered deploys, builds), do a single direct check after kicking off next-priority work. | Never `sleep` on a blocking wait; merge defers to control metalayer |
