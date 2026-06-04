@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.23.2 — 2026-06-04
+
+### docs: README sync to current contract + bench surfaced + P11 cross-reference (BRO-1376)
+
+Closes a documentation-reconciliation gap surfaced by a post-ship audit of BRO-1205 (bench MVP) + BRO-1211 (Databricks live mode). The canonical surfaces (SKILL.md, `references/provider-standards.md`, CHANGELOG, spec, KG research entities) were already current; the public `README.md` was frozen at the P11 era and violated the CLAUDE.md Self-Documenting Standards rule #3 (counts must match SKILL.md as the authoritative source). `bstack doctor` does not lint the README, so the rot was not CI-enforced.
+
+- **CHANGED** `README.md` — synced to the current contract:
+  - "Eleven irreducible primitives" → **twenty**; primitive table extended P1–P11 → full **P1–P20** (wording from SKILL.md's enforcement table).
+  - "28 curated skills" → **30** (matches SKILL.md authoritative count) across intro, Stack-layers header, and bootstrap description.
+  - Commands section: was six (bootstrap/doctor/repair/status/validate/revamp); now also documents **`bench`**, `wave`, `crystallize`, `metrics`, `skills` under an "Orchestration & observability" subsection. `bench` links to `references/provider-standards.md`.
+  - Reasoning-enforced primitive set corrected (P6, P9–P20) vs mechanism-enforced (P1, P2, P4, P5, P7, P8); closing narrative "eleven" → "twenty".
+- **CHANGED** `references/primitives.md` — P11 Empirical Feedback Loop section now lists `bstack bench` as the dedicated P11 *measurement* substrate (table row + paragraph), cross-referencing `provider-standards.md` and the bench spec.
+- **NOTE** Out of scope (separate audit): the deeper skill-count reconciliation (SKILL.md says 30 curated; `companion-skills.yaml` lists 65 full roster incl. optional). README follows SKILL.md per rule #1.
+
+No code, no behavior change. Companion KG artifact (workspace repo, not this repo): `research/entities/pattern/openai-compatible-provider-abstraction.md` documents the provider-abstraction architecture that BRO-1211 introduced.
+
 ## 0.23.1 — 2026-06-01
 
 ### docs: P6 reflex tightening — "a reflex, not a request, **and never a question**" (BRO-1288)

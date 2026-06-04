@@ -1,6 +1,6 @@
 # bstack — The Broomva Stack
 
-**A portable harness metalayer for AI-native development.** Eleven irreducible primitives plus 28 curated agent skills that turn any agent-driven workspace into a self-operating system.
+**A portable harness metalayer for AI-native development.** Twenty irreducible primitives plus 30 curated agent skills that turn any agent-driven workspace into a self-operating system.
 
 ```bash
 npx skills add broomva/bstack
@@ -8,7 +8,7 @@ npx skills add broomva/bstack
 
 This installs the meta-skill that bootstraps the full stack — primitive contract, governance scaffolding, hooks, and skill roster — into your project. Works with Claude Code, Codex, Gemini CLI, OpenCode, and the [50+ agent CLIs the skills ecosystem supports](https://github.com/vercel-labs/skills).
 
-## The eleven primitives
+## The twenty primitives
 
 Each primitive closes one specific failure mode that drifts into entropy in unsupervised agent sessions.
 
@@ -25,12 +25,21 @@ Each primitive closes one specific failure mode that drifts into entropy in unsu
 | **P9** | Productive Wait (`broomva/p9` skill) | sleep-on-wait dead time (CI, deploys, builds — PR CI is the canonical case) |
 | **P10** | Worktree Hygiene Discipline | dirty trees and orphan worktrees compounding across sessions |
 | **P11** | Empirical Feedback Loop | shipping code that compiles but doesn't actually work when exercised |
+| **P12** | Persistent Loop Discipline (`broomva/persist` skill) | long-horizon work decaying as the context window rots |
+| **P13** | Dream Cycle Discipline | tier-crossing consolidation corrupting upper-tier rules without replay (the *shadow dream* failure mode) |
+| **P14** | Dependency-Chain Reasoning Discipline | "think deeply through chain of dependencies" becoming ritual without concrete upstream/downstream enumeration |
+| **P15** | State-Snapshot Before Action | plans built on stale state (uncommitted work, in-flight PRs, stale deploys) |
+| **P16** | Crystallization Discipline (the Bstack Engine) | recurring valuable patterns living only in the user's head, never promoted to infrastructure |
+| **P17** | Lens-Routed Request Articulation (`broomva/role-x` skill) | flat-dispatch fan-out failing to load the domain context that shapes the correct quality bar |
+| **P18** | Format-Follows-Audience Discipline | markdown-by-default regardless of audience; specs nobody reads; ASCII pseudo-diagrams where SVG-in-HTML belongs |
+| **P19** | Orchestration-Mechanism Selection Discipline | implicit between-reflex handoffs ("continue please"); wrong mechanism for the work shape |
+| **P20** | Cross-Model Adversarial Review Gate (`broomva/cross-review` skill) | same-model echo chamber; writer self-validates own work; AI slop merged with no independent evaluator |
 
 Full reference with reflexive trigger rules, invariants, and cohesion narrative: **[references/primitives.md](references/primitives.md)**.
 
-P6, P9, P10, and P11 are *reasoning-enforced* — they bind every agent through reflexive trigger rules in `AGENTS.md` rather than through hooks. The other primitives are mechanism-enforced through hooks, scripts, or CI gates.
+The majority of primitives (P6, P9–P20) are *reasoning-enforced* — they bind every agent through reflexive trigger rules in `AGENTS.md` rather than through hooks. The mechanism-enforced primitives (P1, P2, P4, P5, P7, P8) run through hooks, scripts, or CI gates.
 
-## Stack layers (28 skills)
+## Stack layers (30 skills)
 
 | Layer | Skills | Purpose |
 |-------|--------|---------|
@@ -44,14 +53,22 @@ P6, P9, P10, and P11 are *reasoning-enforced* — they bind every agent through 
 
 ## Commands
 
-Once installed, the skill exposes six commands:
+Once installed, the skill exposes these commands:
 
-- **`bootstrap`** — install all 28 skills + scaffold governance (CLAUDE.md, AGENTS.md, `.control/policy.yaml`) + wire hooks + run doctor
+**Lifecycle**
+- **`bootstrap`** — install all 30 skills + scaffold governance (CLAUDE.md, AGENTS.md, `.control/policy.yaml`) + wire hooks + run doctor
 - **`doctor`** — verify primitive contract compliance (always exits 0 by default; `--strict` for CI)
 - **`repair`** — apply targeted fixes for gaps the doctor surfaces
 - **`status`** — show installed-vs-missing skills + harness health
 - **`validate`** — check skill SKILL.md frontmatter health
 - **`revamp`** — full reconfiguration: force-reinstall + rewire + re-doctor
+
+**Orchestration & observability**
+- **`wave`** — Orchestrate (P19) parallel sub-phase dispatch: one background agent + worktree per plan file
+- **`crystallize`** — Crystallize (P16) rule-of-three candidate detector over conversation logs
+- **`metrics`** — setpoint measurement pipeline (collect / observe)
+- **`skills`** — companion-skill roster manager (install / status / list)
+- **`bench`** — Empirical (P11) skill-evolution benchmark: two-phase cold→warm runs with pluggable LLM providers (OpenAI-compatible; Databricks Gateway built in). See [references/provider-standards.md](references/provider-standards.md).
 
 ## Governance & stability
 
@@ -72,7 +89,7 @@ Interactive catalog with descriptions, install commands, and layer diagrams:
 
 **[broomva.tech/skills](https://broomva.tech/skills)**
 
-The narrative on what bstack is, why it exists, and what the eleven primitives buy you in measured throughput is at:
+The narrative on what bstack is, why it exists, and what the twenty primitives buy you in measured throughput is at:
 
 **[broomva.tech/writing/bstack-portable-harness-metalayer](https://broomva.tech/writing/bstack-portable-harness-metalayer)**
 

@@ -216,8 +216,11 @@ Mental checklist: *Did I decide on a worktree? Is `git status` clean? Are merged
 | Deploy verification | Vercel preview URL → screenshot via `gstack` | After CI green, before claiming "shipped" |
 | Audio diff | TTS comparison | When narration changes |
 | Multi-agent observation | Parallel `Agent` calls watching different surfaces | Long-running work |
+| Skill-evolution benchmark | `bstack bench` — two-phase cold→warm runs + rubric/LLM-judge over pluggable providers | Measuring whether a skill/primitive change actually cuts tokens or lifts quality |
 
 The agent picks the right subset, runs as parallel watchers via `run_in_background` where applicable, and **captures evidence** — not just exit codes, but actual screenshots, log snippets, response bodies, browser transcripts.
+
+`bstack bench` is the dedicated P11 *measurement* substrate: it turns "this primitive reduces token waste" from an assertion into a falsifiable number. Two-phase protocol (Phase 1 cold skills → snapshot → Phase 2 warm), pluggable LLM providers via the OpenAI-compatible contract (Databricks Gateway built in), and a P20-enforced judge-model-isolation gate. See [provider-standards.md](provider-standards.md) and `specs/bench-skill-evolution.md`.
 
 **Invariant**: before claiming any work *complete*, the agent has interacted with the deployed/running version (or stated explicitly why interaction wasn't possible). The interaction is captured (screenshot, log snippet, video clip, terminal output, response body) and surfaced in the response. *Reasoning isn't validation; interaction is.*
 
