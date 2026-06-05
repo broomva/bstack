@@ -113,6 +113,105 @@ PYEOF
     fi
 }
 
+# ── Development Philosophy backfill (helper) ───────────────────────────────
+# Inserts the `## Development Philosophy` section (templated since bstack 0.24.0)
+# into an existing AGENTS.md / CLAUDE.md that predates it. The scaffold is
+# idempotent-never-overwrite, so existing workspaces never receive newly-
+# templated *content* — only freshly-created files. This closes that gap for
+# this one section.
+#
+# Idempotent + non-destructive: skips if the section is already present; skips
+# with a warning if the insertion anchor (`## Bstack Core Automation
+# Primitives`) is absent (never guesses a location). Extracts the section
+# verbatim from the template (heading → Primitives anchor, exclusive) via files
+# only — no shell interpolation of the content — so backticks/quotes/pipes in
+# the section survive intact.
+backfill_philosophy_section() {
+    local target="$1"        # AGENTS.md | CLAUDE.md
+    local template="$2"      # AGENTS.md.template | CLAUDE.md.template
+    local tgt="$WORKSPACE_DIR/$target"
+    local tpl="$TEMPLATES_DIR/$template"
+    local anchor="## Bstack Core Automation Primitives"
+    # Anchor regex tolerant of trailing whitespace + CRLF (a realistic line-ending
+    # variant must NOT become a silent no-op). The CR is stripped before matching.
+    local anchor_re='^## Bstack Core Automation Primitives[[:space:]]*$'
+    [ -f "$tgt" ] || return                                   # nothing to backfill into
+    [ -f "$tpl" ] || { echo "  [skip] $target philosophy — template missing: $template"; return; }
+    grep -qE "^## Development Philosophy" "$tgt" && return     # already present (idempotent)
+    # BOTH source and destination must carry the anchor: the template needs it to
+    # *bound* the extracted section (else awk runs heading→EOF and over-copies);
+    # the target needs it to *locate* the insertion point. grep the files directly
+    # — `[[:space:]]*$` absorbs trailing spaces AND a trailing CR, so this is
+    # CRLF-tolerant without a `tr | grep -q` pipe (which under `set -o pipefail`
+    # fails spuriously: grep -q closes the pipe early on a match → SIGPIPE on tr).
+    if ! grep -qE "$anchor_re" "$tpl"; then
+        echo "  [skip] $target philosophy — template lacks anchor; cannot bound section"
+        return
+    fi
+    if ! grep -qE "$anchor_re" "$tgt"; then
+        echo "  [skip] $target philosophy — anchor '$anchor' not found (insert manually)"
+        return
+    fi
+    if [ "$DRY_RUN" = "1" ]; then
+        echo "  [dry-run] would backfill Development Philosophy into $target"
+        return
+    fi
+    if ! confirm "Backfill Development Philosophy section into $target?"; then
+        echo "  [skip] $target philosophy (declined)"
+        return
+    fi
+    local secfile tmp
+    secfile="$(mktemp)" || { echo "  [skip] $target philosophy — mktemp failed"; return; }
+    # Section block = template lines from the heading up to (excluding) the anchor.
+    # CR is stripped first so the awk delimiters match on a CRLF template too.
+    # The pipeline's exit status is checked (under `set -o pipefail` a tr/awk/write
+    # failure surfaces here); it is SIGPIPE-safe because awk drains all of tr's
+    # output (no early close). The content checks below catch a partial/empty write.
+    if ! tr -d '\r' < "$tpl" | awk '
+        /^## Development Philosophy$/                    { f=1 }
+        /^## Bstack Core Automation Primitives[ \t]*$/   { f=0 }
+        f { print }
+    ' > "$secfile"; then
+        echo "  [skip] $target philosophy — extraction pipeline failed"
+        rm -f "$secfile"
+        return
+    fi
+    if [ ! -s "$secfile" ] || ! grep -qE "^## Development Philosophy" "$secfile"; then
+        echo "  [skip] $target philosophy — could not extract section from $template"
+        rm -f "$secfile"
+        return
+    fi
+    tmp="$(mktemp)" || { echo "  [skip] $target philosophy — mktemp failed"; rm -f "$secfile"; return; }
+    # Insert the section immediately before the first anchor line (CR/space-tolerant).
+    if ! awk -v secfile="$secfile" '
+        function isanchor(s) { sub(/\r$/, "", s); sub(/[ \t]+$/, "", s); return (s == "## Bstack Core Automation Primitives") }
+        isanchor($0) && !done {
+            while ((getline line < secfile) > 0) print line
+            close(secfile)
+            done = 1
+        }
+        { print }
+    ' "$tgt" > "$tmp"; then
+        echo "  [skip] $target philosophy — insertion failed (awk)"
+        rm -f "$secfile" "$tmp"
+        return
+    fi
+    rm -f "$secfile"
+    # Verify the section actually landed BEFORE committing the write. Guards the
+    # probe-vs-inserter mismatch and any awk no-op — never report a false [fix].
+    if ! grep -qE "^## Development Philosophy" "$tmp"; then
+        echo "  [skip] $target philosophy — anchor not matched during insert (no change)"
+        rm -f "$tmp"
+        return
+    fi
+    if ! mv "$tmp" "$tgt"; then
+        echo "  [skip] $target philosophy — could not write $target"
+        rm -f "$tmp"
+        return
+    fi
+    echo "  [fix] backfilled Development Philosophy into $target"
+}
+
 # ── Hook re-wire (helper) ──────────────────────────────────────────────────
 # Idempotently merges every hook in assets/templates/settings.json.snippet
 # into $WORKSPACE_DIR/.claude/settings.json. Existing entries are never
@@ -222,6 +321,13 @@ GAPS_OUTPUT=$(BROOMVA_WORKSPACE="$WORKSPACE_DIR" bash "$DOCTOR" --quiet 2>&1 || 
 if [ "$DRY_RUN" = "1" ] || confirm "Merge missing hooks from settings.json.snippet into .claude/settings.json?"; then
     merge_hooks_into_settings
 fi
+
+# Backfill templated-since-0.24.0 governance content that even a *compliant*
+# (pre-0.24.0) workspace can lack — run BEFORE the compliance early-exit, like
+# the hook merge above, because the Development Philosophy advisory is not a
+# GAP (so doctor still reports "fully bstack-compliant" without it).
+backfill_philosophy_section "AGENTS.md" "AGENTS.md.template"
+backfill_philosophy_section "CLAUDE.md" "CLAUDE.md.template"
 
 if echo "$GAPS_OUTPUT" | grep -q "fully bstack-compliant"; then
     echo "  ✓ no other gaps — workspace already bstack-compliant"

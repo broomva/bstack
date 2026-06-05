@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.25.0 — 2026-06-05
+
+### feat: doctor advisory + repair backfill for the Development Philosophy section (BRO-1409)
+
+Follow-up to 0.24.0 (BRO-1406). The scaffold's idempotent-never-overwrite policy means newly-templated *content* never reaches existing workspaces — so the Development Philosophy section shipped only to new installs. This closes that gap for the section: `bstack doctor` surfaces it and `bstack repair` backfills it.
+
+### Changed
+
+- **`scripts/doctor.sh`** — new §4b advisory: if `AGENTS.md` lacks `## Development Philosophy`, print an `[info]` nudge to run `bstack repair`. Informational only — a pre-0.24.0 workspace legitimately lacks it; it is **not** a GAP and does **not** fail `--strict` (mirrors the §12 Pillars / §13 dogfood convention).
+- **`scripts/repair.sh`** — new `backfill_philosophy_section()`: extracts the section verbatim from the template (heading → `## Bstack Core Automation Primitives` anchor, exclusive) via files only (no shell interpolation of content), and inserts it before the target's own anchor line in both `AGENTS.md` and `CLAUDE.md`. Runs before the "fully bstack-compliant" early-exit (same pattern as the hook merge), since the advisory is not a GAP. Idempotent (skips if present) and non-destructive (insert-only; skips with a warning if the anchor is absent). Honors `--dry-run` / `--apply-all`.
+- **`tests/philosophy-backfill.test.sh`** — new: backfill + position + content-integrity + idempotency + `--dry-run` + missing-anchor + doctor-advisory (13 assertions).
+- **`references/new-workspace-flow.md`** — documents §4b + the repair backfill.
+
+### Notes
+
+- Primitive count unchanged (**20**). Governance-substrate tooling, not a P-row.
+- Backfill targets *content* gaps the never-overwrite scaffold skips — a general pattern (the hook merge does the same for `.claude/settings.json`).
+- `VERSION` 0.24.0 → 0.25.0.
+
 ## 0.24.0 — 2026-06-05
 
 ### feat: scaffold a Development Philosophy section into AGENTS.md/CLAUDE.md on install (BRO-1406)

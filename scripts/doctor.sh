@@ -202,6 +202,22 @@ if [ -f "$AGENTS" ]; then
     done
 fi
 
+# ── 4b. AGENTS.md Development Philosophy section (advisory, backfillable) ────
+# Templated since bstack 0.24.0. A workspace bootstrapped before then
+# legitimately lacks it — this is NOT a contract violation (the P1-P20 contract
+# is unchanged), so it is reported as an informational advisory only: never a
+# GAP, never fails --strict (mirrors §12 Pillars / §13 dogfood convention).
+# `bstack repair` backfills it from the template.
+section "4b. AGENTS.md Development Philosophy (advisory)"
+if [ -f "$AGENTS" ]; then
+    if grep -qE "^## Development Philosophy" "$AGENTS"; then
+        ok "AGENTS.md has Development Philosophy section"
+    else
+        echo "  [info] AGENTS.md has no Development Philosophy section (templated since 0.24.0)"
+        echo "         → backfill: bstack repair  (informational; not a gap, does not fail --strict)"
+    fi
+fi
+
 # ── 5. policy.yaml required blocks ──────────────────────────────────────────
 section "5. .control/policy.yaml blocks"
 POL="$WORKSPACE/.control/policy.yaml"
