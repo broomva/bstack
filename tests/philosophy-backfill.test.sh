@@ -149,40 +149,75 @@ else
 fi
 rm -rf "$WS"
 
-# ── Test 5: doctor advisory present/absent + --strict safety ─────────────────
+# ── Test 5: doctor advisory present/absent + advisory contributes 0 gaps ─────
 echo ""
-echo "Test 5: doctor advisory + --strict does not fail on missing section"
+echo "Test 5: doctor advisory is informational (does not change the GAP total / --strict)"
+gap_lines() { grep -c "^  \[gap\]" 2>/dev/null || true; }   # count [gap] lines from stdin
 WS="$(mktemp -d)"; mkdir -p "$WS/.control"
-: > "$WS/.control/policy.yaml"
+cp "$BSTACK_REPO/assets/templates/policy.yaml.template" "$WS/.control/policy.yaml"
 cp "$BSTACK_REPO/assets/templates/CLAUDE.md.template" "$WS/CLAUDE.md"
-# AGENTS.md WITHOUT the section (strip it from the template between the heading
-# and the Primitives anchor).
+
+# (a) WITHOUT the section: strip it from the template (heading → anchor, exclusive).
 awk '/^## Development Philosophy$/{skip=1} /^## Bstack Core Automation Primitives$/{skip=0} !skip' \
     "$BSTACK_REPO/assets/templates/AGENTS.md.template" > "$WS/AGENTS.md"
+DOC_WITHOUT="$(BROOMVA_WORKSPACE="$WS" bash "$DOCTOR_SH" 2>&1)"
+BROOMVA_WORKSPACE="$WS" bash "$DOCTOR_SH" --strict >/dev/null 2>&1; STRICT_WITHOUT=$?
+GAPS_WITHOUT="$(echo "$DOC_WITHOUT" | gap_lines)"
 
-DOC_OUT="$(BROOMVA_WORKSPACE="$WS" bash "$DOCTOR_SH" 2>&1)"
-if echo "$DOC_OUT" | grep -q "no Development Philosophy section"; then
+if echo "$DOC_WITHOUT" | grep -q "no Development Philosophy section"; then
     assert_pass "doctor surfaces the advisory when section absent"
 else
     assert_fail "doctor did not surface the advisory"
 fi
-
-# --strict must still exit 0 for *this* (advisory is not a GAP). Other gaps may
-# exist in this minimal workspace, so we assert specifically that the advisory
-# itself is phrased as informational (not a [gap] line).
-if echo "$DOC_OUT" | grep -q "\[gap\].*Development Philosophy"; then
+if echo "$DOC_WITHOUT" | grep -q "\[gap\].*Development Philosophy"; then
     assert_fail "advisory was emitted as a GAP (should be informational)"
 else
-    assert_pass "advisory is informational, not a GAP"
+    assert_pass "advisory is informational, not a [gap] line"
 fi
 
-# With the section present, doctor reports ok.
+# (b) WITH the section: identical workspace except the section is present.
 cp "$BSTACK_REPO/assets/templates/AGENTS.md.template" "$WS/AGENTS.md"
-DOC_OUT2="$(BROOMVA_WORKSPACE="$WS" bash "$DOCTOR_SH" 2>&1)"
-if echo "$DOC_OUT2" | grep -q "AGENTS.md has Development Philosophy section"; then
+DOC_WITH="$(BROOMVA_WORKSPACE="$WS" bash "$DOCTOR_SH" 2>&1)"
+BROOMVA_WORKSPACE="$WS" bash "$DOCTOR_SH" --strict >/dev/null 2>&1; STRICT_WITH=$?
+GAPS_WITH="$(echo "$DOC_WITH" | gap_lines)"
+
+if echo "$DOC_WITH" | grep -q "AGENTS.md has Development Philosophy section"; then
     assert_pass "doctor reports ok when section present"
 else
     assert_fail "doctor did not report ok with section present"
+fi
+# The contract: presence/absence of the section changes neither the GAP total
+# nor the --strict exit code. This actually runs --strict and asserts on it.
+if [ "$GAPS_WITHOUT" = "$GAPS_WITH" ]; then
+    assert_pass "GAP total identical with/without section ($GAPS_WITH) — advisory adds 0 gaps"
+else
+    assert_fail "advisory changed the GAP total (without=$GAPS_WITHOUT with=$GAPS_WITH)"
+fi
+if [ "$STRICT_WITHOUT" = "$STRICT_WITH" ]; then
+    assert_pass "--strict exit code identical with/without section (=$STRICT_WITH)"
+else
+    assert_fail "--strict exit changed (without=$STRICT_WITHOUT with=$STRICT_WITH)"
+fi
+rm -rf "$WS"
+
+# ── Test 6: CRLF / trailing-space anchor must not be a silent no-op ──────────
+echo ""
+echo "Test 6: anchor with CRLF + trailing space is matched (no false [fix])"
+WS="$(mktemp -d)"
+# AGENTS.md whose Primitives anchor carries trailing spaces + CRLF line endings.
+printf '# demo\r\n\r\n## Self-Meta\r\n\r\n## Bstack Core Automation Primitives   \r\n\r\n(table)\r\n' > "$WS/AGENTS.md"
+printf '# demo\n\n## Identity\n\n## Bstack Core Automation Primitives\n\n(table)\n' > "$WS/CLAUDE.md"
+BF_OUT="$(BROOMVA_WORKSPACE="$WS" bash "$REPAIR_SH" --apply-all 2>&1)"
+if [ "$(phil_count "$WS/AGENTS.md")" -eq 1 ]; then
+    assert_pass "CRLF/trailing-space anchor matched — section inserted"
+else
+    assert_fail "CRLF/trailing-space anchor NOT matched (count=$(phil_count "$WS/AGENTS.md"))"
+fi
+# And it must not have claimed a fix it didn't make on AGENTS.md.
+if echo "$BF_OUT" | grep -q "backfilled Development Philosophy into AGENTS.md"; then
+    assert_pass "reported [fix] only because it really inserted"
+else
+    assert_fail "did not report the AGENTS.md fix"
 fi
 rm -rf "$WS"
 

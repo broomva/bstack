@@ -132,10 +132,23 @@ backfill_philosophy_section() {
     local tgt="$WORKSPACE_DIR/$target"
     local tpl="$TEMPLATES_DIR/$template"
     local anchor="## Bstack Core Automation Primitives"
+    # Anchor regex tolerant of trailing whitespace + CRLF (a realistic line-ending
+    # variant must NOT become a silent no-op). The CR is stripped before matching.
+    local anchor_re='^## Bstack Core Automation Primitives[[:space:]]*$'
     [ -f "$tgt" ] || return                                   # nothing to backfill into
     [ -f "$tpl" ] || { echo "  [skip] $target philosophy — template missing: $template"; return; }
     grep -qE "^## Development Philosophy" "$tgt" && return     # already present (idempotent)
-    if ! grep -qF "$anchor" "$tgt"; then
+    # BOTH source and destination must carry the anchor: the template needs it to
+    # *bound* the extracted section (else awk runs heading→EOF and over-copies);
+    # the target needs it to *locate* the insertion point. grep the files directly
+    # — `[[:space:]]*$` absorbs trailing spaces AND a trailing CR, so this is
+    # CRLF-tolerant without a `tr | grep -q` pipe (which under `set -o pipefail`
+    # fails spuriously: grep -q closes the pipe early on a match → SIGPIPE on tr).
+    if ! grep -qE "$anchor_re" "$tpl"; then
+        echo "  [skip] $target philosophy — template lacks anchor; cannot bound section"
+        return
+    fi
+    if ! grep -qE "$anchor_re" "$tgt"; then
         echo "  [skip] $target philosophy — anchor '$anchor' not found (insert manually)"
         return
     fi
@@ -148,25 +161,47 @@ backfill_philosophy_section() {
         return
     fi
     local secfile tmp
-    secfile="$(mktemp)"
+    secfile="$(mktemp)" || { echo "  [skip] $target philosophy — mktemp failed"; return; }
     # Section block = template lines from the heading up to (excluding) the anchor.
-    awk '/^## Development Philosophy$/{f=1} /^## Bstack Core Automation Primitives$/{f=0} f' "$tpl" > "$secfile"
-    if [ ! -s "$secfile" ]; then
+    # CR is stripped first so the awk delimiters match on a CRLF template too.
+    tr -d '\r' < "$tpl" | awk '
+        /^## Development Philosophy$/                    { f=1 }
+        /^## Bstack Core Automation Primitives[ \t]*$/   { f=0 }
+        f { print }
+    ' > "$secfile"
+    if [ ! -s "$secfile" ] || ! grep -qE "^## Development Philosophy" "$secfile"; then
         echo "  [skip] $target philosophy — could not extract section from $template"
         rm -f "$secfile"
         return
     fi
-    tmp="$(mktemp)"
-    # Insert the section immediately before the first anchor line in the target.
-    awk -v anchor="$anchor" -v secfile="$secfile" '
-        $0 == anchor && !done {
+    tmp="$(mktemp)" || { echo "  [skip] $target philosophy — mktemp failed"; rm -f "$secfile"; return; }
+    # Insert the section immediately before the first anchor line (CR/space-tolerant).
+    if ! awk -v secfile="$secfile" '
+        function isanchor(s) { sub(/\r$/, "", s); sub(/[ \t]+$/, "", s); return (s == "## Bstack Core Automation Primitives") }
+        isanchor($0) && !done {
             while ((getline line < secfile) > 0) print line
             close(secfile)
             done = 1
         }
         { print }
-    ' "$tgt" > "$tmp" && mv "$tmp" "$tgt"
+    ' "$tgt" > "$tmp"; then
+        echo "  [skip] $target philosophy — insertion failed (awk)"
+        rm -f "$secfile" "$tmp"
+        return
+    fi
     rm -f "$secfile"
+    # Verify the section actually landed BEFORE committing the write. Guards the
+    # probe-vs-inserter mismatch and any awk no-op — never report a false [fix].
+    if ! grep -qE "^## Development Philosophy" "$tmp"; then
+        echo "  [skip] $target philosophy — anchor not matched during insert (no change)"
+        rm -f "$tmp"
+        return
+    fi
+    if ! mv "$tmp" "$tgt"; then
+        echo "  [skip] $target philosophy — could not write $target"
+        rm -f "$tmp"
+        return
+    fi
     echo "  [fix] backfilled Development Philosophy into $target"
 }
 
