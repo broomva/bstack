@@ -17,7 +17,7 @@ Both paths wire the RCS control loop. `bootstrap.sh` scaffolds governance files 
 
 | Path | Source | Purpose |
 |---|---|---|
-| `CLAUDE.md`, `AGENTS.md`, `.control/policy.yaml`, `METALAYER.md` | `assets/templates/*.template` | Governance substrate (P-row primitives table, reflexive trigger rules, gate config) |
+| `CLAUDE.md`, `AGENTS.md`, `.control/policy.yaml`, `METALAYER.md` | `assets/templates/*.template` | Governance substrate (Development Philosophy section, P-row primitives table, reflexive trigger rules, gate config). The philosophy section states the four guiding principles (think-before-coding · simplicity-first · surgical-changes · goal-driven) and backs each with the primitive(s) that hold it, so downstream development inherits the *intent* behind the primitives — and the user can extend it with project-specific principles. |
 | `.control/arcs.yaml` | `arcs.yaml.template` | Closure-contract arcs — the workspace's own editable loop definitions (5-tuple). Scaffolded by `bootstrap.sh` Phase 2 |
 | `.githooks/pre-commit` | `githook-pre-commit-l3-rate.sh.template` | G1 — blocks `git commit` over τ_a₃ L3 commit rate (bypassable with `--no-verify`) |
 | `.github/workflows/l3-stability.yml` | `gh-workflow-l3-stability.yml.template` | G2 — runs `compute-lambda` + `l3-rate-gate` on every PR touching L3 paths; comments verdict |

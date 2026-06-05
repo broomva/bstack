@@ -6,6 +6,27 @@ This file IS the control harness for agents operating in this workspace. Reading
 
 **If you are an agent reading this**: you are part of a self-improving system. Your session will be captured, indexed, and used to improve future agents. The bstack consciousness substrate is always active.
 
+## Development Philosophy
+
+Before the twenty primitives below — which are the *mechanism* — these four principles are the *intent*. They are widely-recognized engineering disciplines, articulated sharply in Andrej Karpathy's observations on where LLM-assisted coding goes wrong. bstack's contribution is to make each one **machine-checkable** instead of a hopeful instruction: a principle that lives only as prose decays into ritual — acknowledged in passing, then ignored. Each principle below therefore names the primitive(s) that back it.
+
+| Principle | What it means | Failure it prevents | Backed by |
+|---|---|---|---|
+| **1. Think before coding** | Surface assumptions and trade-offs *before* writing. Trace what the change depends on and what depends on it. Ask only for what you genuinely cannot derive from the repo. | Hidden assumptions — confidently building the wrong thing. | **Dep-Chain (P14)** + **Snapshot (P15)** |
+| **2. Simplicity first** | Deliver the minimal change that solves the actual problem. No speculative features, no premature abstraction, no scope creep. | Overcomplication — code nobody asked for, harder to maintain than the problem warranted. | **Cross-Review (P20)** anti-slop gate |
+| **3. Surgical changes** | Change only what the task requires. Match the surrounding style. Don't refactor tangentially or reformat untouched lines. | Unintended edits — diffs that touch more than they should, hiding the real change and breaking unrelated things. | **Dep-Chain (P14)** (enumerating what's touched bounds the change surface) + **Cross-Review (P20)** (flags tangential edits / scope creep) |
+| **4. Goal-driven execution** | Define measurable success criteria up front, then loop — building and *verifying by interaction* — until they are met. | No verifiable "done" — work that *looks* complete without evidence it works. | **Empirical (P11)** (interaction evidence for "done") + **Orchestrate (P19)** (the verify-until-met loop) |
+
+**Enforcement strength varies by principle, and that is the point.** P14/P15 are *hard predicates* — a checker reads the response for a dependency enumeration / state snapshot. P20 is an *independent-judgment* gate that blocks a merge below threshold. Both beat prose, because in neither case is the agent the one grading itself — but only the first kind is a literal yes/no predicate. The goal is to push each principle as far down the gradient toward a hard predicate as it will go.
+
+The binding rule across all four:
+
+> **A discipline that recurs as a phrase must map to a concrete, machine-checkable behavior — or it does not count as discipline.**
+
+"Think deeply", "follow best practices", "keep it simple", "make sure it works" are *rituals* until they produce a concrete artifact: a dependency enumeration, a state snapshot, a minimal diff, an interaction receipt. The primitives below are how this workspace converts each principle from intention into enforced behavior.
+
+**This philosophy is yours to extend.** Add project-specific principles to this section so every agent and contributor inherits them by default; the primitives stay the enforcement layer beneath whatever principles you declare here.
+
 ## Bstack Core Automation Primitives
 
 This workspace is governed by the **bstack** primitive contract — twenty irreducible building blocks. All are always active. Run `bstack doctor` to verify compliance.

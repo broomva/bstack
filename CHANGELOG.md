@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.24.0 — 2026-06-05
+
+### feat: scaffold a Development Philosophy section into AGENTS.md/CLAUDE.md on install (BRO-1406)
+
+`bstack bootstrap` now scaffolds a **Development Philosophy** section into a new workspace's `AGENTS.md` (full section) and `CLAUDE.md` (anchor). It states four guiding principles — Think Before Coding · Simplicity First · Surgical Changes · Goal-Driven Execution — and backs each with the primitive(s) that hold it: Think→P14+P15, Simplicity→P20, Surgical→P14+P20, Goal-Driven→P11+P19, with a note that enforcement strength varies (P14/P15 are hard predicates; P20 is a judgment gate). Previously the scaffold deployed the primitive contract without this stated intent.
+
+### Changed
+
+- **`assets/templates/AGENTS.md.template`** — new `## Development Philosophy` section between Self-Meta Definition and the primitives table (so the *why* frames the *how*): 4-principle → backing-primitive table, the binding Ritual-vs-Substance rule, and an explicit invitation to extend it with project-specific principles.
+- **`assets/templates/CLAUDE.md.template`** — short philosophy anchor after Identity, linking to `AGENTS.md#development-philosophy`.
+- **`references/new-workspace-flow.md`** — deployed-files table note updated to describe the philosophy section.
+
+### Notes
+
+- **No code change** in `scripts/bootstrap.sh` — Phase 2 (`scaffold_governance_file`) copies whatever the templates hold. Idempotent-never-overwrite: **new** installs get the section automatically; existing workspaces are unaffected (backfill is the deferred `bstack doctor`/`repair` next step).
+- **Not a new primitive.** Primitive count stays **20**. This is governance-substrate content, not a P-row — respects the L3 stability budget (λ₃≈0.006).
+- Companion KG artifact (workspace repo, not this repo): `research/entities/tool/karpathy-claude-md-guidelines.md` documents the lineage + the principle→primitive mapping.
+- `VERSION` 0.23.2 → 0.24.0.
+- **Deferred:** (1) a `bstack doctor` check that lints for the section (makes it contract-enforced + lets `repair` backfill existing workspaces); (2) dogfood into bstack's own root governance + `~/broomva`.
+
 ## 0.23.2 — 2026-06-04
 
 ### docs: README sync to current contract + bench surfaced + P11 cross-reference (BRO-1376)
