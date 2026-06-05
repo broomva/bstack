@@ -132,6 +132,40 @@ if echo "$out" | grep -q '## Budget' && echo "$out" | grep -q '## Duplicates' \
    && echo "$out" | grep -q '## Registry coherence' && echo "$out" | grep -q '## Unused' \
    && echo "$out" | grep -q '## Roots'; then ap "$t"; else af "$t"; fi
 
+# ── --require-tests gate (skillify step 3, BRO-1411) — separate hermetic root ──
+FX2="$(mktemp -d)"; RT_ROOT="$FX2/skills"; mkdir -p "$RT_ROOT"
+# md-only skill → exempt (no deterministic code)
+make_skill "$RT_ROOT" docs docs "Markdown only, no code."
+# code, no tests → must be flagged untested
+make_skill "$RT_ROOT" coded coded "Script but no tests."
+mkdir -p "$RT_ROOT/coded/scripts"; echo 'print(1)' > "$RT_ROOT/coded/scripts/run.py"
+# code + tests → must NOT be flagged
+make_skill "$RT_ROOT" tested tested "Script and test."
+mkdir -p "$RT_ROOT/tested/scripts" "$RT_ROOT/tested/tests"
+echo 'print(1)' > "$RT_ROOT/tested/scripts/run.py"
+echo 'def test_x(): assert True' > "$RT_ROOT/tested/tests/test_run.py"
+
+rt_audit() { BSTACK_AUDIT_ROOTS="$RT_ROOT" BSTACK_DIR="$FAKE_BSTACK" python3 "$AUDIT_PY" "$@"; }
+
+# T10: untested detection — only 'coded' flagged; 'tested' + md-only 'docs' exempt
+t="untested detection (coded flagged; tested + md-only exempt)"
+if rt_audit --json --no-logs 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); u={x['name'] for x in d['untested']}; assert u=={'coded'}, u" 2>/dev/null; then ap "$t"; else af "$t"; fi
+
+# T11: --require-tests gate exits 1 when an untested skill exists
+t="--require-tests exits 1 on untested skill"
+rt_audit --no-logs --require-tests >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 1 ]; then ap "$t"; else af "$t" "rc=$rc (expected 1)"; fi
+
+# T12: without --require-tests, untested report is informational (exit 0)
+t="untested report informational without --require-tests (exit 0)"
+rt_audit --no-logs >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 0 ]; then ap "$t"; else af "$t" "rc=$rc (expected 0)"; fi
+
+# T13: human report includes the Untested section
+t="human report includes '## Untested deterministic code'"
+if rt_audit --no-logs 2>/dev/null | grep -q '## Untested deterministic code'; then ap "$t"; else af "$t"; fi
+
+rm -rf "$FX2"
 rm -rf "$FX"
 echo ""
 echo "── results: $PASS passed, $FAIL failed ────────────────────────────"

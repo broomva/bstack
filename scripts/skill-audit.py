@@ -13,13 +13,15 @@ skill-cleaner (steipete/agent-scripts) algorithm for Claude Code + bstack:
   - usage-trace scanning of Claude Code logs (~/.claude/projects/**/*.jsonl)
     rather than Codex's ~/.codex/history.jsonl
 
-Five reports:
+Six reports (1-5 are hygiene; 6 is correctness — skillify step 3, BRO-1411):
   1. Budget        — total description token cost vs ceiling (default 2% of 1M)
   2. Duplicates    — same skill name across >1 distinct realpath
   3. Registry      — coherence between companion-skills.yaml and installed roots
                      (registered-but-missing, installed-but-unregistered)
   4. Unused        — no invocation trace in recent session logs (--months window)
   5. Roots         — skill count per root
+  6. Untested      — ships deterministic code (scripts/*.{py,sh,mjs,js,ts}) but no
+                     tests; informational by default, a hard gate under --require-tests
 
 Env overrides (test fixtures):
   BSTACK_DIR                  bstack root (for default companion-skills.yaml)
@@ -152,6 +154,63 @@ def scan_usage(skill_names: list[str], log_glob: str, months: int) -> set[str]:
     return used
 
 
+CODE_EXTS = {".py", ".sh", ".mjs", ".js", ".ts"}
+
+
+def _is_test_file(name: str) -> bool:
+    return (
+        name.startswith("test_")
+        or name.endswith("_test.py")
+        or name.endswith("_test.sh")
+        or ".test." in name
+    )
+
+
+def _skill_code_files(skill_dir: Path) -> list[str]:
+    """Deterministic code files a skill ships (scripts/ + skill root, one level).
+
+    Test files are excluded — a skill whose only code IS its tests has nothing
+    left to test. Markdown-only skills return [] and are exempt from the gate.
+    """
+    found: list[str] = []
+    for sub in ("scripts", ""):
+        d = skill_dir / sub if sub else skill_dir
+        if not d.is_dir():
+            continue
+        for f in sorted(d.iterdir()):
+            if f.is_file() and f.suffix in CODE_EXTS and not _is_test_file(f.name):
+                found.append(str(f.relative_to(skill_dir)))
+    return found
+
+
+def _skill_has_tests(skill_dir: Path) -> bool:
+    """True if the skill ships any test file (tests/ or scripts/ or root, one level)."""
+    for sub in ("tests", "scripts", ""):
+        d = skill_dir / sub if sub else skill_dir
+        if not d.is_dir():
+            continue
+        for f in d.iterdir():
+            if f.is_file() and _is_test_file(f.name):
+                return True
+    return False
+
+
+def detect_untested(skills: list[dict]) -> list[dict]:
+    """Skills shipping deterministic code but no tests — skillify step 3 (BRO-1411).
+
+    The correctness counterpart to the hygiene reports: `audit` already covers
+    budget/duplicate/reachability; this covers "the script the skill runs is
+    actually tested". Markdown-only skills are exempt (no deterministic code).
+    """
+    out: list[dict] = []
+    for s in skills:
+        skill_dir = Path(s["path"]).parent
+        code = _skill_code_files(skill_dir)
+        if code and not _skill_has_tests(skill_dir):
+            out.append({"name": s["name"], "dir": str(skill_dir), "code_files": code})
+    return sorted(out, key=lambda x: x["name"])
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(prog="bstack skills audit", description="Skill registry audit.")
     ap.add_argument("--roots", action="append", default=[], help="Additional skill root (repeatable).")
@@ -159,6 +218,8 @@ def main() -> int:
     ap.add_argument("--chars-per-token", type=int, default=4, help="Token-cost divisor (default 4).")
     ap.add_argument("--months", type=int, default=3, help="Usage-trace window for unused detection (default 3).")
     ap.add_argument("--no-logs", action="store_true", help="Skip usage-trace scanning.")
+    ap.add_argument("--require-tests", action="store_true",
+                    help="Gate: exit 1 if any skill ships deterministic code without tests (skillify step 3, BRO-1411).")
     ap.add_argument("--json", action="store_true", help="Machine-readable output.")
     args = ap.parse_args()
 
@@ -204,6 +265,10 @@ def main() -> int:
     for s in skills:
         root_counts[s["root"]] = root_counts.get(s["root"], 0) + 1
 
+    # 6. Untested deterministic code (skillify step 3 — correctness, not hygiene)
+    untested = detect_untested(skills)
+    gate_failed = bool(args.require_tests and untested)
+
     if args.json:
         print(json.dumps({
             "total_skills": len(skills),
@@ -213,8 +278,10 @@ def main() -> int:
             "registry": {"registered_missing": registered_missing, "installed_unregistered": installed_unregistered},
             "unused": unused,
             "roots": root_counts,
+            "untested": untested,
+            "require_tests": bool(args.require_tests),
         }, indent=2))
-        return 0
+        return 1 if gate_failed else 0
 
     # Human report
     print("# Skill Audit Report\n")
@@ -243,10 +310,21 @@ def main() -> int:
         print(f"## Unused (no trace in last {args.months}mo)  [{len(unused)}]")
         print(f"  {', '.join(unused) or '(none — all skills show recent usage)'}")
     print()
+    print(f"## Untested deterministic code  [{len(untested)}]")
+    if untested:
+        for u in untested:
+            print(f"  {u['name']}: {', '.join(u['code_files'])}")
+        if args.require_tests:
+            print(f"  ⚠ {len(untested)} skill(s) ship code without tests — --require-tests gate FAILED")
+        else:
+            print("  (informational — pass --require-tests to gate CI on this)")
+    else:
+        print("  (none — every skill with deterministic code ships tests)")
+    print()
     print("## Roots")
     for r, c in sorted(root_counts.items()):
         print(f"  {c:3d}  {r}")
-    return 0
+    return 1 if gate_failed else 0
 
 
 if __name__ == "__main__":
