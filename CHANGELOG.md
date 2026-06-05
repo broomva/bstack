@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.26.0 — 2026-06-05
+
+### feat: `bstack skills audit --require-tests` — skill-script test gate (BRO-1411 slice 2)
+
+Adds a sixth audit report and a CI-gateable correctness check. Origin: `/checkit` on Garry Tan's "skillify" essay surfaced that bstack's `skills audit` covers *hygiene* (budget / duplicate / reachability) but never *correctness* of the skill layer. This is skillify step 3 ("unit tests on the deterministic code"), built bstack-native — the correctness counterpart to the existing five hygiene reports.
+
+### Added
+
+- **`scripts/skill-audit.py` report 6 — "Untested deterministic code".** Flags any skill that ships deterministic code (`scripts/*.{py,sh,mjs,js,ts}` or root-level) but no test file (`test_*.py`, `*_test.py`, `*.test.*`, `test_*.sh`). Markdown-only skills are exempt (nothing to test); test files themselves don't count as code. Always shown (informational); `--json` gains an `untested` array.
+- **`--require-tests` flag** — escalates the report to a hard gate: exit 1 if any skill ships untested code. Default (no flag) stays exit 0, so the report informs without breaking existing callers; CI opts into enforcement.
+- **`tests/skill-audit.test.sh`** — 4 new hermetic cases (T10–T13): untested detection (code-no-tests flagged, code+tests and md-only exempt), gate exit-1 under `--require-tests`, informational exit-0 without it, human-report section presence. 14/14 pass.
+
+### Notes
+
+- First real run over `~/broomva/skills`: **19 skills ship deterministic code with no tests** (the bstack analog of GBrain's "6/40 dark skills" finding). Informational today; backlog candidates for test backfill.
+- Primitive count unchanged (**20**). Widens the `bstack skills audit` surface — not a new P-row. The `bstack-engine` "Skill-QA discipline" ledger row (workspace KG) tracks promotion eligibility.
+- `VERSION` 0.25.0 → 0.26.0.
+
 ## 0.25.0 — 2026-06-05
 
 ### feat: doctor advisory + repair backfill for the Development Philosophy section (BRO-1409)
