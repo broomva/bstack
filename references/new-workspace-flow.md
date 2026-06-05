@@ -36,7 +36,7 @@ Both paths wire the RCS control loop. `bootstrap.sh` scaffolds governance files 
 
 ## What `bstack doctor` reports
 
-§1–§13 v0.13.0 substrate checks · §14 RCS λ compute + drift · §15 G0/G1/G2 wiring · §16 L0 tool-call audit summary · §17 L1 reflex compliance · §18 L2 promotion throttle · §19 multi-layer composite health (`L0=stable L1=stable L2=stable L3=stable` form) · §20 federation registry · §21 closure-contract arcs · §22 composite-ω drift trend · **§23 control-loop closure verdict** — the single "is the loop wired + connected + running?" answer (substrate-absent / wired-but-idle / wired+running+closing). New workspaces show §16–§18 + §23 as informational ("no audit log yet" / "wired but idle") until first events fire; For CI lanes that must fail on an idle loop, run `BSTACK_LOOP_STRICT=1 doctor.sh --strict` — `BSTACK_LOOP_STRICT=1` records the gap but only `--strict` changes the exit code, so **both** are required.
+§1–§13 v0.13.0 substrate checks · **§4b Development Philosophy advisory** (informational since 0.25.0 — flags an AGENTS.md that predates the 0.24.0 templated section; backfill with `bstack repair`; never a GAP, never fails `--strict`) · §14 RCS λ compute + drift · §15 G0/G1/G2 wiring · §16 L0 tool-call audit summary · §17 L1 reflex compliance · §18 L2 promotion throttle · §19 multi-layer composite health (`L0=stable L1=stable L2=stable L3=stable` form) · §20 federation registry · §21 closure-contract arcs · §22 composite-ω drift trend · **§23 control-loop closure verdict** — the single "is the loop wired + connected + running?" answer (substrate-absent / wired-but-idle / wired+running+closing). New workspaces show §16–§18 + §23 as informational ("no audit log yet" / "wired but idle") until first events fire; For CI lanes that must fail on an idle loop, run `BSTACK_LOOP_STRICT=1 doctor.sh --strict` — `BSTACK_LOOP_STRICT=1` records the gap but only `--strict` changes the exit code, so **both** are required.
 
 ## Common gotchas
 
@@ -49,6 +49,8 @@ Both paths wire the RCS control loop. `bootstrap.sh` scaffolds governance files 
 ## Re-run + repair
 
 `bstack onboard --force` redoes the wizard. `bstack repair` detects missing pieces (G0/G1/G2 hooks, audit dir, parameters.toml) and re-runs the relevant installer. Both are idempotent — existing files are preserved unless `--force` is passed; settings.json merges are structurally idempotent via `_bstack_primitive` markers.
+
+`bstack repair` also **backfills newly-templated *content*** into existing governance files where the scaffold's never-overwrite policy would otherwise skip it. Since 0.25.0 it inserts the `## Development Philosophy` section (templated in 0.24.0) into a pre-existing `AGENTS.md`/`CLAUDE.md` — runs before the "fully bstack-compliant" early-exit (like the hook merge), is insert-only + idempotent, and skips with a warning if the `## Bstack Core Automation Primitives` anchor is absent (never guesses a location).
 
 ## See also
 

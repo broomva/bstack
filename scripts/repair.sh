@@ -113,6 +113,63 @@ PYEOF
     fi
 }
 
+# ── Development Philosophy backfill (helper) ───────────────────────────────
+# Inserts the `## Development Philosophy` section (templated since bstack 0.24.0)
+# into an existing AGENTS.md / CLAUDE.md that predates it. The scaffold is
+# idempotent-never-overwrite, so existing workspaces never receive newly-
+# templated *content* — only freshly-created files. This closes that gap for
+# this one section.
+#
+# Idempotent + non-destructive: skips if the section is already present; skips
+# with a warning if the insertion anchor (`## Bstack Core Automation
+# Primitives`) is absent (never guesses a location). Extracts the section
+# verbatim from the template (heading → Primitives anchor, exclusive) via files
+# only — no shell interpolation of the content — so backticks/quotes/pipes in
+# the section survive intact.
+backfill_philosophy_section() {
+    local target="$1"        # AGENTS.md | CLAUDE.md
+    local template="$2"      # AGENTS.md.template | CLAUDE.md.template
+    local tgt="$WORKSPACE_DIR/$target"
+    local tpl="$TEMPLATES_DIR/$template"
+    local anchor="## Bstack Core Automation Primitives"
+    [ -f "$tgt" ] || return                                   # nothing to backfill into
+    [ -f "$tpl" ] || { echo "  [skip] $target philosophy — template missing: $template"; return; }
+    grep -qE "^## Development Philosophy" "$tgt" && return     # already present (idempotent)
+    if ! grep -qF "$anchor" "$tgt"; then
+        echo "  [skip] $target philosophy — anchor '$anchor' not found (insert manually)"
+        return
+    fi
+    if [ "$DRY_RUN" = "1" ]; then
+        echo "  [dry-run] would backfill Development Philosophy into $target"
+        return
+    fi
+    if ! confirm "Backfill Development Philosophy section into $target?"; then
+        echo "  [skip] $target philosophy (declined)"
+        return
+    fi
+    local secfile tmp
+    secfile="$(mktemp)"
+    # Section block = template lines from the heading up to (excluding) the anchor.
+    awk '/^## Development Philosophy$/{f=1} /^## Bstack Core Automation Primitives$/{f=0} f' "$tpl" > "$secfile"
+    if [ ! -s "$secfile" ]; then
+        echo "  [skip] $target philosophy — could not extract section from $template"
+        rm -f "$secfile"
+        return
+    fi
+    tmp="$(mktemp)"
+    # Insert the section immediately before the first anchor line in the target.
+    awk -v anchor="$anchor" -v secfile="$secfile" '
+        $0 == anchor && !done {
+            while ((getline line < secfile) > 0) print line
+            close(secfile)
+            done = 1
+        }
+        { print }
+    ' "$tgt" > "$tmp" && mv "$tmp" "$tgt"
+    rm -f "$secfile"
+    echo "  [fix] backfilled Development Philosophy into $target"
+}
+
 # ── Hook re-wire (helper) ──────────────────────────────────────────────────
 # Idempotently merges every hook in assets/templates/settings.json.snippet
 # into $WORKSPACE_DIR/.claude/settings.json. Existing entries are never
@@ -222,6 +279,13 @@ GAPS_OUTPUT=$(BROOMVA_WORKSPACE="$WORKSPACE_DIR" bash "$DOCTOR" --quiet 2>&1 || 
 if [ "$DRY_RUN" = "1" ] || confirm "Merge missing hooks from settings.json.snippet into .claude/settings.json?"; then
     merge_hooks_into_settings
 fi
+
+# Backfill templated-since-0.24.0 governance content that even a *compliant*
+# (pre-0.24.0) workspace can lack — run BEFORE the compliance early-exit, like
+# the hook merge above, because the Development Philosophy advisory is not a
+# GAP (so doctor still reports "fully bstack-compliant" without it).
+backfill_philosophy_section "AGENTS.md" "AGENTS.md.template"
+backfill_philosophy_section "CLAUDE.md" "CLAUDE.md.template"
 
 if echo "$GAPS_OUTPUT" | grep -q "fully bstack-compliant"; then
     echo "  ✓ no other gaps — workspace already bstack-compliant"
