@@ -4,6 +4,10 @@
 
 This workspace is governed by **bstack** — twenty irreducible primitives (P1–P20) that turn an agent-driven workspace into a self-operating system. The full primitive contract lives in [AGENTS.md](AGENTS.md). Run `bstack doctor` to verify compliance.
 
+## Development Philosophy
+
+Four principles govern every change in this workspace — *think before coding · simplicity first · surgical changes · goal-driven execution*. They are universal good-engineering disciplines (sharpened by Andrej Karpathy's observations on LLM coding pitfalls); bstack's job is to make each one **machine-checkable** rather than a hopeful instruction, because a discipline that lives only as prose decays into ritual. Each principle is bound to the primitive that enforces it — see [AGENTS.md § Development Philosophy](AGENTS.md#development-philosophy) for the full mapping. Extend it with project-specific principles; the primitives stay the enforcement layer.
+
 ## Bstack Core Automation Primitives
 
 Twenty irreducible building blocks that make this workspace self-operating. All are always active. Full specification in `AGENTS.md`.

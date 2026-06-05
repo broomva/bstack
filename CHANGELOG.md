@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.24.0 — 2026-06-05
+
+### feat: scaffold a Development Philosophy section into AGENTS.md/CLAUDE.md on install (BRO-1406)
+
+Every newly-bootstrapped workspace now inherits an explicit **Development Philosophy** — four guiding principles, each bound to the primitive that enforces it — so downstream development follows the philosophy by default, cohesively with the user's own project. Previously the scaffold deployed the *mechanism* (the P1–P20 contract) without the *intent*; new repos got the "how" with no "why".
+
+The four principles (Think Before Coding · Simplicity First · Surgical Changes · Goal-Driven Execution) are the disciplines every good engineer recognizes, articulated sharply in Andrej Karpathy's observations on LLM-coding pitfalls (the most-starred public CLAUDE.md, `multica-ai/andrej-karpathy-skills`, ~168k★, proves the demand). bstack's contribution is the **Ritual-vs-Substance** rule: a principle that lives only as prose decays into ritual, so each is bound to its enforcing primitive — Think→Dep-Chain (P14)+Snapshot (P15); Simplicity→Cross-Review (P20); Surgical→Hygiene (P10); Goal-Driven→Empirical (P11)+Orchestrate (P19).
+
+### Changed
+
+- **`assets/templates/AGENTS.md.template`** — new `## Development Philosophy` section between Self-Meta Definition and the primitives table (so the *why* frames the *how*): 4-principle → enforcing-primitive table, the binding Ritual-vs-Substance rule, and an explicit invitation to extend it with project-specific principles.
+- **`assets/templates/CLAUDE.md.template`** — short philosophy anchor after Identity, linking to `AGENTS.md#development-philosophy`.
+- **`references/new-workspace-flow.md`** — deployed-files table note updated to describe the philosophy section.
+
+### Notes
+
+- **No code change** in `scripts/bootstrap.sh` — Phase 2 (`scaffold_governance_file`) copies whatever the templates hold. Idempotent-never-overwrite: **new** installs get the section automatically; existing workspaces are unaffected (backfill is the deferred `bstack doctor`/`repair` next step).
+- **Not a new primitive.** Primitive count stays **20**. This is governance-substrate content, not a P-row — respects the L3 stability budget (λ₃≈0.006).
+- Companion KG artifact (workspace repo, not this repo): `research/entities/tool/karpathy-claude-md-guidelines.md` documents the lineage + the principle→primitive mapping.
+- `VERSION` 0.23.2 → 0.24.0.
+- **Deferred:** (1) a `bstack doctor` check that lints for the section (makes it contract-enforced + lets `repair` backfill existing workspaces); (2) dogfood into bstack's own root governance + `~/broomva`.
+
 ## 0.23.2 — 2026-06-04
 
 ### docs: README sync to current contract + bench surfaced + P11 cross-reference (BRO-1376)
