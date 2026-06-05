@@ -164,11 +164,18 @@ backfill_philosophy_section() {
     secfile="$(mktemp)" || { echo "  [skip] $target philosophy — mktemp failed"; return; }
     # Section block = template lines from the heading up to (excluding) the anchor.
     # CR is stripped first so the awk delimiters match on a CRLF template too.
-    tr -d '\r' < "$tpl" | awk '
+    # The pipeline's exit status is checked (under `set -o pipefail` a tr/awk/write
+    # failure surfaces here); it is SIGPIPE-safe because awk drains all of tr's
+    # output (no early close). The content checks below catch a partial/empty write.
+    if ! tr -d '\r' < "$tpl" | awk '
         /^## Development Philosophy$/                    { f=1 }
         /^## Bstack Core Automation Primitives[ \t]*$/   { f=0 }
         f { print }
-    ' > "$secfile"
+    ' > "$secfile"; then
+        echo "  [skip] $target philosophy — extraction pipeline failed"
+        rm -f "$secfile"
+        return
+    fi
     if [ ! -s "$secfile" ] || ! grep -qE "^## Development Philosophy" "$secfile"; then
         echo "  [skip] $target philosophy — could not extract section from $template"
         rm -f "$secfile"
