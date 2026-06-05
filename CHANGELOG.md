@@ -4,9 +4,9 @@
 
 ### feat: scaffold a Development Philosophy section into AGENTS.md/CLAUDE.md on install (BRO-1406)
 
-Every newly-bootstrapped workspace now inherits an explicit **Development Philosophy** — four guiding principles, each bound to the primitive that enforces it — so downstream development follows the philosophy by default, cohesively with the user's own project. Previously the scaffold deployed the *mechanism* (the P1–P20 contract) without the *intent*; new repos got the "how" with no "why".
+Every newly-bootstrapped workspace now inherits an explicit **Development Philosophy** — four guiding principles, each backed by the primitive(s) that hold it — so downstream development follows the philosophy by default, alongside the user's own project conventions. Previously the scaffold deployed the primitive contract (the *mechanism*) without its stated *intent*.
 
-The four principles (Think Before Coding · Simplicity First · Surgical Changes · Goal-Driven Execution) are the disciplines every good engineer recognizes, articulated sharply in Andrej Karpathy's observations on LLM-coding pitfalls (the most-starred public CLAUDE.md, `multica-ai/andrej-karpathy-skills`, ~168k★, proves the demand). bstack's contribution is the **Ritual-vs-Substance** rule: a principle that lives only as prose decays into ritual, so each is bound to its enforcing primitive — Think→Dep-Chain (P14)+Snapshot (P15); Simplicity→Cross-Review (P20); Surgical→Hygiene (P10); Goal-Driven→Empirical (P11)+Orchestrate (P19).
+The four principles (Think Before Coding · Simplicity First · Surgical Changes · Goal-Driven Execution) are widely-recognized engineering disciplines, articulated sharply in Andrej Karpathy's observations on LLM-coding pitfalls; the most-starred public CLAUDE.md, `multica-ai/andrej-karpathy-skills` (~168k★), applies the same four. bstack's contribution is the **Ritual-vs-Substance** rule: a principle that lives only as prose decays into ritual, so each is backed by a primitive — Think→Dep-Chain (P14)+Snapshot (P15); Simplicity→Cross-Review (P20); Surgical→Hygiene (P10)+Cross-Review (P20); Goal-Driven→Empirical (P11)+Orchestrate (P19). Enforcement strength varies (P14/P15 are hard predicates; P20 is an independent-judgment gate) — both beat prose because the agent never grades itself.
 
 ### Changed
 

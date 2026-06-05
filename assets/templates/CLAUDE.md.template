@@ -6,7 +6,7 @@ This workspace is governed by **bstack** — twenty irreducible primitives (P1�
 
 ## Development Philosophy
 
-Four principles govern every change in this workspace — *think before coding · simplicity first · surgical changes · goal-driven execution*. They are universal good-engineering disciplines (sharpened by Andrej Karpathy's observations on LLM coding pitfalls); bstack's job is to make each one **machine-checkable** rather than a hopeful instruction, because a discipline that lives only as prose decays into ritual. Each principle is bound to the primitive that enforces it — see [AGENTS.md § Development Philosophy](AGENTS.md#development-philosophy) for the full mapping. Extend it with project-specific principles; the primitives stay the enforcement layer.
+Four principles govern every change in this workspace — *think before coding · simplicity first · surgical changes · goal-driven execution*. They are widely-recognized engineering disciplines (sharpened by Andrej Karpathy's observations on LLM coding pitfalls); bstack's job is to make each one **machine-checkable** rather than a hopeful instruction, because a discipline that lives only as prose decays into ritual. Each principle is backed by the primitive(s) that hold it — see [AGENTS.md § Development Philosophy](AGENTS.md#development-philosophy) for the full mapping (and a note on why enforcement strength varies). Extend it with project-specific principles; the primitives stay the enforcement layer.
 
 ## Bstack Core Automation Primitives
 
