@@ -4,9 +4,7 @@
 
 ### feat: scaffold a Development Philosophy section into AGENTS.md/CLAUDE.md on install (BRO-1406)
 
-`bstack bootstrap` now scaffolds a **Development Philosophy** section into a new workspace's `AGENTS.md` (full section) and `CLAUDE.md` (anchor). It states four guiding principles — Think Before Coding · Simplicity First · Surgical Changes · Goal-Driven Execution — and backs each with the primitive(s) that hold it: Think→P14+P15, Simplicity→P20, Surgical→P14+P20, Goal-Driven→P11+P19. A note records that enforcement strength varies (P14/P15 are hard predicates; P20 is a judgment gate) — both beat prose because the agent never grades itself.
-
-Rationale: the scaffold previously deployed the primitive contract without its stated intent. The four principles follow Andrej Karpathy's observations on LLM-coding pitfalls (cf. `multica-ai/andrej-karpathy-skills`).
+`bstack bootstrap` now scaffolds a **Development Philosophy** section into a new workspace's `AGENTS.md` (full section) and `CLAUDE.md` (anchor). It states four guiding principles — Think Before Coding · Simplicity First · Surgical Changes · Goal-Driven Execution — and backs each with the primitive(s) that hold it: Think→P14+P15, Simplicity→P20, Surgical→P14+P20, Goal-Driven→P11+P19, with a note that enforcement strength varies (P14/P15 are hard predicates; P20 is a judgment gate). Previously the scaffold deployed the primitive contract without this stated intent.
 
 ### Changed
 
