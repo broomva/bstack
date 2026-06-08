@@ -310,6 +310,36 @@ for line in added:
 PYEOF
 }
 
+# ── Workspace hook deploy (helper) ─────────────────────────────────────────
+# Ships the P1/P2/P6/P7 hook scripts into $WORKSPACE_DIR/scripts/ so the hook
+# references wired by settings.json.snippet resolve. Closes the dangling-hook
+# safety gap (a wired-but-undelivered control-gate hook silently no-ops) on
+# workspaces bootstrapped before these scripts shipped. Idempotent — never
+# overwrites a workspace's existing hook script.
+deploy_workspace_hooks() {
+    local hooks=(control-gate-hook.sh skill-freshness-hook.sh conversation-bridge-hook.sh knowledge-catalog-refresh-hook.sh)
+    local n=0
+    for hook in "${hooks[@]}"; do
+        local src="$SKILL_ROOT/scripts/$hook"
+        local dst="$WORKSPACE_DIR/scripts/$hook"
+        [ -f "$src" ] || continue
+        [ -f "$dst" ] && continue
+        if [ "$DRY_RUN" = "1" ]; then
+            echo "  [dry-run] would deploy scripts/$hook"
+        else
+            mkdir -p "$WORKSPACE_DIR/scripts"
+            if cp "$src" "$dst" 2>/dev/null && chmod +x "$dst" 2>/dev/null; then
+                echo "  [fix] deployed scripts/$hook (control-gate=P2 safety shield)"
+                n=$((n + 1))
+            else
+                echo "  [warn] could not deploy scripts/$hook (non-fatal)"
+            fi
+        fi
+    done
+    [ "$n" -gt 0 ] && echo "  [fix] deployed $n workspace hook script(s)"
+    return 0
+}
+
 # ── Run doctor to identify gaps ────────────────────────────────────────────
 echo "[bstack repair] running doctor to identify gaps..."
 echo ""
@@ -321,6 +351,10 @@ GAPS_OUTPUT=$(BROOMVA_WORKSPACE="$WORKSPACE_DIR" bash "$DOCTOR" --quiet 2>&1 || 
 if [ "$DRY_RUN" = "1" ] || confirm "Merge missing hooks from settings.json.snippet into .claude/settings.json?"; then
     merge_hooks_into_settings
 fi
+
+# Deploy the hook SCRIPTS the merge just wired references to (idempotent;
+# unconditional like the philosophy backfill — closes the dangling-hook gap).
+deploy_workspace_hooks
 
 # Backfill templated-since-0.24.0 governance content that even a *compliant*
 # (pre-0.24.0) workspace can lack — run BEFORE the compliance early-exit, like

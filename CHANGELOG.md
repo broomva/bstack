@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.27.0 — 2026-06-08
+
+### fix: ship + deploy the dangling P1/P2/P6/P7 hook scripts; scaffold METALAYER + schemas; document the two-flow bootstrap (BRO-1431)
+
+Surfaced by building a from-scratch RCS/RSI template (rcs-template) as a gap-discovery probe for bstack's own bootstrap. Found a real safety bug plus two scaffold omissions, and the absence of a generative flow.
+
+### Fixed
+
+- **Dangling hook scripts (safety bug).** `settings.json.snippet` wired the P1 (conversation-bridge), P2 (control-gate), P6 (knowledge-catalog-refresh), and P7 (skill-freshness) hooks at `${BROOMVA_WORKSPACE}/scripts/*.sh`, but bstack shipped none of those scripts and bootstrap never copied them. Result: every workspace bootstrapped anywhere but the bstack origin had a **non-functional control gate (P2)** — the safety shield silently no-op'd because Claude Code invoked a script that did not exist. `doctor §7` detected the gap but nothing closed it. Now bstack **ships** all four (`scripts/{control-gate,skill-freshness,conversation-bridge,knowledge-catalog-refresh}-hook.sh`, self-contained + `$CLAUDE_PROJECT_DIR`-portable) and **deploys** them into `$WORKSPACE/scripts/` — `bootstrap` Phase 3.1 and `repair`'s `deploy_workspace_hooks` (idempotent, never overwrites). Dogfood proof: on a fresh workspace with no bstack on PATH, the deployed control-gate blocks `git push --force` (exit 2) and allows `git status` (exit 0).
+
+### Added
+
+- **`bootstrap` Phase 2 now scaffolds `METALAYER.md` + `schemas/{state,action,trace,evaluator,egri-event}.schema.json`** (the control-systems manifest + typed interfaces). Templates added under `assets/templates/` + `assets/templates/schemas/`. Previously only CLAUDE/AGENTS/policy/arcs scaffolded; the manifest and typed contract were omitted.
+- **Two-flow bootstrap doc (SKILL.md).** Names and sequences the **structured flow** (deterministic scaffold — the lossless floor, no LLM) → **generative flow** (agent-authored, workspace-tailored setup — bespoke, to-the-ceiling) → **verify** (`bstack doctor` gates both). Mirrors the P18 Audience Category-B-projection vs Category-C-generative split, applied to workspace setup. Invariant: never wire a hook whose script isn't deployed.
+
+### Notes
+
+- Primitive count unchanged (**20**). This is a bootstrap correctness + completeness fix, not a new P-row.
+- Hook-resolution is now consistent for the workspace-resolved hooks (all four deployed into `$WORKSPACE/scripts/`, self-contained on a fresh clone); the L0/L1 audit hooks remain `$BSTACK_REPO`-referenced (already resolving).
+- `VERSION` 0.26.0 → 0.27.0.
+
 ## 0.26.0 — 2026-06-05
 
 ### feat: `bstack skills audit --require-tests` — skill-script test gate (BRO-1411 slice 2)

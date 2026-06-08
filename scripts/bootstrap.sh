@@ -151,6 +151,13 @@ scaffold_governance_file ".control/policy.yaml" "policy.yaml.template"
 # Closure-contract arcs (the loop DEFINITIONS — the workspace's own editable
 # copy; compute-arc-status.sh otherwise falls back to the bundled template).
 scaffold_governance_file ".control/arcs.yaml" "arcs.yaml.template"
+# Control-systems manifest (plant/controller/shield/feedback formalization).
+scaffold_governance_file "METALAYER.md" "METALAYER.md.template"
+# Typed interface schemas (state/action/trace/evaluator/egri-event) — the typed
+# contract the control loop validates against.
+for _schema in state action trace evaluator egri-event; do
+    scaffold_governance_file "schemas/${_schema}.schema.json" "schemas/${_schema}.schema.json"
+done
 
 echo "  scaffolded: $scaffolded | preserved: $preserved"
 
@@ -274,6 +281,35 @@ else
     echo "  [skip] python3 not available; cannot merge into existing settings.json"
     echo "  manual: see assets/templates/settings.json.snippet"
 fi
+
+# ─── Phase 3.1: deploy workspace-resolved hook scripts ─────────────────────
+# settings.json.snippet wires P1/P2/P6/P7 hooks at ${BROOMVA_WORKSPACE}/scripts/*.sh.
+# Ship + deploy those scripts so the references resolve. Closes the dangling-hook
+# safety gap: a wired-but-undelivered control-gate hook (P2) silently no-ops,
+# leaving the safety shield non-functional on every workspace but the bstack
+# origin. Idempotent: never overwrites a workspace's existing hook script.
+echo ""
+echo "=== bstack workspace hook deploy ==="
+mkdir -p "$WORKSPACE_DIR/scripts"
+WORKSPACE_HOOKS=(control-gate-hook.sh skill-freshness-hook.sh conversation-bridge-hook.sh knowledge-catalog-refresh-hook.sh)
+deployed_hooks=0
+for hook in "${WORKSPACE_HOOKS[@]}"; do
+    src="$SKILL_ROOT/scripts/$hook"
+    dst="$WORKSPACE_DIR/scripts/$hook"
+    if [ ! -f "$src" ]; then
+        echo "  [skip] $hook (not shipped in this bstack version)"
+        continue
+    fi
+    if [ -f "$dst" ]; then
+        echo "  [keep] scripts/$hook (existing — preserved)"
+    elif cp "$src" "$dst" 2>/dev/null && chmod +x "$dst" 2>/dev/null; then
+        echo "  [deploy] scripts/$hook ← bstack/scripts/$hook"
+        deployed_hooks=$((deployed_hooks + 1))
+    else
+        echo "  [warn] could not deploy scripts/$hook (non-fatal)"
+    fi
+done
+echo "  deployed: $deployed_hooks workspace hook script(s) (P1/P2/P6/P7)"
 
 # ─── Phase 3.5: wire the RCS control loop (L0/L1 audit + L3 gates) ─────────
 # Closes the split-brain: onboard.sh (the wizard) wired the loop here; the
