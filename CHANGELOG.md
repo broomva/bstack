@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.27.1 — 2026-06-08
+
+### fix: L3 rate gate counts mutations, not creations — unblocks the initial bootstrap commit (BRO-1435)
+
+Found via live dogfooding (P11) of the v0.27.0 autonomous-loop demo: `bstack bootstrap` activates the L3 rate gate, then the user's very first `git commit` of the freshly-*scaffolded* governance is blocked — the gate counted the 5 newly-**created** L3 files as 5 L3 mutations (`5/1 EXCEEDED`). Creation is not mutation: there is no prior governance state to destabilize.
+
+### Fixed
+
+- **`scripts/l3-rate-gate.sh` — staged count:** a staged L3 path counts as a mutation only if it already exists at `HEAD` (`git cat-file -e HEAD:<path>`). Newly-created L3 files (and the first-ever commit, where `HEAD` is absent) are exempt.
+- **`scripts/l3-rate-gate.sh` — committed count:** uses `git log --diff-filter=M` so commits that *added* L3 files (e.g. the bootstrap scaffold) don't consume the per-window budget; only commits that *modified* them do. Also switched the counter from `wc -l` on a `format:` stream to `grep -c .`, fixing a latent off-by-one (a single committed L3 mutation previously counted as 0).
+- The pre-commit template calls the script (no duplicated logic), so this fixes both `bstack bootstrap` Day-1 UX and every deployed `.githooks/pre-commit`.
+
+### Added
+
+- **`tests/l3-rate-gate.test.sh`** — 4 hermetic cases: (A) creating 5 L3 files is exempt, (B) 1 modification is within budget, (C) a 2nd modification in the same window is blocked, (D) non-governance changes are ignored. 4/4 pass.
+
+### Notes
+
+- The gate's actual purpose is preserved: governance *modifications* are still rate-limited to one per `τ_a₃` window (verified by case C). Only *creation* is exempt.
+- Primitive count unchanged (**20**). `VERSION` 0.27.0 → 0.27.1.
+
 ## 0.27.0 — 2026-06-08
 
 ### fix: ship + deploy the dangling P1/P2/P6/P7 hook scripts; scaffold METALAYER + schemas; document the two-flow bootstrap (BRO-1431)
