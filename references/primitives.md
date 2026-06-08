@@ -129,10 +129,10 @@ The reflexive trigger rule above is the *write* side of the knowledge graph; thi
 
 **Never `find -name "$slug.md"` / `grep` / `cat` over `research/entities/` as a *discovery* mechanism.** Two failure modes:
 
-1. **Silent miss** — a guessed slug that doesn't exist returns nothing, usually swallowed by `2>/dev/null` / `if [ -n "$f" ]`. The agent believes it loaded N entities when it loaded fewer and reasons over a *false-complete* context. `/kg` prints `Loaded N/total`, so a miss is visible.
+1. **Silent miss** — a guessed slug that doesn't exist returns nothing (a no-match is silent by default; often further masked by `2>/dev/null` / `if [ -n "$f" ]`). The agent believes it loaded N entities when it loaded fewer and reasons over a *false-complete* context. `/kg` prints `Loaded N/total`, so a slug miss is visible (it does not, by itself, defend against the recall miss below — `--terms`/tier-2 do).
 2. **Recall miss** — hand-picked slugs are bounded by agent memory; they miss the relevant entities the catalog routing surfaces (and `--terms` recovers the union).
 
-`find`/`grep`/`cat` over `research/entities/` are for operating on a *confirmed known file*, never for *finding what's relevant*. The user should never have to tell an agent to use `/kg` instead of grepping the substrate.
+This bans only *discovery* greps. `find`/`grep`/`cat` over `research/entities/` stay legitimate for operating on a **confirmed known file**, for **tooling/skill internals** (the `/kg` loader's own tier-2 body-grep, `bookkeeping` lint/index/catalog generation), and for **bulk edits or counting/aggregation** — just never as the step that *decides which entities are relevant*. The user should never have to tell an agent to use `/kg` instead of grepping the substrate to find what's relevant.
 
 ---
 
