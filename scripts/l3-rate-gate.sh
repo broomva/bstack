@@ -132,18 +132,29 @@ fi
 NOW=$(date +%s)
 CUTOFF=$((NOW - TAU_A_L3_INT))
 
-# Count L3-class commits in the window
-# Build a pathspec list for `git log -- <paths>` — git accepts multiple paths
-COUNT_COMMITTED=$(git log --since="@$CUTOFF" --pretty=format:%H -- "${L3_PATHS[@]}" 2>/dev/null | wc -l | tr -d '[:space:]')
+# Count L3-class commits in the window that MODIFIED an L3 file (--diff-filter=M).
+# Additions (creation — e.g. the initial `bstack bootstrap` scaffold) are not
+# mutations: there is no prior governance state to destabilize, so they do not
+# consume the rate budget (BRO-1435). `grep -c .` counts robustly regardless of
+# a trailing newline (fixes a latent off-by-one in the prior `wc -l` form).
+COUNT_COMMITTED=$(git log --diff-filter=M --since="@$CUTOFF" --format='%H' -- "${L3_PATHS[@]}" 2>/dev/null | grep -c '.' || true)
+COUNT_COMMITTED=${COUNT_COMMITTED:-0}
 
 COUNT_STAGED=0
 STAGED_FILES=""
 if [ "$INCLUDE_STAGED" = "1" ]; then
-    # Check if any staged files match L3 paths
+    # Count a staged L3 file as a mutation ONLY if it already exists at HEAD.
+    # Newly-created L3 files (e.g. the initial `bstack bootstrap` scaffold) are
+    # creation, not mutation — there is no prior governance state to destabilize,
+    # so they are exempt from the rate budget (BRO-1435). If HEAD does not exist
+    # yet (first commit ever), every path is a creation → exempt.
+    staged_now="$(git diff --cached --name-only 2>/dev/null)"
     for path in "${L3_PATHS[@]}"; do
-        if git diff --cached --name-only 2>/dev/null | grep -qFx "$path"; then
-            COUNT_STAGED=$((COUNT_STAGED + 1))
-            STAGED_FILES="$STAGED_FILES $path"
+        if printf '%s\n' "$staged_now" | grep -qFx "$path"; then
+            if git cat-file -e "HEAD:$path" 2>/dev/null; then
+                COUNT_STAGED=$((COUNT_STAGED + 1))
+                STAGED_FILES="$STAGED_FILES $path"
+            fi
         fi
     done
 fi
