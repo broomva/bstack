@@ -18,6 +18,8 @@ bstack ships two complementary layers:
 
 Installing the substrate without the mode = the workspace has primitives but no entry point to engage them. Invoking the mode without the substrate = wishful thinking. Compounded: `/bstack bootstrap` installs the substrate, then `/autonomous` is the standing operating mode for substantive work units.
 
+Bootstrap itself is **two-flow** — a deterministic structured scaffold (the floor) plus an agent-authored generative tailoring pass (the bespoke layer). See [Two-flow workspace setup](#two-flow-workspace-setup-structured--generative).
+
 ## Quick start
 
 Install:
@@ -248,6 +250,39 @@ Future sessions inspect this for state. `bootstrap_status: failed` is captured t
 **Idempotent**: never overwrites existing user customizations. If a file already exists, the bootstrap appends only the missing primitive sections / blocks / hooks, never the whole file.
 
 **Self-application**: when `/bstack bootstrap` is invoked in an existing workspace, the bootstrap itself runs under `/autonomous` discipline — state snapshot, dep-chain trace, validation plan, PR pipeline. The bootstrap that installs the discipline embodies the contract it ships.
+
+**Two-flow**: bootstrap is not a single deterministic pass. The structured scaffold above is the *floor*; the agent then runs a generative tailoring pass on top of it. See [Two-flow workspace setup](#two-flow-workspace-setup-structured--generative) below for the full model and canonical sequence.
+
+### Two-flow workspace setup (structured + generative)
+
+`bstack bootstrap` is a *two-flow* operation, not a single deterministic pass. This mirrors the Audience (P18) split bstack already applies to documents — a deterministic Category-B *projection floor* plus a context-aware Category-C *bespoke authoring* layer — now applied to workspace setup itself.
+
+```
+bstack bootstrap  =  STRUCTURED flow      →   GENERATIVE flow            →   VERIFY
+                     (deterministic, no LLM)    (agent-authored, contextual)   (deterministic)
+                     scripts + templates        tailoring of THIS workspace    bstack doctor
+                     + shipped+deployed hooks
+                     + gates + .control
+```
+
+**1. Structured flow (the floor — reproducible, no LLM).** `bstack bootstrap` runs the idempotent scaffold: installs skills; scaffolds governance from `assets/templates/*` (CLAUDE.md, AGENTS.md, METALAYER.md, `.control/policy.yaml`, `.control/arcs.yaml`, `.control/rcs-parameters.toml`, `schemas/`); **deploys** the hook scripts into the workspace (control-gate / skill-freshness / conversation-bridge / knowledge-catalog-refresh + the L0/L1 audit hooks); wires `.claude/settings.json`; installs the L3 rate gate + CI gate. This flow must be COMPLETE and CORRECT — every wired hook must have a backing script deployed (no dangling references). It is the lossless baseline: same inputs → same workspace, every time.
+
+**2. Generative flow (the bespoke layer — agent-authored, to-the-ceiling).** After the structured scaffold, the agent does a context-aware pass that templates cannot produce. Concretely the agent:
+
+   a. **Detects the stack + project intent** — signals: language/build files, existing code, README, the user's stated goal.
+   b. **Tailors the scaffolded governance prose to THIS project** — rewrites the generic CLAUDE.md / AGENTS.md placeholders into project-specific invariants, conventions, and architecture notes (not generic template text).
+   c. **Authors a project-specific CI workflow** — the structured flow ships the L3-stability gate; the agent generates the test/lint/build job that matches the detected stack.
+   d. **Fills the Dogfood Plan (Empirical, P11)** with the real entry surfaces + evidence anchors for this project's stack (per [references/dogfood-patterns.md](references/dogfood-patterns.md)).
+   e. **For RCS/RSI or control-systems repos** — optionally lays down a runnable L0–L3 substrate + a HIERARCHY/instantiation map, so the workspace doesn't merely DESCRIBE a control system, it RUNS one. For ordinary repos, this step is skipped.
+   f. **Files the initial knowledge-graph entities / decision log (Bookkeeping, P6)** for the new workspace — proactively, never asking permission.
+
+**3. Verify (deterministic).** `bstack doctor` gates BOTH flows: the structured contract (governance files, hooks wired+deployed, gates, schemas) AND the generative output (the doctor surfaces gaps if the agent's tailoring left a hole). Generative output is always checked by the structured contract — never trusted blind.
+
+**Key principles:**
+
+- This mirrors the established Audience (P18) discipline: the STRUCTURED flow is the Category-B *projection floor* (deterministic, lossless, reproducible); the GENERATIVE flow is Category-C *bespoke authoring* (context-aware, to-the-ceiling). The same structured-vs-generative split bstack already applies to documents, now applied to workspace setup.
+- The structured flow must never wire a hook whose script isn't deployed — the *dangling-hook* failure mode this work fixes. "Wired but dangling" is forbidden: every hook reference resolves to a real, executable, deployed script.
+- The agent runs **structured FIRST** (idempotent floor), **THEN generative** (bespoke), **THEN doctor** (verify). Never generative-without-structured (no floor) or structured-without-generative (generic, untailored workspace).
 
 ### `doctor` — verify primitive contract
 
