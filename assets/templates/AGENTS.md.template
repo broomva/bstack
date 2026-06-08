@@ -92,6 +92,8 @@ Each primitive carries a **short name** for agent prose. When referencing a prim
 
 **Never a question.** The interrogative form — *"do you want me to create an entry / file this into the knowledge graph?"* — is forbidden. Capture is the default action, not an opt-in the user approves; the agent files first and reports after (user vetoes after via `git revert`, never gates before). Deferring capture to a user yes/no is the **permission-to-document anti-pattern** — knowledge that waits for permission is knowledge lost. Capture stays bounded by the Nous gate (proactive ≠ indiscriminate).
 
+**Retrieval discipline (`/kg` for discovery, never substrate grep).** Knowledge-graph *discovery* — "what do we know about X", "load context for X", finding the relevant entities before reasoning — goes through **`/kg load <topic>`** (add `--terms <synonyms>` for paraphrase/jargon topics); use `Read` only on a slug confirmed present in `docs/knowledge-index.md`. **Never** `find -name "$slug.md"` / `grep` / `cat` over `research/entities/` as a *discovery* mechanism: a guessed slug that doesn't exist returns nothing **silently** (typically masked by `2>/dev/null`), so the agent reasons over a *false-complete* context, and hand-picked slugs miss the relevant entities the catalog routing surfaces. `find`/`grep`/`cat` are for operating on a *confirmed known file*, not for finding what's relevant.
+
 ### P7 — Freshness: Skill Freshness Check (Stale-Install Detector)
 
 **What**: Reports stale installed skills at SessionStart so they get refreshed before causing silent failures.

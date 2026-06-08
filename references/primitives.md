@@ -123,6 +123,17 @@ Bookkeeping — and knowledge capture generally — is a reflex, not a request, 
 
 Mental checklist before declaring graph-dependent work done: *Did this session produce material that belongs in the graph? Does my feature read graph state? Am I about to commit a snapshot?* — yes to any → file it / run bookkeeping, without asking.
 
+### P6 Retrieval Discipline (`/kg` for discovery, never substrate grep)
+
+The reflexive trigger rule above is the *write* side of the knowledge graph; this is the *read* side. Knowledge-graph **discovery** — "what do we know about X", "load context for X", finding the relevant entities before reasoning — goes through **`/kg load <topic>`** (add `--terms <synonyms>` for paraphrase/jargon topics; tier-2 body-grep also auto-fires on weak tier-1 hits). Use `Read` directly **only** on a slug confirmed present in the catalog (`docs/knowledge-index.md`).
+
+**Never `find -name "$slug.md"` / `grep` / `cat` over `research/entities/` as a *discovery* mechanism.** Two failure modes:
+
+1. **Silent miss** — a guessed slug that doesn't exist returns nothing, usually swallowed by `2>/dev/null` / `if [ -n "$f" ]`. The agent believes it loaded N entities when it loaded fewer and reasons over a *false-complete* context. `/kg` prints `Loaded N/total`, so a miss is visible.
+2. **Recall miss** — hand-picked slugs are bounded by agent memory; they miss the relevant entities the catalog routing surfaces (and `--terms` recovers the union).
+
+`find`/`grep`/`cat` over `research/entities/` are for operating on a *confirmed known file*, never for *finding what's relevant*. The user should never have to tell an agent to use `/kg` instead of grepping the substrate.
+
 ---
 
 ## P7 — Skill Freshness Check
