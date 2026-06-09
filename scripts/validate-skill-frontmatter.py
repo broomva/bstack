@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import os
 from pathlib import Path
 
 NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
@@ -42,56 +43,137 @@ NAME_MAX = 64
 DESC_CEILING_DEFAULT = 1024  # portable Agent-Skills ceiling
 _KEY_RE = re.compile(r"^([A-Za-z0-9_-]+):[ \t]*(.*)$")
 _BLOCK_INDICATORS = {">", "|", ">-", "|-", ">+", "|+"}
+# Test hook: set SKILL_FM_NO_YAML=1 to force the dependency-free fallback parser
+# even when PyYAML is installed, so both code paths get exercised in CI.
+_USE_YAML = os.environ.get("SKILL_FM_NO_YAML") != "1"
+
+
+def _coerce_field_dict(data) -> dict[str, str]:
+    """Normalize a parsed YAML mapping to a {str: str} field dict.
+
+    name/description are the only fields we validate and both must be strings;
+    a non-string value (None, list, number) is stringified so downstream
+    len()/strip() never crash — a malformed list-valued `description` becomes
+    its repr, which is long and correctly trips the ceiling warning.
+    """
+    out: dict[str, str] = {}
+    if not isinstance(data, dict):
+        return out
+    for k, v in data.items():
+        if v is None:
+            out[str(k)] = ""
+        elif isinstance(v, str):
+            out[str(k)] = v
+        else:
+            out[str(k)] = str(v)
+    return out
 
 
 def parse_frontmatter_fields(text: str) -> dict[str, str] | None:
     """Extract top-level scalar fields from the YAML frontmatter block.
 
-    Dependency-free and deliberately minimal: handles single-line values
-    (optionally quoted) and block/folded scalars (`>` / `|`). Not a general
-    YAML parser — sufficient for name/description validation. Returns None when
-    there is no frontmatter block at all.
+    Primary path uses PyYAML (correct on every YAML scalar form — plain
+    multiline, folded `>`, literal `|`, inline `#` comments, quoting). When
+    PyYAML is unavailable (minimal CI), falls back to a hardened hand-parser
+    that covers the same cases best-effort. Returns None only when there is NO
+    frontmatter block; an empty block (`---\\n---`) returns {} so the caller
+    emits the correct "description missing" error rather than "no block".
     """
-    m = re.match(r"^---[ \t]*\n(.*?)\n---[ \t]*(?:\n|$)", text, re.DOTALL)
+    # `(.*?\n)?` makes the body optional so an empty block still matches.
+    m = re.match(r"^---[ \t]*\n(.*?\n)?---[ \t]*(?:\n|$)", text, re.DOTALL)
     if not m:
         return None
-    lines = m.group(1).split("\n")
+    block = m.group(1) or ""
+
+    if _USE_YAML:
+        try:
+            import yaml
+            data = yaml.safe_load(block)
+            return {} if data is None else _coerce_field_dict(data)
+        except ImportError:
+            pass
+        except Exception:
+            # Malformed YAML — fall through to the hand-parser, which is more
+            # forgiving and still recovers name/description in practice.
+            pass
+
+    return _hand_parse_fields(block)
+
+
+def _strip_inline_comment(value: str) -> str:
+    """Strip a YAML inline comment (whitespace-preceded `#`) from a plain scalar.
+
+    Matches YAML semantics: `desc text  # note` → `desc text`; `a#b` (no
+    leading whitespace) is NOT a comment and is left intact. Quoted values are
+    handled by the caller and never reach here.
+    """
+    cm = re.search(r"[ \t]#", value)
+    return value[:cm.start()].rstrip() if cm else value
+
+
+def _hand_parse_fields(block: str) -> dict[str, str]:
+    """Dependency-free fallback parser (best-effort; PyYAML is the primary path).
+
+    Handles: single-line scalars (quoted or plain, with inline-# stripping),
+    block/folded scalars (`|` / `>`), and PLAIN multiline scalars (continuation
+    lines indented under a 0-indent key are folded with spaces). Top-level keys
+    only (0 indent), which is all SKILL.md frontmatter needs.
+    """
+    lines = block.split("\n")
     fields: dict[str, str] = {}
     i = 0
     n = len(lines)
     while i < n:
         km = _KEY_RE.match(lines[i])
-        if not km:
+        # Only 0-indent lines are keys; anything else is consumed as a value.
+        if not km or (len(lines[i]) - len(lines[i].lstrip(" \t"))) != 0:
             i += 1
             continue
         key, rest = km.group(1), km.group(2).strip()
+
         if rest in _BLOCK_INDICATORS:
-            # Block/folded scalar: gather subsequent more-indented lines.
             folded = rest[0] == ">"
             i += 1
-            block: list[str] = []
+            chunk: list[str] = []
             base_indent: int | None = None
             while i < n:
                 ln = lines[i]
                 if ln.strip() == "":
-                    block.append("")
+                    chunk.append("")
                     i += 1
                     continue
                 indent = len(ln) - len(ln.lstrip(" "))
+                if indent == 0:
+                    break
                 if base_indent is None:
                     base_indent = indent
-                if indent < base_indent:
-                    break
-                block.append(ln[base_indent:])
+                chunk.append(ln[base_indent:])
                 i += 1
-            joiner = " " if folded else "\n"
-            fields[key] = joiner.join(block).strip()
+            fields[key] = (" " if folded else "\n").join(chunk).strip()
             continue
-        # Single-line scalar; strip one layer of matching quotes.
-        if len(rest) >= 2 and rest[0] == rest[-1] and rest[0] in ("'", '"'):
-            rest = rest[1:-1]
-        fields[key] = rest
+
+        # Quoted single-line scalar.
+        if len(rest) >= 2 and rest[0] in ("'", '"') and rest[-1] == rest[0]:
+            fields[key] = rest[1:-1]
+            i += 1
+            continue
+
+        # Plain scalar: strip inline comment, then fold any indented
+        # continuation lines (plain multiline) until the next 0-indent key.
+        value = _strip_inline_comment(rest)
         i += 1
+        cont: list[str] = []
+        while i < n:
+            ln = lines[i]
+            if ln.strip() == "":
+                break
+            if (len(ln) - len(ln.lstrip(" \t"))) == 0:
+                break  # next top-level key
+            cont.append(_strip_inline_comment(ln.strip()))
+            i += 1
+        if cont:
+            value = (value + " " + " ".join(cont)).strip()
+        fields[key] = value
     return fields
 
 

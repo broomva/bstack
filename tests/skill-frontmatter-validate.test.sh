@@ -151,6 +151,59 @@ else
     assert_fail "folded description should be measured (rc=$rc)" "$out"
 fi
 
+# ── P20 regression block: run the parser-correctness cases on BOTH paths ──────
+# B1 (plain multiline truncation) + B2 (inline-# divergence) + empty-block msg.
+# Each runs once with PyYAML (primary) and once with SKILL_FM_NO_YAML=1 (fallback).
+for MODE in "yaml" "nofallback"; do
+    if [ "$MODE" = "nofallback" ]; then export SKILL_FM_NO_YAML=1; LABEL="fallback parser"; else unset SKILL_FM_NO_YAML; LABEL="PyYAML"; fi
+
+    # B1: a plain (unquoted, no >|) multiline description over the ceiling must WARN.
+    echo ""
+    echo "Test 8 [$LABEL]: B1 — plain multiline description is fully measured"
+    B1="$(mk_skill b1-skill-'"$MODE"' '---
+name: b1-skill-'"$MODE"'
+description: line one is short on its own
+  but continues onto a second plain line that pushes it well past the ceiling
+---
+body
+')"
+    out="$(python3 "$VALIDATOR" --ceiling 40 "$B1" 2>&1)"; rc=$?
+    if [ "$rc" -eq 0 ] && echo "$out" | grep -qi "portable ceiling"; then
+        assert_pass "B1 plain-multiline measured over ceiling 40 [$LABEL]"
+    else
+        assert_fail "B1 plain-multiline should warn over ceiling [$LABEL] (rc=$rc)" "$out"
+    fi
+
+    # B2: an inline `# comment` must be stripped (not counted) — `a#b` (no space) kept.
+    echo ""
+    echo "Test 9 [$LABEL]: B2 — inline comment stripped, bare-hash preserved"
+    B2="$(mk_skill b2-skill-'"$MODE"' '---
+name: b2-skill-'"$MODE"'
+description: short visible text  # this trailing comment must not be counted
+---
+body
+')"
+    out="$(python3 "$VALIDATOR" --ceiling 25 "$B2" 2>&1)"; rc=$?
+    # "short visible text" is 18 chars (< 25) once the comment is stripped → no warn.
+    if [ "$rc" -eq 0 ] && ! echo "$out" | grep -qi "portable ceiling"; then
+        assert_pass "B2 inline comment stripped (under ceiling) [$LABEL]"
+    else
+        assert_fail "B2 comment should be stripped, not counted [$LABEL] (rc=$rc)" "$out"
+    fi
+
+    # Empty frontmatter block → ERROR with the description-missing message (not "no block").
+    echo ""
+    echo "Test 10 [$LABEL]: empty block is an ERROR (description missing)"
+    EMPTY="$(printf -- '---\n---\nbody\n' > "$TMP/empty-$MODE.md"; echo "$TMP/empty-$MODE.md")"
+    out="$(python3 "$VALIDATOR" "$EMPTY" 2>&1)"; rc=$?
+    if [ "$rc" -eq 1 ] && echo "$out" | grep -qi "description is missing"; then
+        assert_pass "empty block → exit 1 + description-missing [$LABEL]"
+    else
+        assert_fail "empty block should error as description-missing [$LABEL] (rc=$rc)" "$out"
+    fi
+done
+unset SKILL_FM_NO_YAML
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo "════════════════════════════════════════"

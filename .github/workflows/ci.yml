@@ -76,6 +76,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install python deps for tests
+        # PyYAML is the primary parser path for validate-skill-frontmatter.py
+        # (the dependency-free hand-parser is a best-effort fallback). The
+        # frontmatter test exercises both paths via SKILL_FM_NO_YAML.
+        run: python3 -m pip install --quiet PyYAML
+
       - name: Run all tests/*.test.sh
         # As of v0.8.0 (Phase 5 of substrate completion) the pre-existing
         # tests/template_lockstep.test.sh and tests/onboard.test.sh are
