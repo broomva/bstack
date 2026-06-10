@@ -54,6 +54,27 @@ echo ""
 echo "Health: $healthy/27 OK | $missing missing | $broken broken"
 [ "$missing" -gt 0 ] && echo "Run: bash scripts/bootstrap.sh"
 
+# ── SKILL.md Frontmatter (Agent Skills open standard) ─────────────────────────
+# Validates installed SKILL.md headers against the portable Agent-Skills contract
+# (name regex/length, description present + ≤1024-char portable ceiling). Findings
+# are informational here — the CI gate is tests/skill-frontmatter-validate.test.sh.
+echo ""
+echo "=== SKILL.md Frontmatter (Agent Skills standard) ==="
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FM_VALIDATOR="$SCRIPT_DIR/validate-skill-frontmatter.py"
+if [ -f "$FM_VALIDATOR" ]; then
+  fm_targets=()
+  [ -d "$AGENTS_DIR" ] && fm_targets+=("$AGENTS_DIR")
+  [ -d "$CLAUDE_DIR" ] && fm_targets+=("$CLAUDE_DIR")
+  if [ "${#fm_targets[@]}" -gt 0 ]; then
+    python3 "$FM_VALIDATOR" --quiet "${fm_targets[@]}" || echo "  (SKILL.md frontmatter errors found — see above)"
+  else
+    echo "  (no installed skill dirs to check)"
+  fi
+else
+  echo "  [warn] validate-skill-frontmatter.py not found"
+fi
+
 # ── PII Redaction Check ──────────────────────────────────────────────────────
 echo ""
 echo "=== PII Redaction ==="
