@@ -260,6 +260,12 @@ fi
 # Auto-fill the detected stack so the agent has a concrete pattern to follow.
 # Mirrors detection logic in bstack/scripts/doctor.sh §13 + references/dogfood-patterns.md.
 DETECTED_STACK="unknown"
+# Is any code build manifest present? (checked individually — `ls a b c` fails if
+# ANY one is missing, so it can't answer "are they all absent".)
+CODE_MANIFEST=0
+for _m in Cargo.toml package.json go.mod pyproject.toml setup.py pom.xml build.gradle Gemfile composer.json; do
+    [ -f "$WORKSPACE/$_m" ] && CODE_MANIFEST=1 && break
+done
 if [ -f "$WORKSPACE/Cargo.toml" ] && [ -d "$WORKSPACE/src-tauri" ]; then
     DETECTED_STACK="tauri-sidecar"
 elif [ -d "$WORKSPACE/app/src-tauri" ] || ls "$WORKSPACE"/*/src-tauri 2>/dev/null | head -1 | grep -q . ; then
@@ -276,6 +282,9 @@ elif [ -f "$WORKSPACE/mcp.json" ] || [ -f "$WORKSPACE/mcp.yaml" ]; then
     DETECTED_STACK="mcp-server"
 elif [ -f "$WORKSPACE/package.json" ] && grep -qE '"(fastapi|hono|axum|express)"' "$WORKSPACE/package.json" 2>/dev/null; then
     DETECTED_STACK="rest-api"
+elif [ "$CODE_MANIFEST" = "0" ] && { [ -d "$WORKSPACE/entities" ] || [ -d "$WORKSPACE/.obsidian" ] || [ -d "$WORKSPACE/vault" ] \
+        || [ "$(find "$WORKSPACE" -maxdepth 3 -name '*.md' -not -path '*/.git/*' -not -path '*/.control/*' 2>/dev/null | wc -l | tr -d ' ')" -ge 5 ]; }; then
+    DETECTED_STACK="knowledge-vault"
 fi
 
 if [ -f "$WORKSPACE/AGENTS.md" ] && grep -q '^## Dogfood Plan (Stack: TBD)' "$WORKSPACE/AGENTS.md" 2>/dev/null; then

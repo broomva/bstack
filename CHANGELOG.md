@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.28.0 — 2026-06-11
+
+### feat: Pattern H — non-code dogfood (knowledge-vault) + detection (BRO-1482)
+
+Surfaced by dogfooding bstack into a non-code repo (a research vault): the full governance + control plane install language-agnostically and the P2 gate fires, but the dogfood cookbook had **no non-code entry** (only tauri/nextjs/expo/rust/rest/mcp/trading), so detection fell through to "Pattern Z — Unknown" and the agent had to author the validation predicate from scratch.
+
+### Added
+
+- **`references/dogfood-patterns.md` — Pattern H: Knowledge vault / Document repo (NON-CODE).** The dogfood pattern for repos with no build/test suite (research vaults, Obsidian graphs, ADR/decisions folders, spec libraries, manuscripts, contract repos). Ships a reference predicate (`vault-check.py` — required frontmatter + every `[[wikilink]]` resolves, wired as `make check`; the non-code analog of a test suite, `h ⟂ U`), a five-tier predicate menu (schema / cross-reference / checklist / rubric-judge / human-sign-off), the stack=knowledge-vault Dogfood Plan, and gotchas (well-formed ≠ correct; keep the predicate independent of the authoring agent).
+- **Detection branch (`scripts/doctor.sh §13` + `scripts/onboard.sh`):** a markdown-dominant repo with no code build manifest (`entities/`/`.obsidian/`/`vault/` dir or ≥5 `.md` files) → `knowledge-vault`. Added a correct `CODE_MANIFEST` flag (a per-file loop — `ls a b c` returns non-zero if ANY one is missing, so it can't answer "are they all absent"). Checked **last before the Pattern Z fallback** so every code pattern gets first refusal; `no_code_manifest` keeps it from firing on a real codebase.
+- Detection-algorithm pseudocode + the inline detection summary in the cookbook updated to include Pattern H.
+
+### Notes
+
+- Primitive count unchanged (**20**). This widens the P11 cookbook + detection, not a new P-row.
+- Validation: dogfooded on a real non-code repo (research vault → `knowledge-vault`; vault-check RED→GREEN) and confirmed a manifest-less code repo does not misfire. Provenance: the live non-code dogfood (bootstrap landed identically, P2 gate blocked force-push/secret exit 2).
+- `VERSION` 0.27.1 → 0.28.0.
+
 ## 0.27.1 — 2026-06-08
 
 ### fix: L3 rate gate counts mutations, not creations — unblocks the initial bootstrap commit (BRO-1435)
