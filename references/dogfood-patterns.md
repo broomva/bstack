@@ -12,7 +12,7 @@
 
 P11 is **what to do** (interact with the deployed version, capture evidence). This cookbook is **how to do it** for whatever tech stack the workspace is currently instantiated from. Without this, the P11 reflex becomes ritual: agents acknowledge "validate by interacting" and then ship without ever clicking the app, because they don't know which surface to drive.
 
-The cookbook is keyed on the **detected stack** — not the user's words. The `bstack doctor` §13 check auto-detects the stack from repo signals (Cargo.toml + src-tauri/ → Tauri; next.config.* → Next.js; app.json + Expo SDK → React Native; Cargo.toml solo → Rust CLI; openapi.* / FastAPI / Hono routes → REST API; SKILL.md with MCP frontmatter → MCP server) and maps to the matching pattern below.
+The cookbook is keyed on the **detected stack** — not the user's words. The `bstack doctor` §13 check auto-detects the stack from repo signals (Cargo.toml + src-tauri/ → Tauri; next.config.* → Next.js; app.json + Expo SDK → React Native; Cargo.toml solo → Rust CLI; openapi.* / FastAPI / Hono routes → REST API; SKILL.md with MCP frontmatter → MCP server; markdown-dominant with no code manifest → **Knowledge vault / non-code, Pattern H**) and maps to the matching pattern below.
 
 ---
 
@@ -242,6 +242,73 @@ If the agent cannot fill a row, it states why ("backend requires real cloud cred
 
 ---
 
+## Pattern H — Knowledge vault / Document repo (NON-CODE)
+
+The case bstack governs but the other patterns miss: a repo with **no code** — a research vault, an Obsidian knowledge graph, an ADR/decisions folder, a spec library, a book manuscript, a contracts/policy repo. The governance + control plane install identically (they are markdown/YAML/TOML/bash — language-agnostic; the P2 gate, audit telemetry, L3 rate gate, and knowledge graph all govern *agent actions on files*, not a language). The one thing that has no default here is the **validation predicate**: there is no build, no test suite. `make check` defaults assume code.
+
+The move is the universal-reduction discipline made concrete: **author a domain predicate and wire it as `make check`.** "Done" is not "tests pass" — it is "the documents are well-formed and internally consistent." That predicate must be *agent-independent* (`h ⟂ U`): a separate checker the writing agent cannot fake, exactly like a test suite is independent of the code that satisfies it.
+
+**Reference predicate — vault integrity** (the non-code analog of a test suite). Every entity has required frontmatter; every `[[wikilink]]` resolves to a real file. Drop this at `vault-check.py` and wire `make check` to it:
+
+```python
+#!/usr/bin/env python3
+"""Vault integrity predicate: required frontmatter + every [[wikilink]] resolves."""
+import sys, re, pathlib
+REQUIRED = {"slug", "type", "status"}
+root = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else ".")
+ents = sorted((root / "entities").glob("*.md"))
+slugs = {p.stem for p in ents}
+errs = []
+for p in ents:
+    t = p.read_text()
+    fm = re.match(r"^---\n(.*?)\n---", t, re.S)
+    keys = set(re.findall(r"^(\w+):", fm.group(1), re.M)) if fm else set()
+    if REQUIRED - keys:
+        errs.append(f"{p.name}: missing frontmatter {sorted(REQUIRED - keys)}")
+    for link in re.findall(r"\[\[([^\]]+)\]\]", t):
+        tgt = link.split("|")[0].split("#")[0].strip()
+        if tgt not in slugs:
+            errs.append(f"{p.name}: broken wikilink [[{tgt}]]")
+if errs:
+    print("VAULT CHECK FAILED:"); [print("  -", e) for e in errs]; sys.exit(1)
+print(f"VAULT CHECK OK: {len(ents)} entities, frontmatter complete, all wikilinks resolve.")
+```
+
+```makefile
+# The bstack validation gate, tailored to a non-code repo:
+check:
+	@python3 vault-check.py
+```
+
+**The predicate menu** (pick by what "well-formed" means for *your* documents — strongest first):
+- **Schema / structure** (hard, `h ⟂ U`): required frontmatter present, link-graph resolves (no broken `[[wikilinks]]` / relative links), no orphan pages, IDs unique. The reference above.
+- **Cross-reference integrity** (hard): every citation/reference resolves to a real source (a DOI/URL that returns 200, a `references.bib` key that exists). Mirrors the systematic-review citation-verification predicate.
+- **Checklist coverage** (hard): every required section present (an RFP compliance matrix, an ADR template's mandatory fields, a contract playbook's clauses).
+- **Rubric / judge** (soft, LLM-as-judge ≥ threshold): prose quality, argument completeness — needs a judge the writer doesn't control; pairs with P20 cross-review.
+- **Human sign-off** (gate): the irreducible-judgment residual (legal review, editorial approval) — wire as a `require_human` merge gate in `.control/policy.yaml`.
+
+**Dogfood Plan** (stack: knowledge-vault)
+
+```markdown
+**Dogfood Plan** (stack: knowledge-vault)
+
+- **Entry surface**: the documents as consumed — rendered HTML/PDF, the Obsidian graph view, or a `/kg load <topic>` query
+- **Driver**: the domain predicate (`vault-check.py` / a schema validator / a citation-resolver / an LLM-judge)
+- **Evidence**: predicate exit 0 + a sample render of a changed page (PNG/PDF) showing it reads correctly
+- **Smoke**: `make check` green (frontmatter + links resolve)
+- **End-to-end**: render/query one changed document end-to-end (the link a human/agent actually follows), capture it
+- **Receipt anchor**: PR body / commit message / a bookkeeping entry for the vault
+```
+
+**Gotchas**:
+- A green predicate proves *well-formed*, not *correct/true* — schema validation can't judge whether a claim is right (same gap as "tests pass ≠ behavior correct"). Use the rubric/judge tier for substance, and keep the hard predicate for structure.
+- Keep the predicate **independent of the authoring agent** (`h ⟂ U`). A predicate the writer can trivially satisfy by restating its own output is theater, not verification — the EGRI evaluator-immutability principle applies to documents too.
+- Markdown is the agent-read substrate (Audience / P18): the *predicate* and *plan* are markdown; a human-facing render (the PDF/HTML the reader consumes) is the Category-B/C projection.
+
+**Where this sits**: the canonical reference instance is the workspace's own `research/entities/` knowledge graph — entity pages with frontmatter + `[[wikilinks]]`, validated by `bookkeeping lint` (the production-grade version of the predicate above).
+
+---
+
 ## Skills inventory (when to reach for which)
 
 Ranked by P11 utility for dogfooding-from-client-POV. All are existing skills; the cookbook composes them per stack.
@@ -281,10 +348,14 @@ elif exists(openapi.*) or has_dep(["fastapi","hono","axum","express"])
                                                        → Pattern E — REST API
 elif frontmatter_has("tools:") or exists(mcp.{json,yaml})
                                                        → Pattern F — MCP server
+elif no_code_manifest and (exists(entities/) or exists(.obsidian/) or
+     exists(vault/) or count("**/*.md") >= 5)          → Pattern H — Knowledge vault / Document repo (NON-CODE)
 else                                                   → Pattern Z — Unknown; agent declares stack in plan
 ```
 
-Trading-bot is checked *before* REST API because a trading-bot repo also matches the REST API signals (it has FastAPI / Hono routes). The more-specific match wins.
+where `no_code_manifest` = none of {Cargo.toml, package.json, go.mod, pyproject.toml, setup.py, pom.xml, build.gradle, Gemfile, composer.json} exist.
+
+Trading-bot is checked *before* REST API because a trading-bot repo also matches the REST API signals (it has FastAPI / Hono routes). The more-specific match wins. Pattern H (non-code) is checked *last before the fallback*: it is the most-general match (any markdown-dominant repo), so every code pattern gets first refusal — `no_code_manifest` keeps it from ever firing on a real codebase.
 
 Multi-stack repos (e.g. Next.js + REST API combined; Tauri + MCP-server-as-tool) produce *multiple* dogfood plans — one per surface the user perceives.
 

@@ -614,6 +614,13 @@ section "13. P11 Empirical dogfood-readiness"
 DETECTED_STACK="unknown"
 DETECTION_REASON=""
 
+# Is any code build manifest present? (checked individually — `ls a b c` returns
+# non-zero if ANY one is missing, so it can't answer "are they all absent".)
+CODE_MANIFEST=0
+for _m in Cargo.toml package.json go.mod pyproject.toml setup.py pom.xml build.gradle Gemfile composer.json; do
+    [ -f "$WORKSPACE/$_m" ] && CODE_MANIFEST=1 && break
+done
+
 if [ -f "$WORKSPACE/Cargo.toml" ] && [ -d "$WORKSPACE/src-tauri" ]; then
     DETECTED_STACK="tauri-sidecar"
     DETECTION_REASON="Cargo.toml + src-tauri/ present"
@@ -638,6 +645,12 @@ elif [ -f "$WORKSPACE/mcp.json" ] || [ -f "$WORKSPACE/mcp.yaml" ]; then
 elif [ -f "$WORKSPACE/package.json" ] && grep -qE '"(fastapi|hono|axum|express)"' "$WORKSPACE/package.json" 2>/dev/null; then
     DETECTED_STACK="rest-api"
     DETECTION_REASON="REST framework dep in package.json"
+elif [ "$CODE_MANIFEST" = "0" ] && { [ -d "$WORKSPACE/entities" ] || [ -d "$WORKSPACE/.obsidian" ] || [ -d "$WORKSPACE/vault" ] \
+        || [ "$(find "$WORKSPACE" -maxdepth 3 -name '*.md' -not -path '*/.git/*' -not -path '*/.control/*' 2>/dev/null | wc -l | tr -d ' ')" -ge 5 ]; }; then
+    # Non-code repo: a knowledge vault / document repo (markdown-dominant, no code
+    # build manifest). The dogfood predicate is content integrity, not a test suite.
+    DETECTED_STACK="knowledge-vault"
+    DETECTION_REASON="markdown/document repo (no code build manifest; Pattern H)"
 fi
 
 if [ "$DETECTED_STACK" = "unknown" ]; then
