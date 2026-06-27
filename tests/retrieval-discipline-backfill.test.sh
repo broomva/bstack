@@ -183,9 +183,19 @@ if [ "$lead_before" -eq 1 ] && [ "$lead_after" -eq 1 ]; then
 else
     assert_fail "reworded reflex duplicated (before=$lead_before after=$lead_after)"
 fi
-# doctor must report ok on the reworded variant (consistency with repair).
-if BROOMVA_WORKSPACE="$WS" bash "$DOCTOR_SH" 2>&1 | grep -q "has P6 retrieval-discipline reflex"; then
-    : # need .control for doctor to run sections; skip strict check here
+# doctor §4c must ALSO report ok on the reworded variant (drops the phrase,
+# keeps the **Retrieval discipline lead) — proving doctor's structural signal
+# agrees with repair's. Needs .control so doctor runs its sections. Capture the
+# output to a var first: the bare fixture has real gaps so doctor exits non-zero,
+# and `doctor | grep -q` under `set -o pipefail` would return doctor's exit, not
+# grep's — a false failure. Grepping the captured string avoids that.
+mkdir -p "$WS/.control"
+cp "$BSTACK_REPO/assets/templates/policy.yaml.template" "$WS/.control/policy.yaml" 2>/dev/null || true
+DOC_REWORDED="$(BROOMVA_WORKSPACE="$WS" bash "$DOCTOR_SH" 2>&1)"
+if echo "$DOC_REWORDED" | grep -q "has P6 retrieval-discipline reflex"; then
+    assert_pass "doctor §4c treats the reworded (phrase-less) reflex as present"
+else
+    assert_fail "doctor §4c did not recognize the reworded reflex (structural signal broken)"
 fi
 rm -rf "$WS"
 
