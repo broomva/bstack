@@ -2,6 +2,19 @@
 
 28 curated skills across 7 layers. The Broomva Stack.
 
+## Publishing standard (skill layout) — required for installability
+
+A skill is a **folder**, per the [Agent Skills standard](https://agentskills.io) — `SKILL.md` + optional `scripts/` / `references/` / `assets/`. **Publish every multi-file skill in a `skills/<name>/` subdirectory of its repo — never as a bare top-level `SKILL.md` at the repo root.**
+
+| Layout | Remote `npx skills add` | |
+|---|---|---|
+| `skills/<name>/{SKILL.md, scripts/…}` | installs the **full** skill | ✅ standard |
+| top-level `SKILL.md` + sibling `scripts/` at repo root | installs **only `SKILL.md`** — scripts dropped → non-functional | 🔴 broken (BRO-1561) |
+
+**Why:** the vercel-labs/skills CLI special-cases a repo-root `SKILL.md` and copies only that file (a repo root carries `README`/`LICENSE`/`.github` — not a clean skill folder). A `skills/<name>/` subdir is a clean folder and is fully copied. A repo can keep its name and still be standard: `git mv SKILL.md scripts/ → skills/<name>/`; `npx skills add broomva/<name>` still works (the CLI's `skills/` priority-search finds the subdir).
+
+**Validation:** `--list` is **necessary but not sufficient** — it only parses frontmatter, never the file-copy path, so it passes even when the install drops `scripts/`. The real gate is a **clean-room install that yields a *runnable* skill** (bundled files land + the skill's own test passes). The `skillify` skill machine-enforces this (`skillify_check.py` step 1 FAILs a repo-root-with-bundled-dirs layout). Full proof + root cause: `research/entities/tool/skills-sh.md`.
+
 ## Foundation — Control & Governance
 
 | # | Skill | Install | Description |
