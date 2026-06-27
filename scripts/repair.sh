@@ -229,15 +229,18 @@ backfill_retrieval_discipline() {
     local template="$2"      # AGENTS.md.template
     local tgt="$WORKSPACE_DIR/$target"
     local tpl="$TEMPLATES_DIR/$template"
-    # Shared marker with doctor §4c so detection and backfill agree on "present".
-    # Match the coined phrase "substrate grep" (not the full "never substrate
-    # grep") so a workspace carrying the reflex under DIFFERENT wording — e.g. a
-    # hand-authored "not a substrate grep" variant — is still detected as present
-    # and NOT duplicated. "substrate grep" appears only in this reflex.
+    # Shared phrase marker with doctor §4c so detection and backfill agree on
+    # "present". "substrate grep" is the coined phrase and appears only in this
+    # reflex; it catches the verbatim template paragraph AND wording variants that
+    # retain the phrase (e.g. a hand-authored "not a substrate grep").
     local marker="substrate grep"
     [ -f "$tgt" ] || return                                   # nothing to backfill into
     [ -f "$tpl" ] || { echo "  [skip] $target retrieval-discipline — template missing: $template"; return; }
     grep -qF "$marker" "$tgt" && return                       # already present (idempotent)
+    # Semantic guard: also treat a reflex reworded to DROP the phrase as present
+    # (an additive backfill of a second paragraph is worse than a missed one).
+    # The `**Retrieval discipline` lead is the reflex's structural signature.
+    grep -qE "^\*\*Retrieval discipline" "$tgt" && return     # present under different wording
     if ! grep -qF "$marker" "$tpl"; then
         echo "  [skip] $target retrieval-discipline — template lacks the paragraph"
         return

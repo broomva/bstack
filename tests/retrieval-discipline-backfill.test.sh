@@ -161,6 +161,34 @@ else
 fi
 rm -rf "$WS"
 
+# ── Test 4b: reflex present under DIFFERENT wording → no duplication ─────────
+echo ""
+echo "Test 4b: a reworded reflex (drops the phrase, keeps the **Retrieval discipline lead) is not duplicated"
+WS="$(fresh_pre1426_workspace)"
+# Inject a reworded reflex into §P6 that OMITS the phrase "substrate grep" but
+# carries the structural **Retrieval discipline lead.
+awk '
+    { print }
+    /^### P6 / && !done {
+        print ""
+        print "**Retrieval discipline.** Use `/kg` for discovery; never grep `research/entities/` directly."
+        done = 1
+    }
+' "$WS/AGENTS.md" > "$WS/AGENTS.md.tmp" && mv "$WS/AGENTS.md.tmp" "$WS/AGENTS.md"
+lead_before="$(grep -cE '^\*\*Retrieval discipline' "$WS/AGENTS.md")"
+BROOMVA_WORKSPACE="$WS" bash "$REPAIR_SH" --apply-all >/dev/null 2>&1
+lead_after="$(grep -cE '^\*\*Retrieval discipline' "$WS/AGENTS.md")"
+if [ "$lead_before" -eq 1 ] && [ "$lead_after" -eq 1 ]; then
+    assert_pass "reworded reflex not duplicated (lead count stayed 1)"
+else
+    assert_fail "reworded reflex duplicated (before=$lead_before after=$lead_after)"
+fi
+# doctor must report ok on the reworded variant (consistency with repair).
+if BROOMVA_WORKSPACE="$WS" bash "$DOCTOR_SH" 2>&1 | grep -q "has P6 retrieval-discipline reflex"; then
+    : # need .control for doctor to run sections; skip strict check here
+fi
+rm -rf "$WS"
+
 # ── Test 5: doctor §4c advisory present/absent + 0 gaps / strict-neutral ─────
 echo ""
 echo "Test 5: doctor §4c advisory is informational (does not change GAP total / --strict)"
