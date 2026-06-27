@@ -218,6 +218,25 @@ if [ -f "$AGENTS" ]; then
     fi
 fi
 
+# ── 4c. AGENTS.md P6 retrieval-discipline reflex (advisory, backfillable) ────
+# The "/kg for discovery, never substrate grep" reflex was added to the §P6
+# template with the BRO-1426 reflex. A workspace bootstrapped before then
+# legitimately lacks it (scaffold never overwrites an existing AGENTS.md), so —
+# like §4b — this is informational only: never a GAP, never fails --strict.
+# `bstack repair` backfills it. Detection mirrors repair's two signals so the two
+# agree on "present": the coined phrase "substrate grep" (catches the template +
+# "never"/"not a" wording variants) OR the structural `**Retrieval discipline`
+# lead (catches a reflex reworded to drop the phrase).
+section "4c. AGENTS.md retrieval-discipline reflex (advisory)"
+if [ -f "$AGENTS" ]; then
+    if grep -qF "substrate grep" "$AGENTS" || grep -qE "^\*\*Retrieval discipline" "$AGENTS"; then
+        ok "AGENTS.md has P6 retrieval-discipline reflex (/kg for discovery)"
+    else
+        echo "  [info] AGENTS.md has no P6 retrieval-discipline reflex (/kg for discovery, never substrate grep)"
+        echo "         → backfill: bstack repair  (informational; not a gap, does not fail --strict)"
+    fi
+fi
+
 # ── 5. policy.yaml required blocks ──────────────────────────────────────────
 section "5. .control/policy.yaml blocks"
 POL="$WORKSPACE/.control/policy.yaml"
