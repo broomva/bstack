@@ -212,6 +212,106 @@ backfill_philosophy_section() {
     echo "  [fix] backfilled Development Philosophy into $target"
 }
 
+# Backfill the §P6 "Retrieval discipline (/kg for discovery, never substrate
+# grep)" reflex paragraph into an existing AGENTS.md that predates it (templated
+# in the §P6 section since the BRO-1426 reflex shipped). Same idempotent-never-
+# overwrite gap as the philosophy section: scaffold only creates whole files, so
+# existing workspaces never receive newly-templated *content* — this closes that
+# gap for this one paragraph.
+#
+# Idempotent + non-destructive: skips if the marker phrase is already present;
+# skips with a warning if the §P6→next-heading insertion anchor is absent (never
+# guesses a location). Extracts the paragraph verbatim from the template (the
+# `**Retrieval discipline` line → next `### ` heading, exclusive) via files only
+# — no shell interpolation of the content — so backticks/quotes/pipes survive.
+backfill_retrieval_discipline() {
+    local target="$1"        # AGENTS.md
+    local template="$2"      # AGENTS.md.template
+    local tgt="$WORKSPACE_DIR/$target"
+    local tpl="$TEMPLATES_DIR/$template"
+    # Shared marker with doctor §4c so detection and backfill agree on "present".
+    # Match the coined phrase "substrate grep" (not the full "never substrate
+    # grep") so a workspace carrying the reflex under DIFFERENT wording — e.g. a
+    # hand-authored "not a substrate grep" variant — is still detected as present
+    # and NOT duplicated. "substrate grep" appears only in this reflex.
+    local marker="substrate grep"
+    [ -f "$tgt" ] || return                                   # nothing to backfill into
+    [ -f "$tpl" ] || { echo "  [skip] $target retrieval-discipline — template missing: $template"; return; }
+    grep -qF "$marker" "$tgt" && return                       # already present (idempotent)
+    if ! grep -qF "$marker" "$tpl"; then
+        echo "  [skip] $target retrieval-discipline — template lacks the paragraph"
+        return
+    fi
+    # Anchor: the target must have a §P6 section followed by a later `### ` heading
+    # (the paragraph lands at the END of §P6, before whatever heading follows it).
+    if ! awk '
+        function clean(s){ sub(/\r$/,"",s); return s }
+        { l=clean($0); if (l ~ /^### P6([ :]|$)/) p6=1; else if (p6 && l ~ /^### /) {found=1; exit} }
+        END { exit (found ? 0 : 1) }
+    ' "$tgt"; then
+        echo "  [skip] $target retrieval-discipline — no §P6→heading anchor (insert manually)"
+        return
+    fi
+    if [ "$DRY_RUN" = "1" ]; then
+        echo "  [dry-run] would backfill P6 retrieval-discipline into $target"
+        return
+    fi
+    if ! confirm "Backfill P6 retrieval-discipline reflex into $target?"; then
+        echo "  [skip] $target retrieval-discipline (declined)"
+        return
+    fi
+    local secfile tmp
+    secfile="$(mktemp)" || { echo "  [skip] $target retrieval-discipline — mktemp failed"; return; }
+    # Extract the paragraph: from the `**Retrieval discipline` line up to (excluding)
+    # the next `### ` heading. CR stripped first so awk delimiters match a CRLF template.
+    # Flag-clear on the boundary (NOT `exit`): under `set -o pipefail` an early awk
+    # exit closes the pipe and `tr` dies with SIGPIPE → the pipeline fails spuriously.
+    # Draining all of tr's output keeps the pipeline status clean.
+    if ! tr -d '\r' < "$tpl" | awk '
+        /^\*\*Retrieval discipline/ { f=1 }
+        f && /^### / { f=0 }
+        f { print }
+    ' > "$secfile"; then
+        echo "  [skip] $target retrieval-discipline — extraction pipeline failed"
+        rm -f "$secfile"
+        return
+    fi
+    if [ ! -s "$secfile" ] || ! grep -qF "$marker" "$secfile"; then
+        echo "  [skip] $target retrieval-discipline — could not extract from $template"
+        rm -f "$secfile"
+        return
+    fi
+    tmp="$(mktemp)" || { echo "  [skip] $target retrieval-discipline — mktemp failed"; rm -f "$secfile"; return; }
+    # Insert at the END of §P6 — before the first `### ` heading after `### P6`.
+    if ! awk -v secfile="$secfile" '
+        function clean(s){ sub(/\r$/,"",s); return s }
+        { line = clean($0) }
+        seenP6 && line ~ /^### / && !done {
+            while ((getline s < secfile) > 0) print s
+            close(secfile)
+            done = 1
+        }
+        { if (line ~ /^### P6([ :]|$)/) seenP6 = 1; print }
+    ' "$tgt" > "$tmp"; then
+        echo "  [skip] $target retrieval-discipline — insertion failed (awk)"
+        rm -f "$secfile" "$tmp"
+        return
+    fi
+    rm -f "$secfile"
+    # Verify the paragraph actually landed before committing the write.
+    if ! grep -qF "$marker" "$tmp"; then
+        echo "  [skip] $target retrieval-discipline — anchor not matched during insert (no change)"
+        rm -f "$tmp"
+        return
+    fi
+    if ! mv "$tmp" "$tgt"; then
+        echo "  [skip] $target retrieval-discipline — could not write $target"
+        rm -f "$tmp"
+        return
+    fi
+    echo "  [fix] backfilled P6 retrieval-discipline reflex into $target"
+}
+
 # ── Hook re-wire (helper) ──────────────────────────────────────────────────
 # Idempotently merges every hook in assets/templates/settings.json.snippet
 # into $WORKSPACE_DIR/.claude/settings.json. Existing entries are never
@@ -362,6 +462,7 @@ deploy_workspace_hooks
 # GAP (so doctor still reports "fully bstack-compliant" without it).
 backfill_philosophy_section "AGENTS.md" "AGENTS.md.template"
 backfill_philosophy_section "CLAUDE.md" "CLAUDE.md.template"
+backfill_retrieval_discipline "AGENTS.md" "AGENTS.md.template"
 
 if echo "$GAPS_OUTPUT" | grep -q "fully bstack-compliant"; then
     echo "  ✓ no other gaps — workspace already bstack-compliant"
