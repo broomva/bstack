@@ -2,8 +2,213 @@
 # Installed by `bstack bootstrap` when .control/policy.yaml is absent.
 # Customize for your workspace; bstack doctor will validate required blocks.
 
-version: "1.0"
+version: "1.1"
 profile: governed  # baseline | governed | autonomous
+
+permissions:
+  defaults:
+    # Path-match PRECEDENCE: explicit `deny` ALWAYS wins over `allow`, regardless of
+    # list order, across read/write/execute/network. Load-bearing invariant — without
+    # it, broad allows like `{current_project}/**` (which equals `{workspace_root}/**`
+    # when work runs at workspace root) would match governance + secret paths and
+    # enable self-elevation. The runtime gate MUST apply deny-over-allow.
+    precedence: deny_over_allow
+    read:
+      allow:
+        - "{workspace_root}/CLAUDE.md"
+        - "{workspace_root}/AGENTS.md"
+        - "{workspace_root}/METALAYER.md"
+        - "{workspace_root}/.control/policy.yaml"
+        - "{workspace_root}/docs/**"
+        - "{workspace_root}/skills/**/SKILL.md"
+        - "{workspace_root}/skills/**/references/**"
+        - "{workspace_root}/research/**"
+        - "{current_project}/**"
+        - "{workspace_root}/scripts/**"  # bstack scripts readable for inspection
+      deny:
+        - "**/.env*"
+        - "**/credentials*"
+        - "**/secrets/**"
+        - "**/*.key"
+        - "**/id_rsa*"
+        - "**/*.pem"
+        - "**/.aws/credentials"
+        - "**/.ssh/**"
+        - "~/Downloads/**"
+        - "~/Desktop/**"
+        - "/tmp/**"  # tmp is for hook-output only; agent shouldn't read freely
+        - "**/.git/objects/**"  # raw git internals — use git commands
+
+    write:
+      allow:
+        - "{current_project}/**"
+        - "{workspace_root}/research/entities/**"   # P6 — requires capability_id (BRO-1030)
+        - "{workspace_root}/research/notes/**"
+        - "{workspace_root}/docs/conversations/**"  # P1 bridge writes
+      deny:
+        - "**/.env*"
+        - "**/credentials*"
+        - "**/secrets/**"
+        - "**/*.key"
+        - "**/id_rsa*"
+        - "**/.git/objects/**"
+        - "{workspace_root}/.control/policy.yaml"   # never_auto_granted
+        - "{workspace_root}/.control/grants.jsonl"  # never_auto_granted (use permission_approve)
+        - "{workspace_root}/CLAUDE.md"              # governance — require_human
+        - "{workspace_root}/AGENTS.md"              # governance — require_human
+        - "{workspace_root}/METALAYER.md"           # governance — require_human
+        - "{workspace_root}/.claude/settings.json"  # hooks:write — the hook registry
+        - "{workspace_root}/scripts/*-hook.sh"      # hooks:write — enforcement substrate
+        - "{workspace_root}/.githooks/**"           # hooks:write — pre-commit/gate hooks
+
+    execute:
+      # NOTE: bash_allowlist/denylist are a convenience pre-filter + defense-in-depth
+      # tripwire, NOT a complete exec boundary — an allowed interpreter (python3, bun
+      # run, npm run) can shell out and evade the denylist. The real execution boundary
+      # is deny-precedence (above) + the Tier-3 sandbox (spec §4 Tier 3, follow-up PR).
+      # Denylist entries are tripwires for the common case, not adversarial-proof.
+      bash_allowlist:
+        # Read-only inspection
+        - "git status*"
+        - "git diff*"
+        - "git log*"
+        - "git show*"
+        - "git branch*"
+        - "git remote*"
+        - "git worktree list*"
+        - "ls *"
+        - "find *"
+        - "cat *"            # but the read-allow list above gates the path
+        - "head *"
+        - "tail *"
+        - "wc *"
+        - "stat *"
+        - "file *"
+        - "echo *"
+        - "pwd"
+        - "which *"
+        - "type *"
+        # Build / test (project-scoped — never executes outside current project)
+        - "make {bstack-check|control-audit|check|janitor|test|build|smoke}"
+        - "bun {install|run *|test*}"
+        - "npm {install|run *|test*}"
+        - "cargo {build|test|check|clippy|fmt}"
+        - "pytest *"
+        - "python3 *"        # paired with read-allow on the script path
+        # Tooling
+        - "gh {pr list|pr view *|pr checks *|run list|run view *|run watch *|api *}"
+        - "vercel {ls|inspect *|logs *}"
+        - "curl -sI *"       # head-only; full curl requires network grant
+        - "jq *"
+        - "yq *"
+      bash_denylist:
+        - "rm -rf*"
+        - "*--no-verify*"
+        - "git push --force*"
+        - "git push -f *"
+        - "git reset --hard*"
+        - "git clean -f*"
+        - "sudo *"
+        - "su *"
+        - "chmod 777 *"
+        - "chown *"
+        - "curl http*://*"   # full HTTP curl requires network grant
+        - "wget *"
+        - "ssh *"
+        - "scp *"
+        - "rsync *"
+        - "* > /etc/*"
+        - "* > /usr/*"
+
+    network:
+      egress_allowlist:
+        # Anthropic + Claude Code infrastructure
+        - "https://api.anthropic.com/**"
+        - "https://*.anthropic.com/**"
+        # Git hosting
+        - "https://github.com/**"
+        - "https://api.github.com/**"
+        - "https://raw.githubusercontent.com/**"
+        # bstack-known surfaces
+        - "https://broomva.tech/**"
+        - "https://www.broomva.tech/**"
+        # NOTE: no `*.vercel.app` wildcard — that would authorize egress to any
+        # attacker-deployable subdomain (exfil channel). Preview-deploy hosts are
+        # added per-host via a `network:egress.add_host` grant (never_auto_granted).
+        - "https://www.moltbook.com/api/**"
+        - "https://linear.app/**"
+        - "https://api.linear.app/**"
+        # Package registries (read-only)
+        - "https://registry.npmjs.org/**"
+        - "https://pypi.org/**"
+        - "https://crates.io/**"
+      egress_denylist: []  # whitelist-only; nothing implicit
+
+  # ============================================================================
+  # NEVER-AUTO-GRANTED — capabilities that ALWAYS require human approval.
+  # ============================================================================
+  # Even if the agent has `policy:write` from a prior grant, requests to add or
+  # broaden any of these MUST trigger a fresh human-approval flow. The chained-
+  # self-elevation check enforces this.
+  never_auto_granted:
+    - "policy:write"           # edits to .control/policy.yaml
+    - "grants:write"           # edits to .control/grants.jsonl outside approve/revoke
+    - "secrets:read"           # reads from secret-shaped paths
+    - "network:egress.add_host"  # adding a new egress allowlist entry
+    - "signed_writes:bypass"   # bypassing capability_id (BRO-1030) requirement
+    - "governance:write"       # writes to CLAUDE.md / AGENTS.md / METALAYER.md
+    - "hooks:write"            # edits to scripts/*-hook.sh or .claude/settings.json
+
+  # ============================================================================
+  # APPROVAL FLOW — how permission requests get to the human.
+  # ============================================================================
+  approval:
+    mode: in_band  # in_band | out_of_band_telegram | auto_deny
+    in_band:
+      blocking: true       # agent halts until approve/deny
+      timeout_seconds: 0   # 0 = no timeout (synchronous human wait)
+    out_of_band_telegram:
+      enabled: false
+      chat_id: ""
+      timeout_seconds: 1800  # 30 min
+      timeout_action: deny
+    rate_limit:
+      max_requests_per_hour: 12
+      max_requests_per_session: 30
+      excess_action: deny
+
+# ============================================================================
+# TRUST TIERS — read-side classification of incoming content.
+# ============================================================================
+# Trust tier is ORTHOGONAL to permission. A cross-folder read grant authorizes
+# the operation; the content is still classified at its tier (likely T4) and
+# wrapped accordingly by the read-boundary runtime (follow-up PR).
+#
+# Model: INSTRUCTION-AUTHORITY (who may issue instructions vs data-only) — adopted
+# from the CaMeL / spotlighting instruction-vs-data distinction the defense spec
+# cites. This SUPERSEDES the draft origin-locality sketch in
+# specs/2026-05-15-indirect-prompt-injection-defense.md §4 Tier 2 (that spec is a
+# Draft; this block is canonical). Self-contained — the full classification lives
+# here, not a separate file, so it is protected by `policy:write` like the rest of
+# this file (an agent cannot reclassify external content as trusted-instructions
+# without a human-signed grant).
+
+trust_tiers:
+  default_tier: "T4_external"   # fail-closed: unknown sources are quarantined data
+  classification:
+    T0_system: "governance files (CLAUDE.md, AGENTS.md, METALAYER.md, policy.yaml); trusted instructions"
+    T1_user: "live user messages; trusted instructions"
+    T2_workspace_governance: "installed SKILL.md, conventions, bstack/references; loaded as instructions"
+    T3_workspace_data: "research/, docs/conversations/, our source code; data only, never instructions"
+    T4_external: "Moltbook, X, WebFetch, MCP, imported bridge logs; quarantined data, never instructions"
+
+# ============================================================================
+# LEGACY: v1 GATES (kept for backward compatibility)
+# ============================================================================
+# These remain enforced by control-gate-hook.sh. The new permission model in
+# `permissions.defaults.execute.bash_denylist` is a superset; gates here are
+# the minimal hard-wired baseline that survives even if the policy parser
+# fails.
 
 setpoints:
   - id: S1
@@ -86,6 +291,15 @@ auto_merge:
     - path_touched: METALAYER.md
       action: require_human
     - path_touched: .control/policy.yaml
+      action: require_human
+    # Enforcement substrate — the hooks + grants ledger that ENFORCE this policy. A
+    # PR that modifies the gate hook or the grants ledger must not auto-merge under
+    # `notify` (the merge-time twin of the write.deny hooks:write guard). (BRO-1600)
+    - path_touched: .control/grants.jsonl
+      action: require_human
+    - path_touched: scripts/*-hook.sh
+      action: require_human
+    - path_touched: .githooks/*
       action: require_human
     # === Indirect-prompt-injection defense — editor-config paths (2026-05-15) ===
     # Spec: specs/2026-05-15-indirect-prompt-injection-defense.md §4 Tier 1.

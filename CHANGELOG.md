@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.29.0 — 2026-06-29
+
+### feat: Tier-2 `permissions:` + `trust_tiers:` policy schema — path-based capability model, never-auto-granted set, signed grants approval flow (BRO-1600)
+
+Lands the schema half of the indirect-prompt-injection defense: a declarative capability layer in `assets/templates/policy.yaml.template` (template internal version `1.0` → `1.1`) that makes an agent's authority over the filesystem an explicit, reviewable surface instead of an implicit consequence of which tools are wired. Schema-first by design — the runtime hooks that enforce these blocks are sequenced follow-ups, matching the precedent set by `write_gate` (declared before its checker shipped).
+
+### Added
+
+- **`permissions:` block (path-based capability model).** Declares per-path-glob capabilities (read / write / execute) so authority is granted by location, not inherited globally. A `never_auto_granted:` set names capabilities that an agent can **never** self-grant in-loop (the dangerous-by-default surface — credential paths, governance files, the grant ledger itself); acquiring them requires the explicit approval flow below, never an in-session decision.
+- **`trust_tiers:` block (T0–T4).** Five named trust tiers that scope what a given actor/context is permitted to do, from untrusted input (T0) up to operator-authorized (T4). Capabilities and paths bind to a minimum tier; requests below tier are refused.
+- **Signed-grant approval flow (`grants.jsonl`).** An append-only, signed grant ledger: escalations to a `never_auto_granted` capability are recorded as signed grant entries, so every elevation is attributable and auditable after the fact rather than silently assumed.
+- **`tests/policy-template-schema.test.sh`** — schema guard: asserts the template carries internal version `1.1` and that the `permissions:`, `never_auto_granted:`, `trust_tiers:` (T0–T4), and `grants.jsonl` flow are all present and well-formed, so the schema can't silently regress.
+- **`references/security-primitives.md`** — documents the capability model, the T0–T4 tiers, the never-auto-granted set, and the signed-grant flow; cross-links `specs/2026-05-15-indirect-prompt-injection-defense.md §5`.
+
+### Notes
+
+- **Schema-first, enforcement-sequenced.** This ships the declarative contract only; the PreToolUse runtime hooks that enforce `permissions:` / `trust_tiers:` are the sequenced follow-ups per `specs/2026-05-15-indirect-prompt-injection-defense.md §5` — the same land-schema-then-wire-checker order `write_gate` used.
+- Primitive count unchanged (**20**). This is a policy-schema addition, not a new P-row.
+- `VERSION` 0.28.1 → 0.29.0 (minor: additive schema feature, backward-compatible).
+
 ## 0.28.1 — 2026-06-28
 
 ### fix: `bstack-skills install` lands every skill, in the dir `status` reads (BRO-1588)
