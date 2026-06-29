@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.28.1 — 2026-06-28
+
+### fix: `bstack-skills install` lands every skill, in the dir `status` reads (BRO-1588)
+
+Caught by a clean-room end-to-end dogfood (P11) of the merged skills-monorepo setup: every guard test and the mocked install test passed, but the **real** `bstack-skills install` only installs the FIRST roster skill, then silently stops (`Installed: 1`). A second, compounding defect: even that one skill lands where `status` can't see it.
+
+### Fixed
+
+- **`bin/bstack-skills` `cmd_install` — stdin drain (the truncation).** The loop reads the roster via `done < <(parse_roster)`, so the loop body's stdin **is** that pipe. The per-skill `$NPX_CMD …` call had no stdin redirect, so the real `npx skills add` subprocess drained the remaining roster rows off the pipe and the enclosing `read` hit EOF after skill #1. Fix: `… </dev/null >/dev/null 2>&1`. Empirically: exact pre-fix code installs 1/13 required; with `</dev/null`, 13/13. Pre-existing — predates the BRO-1584 `--skill` change; any stdin-reading subprocess in that loop drains it.
+- **`bin/bstack-skills` `cmd_install` — global-install landing (the mismatch).** Production `add_args` had no `-g`, so the skills CLI installed **cwd-relative** (`./.agents/skills`), while `status` only checks `~/.agents/skills` + `~/.claude/skills` → an install↔status mismatch. Fix: append `-g`. Verified `-g` lands in the global `~/.agents/skills` (plus the per-agent `~/.claude/skills` when that agent's home dir is present at install time), so `status` reports `installed`; and it exits 0 even when exotic agents (Eve/PromptScript) reject global install. (Caveat: if `~/.claude` does not yet exist at install time the skill lands only in `~/.agents/skills`; `bstack skills install` is normally run from inside a Claude Code session where `~/.claude` exists, so the per-agent entry is created.)
+- **`bin/bstack-skills` `cmd_install` — interactive prompt (latent, same root cause).** The `--interactive` `read -r -p … reply` read roster rows as the y/N answer; now reads from `</dev/tty`.
+
+### Added
+
+- **`tests/skills-install-no-stdin-drain.test.sh`** — regression guard: mocks `NPX_CMD` with a subprocess that **drains stdin** (like the real CLI) and asserts every roster skill is attempted (count == N, not 1). The existing `skills-install-uses-skill-flag.test.sh` mock does not read stdin, so it could not catch this — proven red (buggy) → green (fixed).
+- **`tests/skills-install-uses-skill-flag.test.sh`** — added a `-g` assertion (every `broomva/skills` install carries `-g`, so it lands status-visible).
+
+### Notes
+
+- Primitive count unchanged (**20**). Installer correctness fix, not a new P-row.
+- `VERSION` 0.28.0 → 0.28.1.
+
 ## 0.28.0 — 2026-06-11
 
 ### feat: Pattern H — non-code dogfood (knowledge-vault) + detection (BRO-1482)

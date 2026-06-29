@@ -31,6 +31,16 @@ else
   fail "$BARE install(s) hit broomva/skills without --skill:"; grep -E '(^| )broomva/skills( |$)' "$LOG" | grep -v -- '--skill' | head
 fi
 
+# every install must be global (-g) so it lands in ~/.{agents,claude}/skills, where
+# `status` looks. Without -g the skills CLI installs cwd-relative (./.agents/skills),
+# invisible to status — an install↔status mismatch. (BRO-1588)
+NONGLOBAL="$(grep -E '(^| )broomva/skills( |$)' "$LOG" | grep -vcE '(^| )-g( |$)' || true)"
+if [ "${NONGLOBAL:-0}" -eq 0 ]; then
+  ok "every broomva/skills install carries -g (global install, status-visible)"
+else
+  fail "$NONGLOBAL install(s) hit broomva/skills without -g (would land cwd-relative, invisible to status):"; grep -E '(^| )broomva/skills( |$)' "$LOG" | grep -vE '(^| )-g( |$)' | head
+fi
+
 rm -f "$LOG" "$MOCK"
 echo ""
 echo "skills-install-uses-skill-flag: $PASS passed, $FAIL failed"
