@@ -241,7 +241,12 @@ cmd_install() {
             continue
         fi
         if [ "$interactive" = "1" ]; then
-            read -r -p "  Install $n ($r)? [y/N] " reply
+            # </dev/tty: the loop body's stdin is the parse_roster pipe (see the npx
+            # note below), so a bare `read` would consume roster rows as the answer.
+            # Read the prompt from the controlling terminal instead. If there is no
+            # tty (CI/cron/piped), the open fails — `|| reply=N` declines rather than
+            # aborting under `set -e`. (BRO-1588)
+            { read -r -p "  Install $n ($r)? [y/N] " reply </dev/tty; } || reply="N"
             if [ "${reply:-N}" != "y" ] && [ "${reply:-N}" != "Y" ]; then
                 echo "    [skip] declined"
                 skipped=$((skipped + 1))
@@ -249,16 +254,27 @@ cmd_install() {
             fi
         fi
         echo "  [install] $n ($r)..."
+        # -g installs globally to ~/.{agents,claude}/skills — exactly where `status`
+        # looks. Without it the skills CLI installs cwd-relative (./.agents/skills),
+        # so an install would never be seen by `status` (install↔status mismatch).
+        # The flag is exit-0 even when exotic agents (Eve/PromptScript) reject global
+        # install — the canonical .agents/.claude copies still land. (BRO-1588)
+        #
         # broomva/skills is the monorepo (many skills) — install the single skill
         # with --skill <name>, else a bare `add broomva/skills` pulls everything.
         # Standalone repos install whole.
         if [ "$r" = "broomva/skills" ]; then
-            add_args=("$r" --skill "$n")
+            add_args=("$r" --skill "$n" -g)
         else
-            add_args=("$r")
+            add_args=("$r" -g)
         fi
         # shellcheck disable=SC2086
-        if $NPX_CMD "${add_args[@]}" >/dev/null 2>&1; then
+        # </dev/null is load-bearing: this loop reads the roster via
+        # `done < <(parse_roster)`, so the loop body's stdin IS that pipe. Without
+        # the redirect the `npx skills add` subprocess drains the remaining roster
+        # rows off the pipe and the enclosing `read` hits EOF after skill #1 — only
+        # 1 of N skills installs, silently. (BRO-1588)
+        if $NPX_CMD "${add_args[@]}" </dev/null >/dev/null 2>&1; then
             installed=$((installed + 1))
             echo "    ✓ installed"
         else
