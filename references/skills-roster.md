@@ -2,6 +2,8 @@
 
 28 curated skills across 7 layers. The Broomva Stack.
 
+> **Canonical *installable* roster:** [`references/companion-skills.yaml`](companion-skills.yaml) — the 56 bstack-native skills, all in the **broomva/skills** monorepo (validated by `tests/roster-monorepo-sync.test.sh`). Install path-independently: `npx skills add broomva/skills --skill <name>`. **This doc is a broader human catalog**: it also documents ecosystem *products* (e.g. symphony, autoany, next-forge) that are not installable bstack skills, so it intentionally lists more than the YAML. For what is installable, the YAML is authoritative.
+
 ## Publishing standard (skill layout) — required for installability
 
 A skill is a **folder**, per the [Agent Skills standard](https://agentskills.io) — `SKILL.md` + optional `scripts/` / `references/` / `assets/`. **Publish every multi-file skill in a `skills/<name>/` subdirectory of its repo — never as a bare top-level `SKILL.md` at the repo root.**
@@ -19,26 +21,26 @@ A skill is a **folder**, per the [Agent Skills standard](https://agentskills.io)
 
 | # | Skill | Install | Description |
 |---|-------|---------|-------------|
-| 1 | `agentic-control-kernel` | `npx skills add broomva/agentic-control-kernel` | LLM-as-controller with safety shields, typed plant/action/trace schemas, multi-rate loop hierarchy. The governance backbone. |
-| 2 | `control-metalayer-loop` | `npx skills add broomva/control-metalayer` | Control primitives: setpoints, sensors, actuators, stability gates, policy profiles. Bootstraps `.control/policy.yaml`. |
+| 1 | `agentic-control-kernel` | `npx skills add broomva/skills --skill agentic-control-kernel` | LLM-as-controller with safety shields, typed plant/action/trace schemas, multi-rate loop hierarchy. The governance backbone. |
+| 2 | `control-metalayer-loop` | *(consolidated → `agentic-control-kernel`)* | Control primitives: setpoints, sensors, actuators, stability gates, policy profiles. Bootstraps `.control/policy.yaml`. |
 | 3 | `harness-engineering-playbook` | `npx skills add broomva/skills --skill harness-engineering-playbook` | Agent-first workflow: AGENTS.md, smoke/test/lint/typecheck harness, entropy-control checks. (Migrated 2026-05-25 from `broomva/harness-engineering-skill` — Phase 4c.) |
 
 ## Memory & Consciousness
 
 | # | Skill | Install | Description |
 |---|-------|---------|-------------|
-| 4 | `agent-consciousness` | `npx skills add broomva/control-metalayer` | Three-substrate persistence: governance + knowledge graph + episodic memory. Progressive crystallization pathway. |
-| 5 | `knowledge-graph-memory` | `npx skills add broomva/control-metalayer` | Conversation logs to Obsidian knowledge graph bridge. Generates per-session docs with frontmatter and wikilinks. |
-| 6 | `kg` | `npx skills add broomva/kg` | LLM-as-index loader for `research/entities/`. Two-tier scoring (catalog tier-1, body-grep tier-2 fallback) routes a topic to top-N entity bodies the agent reasons over. The runtime form of "the LLM **is** the index" — substrate canonical, one projection (catalog) routes, agent IS the query engine. Pairs with bookkeeping's `cmd_index` and the workspace's `knowledge-catalog-refresh-hook.sh` Stop hook (P6). |
-| 7 | `prompt-library` | `npx skills add broomva/prompt-library` | Shared knowledge surface across agents. Versioned prompts + an evaluation engine: every pull/completion writes a typed `prompt_invocation` row with source attribution (`web\|cli\|skill\|api`), latency, tokens, cost, and feedback. The `broomva` Rust CLI (`broomva prompts pull/list/complete/feedback`) is the runtime; the broomva-cli skill carries the auto-tracing mandate. See [prompts-integration.md](prompts-integration.md). |
+| 4 | `agent-consciousness` | *(consolidated → `agentic-control-kernel`)* | Three-substrate persistence: governance + knowledge graph + episodic memory. Progressive crystallization pathway. |
+| 5 | `knowledge-graph-memory` | *(consolidated → `agentic-control-kernel`)* | Conversation logs to Obsidian knowledge graph bridge. Generates per-session docs with frontmatter and wikilinks. |
+| 6 | `kg` | `npx skills add broomva/skills --skill kg` | LLM-as-index loader for `research/entities/`. Two-tier scoring (catalog tier-1, body-grep tier-2 fallback) routes a topic to top-N entity bodies the agent reasons over. The runtime form of "the LLM **is** the index" — substrate canonical, one projection (catalog) routes, agent IS the query engine. Pairs with bookkeeping's `cmd_index` and the workspace's `knowledge-catalog-refresh-hook.sh` Stop hook (P6). |
+| 7 | `prompt-library` | `npx skills add broomva/skills --skill prompt-library` | Shared knowledge surface across agents. Versioned prompts + an evaluation engine: every pull/completion writes a typed `prompt_invocation` row with source attribution (`web\|cli\|skill\|api`), latency, tokens, cost, and feedback. The `broomva` Rust CLI (`broomva prompts pull/list/complete/feedback`) is the runtime; the broomva-cli skill carries the auto-tracing mandate. See [prompts-integration.md](prompts-integration.md). |
 
 ## Orchestration
 
 | # | Skill | Install | Description |
 |---|-------|---------|-------------|
-| 8 | `symphony` | `npx skills add broomva/symphony` | Rust orchestration engine for coding agents. Daemon mode, Linear/GitHub tracker integration, lifecycle hooks. |
-| 9 | `symphony-forge` | `npx skills add broomva/symphony-forge` | CLI scaffolder with composable control metalayer. Bootstraps projects with agent governance built in. |
-| 10 | `autoany` | `npx skills add broomva/autoany` | EGRI self-improvement framework. Turns ambiguous goals into safe, measurable, rollback-capable recursive improvement loops. |
+| 8 | `symphony` | *(ecosystem product — not a portable skill in the monorepo; lives at `broomva/symphony`)* | Rust orchestration engine for coding agents. Daemon mode, Linear/GitHub tracker integration, lifecycle hooks. |
+| 9 | `symphony-forge` | *(ecosystem product — not a portable skill in the monorepo; lives at `broomva/symphony-forge`)* | CLI scaffolder with composable control metalayer. Bootstraps projects with agent governance built in. |
+| 10 | `autoany` | *(ecosystem product — not a portable skill in the monorepo; lives at `broomva/autoany`)* | EGRI self-improvement framework. Turns ambiguous goals into safe, measurable, rollback-capable recursive improvement loops. |
 
 ## Research & Intelligence
 
@@ -47,27 +49,27 @@ A skill is a **folder**, per the [Agent Skills standard](https://agentskills.io)
 | 11 | `deep-dive-research-orchestrator` | `npx skills add broomva/skills --skill deep-dive-research-orchestrator` | Multi-dimensional research with coordinated AI specialists. 10+ source synthesis with citations. (Migrated 2026-05-25 from `broomva/deep-dive-research-skill` — Phase 4c.) |
 | 11a | `social-intelligence` | `npx skills add broomva/skills --skill social-intelligence` | Autonomous social engagement + knowledge extraction loop for Moltbook and X — compounds with `blog-post` and `content-creation`. (Migrated 2026-05-25 from `broomva/social-intelligence` — Phase 4c.) |
 | 12 | `skills` | `npx skills add broomva/skills` | Canonical reference inventory of 83 agent skills across 15 domains. Browsable catalog. |
-| 13 | `skills-showcase` | `npx skills add broomva/skills` | Remotion video + X thread generator for the skills inventory. Animated showcase content. |
+| 13 | `skills-showcase` | *(repo-root Remotion tool in broomva/skills — not an installable skill)* | Remotion video + X thread generator for the skills inventory. Animated showcase content. |
 
 ## Design & Implementation
 
 | # | Skill | Install | Description |
 |---|-------|---------|-------------|
-| 14 | `arcan-glass` | `npx skills add broomva/arcan-glass` | BroomVA web design system. Glass/frosted effects, dark-first themes, AI Blue brand tokens. |
-| 15 | `next-forge` | `npx skills add broomva/symphony-forge` | Production Next.js SaaS template via symphony-forge. Turborepo, auth, payments, observability. |
+| 14 | `arcan-glass` | `npx skills add broomva/skills --skill arcan-glass` | BroomVA web design system. Glass/frosted effects, dark-first themes, AI Blue brand tokens. |
+| 15 | `next-forge` | *(ecosystem product — not a portable skill in the monorepo; lives at `broomva/symphony-forge`)* | Production Next.js SaaS template via symphony-forge. Turborepo, auth, payments, observability. |
 
 ## Platform
 
 | # | Skill | Install | Description |
 |---|-------|---------|-------------|
-| 16 | `alkosto-wait-optimizer` | `npx skills add broomva/alkosto-wait-optimizer-skill` | Probability-based decision tool for optimal waiting times. Bayesian estimation with uncertainty. |
+| 16 | `alkosto-wait-optimizer` | `npx skills add broomva/skills --skill alkosto-wait-optimizer` | Probability-based decision tool for optimal waiting times. Bayesian estimation with uncertainty. |
 | 17 | `content-creation` | `npx skills add broomva/skills --skill content-creation` | Full-stack content pipeline — research → narrative → visual assets → video → social → deploy; ships bstack-launch + open-source-stack example campaigns. (Migrated 2026-05-25 from `broomva/content-creation` — Phase 4b.) |
 | 17a | `content-engine` | `npx skills add broomva/skills --skill content-engine` | Full-stack AI content studio — visual DNA compiler, cinematic generation, browser autopilot, content loop; bundles 4 sub-skills. (Migrated 2026-05-25 from `broomva/content-engine` — Phase 4b.) |
 | 17b | `launch-video` | `npx skills add broomva/skills --skill launch-video` | Liquid Glass product launch video — dark void, 3D floating panels, spring animations via Remotion. (Migrated 2026-05-25 from `broomva/launch-video` — Phase 4b.) |
 | 17c | `ltx-video` | `npx skills add broomva/skills --skill ltx-video` | LTX-2.3 video generation — setup, inference, prompting, ComfyUI integration for Lightricks 22B DiT audio-video model. (Migrated 2026-05-25 from `broomva/ltx-video` — Phase 4b.) |
 | 17d | `creative-review` | `npx skills add broomva/skills --skill creative-review` | Meta creative review — style adherence scoring, feedback loops, self-improving creative pipeline. (Migrated 2026-05-25 from `broomva/creative-review` — Phase 4b.) |
 | 17e | `brainrot-for-good` | `npx skills add broomva/skills --skill brainrot-for-good` | High-retention video production using dopamine-aware editing for genuinely valuable content. (Migrated 2026-05-25 from `broomva/brainrot-for-good` — Phase 4b.) |
-| 18 | `finance-substrate` | `npx skills add broomva/finance-substrate` | Personal finance & Colombian tax management. Bank CSV import, TRM rates, DIAN tax projection, withholdings, e-invoicing. Zero paid deps. *(Pending Tier-1 vs Tier-2 lock-in.)* |
+| 18 | `finance-substrate` | `npx skills add broomva/skills --skill finance-substrate` | Personal finance & Colombian tax management. Bank CSV import, TRM rates, DIAN tax projection, withholdings, e-invoicing. Zero paid deps. *(Pending Tier-1 vs Tier-2 lock-in.)* |
 | 18a | `investment-management` | `npx skills add broomva/skills --skill investment-management` | Portfolio construction, factor models, backtesting, multi-platform execution (Alpaca, Coinbase, Polymarket). (Migrated 2026-05-25 from `broomva/investment-management` — Phase 4c.) |
 | 18b | `wealth-management` | `npx skills add broomva/skills --skill wealth-management` | Wealth planning + Monte Carlo simulations + tax-optimized allocation + net worth forecasting. (Migrated 2026-05-25 from `broomva/wealth-management` — Phase 4c.) |
 | 18c | `haima` | `npx skills add broomva/skills --skill haima` | Agent guide for x402 machine-to-machine payments, secp256k1 wallets, per-task billing, on-chain USDC settlement. (Migrated 2026-05-25 from `broomva/haima-skill` — Phase 4c; renamed to drop `-skill` suffix. Runtime crate stays at `broomva/haima`.) |

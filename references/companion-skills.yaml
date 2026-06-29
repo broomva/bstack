@@ -17,14 +17,14 @@ schema_version: 1
 skills:
   # ── Foundation: orchestration + governance modes ────────────────────────
   - name: autonomous
-    repo: broomva/autonomous
+    repo: broomva/skills
     category: orchestration
     required: true
     introduced_in: 0.1.0
     description: "Canonical operating mode that fires the 20-reflex pipeline"
 
   - name: cross-review
-    repo: broomva/cross-review
+    repo: broomva/skills
     category: safety
     primitive: P20
     required: true
@@ -32,7 +32,7 @@ skills:
     description: "Cross-model adversarial review gate"
 
   - name: role-x
-    repo: broomva/role-x
+    repo: broomva/skills
     category: meta
     primitive: P17
     required: true
@@ -41,18 +41,11 @@ skills:
 
   # ── Control + knowledge stack ───────────────────────────────────────────
   - name: agentic-control-kernel
-    repo: broomva/agentic-control-kernel
+    repo: broomva/skills
     category: meta
     required: true
     introduced_in: 0.1.0
     description: "Unifying control-systems metalayer kernel"
-
-  - name: control-metalayer-loop
-    repo: broomva/control-metalayer-loop
-    category: meta
-    required: true
-    introduced_in: 0.1.0
-    description: "Governance feedback loop"
 
   - name: harness-engineering-playbook
     repo: broomva/skills
@@ -63,23 +56,8 @@ skills:
     min_bstack_version: 0.21.0
     description: "Patterns for agent harness design — AGENTS.md, smoke/test/lint/typecheck harness, entropy-control checks (migrated 2026-05-25 from broomva/harness-engineering-skill — Phase 4c; renamed)"
 
-  - name: agent-consciousness
-    repo: broomva/agent-consciousness
-    category: knowledge
-    required: true
-    introduced_in: 0.1.0
-    description: "Three-substrate persistence + episodic memory"
-
-  - name: knowledge-graph-memory
-    repo: broomva/knowledge-graph-memory
-    category: knowledge
-    primitive: P6
-    required: true
-    introduced_in: 0.1.0
-    description: "Conversation logs → Obsidian-shaped knowledge graph"
-
   - name: kg
-    repo: broomva/kg
+    repo: broomva/skills
     category: knowledge
     primitive: P6
     required: true
@@ -88,7 +66,7 @@ skills:
     description: "LLM-as-index loader for research/entities/. Two-tier scoring (catalog tier-1, body-grep tier-2 fallback) routes a topic to top-N entity bodies the agent reasons over. Pairs with bookkeeping's cmd_index (catalog generator) and the workspace's knowledge-catalog-refresh-hook.sh Stop hook (P6)."
 
   - name: prompt-library
-    repo: broomva/prompt-library
+    repo: broomva/skills
     category: meta
     required: true
     introduced_in: 0.1.0
@@ -96,33 +74,12 @@ skills:
 
   # ── Productive-wait + orchestration ─────────────────────────────────────
   - name: p9
-    repo: broomva/p9
+    repo: broomva/skills
     category: lifecycle
     primitive: P9
     required: true
     introduced_in: 0.1.0
     description: "CI watcher + productive-wait"
-
-  - name: symphony
-    repo: broomva/symphony
-    category: orchestration
-    required: true
-    introduced_in: 0.1.0
-    description: "Orchestration daemon"
-
-  - name: symphony-forge
-    repo: broomva/symphony-forge
-    category: orchestration
-    required: true
-    introduced_in: 0.1.0
-    description: "Project scaffolding with control metalayer"
-
-  - name: autoany
-    repo: broomva/autoany
-    category: meta
-    required: true
-    introduced_in: 0.1.0
-    description: "EGRI L2 meta-controller (self-improvement)"
 
   - name: alkosto-wait-optimizer
     repo: broomva/skills
@@ -190,15 +147,6 @@ skills:
     introduced_in: 0.21.4
     min_bstack_version: 0.21.0
     description: "Deep-ocean genomics research — eDNA, AlphaFold, ESMFold, Evo 2, marine biodiversity, agentic bioinformatics"
-
-  - name: microgrid-agent
-    repo: broomva/skills
-    skillPath: skills/microgrid-agent/SKILL.md
-    category: platform
-    required: false
-    introduced_in: 0.21.4
-    min_bstack_version: 0.21.0
-    description: "Edge AI agent for autonomous renewable energy microgrid management on Raspberry Pi"
 
   # Compute & remote infrastructure
   - name: colab-remote
@@ -343,34 +291,20 @@ skills:
     description: "In-silico neuroscience experiments using Meta's TRIBE v2 — predict fMRI cortical responses to video, audio & text without brain scanners"
 
   # ── Discovery + skill management ────────────────────────────────────────
-  - name: skills
+  - name: skills-catalog
     repo: broomva/skills
     category: meta
     required: true
     introduced_in: 0.1.0
     description: "Canonical reference of all available skills"
 
-  - name: skills-showcase
-    repo: broomva/skills-showcase
-    category: meta
-    required: false
-    introduced_in: 0.1.0
-    description: "Skill catalog presentation + Remotion showcase"
-
   # ── Design + frontend ───────────────────────────────────────────────────
   - name: arcan-glass
-    repo: broomva/arcan-glass
+    repo: broomva/skills
     category: design
     required: false
     introduced_in: 0.1.0
     description: "Broomva trademark web styling system"
-
-  - name: next-forge
-    repo: broomva/next-forge
-    category: platform
-    required: false
-    introduced_in: 0.1.0
-    description: "Next.js project scaffolding"
 
   - name: brand-icons
     repo: broomva/skills
@@ -566,7 +500,7 @@ skills:
 
   # ── Platform + finance ──────────────────────────────────────────────────
   - name: finance-substrate
-    repo: broomva/finance-substrate
+    repo: broomva/skills
     category: platform
     required: false
     introduced_in: 0.1.0
