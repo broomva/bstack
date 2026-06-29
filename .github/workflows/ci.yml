@@ -83,6 +83,12 @@ jobs:
         run: python3 -m pip install --quiet PyYAML
 
       - name: Run all tests/*.test.sh
+        env:
+          # Lets roster-monorepo-sync.test.sh run its remote resolution check
+          # (every roster name resolves in broomva/skills). Skips gracefully if the
+          # tree can't be fetched (rate-limit / private); the offline structural
+          # checks always run regardless.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         # As of v0.8.0 (Phase 5 of substrate completion) the pre-existing
         # tests/template_lockstep.test.sh and tests/onboard.test.sh are
         # fixed (case-insensitive lockstep assertion + BSTACK_SKIP_SKILLS=1

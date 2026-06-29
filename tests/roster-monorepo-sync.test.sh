@@ -22,6 +22,19 @@ fail() { FAIL=$((FAIL + 1)); FAILED+=("$1"); echo "  [FAIL] $1"; }
 
 [ -f "$ROSTER" ] || { echo "no roster at $ROSTER"; exit 2; }
 
+# Preflight — the roster must PARSE and be non-empty. Without this, a corrupt or
+# empty roster makes the $(python …) captures below come back empty (the traceback
+# goes to stderr) and checks 1–2 would pass *open* — a drift-guard green-lighting a
+# broken roster. Fail hard here instead.
+python3 -c "
+import yaml, sys
+try:
+    d = yaml.safe_load(open('$ROSTER'))
+except Exception as e:
+    sys.exit('roster does not parse: ' + str(e))
+sys.exit(0 if isinstance(d, dict) and d.get('skills') else 'roster is empty / has no skills')
+" || { echo "  [FAIL] roster preflight (must parse + be non-empty)"; echo ""; echo "roster-monorepo-sync: 0 passed, 1 failed"; exit 1; }
+
 # 1 — every entry repo == broomva/skills
 BAD="$(python3 -c "
 import yaml
@@ -42,8 +55,12 @@ print(' '.join(n for n, k in c.items() if k > 1))
 ")"
 if [ -z "$DUP" ]; then ok "roster names unique"; else fail "duplicate roster names: $DUP"; fi
 
-# 3 — (opt-in, networked) every name resolves in broomva/skills
-if [ "${BSTACK_ROSTER_CHECK_REMOTE:-0}" = "1" ] && command -v gh >/dev/null 2>&1; then
+# 3 — every name resolves in broomva/skills (catches a dangling entry — a name with
+# no monorepo skill behind it, e.g. a relocated/renamed skill). Default: run when gh
+# is available + authed (covers local dev AND CI with a token); skip gracefully if
+# not. BSTACK_ROSTER_CHECK_REMOTE=1 *requires* it (fail if gh can't run); =0 disables.
+REMOTE="${BSTACK_ROSTER_CHECK_REMOTE:-auto}"
+if [ "$REMOTE" != "0" ] && command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
   TREE="$(gh api 'repos/broomva/skills/git/trees/main?recursive=1' --jq '.tree[].path' 2>/dev/null \
           | grep -oE 'skills/[^/]+/[^/]+/SKILL.md' | sed -E 's#skills/[^/]+/([^/]+)/SKILL.md#\1#' | sort -u)"
   if [ -n "$TREE" ]; then
@@ -52,11 +69,15 @@ if [ "${BSTACK_ROSTER_CHECK_REMOTE:-0}" = "1" ] && command -v gh >/dev/null 2>&1
       grep -qxF "$n" <<<"$TREE" || MISSING="$MISSING $n"
     done
     if [ -z "$MISSING" ]; then ok "every roster name resolves in broomva/skills"; else fail "roster names not found in broomva/skills:$MISSING"; fi
+  elif [ "$REMOTE" = "1" ]; then
+    fail "remote check required but could not list the broomva/skills tree"
   else
     echo "  [skip] remote check: could not list broomva/skills tree"
   fi
+elif [ "$REMOTE" = "1" ]; then
+  fail "remote check required (BSTACK_ROSTER_CHECK_REMOTE=1) but gh is unavailable/unauthed"
 else
-  echo "  [skip] remote resolution check (set BSTACK_ROSTER_CHECK_REMOTE=1 + gh to enable)"
+  echo "  [skip] remote resolution check (gh unavailable/unauthed; set BSTACK_ROSTER_CHECK_REMOTE=1 to require)"
 fi
 
 echo ""

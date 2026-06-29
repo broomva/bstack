@@ -38,9 +38,9 @@ A skill is a **folder**, per the [Agent Skills standard](https://agentskills.io)
 
 | # | Skill | Install | Description |
 |---|-------|---------|-------------|
-| 8 | `symphony` | `npx skills add broomva/symphony` | Rust orchestration engine for coding agents. Daemon mode, Linear/GitHub tracker integration, lifecycle hooks. |
-| 9 | `symphony-forge` | `npx skills add broomva/symphony-forge` | CLI scaffolder with composable control metalayer. Bootstraps projects with agent governance built in. |
-| 10 | `autoany` | `npx skills add broomva/autoany` | EGRI self-improvement framework. Turns ambiguous goals into safe, measurable, rollback-capable recursive improvement loops. |
+| 8 | `symphony` | *(ecosystem product — not a portable skill in the monorepo; lives at `broomva/symphony`)* | Rust orchestration engine for coding agents. Daemon mode, Linear/GitHub tracker integration, lifecycle hooks. |
+| 9 | `symphony-forge` | *(ecosystem product — not a portable skill in the monorepo; lives at `broomva/symphony-forge`)* | CLI scaffolder with composable control metalayer. Bootstraps projects with agent governance built in. |
+| 10 | `autoany` | *(ecosystem product — not a portable skill in the monorepo; lives at `broomva/autoany`)* | EGRI self-improvement framework. Turns ambiguous goals into safe, measurable, rollback-capable recursive improvement loops. |
 
 ## Research & Intelligence
 
@@ -49,20 +49,20 @@ A skill is a **folder**, per the [Agent Skills standard](https://agentskills.io)
 | 11 | `deep-dive-research-orchestrator` | `npx skills add broomva/skills --skill deep-dive-research-orchestrator` | Multi-dimensional research with coordinated AI specialists. 10+ source synthesis with citations. (Migrated 2026-05-25 from `broomva/deep-dive-research-skill` — Phase 4c.) |
 | 11a | `social-intelligence` | `npx skills add broomva/skills --skill social-intelligence` | Autonomous social engagement + knowledge extraction loop for Moltbook and X — compounds with `blog-post` and `content-creation`. (Migrated 2026-05-25 from `broomva/social-intelligence` — Phase 4c.) |
 | 12 | `skills` | `npx skills add broomva/skills` | Canonical reference inventory of 83 agent skills across 15 domains. Browsable catalog. |
-| 13 | `skills-showcase` | `npx skills add broomva/skills` | Remotion video + X thread generator for the skills inventory. Animated showcase content. |
+| 13 | `skills-showcase` | *(repo-root Remotion tool in broomva/skills — not an installable skill)* | Remotion video + X thread generator for the skills inventory. Animated showcase content. |
 
 ## Design & Implementation
 
 | # | Skill | Install | Description |
 |---|-------|---------|-------------|
 | 14 | `arcan-glass` | `npx skills add broomva/skills --skill arcan-glass` | BroomVA web design system. Glass/frosted effects, dark-first themes, AI Blue brand tokens. |
-| 15 | `next-forge` | `npx skills add broomva/symphony-forge` | Production Next.js SaaS template via symphony-forge. Turborepo, auth, payments, observability. |
+| 15 | `next-forge` | *(ecosystem product — not a portable skill in the monorepo; lives at `broomva/symphony-forge`)* | Production Next.js SaaS template via symphony-forge. Turborepo, auth, payments, observability. |
 
 ## Platform
 
 | # | Skill | Install | Description |
 |---|-------|---------|-------------|
-| 16 | `alkosto-wait-optimizer` | `npx skills add broomva/alkosto-wait-optimizer-skill` | Probability-based decision tool for optimal waiting times. Bayesian estimation with uncertainty. |
+| 16 | `alkosto-wait-optimizer` | `npx skills add broomva/skills --skill alkosto-wait-optimizer` | Probability-based decision tool for optimal waiting times. Bayesian estimation with uncertainty. |
 | 17 | `content-creation` | `npx skills add broomva/skills --skill content-creation` | Full-stack content pipeline — research → narrative → visual assets → video → social → deploy; ships bstack-launch + open-source-stack example campaigns. (Migrated 2026-05-25 from `broomva/content-creation` — Phase 4b.) |
 | 17a | `content-engine` | `npx skills add broomva/skills --skill content-engine` | Full-stack AI content studio — visual DNA compiler, cinematic generation, browser autopilot, content loop; bundles 4 sub-skills. (Migrated 2026-05-25 from `broomva/content-engine` — Phase 4b.) |
 | 17b | `launch-video` | `npx skills add broomva/skills --skill launch-video` | Liquid Glass product launch video — dark void, 3D floating panels, spring animations via Remotion. (Migrated 2026-05-25 from `broomva/launch-video` — Phase 4b.) |
