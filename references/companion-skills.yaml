@@ -31,6 +31,14 @@ skills:
     introduced_in: 0.2.0
     description: "Cross-model adversarial review gate"
 
+  - name: dogfood
+    repo: broomva/skills
+    category: lifecycle
+    primitive: P11
+    required: true
+    introduced_in: 0.28.0
+    description: "P11 — Empirical feedback. Triggers the Dogfood Plan + per-stack cookbook + Dogfood Receipt; auto-detects the stack and validates by interacting, not reasoning."
+
   - name: role-x
     repo: broomva/skills
     category: meta
@@ -59,11 +67,18 @@ skills:
   - name: kg
     repo: broomva/skills
     category: knowledge
-    primitive: P6
     required: true
     introduced_in: 0.14.0
     min_bstack_version: 0.14.0
     description: "LLM-as-index loader for research/entities/. Two-tier scoring (catalog tier-1, body-grep tier-2 fallback) routes a topic to top-N entity bodies the agent reasons over. Pairs with bookkeeping's cmd_index (catalog generator) and the workspace's knowledge-catalog-refresh-hook.sh Stop hook (P6)."
+
+  - name: bookkeeping
+    repo: broomva/skills
+    category: knowledge
+    primitive: P6
+    required: true
+    introduced_in: 0.28.0
+    description: "P6 — universal knowledge engine: scores, promotes, and compounds knowledge from all sources into a permanent, query-able entity graph. The catalog generator (cmd_index) behind the knowledge-catalog-refresh Stop hook."
 
   - name: prompt-library
     repo: broomva/skills
@@ -80,6 +95,14 @@ skills:
     required: true
     introduced_in: 0.1.0
     description: "CI watcher + productive-wait"
+
+  - name: persist
+    repo: broomva/skills
+    category: orchestration
+    primitive: P12
+    required: true
+    introduced_in: 0.28.0
+    description: "P12 — Persistent Loop Discipline. Cross-context restart loop where state lives in the filesystem (PROMPT.md + git tree + state.jsonl); each iteration is a fresh agent context. Backpressure from compilers/tests, not model self-grading."
 
   - name: alkosto-wait-optimizer
     repo: broomva/skills
@@ -253,6 +276,13 @@ skills:
     min_bstack_version: 0.21.0
     description: "Multi-source research with citation tracking — 10+ source synthesis (migrated from broomva/deep-dive-research-skill; renamed)"
 
+  - name: checkit
+    repo: broomva/skills
+    category: knowledge
+    required: false
+    introduced_in: 0.28.0
+    description: "Ingest-and-integrate an artifact shared with a terse directive ('check this out', 'lets research this'): contextualize -> research (verify sources) -> connect -> document -> ranked next steps. A role-x (P17) lens."
+
   - name: social-intelligence
     repo: broomva/skills
     skillPath: skills/social-intelligence/SKILL.md
@@ -297,6 +327,13 @@ skills:
     required: true
     introduced_in: 0.1.0
     description: "Canonical reference of all available skills"
+
+  - name: skillify
+    repo: broomva/skills
+    category: meta
+    required: false
+    introduced_in: 0.28.0
+    description: "Distill a working session into a permanent, TESTED, registered skill. Its deterministic skillify_check gate (10 steps incl. reference-integrity) makes 'a feature that doesn't pass all ten is not a skill' machine-checkable."
 
   # ── Design + frontend ───────────────────────────────────────────────────
   - name: arcan-glass
