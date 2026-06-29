@@ -169,6 +169,30 @@ The prompt library composes cleanly with the existing primitive contract:
 
 ---
 
+## The evaluation engine (Phase E) — from telemetry to judgment
+
+The 5-step mandate above writes **telemetry**: *what ran* (model, tokens, cost, latency) and *how the human felt* (thumbs). Phase E adds the layer above it — **judgment**: *how good the output actually was*, measured by an LLM-as-judge against versioned rubrics. Design spec: `docs/superpowers/specs/2026-06-02-prompts-evals-engine-design.md`.
+
+What a bstack-driven agent needs to know:
+
+- **Completing an invocation is what triggers an eval.** Step 4 of the mandate (`broomva prompts complete`) is the ingest point. The server applies an adaptive sampling decision (per-rubric YAML config) and, if sampled, enqueues a judge job. The judge — the Life **`krisis`** crate (κρίσις, *judgment*; sibling of `vigil`) — scores the output against a **G-Eval** rubric (each dimension: Definition + Evaluation Steps + Score range + anchors) and writes a `PromptEvaluation` row.
+- **Capture the output the cheap way: run the Vigil sidecar.** `broomva vigil install` writes a SessionStart hook and an on-demand local OTLP proxy; point your agent at it via `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL` and every LLM call is captured as a GenAI span and joined to the invocation by session-id — no extra step in the loop. Fallback if you don't run the sidecar: `broomva prompts complete --output-file <path>` hands the output over explicitly. No output available → the eval is `skipped` with a reason (a measured coverage gap, never silent).
+- **The privacy line is load-bearing: store judgments, never content.** By default the captured output is read transiently to score it, then **dropped** — only scores + reasoning persist. Retention is opt-in (first-party or `sudo` mode) and isolated. Do not design any agent flow that assumes the platform retains the output; it does not, unless capture is explicitly enabled. Entity: `concept/store-judgments-not-content`.
+- **Inspect evals from the terminal:**
+
+```bash
+broomva evals show <invocation_id> --wait    # block until the judge finishes; print the breakdown
+broomva evals list --slug <slug> --failing   # what's scoring poorly
+broomva evals tail                           # live feed of completing evals
+broomva evals rubric validate <path>         # local YAML lint, no server hit
+```
+
+- **`evals show <id> --wait` right after `prompts complete` is the killer loop** — the "did this run actually go well?" answer in the terminal where the work happened.
+
+This deepens the P6/P11/P13 composition above: the eval score is the crystallized quality signal (P6), the judgment is empirical validation of the prompt itself (P11), and the evolving per-prompt aggregate is the dream-tier substrate (P13).
+
+---
+
 ## Common traps
 
 - **Pulling a prompt and not completing it.** The most common silent failure. The CLI emits the invocation id loudly; capture it. Set a TodoWrite reminder if the work is long-running.
@@ -196,6 +220,9 @@ LIST:     broomva prompts list --metrics --sort skill_invokes
 ## See also
 
 - `broomva-cli` skill SKILL.md — the source-of-truth mandate, mirrored here
-- `docs/superpowers/specs/2026-05-09-prompts-eval-engine-design.md` — full design spec for the eval engine
+- `docs/superpowers/specs/2026-06-02-prompts-evals-engine-design.md` — **Phase E** (evaluation/judgment) design spec: rubrics, `krisis`, Vigil capture, privacy posture
+- `docs/superpowers/plans/2026-05-11-prompts-eval-engine-phase2-cli.md` — Phase 2 (CLI telemetry) plan
+- `research/entities/concept/store-judgments-not-content.md` — the governing privacy invariant
+- `research/entities/project/prompts-eval-engine.md` — project tracking node (11 decisions, topology, phasing)
 - broomva.tech/prompts — the browsable web surface
 - `bstack-control-harness-bootstrap` (slug) — the prompt to use when standing up a fresh agent harness
