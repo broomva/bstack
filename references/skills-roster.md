@@ -2,20 +2,22 @@
 
 28 curated skills across 7 layers. The Broomva Stack.
 
-> **Canonical *installable* roster:** [`references/companion-skills.yaml`](companion-skills.yaml) — the 56 bstack-native skills, all in the **broomva/skills** monorepo (validated by `tests/roster-monorepo-sync.test.sh`). Install path-independently: `npx skills add broomva/skills --skill <name>`. **This doc is a broader human catalog**: it also documents ecosystem *products* (e.g. symphony, autoany, next-forge) that are not installable bstack skills, so it intentionally lists more than the YAML. For what is installable, the YAML is authoritative.
+> **Canonical *installable* roster:** [`references/companion-skills.yaml`](companion-skills.yaml) — the 61 bstack-native skills, all in the **broomva/skills** monorepo (validated by `tests/roster-monorepo-sync.test.sh`). Install path-independently: `npx skills add broomva/skills --skill <name>`. **This doc is a broader human catalog**: it also documents ecosystem *products* (e.g. symphony, autoany, next-forge) that are not installable bstack skills, so it intentionally lists more than the YAML. For what is installable, the YAML is authoritative.
 
-## Publishing standard (skill layout) — required for installability
+## Publishing standard (skill layout) — installability + consolidation
 
-A skill is a **folder**, per the [Agent Skills standard](https://agentskills.io) — `SKILL.md` + optional `scripts/` / `references/` / `assets/`. **Publish every multi-file skill in a `skills/<name>/` subdirectory of its repo — never as a bare top-level `SKILL.md` at the repo root.**
+A skill is a **folder**, per the [Agent Skills standard](https://agentskills.io) — `SKILL.md` + optional `scripts/` / `references/` / `assets/`. A top-level `SKILL.md` at a repo root is **standard-valid** (both the spec and the skills.sh README list the repo root as a discovery location). The defect is *not* the layout — it's an **open upstream CLI bug**.
 
 | Layout | Remote `npx skills add` | |
 |---|---|---|
-| `skills/<name>/{SKILL.md, scripts/…}` | installs the **full** skill | ✅ standard |
-| top-level `SKILL.md` + sibling `scripts/` at repo root | installs **only `SKILL.md`** — scripts dropped → non-functional | 🔴 broken (BRO-1561) |
+| `skills/<name>/{SKILL.md, scripts/…}` (subdir) | installs the **full** skill | ✅ installs clean |
+| top-level `SKILL.md` + sibling `scripts/` at repo root | installs **only `SKILL.md`** — siblings dropped → non-functional | ⚠️ standard-valid layout, but hits [skills#1523](https://github.com/vercel-labs/skills/issues/1523) |
 
-**Why:** the vercel-labs/skills CLI special-cases a repo-root `SKILL.md` and copies only that file (a repo root carries `README`/`LICENSE`/`.github` — not a clean skill folder). A `skills/<name>/` subdir is a clean folder and is fully copied. A repo can keep its name and still be standard: `git mv SKILL.md scripts/ → skills/<name>/`; `npx skills add broomva/<name>` still works (the CLI's `skills/` priority-search finds the subdir).
+**Why:** the vercel-labs/skills CLI special-cases a repo-root `SKILL.md` and copies only that file ([#1523](https://github.com/vercel-labs/skills/issues/1523) / #1517 — **open, unfixed**). *Local-path* install copies everything; only *remote* repo-root install drops siblings. A `skills/<name>/` subdir is a clean folder and is fully copied, so it sidesteps the bug.
 
-**Validation:** `--list` is **necessary but not sufficient** — it only parses frontmatter, never the file-copy path, so it passes even when the install drops `scripts/`. The real gate is a **clean-room install that yields a *runnable* skill** (bundled files land + the skill's own test passes). The `skillify` skill machine-enforces this (`skillify_check.py` step 1 FAILs a repo-root-with-bundled-dirs layout). Full proof + root cause: `research/entities/tool/skills-sh.md`.
+**Canonical fix — consolidate into the `broomva/skills` monorepo (BRO-1561):** rather than push each standalone repo into an awkward `skills/<name>/`-inside-a-same-named-repo workaround, skills vendor into **`broomva/skills/skills/<name>/`** and install via `npx skills add broomva/skills --skill <name>`. The subdir is non-redundant there, the monorepo has generic lint + per-skill tests, and standalone repos become **deprecated redirect stubs** (6-month window) pointing at the monorepo command. Tier-2 graduation in `broomva/skills` CONTRIBUTING is the path.
+
+**Validation:** `--list` is **necessary but not sufficient** — it only parses frontmatter, never the file-copy path, so it passes even when the install drops `scripts/`. The real gate is a **clean-room install that yields a *runnable* skill** (bundled files land + the skill's own test passes). The `skillify` skill enforces frontmatter/skills.sh-parseability at step 1 (deterministic, required) and **advises** (step 1b, WARN) when a repo-root-with-bundled-dirs layout would hit #1523 — it no longer *rejects* a standard-valid layout. Full proof + root cause: `research/entities/tool/skills-sh.md`.
 
 ## Foundation — Control & Governance
 
