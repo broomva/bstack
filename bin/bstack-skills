@@ -249,8 +249,16 @@ cmd_install() {
             fi
         fi
         echo "  [install] $n ($r)..."
+        # broomva/skills is the monorepo (many skills) — install the single skill
+        # with --skill <name>, else a bare `add broomva/skills` pulls everything.
+        # Standalone repos install whole.
+        if [ "$r" = "broomva/skills" ]; then
+            add_args=("$r" --skill "$n")
+        else
+            add_args=("$r")
+        fi
         # shellcheck disable=SC2086
-        if $NPX_CMD "$r" >/dev/null 2>&1; then
+        if $NPX_CMD "${add_args[@]}" >/dev/null 2>&1; then
             installed=$((installed + 1))
             echo "    ✓ installed"
         else
