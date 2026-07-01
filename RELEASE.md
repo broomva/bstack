@@ -1,6 +1,6 @@
 # Release process
 
-bstack ships as a skill installed via `npx skills add broomva/bstack` (vendored) or `git clone` (git install). Every release must be reachable to both install types and properly tagged so `bin/bstack-update-check` and downstream tooling can discover it.
+bstack ships as a **CLI + governance substrate** installed via `git clone` + `bstack bootstrap` — it is NOT a skills.sh skill (a repo-root `SKILL.md` beside `bin/` would drop the CLI on `npx skills add`, vercel-labs/skills#1523). Every release must be reachable via the git tag so `bin/bstack-update-check` and downstream tooling can discover it. (The companion primitives *primer* skill is a separate artifact in the broomva/skills monorepo: `npx skills add broomva/skills --skill bstack`.)
 
 ## Versioning policy (Semantic Versioning)
 

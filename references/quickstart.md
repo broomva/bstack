@@ -2,17 +2,21 @@
 
 Get the full Broomva Stack running in 5 minutes.
 
-## 1. Install bstack
+## 1. Install bstack (clone — it's a CLI, not a skill)
 
 ```bash
-npx skills add broomva/bstack
+git clone https://github.com/broomva/bstack.git
+cd bstack
 ```
 
-## 2. Bootstrap all 27 skills
+## 2. Bootstrap — scaffold governance + wire hooks + install the companion-skill roster
 
 ```bash
-bash ~/.agents/skills/bstack/scripts/bootstrap.sh
+./bin/bstack bootstrap
 ```
+
+(`bootstrap` installs the roster from the broomva/skills monorepo via
+`npx skills add broomva/skills --skill <name>`.)
 
 This installs any missing skills, creates symlinks, and runs the postinstall harness.
 

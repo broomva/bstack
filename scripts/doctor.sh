@@ -368,9 +368,9 @@ else
         "run 'python3 skills/bookkeeping/scripts/bookkeeping.py index'"
 fi
 
-# /kg load skill — broomva/kg published as a managed skill in v0.14.0.
-# Accepts either an `npx skills add broomva/kg` install (under ~/.claude/skills/kg/
-# or ~/.agents/skills/kg/) or a legacy workspace-local v1 install.
+# /kg load skill — vendored in the broomva/skills monorepo (knowledge/kg).
+# Accepts either an `npx skills add broomva/skills --skill kg` install (under
+# ~/.claude/skills/kg/ or ~/.agents/skills/kg/) or a legacy workspace-local v1 install.
 _kg_installed=0
 for _kg_path in "$HOME/.claude/skills/kg" "$HOME/.agents/skills/kg"; do
     if [ -f "$_kg_path/SKILL.md" ] && [ -f "$_kg_path/scripts/kg.py" ]; then
@@ -381,7 +381,7 @@ for _kg_path in "$HOME/.claude/skills/kg" "$HOME/.agents/skills/kg"; do
 done
 if [ "$_kg_installed" = "0" ]; then
     gap "/kg load skill missing at ~/.claude/skills/kg/ or ~/.agents/skills/kg/" \
-        "install via 'npx skills add broomva/kg' (managed roster entry, v0.14.0+) — see references/skills-roster.md"
+        "install via 'npx skills add broomva/skills --skill kg' (managed roster entry) — see references/skills-roster.md"
 fi
 
 # ── L3 trust gates (G-L3-1 + G-L3-2) ───────────────────────────────────────
@@ -415,10 +415,10 @@ fi
 
 # Canonical operating mode check
 if [ -d "$HOME/.agents/skills/autonomous" ] || [ -d "$HOME/.claude/skills/autonomous" ] || [ -d "$WORKSPACE/skills/autonomous" ]; then
-    ok "broomva/autonomous installed (canonical operating mode available)"
+    ok "autonomous skill installed (canonical operating mode available)"
 else
-    gap "broomva/autonomous skill not installed" \
-        "install the canonical operating mode: npx skills add broomva/autonomous"
+    gap "autonomous skill not installed" \
+        "install the canonical operating mode: npx skills add broomva/skills --skill autonomous"
 fi
 
 # ── 9. Naming convention propagation ────────────────────────────────────────

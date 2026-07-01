@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# bstack bootstrap — install all 31 Broomva Stack skills + scaffold governance + wire hooks
+# bstack bootstrap — install the companion-skills roster + scaffold governance + wire hooks
 #
 # Four phases + loop wiring:
 #   1. Skill install: npx skills add for each ROSTER entry
@@ -21,98 +21,40 @@ WORKSPACE_DIR="${BROOMVA_WORKSPACE:-$PWD}"
 
 mkdir -p "$AGENTS_DIR" "$CLAUDE_DIR"
 
-# skill-name:repo-name mapping (some skills share repos)
-declare -A SKILL_REPOS=(
-  [agentic-control-kernel]="broomva/agentic-control-kernel"
-  [control-metalayer-loop]="broomva/control-metalayer"
-  [harness-engineering-playbook]="broomva/harness-engineering-skill"
-  [p9]="broomva/p9"
-  [persist]="broomva/persist"
-  [agent-consciousness]="broomva/control-metalayer"
-  [knowledge-graph-memory]="broomva/control-metalayer"
-  [prompt-library]="broomva/prompt-library"
-  [symphony]="broomva/symphony"
-  [symphony-forge]="broomva/symphony-forge"
-  [autoany]="broomva/autoany"
-  [deep-dive-research-orchestrator]="broomva/deep-dive-research-skill"
-  [skills]="broomva/skills"
-  [skills-showcase]="broomva/skills"
-  [arcan-glass]="broomva/arcan-glass"
-  [next-forge]="broomva/symphony-forge"
-  [alkosto-wait-optimizer]="broomva/alkosto-wait-optimizer-skill"
-  [content-creation]="broomva/bstack"
-  [finance-substrate]="broomva/finance-substrate"
-  [wealth-management]="broomva/wealth-management"
-  [investment-management]="broomva/investment-management"
-  [seo-llmeo]="aaron-he-zhu/seo-geo-claude-skills@technical-seo-checker"
-  [brand-icons]="broomva/bstack"
-  [pre-mortem]="broomva/strategy-skills"
-  [braindump]="broomva/strategy-skills"
-  [morning-briefing]="broomva/strategy-skills"
-  [drift-check]="broomva/strategy-skills"
-  [strategy-critique]="broomva/strategy-skills"
-  [stakeholder-update]="broomva/strategy-skills"
-  [decision-log]="broomva/strategy-skills"
-  [weekly-review]="broomva/strategy-skills"
-)
-
-ORDERED_SKILLS=(
-  agentic-control-kernel control-metalayer-loop harness-engineering-playbook p9 persist
-  agent-consciousness knowledge-graph-memory prompt-library
-  symphony symphony-forge autoany
-  deep-dive-research-orchestrator skills skills-showcase
-  arcan-glass next-forge
-  alkosto-wait-optimizer content-creation finance-substrate wealth-management investment-management seo-llmeo brand-icons
-  pre-mortem braindump morning-briefing drift-check
-  strategy-critique stakeholder-update decision-log weekly-review
-)
-
-installed=0
-skipped=0
-failed=0
+# Phase 1 — install the companion-skills roster.
+#
+# Single source of truth: references/companion-skills.yaml, installed via
+# bin/bstack-skills, which resolves every entry to `npx skills add broomva/skills
+# --skill <name> -g` (inherits the BRO-1588 stdin-drain + global-install fixes).
+# There is deliberately NO hardcoded skill→repo map here anymore: the previous map
+# drifted to deleted standalone repos (broomva/agentic-control-kernel, broomva/p9,
+# broomva/finance-substrate, …) after the BRO-1602 consolidation and 404'd every
+# `bstack bootstrap` on a fresh host (BRO-1632). The roster is the only source.
+#
+# BSTACK_SKIP_SKILLS=1 short-circuits (tests/onboard.test.sh sets it so CI doesn't
+# fan out to the real registry; also a governance-only bootstrap escape hatch).
+BOOTSTRAP_BIN_DIR="$(cd "$(dirname "$0")/../bin" && pwd)"
 
 echo "=== bstack bootstrap ==="
 
-# BSTACK_SKIP_SKILLS=1 short-circuits the npx-driven skill install loop.
-# Test fixtures (tests/onboard.test.sh) set this so CI doesn't fan out to
-# the real registry. Workspace operators wanting a governance-only bootstrap
-# without the full skill roster can also use it.
 if [ "${BSTACK_SKIP_SKILLS:-0}" = "1" ]; then
-  echo "BSTACK_SKIP_SKILLS=1 — skipping skill installation loop."
+  echo "BSTACK_SKIP_SKILLS=1 — skipping skill installation."
   echo "(Run \`bstack skills install\` manually to install the roster.)"
   echo ""
 else
-  echo "Installing 31 Broomva Stack skills..."
+  echo "Installing the companion-skills roster (references/companion-skills.yaml)..."
   echo ""
-
-  for skill in "${ORDERED_SKILLS[@]}"; do
-    repo="${SKILL_REPOS[$skill]}"
-
-    if [ -d "$AGENTS_DIR/$skill" ] && [ -f "$AGENTS_DIR/$skill/SKILL.md" ]; then
-      echo "  [skip] $skill"
-      skipped=$((skipped + 1))
-    else
-      echo "  [install] $skill ($repo)..."
-      if npx skills add "$repo" 2>/dev/null; then
-        installed=$((installed + 1))
-      else
-        echo "  [FAIL] $skill"
-        failed=$((failed + 1))
-      fi
-    fi
-
-    # Ensure claude symlink
-    if [ -d "$AGENTS_DIR/$skill" ] && [ ! -e "$CLAUDE_DIR/$skill" ]; then
-      ln -snf "$AGENTS_DIR/$skill" "$CLAUDE_DIR/$skill" 2>/dev/null || true
-    fi
-  done
+  # Delegate to the roster-driven installer (missing-only, idempotent). It reads
+  # companion-skills.yaml and installs each broomva/skills entry with --skill -g.
+  if bash "$BOOTSTRAP_BIN_DIR/bstack-skills" install; then
+    echo ""
+    echo "=== bstack skills install complete ==="
+  else
+    echo ""
+    echo "=== bstack skills install reported failures ==="
+    echo "  Run 'bstack skills status' to see what's missing."
+  fi
 fi
-
-echo ""
-echo "=== bstack skills install complete ==="
-echo "  Installed: $installed | Skipped: $skipped | Failed: $failed"
-echo "  Total: $((installed + skipped))/31"
-[ "$failed" -gt 0 ] && echo "  Run 'bstack validate' to diagnose issues."
 
 # ─── Phase 2: scaffold missing governance files ────────────────────────────
 # Idempotent: never overwrites existing files. Only installs when absent.

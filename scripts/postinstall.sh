@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# bstack postinstall — wire control harness into the workspace after skill install.
+# bstack postinstall — wire control harness into the workspace.
 #
-# This script is run after `npx skills add broomva/bstack` to activate the full
-# governance layer: git hooks, Claude Code hooks, conversation bridge, and policy.
+# Run as part of the clone + `bstack bootstrap` flow (bstack is a CLI/substrate, not
+# a skills.sh skill — do NOT `npx skills add broomva/bstack`, it drops bin/scripts).
+# Activates the governance layer: git hooks, Claude Code hooks, conversation bridge,
+# and policy.
 #
 # Usage: bash scripts/postinstall.sh [TARGET_DIR]
 #   TARGET_DIR defaults to the git repo root or $HOME/broomva

@@ -22,9 +22,10 @@ Bootstrap itself is **two-flow** — a deterministic structured scaffold (the fl
 
 ## Quick start
 
-Install:
+Install (bstack is a CLI/substrate — clone + bootstrap, NOT `npx skills add`, which
+would drop `bin/`/`scripts/` per vercel-labs/skills#1523):
 ```bash
-npx skills add broomva/bstack
+git clone https://github.com/broomva/bstack.git && cd bstack && ./bin/bstack bootstrap
 ```
 
 Then, in your agent session:
@@ -96,7 +97,7 @@ Each primitive carries a **short name** for use in agent prose. When referencing
 
 **Canonical statement** lives in workspace `CLAUDE.md` §Bstack Core Automation Primitives and workspace `AGENTS.md` near line 93. This SKILL.md restates the rule so it's visible at the entry point where `/bstack` loads.
 
-**Skill-name ↔ primitive-number alignment**: when a skill repo carries a numeric name (e.g., `broomva/p9` for Wait at P9), the primitive numbering commits to keeping that number stable — renaming a skill repo would break every `npx skills add broomva/p9` install. Skill repos with functional names (`broomva/bookkeeping` = P6, `broomva/persist` = P12) take their name from the function, not the number.
+**Skill-name ↔ primitive-number alignment**: when a skill carries a numeric name (e.g., `p9` for Wait at P9), the primitive numbering commits to keeping that name stable — renaming it would break every `npx skills add broomva/skills --skill p9` install. Skills with functional names (`bookkeeping` = P6, `persist` = P12) take their name from the function, not the number. (All are vendored in the broomva/skills monorepo; the `--skill <name>` handle is the stable identifier.)
 
 > **`bstack wave` (new in this version).** Fills the N>1 × across-session × external-trigger cell of Orchestrate (P19)'s mechanism cube. Use it when you have N independent plan files that can run in parallel without shared mutable file writes (Fanout (P5)). Each plan's frontmatter declares its `worktree` and `branch`; the wrapper validates atomically, creates worktrees, and launches one `claude --bg` per plan. State lives in `~/.cache/bstack/wave/<wave-id>/` (Persist (P12) filesystem-as-state). See the design at `docs/superpowers/specs/2026-05-13-bstack-wave-design.md` (workspace repo) for the full primitive coalescence map.
 
@@ -235,7 +236,7 @@ Future sessions inspect this for state. `bootstrap_status: failed` is captured t
 
 `scripts/bootstrap.sh` is the install/wire path. It:
 
-1. Installs all 30 skills via `npx skills add broomva/<skill>` — `broomva/autonomous` is the first in the roster (canonical operating mode)
+1. Installs the companion-skills roster by delegating to `bin/bstack-skills install` (reads `references/companion-skills.yaml`, installs each as `npx skills add broomva/skills --skill <name>`) — `autonomous` is the canonical operating mode
 2. **Scaffolds missing governance files** from `assets/templates/`:
    - `CLAUDE.md` (workspace invariants + RCS hierarchy + primitive table P1–P20 + §Ritual vs Substance)
    - `AGENTS.md` (operational rules + per-primitive sections + reflexive triggers for all reasoning-enforced primitives)

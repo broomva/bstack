@@ -30,7 +30,7 @@
 #
 # SLO targets:
 #   status:                 p50 < 200ms, p99 < 500ms (filesystem-only)
-#   install (cold, 31 skills): p50 < 60s, p99 < 180s (network bound)
+#   install (cold, full roster ~61 skills): p50 < 120s, p99 < 300s (network bound)
 set -euo pipefail
 
 BSTACK_DIR="${BSTACK_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
@@ -101,22 +101,47 @@ installed_version() {
     echo "?"
 }
 
-# Parse the roster YAML → emit one TSV row per skill: name<TAB>repo<TAB>category<TAB>required
+# Dependency-free fallback parser for the flat companion-skills.yaml block format.
+# WHY (BRO-1632): a fresh Ubuntu VPS has python3 but NOT PyYAML. Without this, the
+# PyYAML `import` raised ImportError → parse_roster emitted 0 rows → `bstack skills
+# install` (and `bstack bootstrap`) silently installed ZERO skills and reported
+# success. This awk parser handles the controlled `- name:` block format the roster
+# is written in (name/repo/category/required/primitive/description, one per skill).
+_parse_roster_awk() {
+    awk '
+    function emit() { if (name != "") printf "%s\t%s\t%s\t%s\t%s\t%s\n", name, repo, category, (required=="true"?"true":"false"), primitive, description }
+    /^[[:space:]]*-[[:space:]]+name:[[:space:]]*/ {
+        emit()
+        v=$0; sub(/^[[:space:]]*-[[:space:]]+name:[[:space:]]*/,"",v); gsub(/^"|"$/,"",v); name=v
+        repo=""; category=""; required=""; primitive=""; description=""; next
+    }
+    /^[[:space:]]+repo:[[:space:]]*/        { v=$0; sub(/^[[:space:]]+repo:[[:space:]]*/,"",v);        gsub(/^"|"$/,"",v); repo=v; next }
+    /^[[:space:]]+category:[[:space:]]*/    { v=$0; sub(/^[[:space:]]+category:[[:space:]]*/,"",v);    gsub(/^"|"$/,"",v); category=v; next }
+    /^[[:space:]]+required:[[:space:]]*/    { v=$0; sub(/^[[:space:]]+required:[[:space:]]*/,"",v);    gsub(/[[:space:]]|"/,"",v); required=v; next }
+    /^[[:space:]]+primitive:[[:space:]]*/   { v=$0; sub(/^[[:space:]]+primitive:[[:space:]]*/,"",v);   gsub(/^"|"$/,"",v); primitive=v; next }
+    /^[[:space:]]+description:[[:space:]]*/ { v=$0; sub(/^[[:space:]]+description:[[:space:]]*/,"",v); gsub(/^"|"$/,"",v); description=v; next }
+    END { emit() }
+    ' "$1"
+}
+
+# Parse the roster YAML → emit one TSV row per skill: name<TAB>repo<TAB>category<TAB>required<TAB>primitive<TAB>description
+# Prefers PyYAML (robust); falls back to the awk parser when PyYAML is absent so a
+# bare host still resolves the roster instead of silently installing nothing.
 parse_roster() {
     if [ ! -f "$ROSTER_YAML" ]; then
         echo "bstack-skills: roster YAML not found at $ROSTER_YAML" >&2
         return 1
     fi
-    if ! command -v python3 >/dev/null 2>&1; then
-        echo "bstack-skills: python3 required to parse roster" >&2
-        return 1
-    fi
-    python3 - "$ROSTER_YAML" <<'PYEOF'
+    if command -v python3 >/dev/null 2>&1 && python3 -c 'import yaml' >/dev/null 2>&1; then
+        python3 - "$ROSTER_YAML" <<'PYEOF'
 import sys, yaml
 data = yaml.safe_load(open(sys.argv[1]))
 for s in data.get("skills", []):
     print(f"{s['name']}\t{s['repo']}\t{s.get('category','')}\t{'true' if s.get('required') else 'false'}\t{s.get('primitive','')}\t{s.get('description','')}")
 PYEOF
+    else
+        _parse_roster_awk "$ROSTER_YAML"
+    fi
 }
 
 cmd_list() {
@@ -225,9 +250,10 @@ cmd_install() {
         esac
     done
 
-    local installed=0 skipped=0 attempted=0 failed=0
+    local installed=0 skipped=0 attempted=0 failed=0 rows=0
     local n r c req prim desc
     while IFS=$'\t' read -r n r c req prim desc; do
+        rows=$((rows + 1))
         if [ "$required_only" = "1" ] && [ "$req" != "true" ]; then
             continue
         fi
@@ -282,6 +308,17 @@ cmd_install() {
             echo "    ✗ failed (check network + permissions)"
         fi
     done < <(parse_roster)
+
+    # 0-row guard (BRO-1632): if the roster file has skill entries on disk but the
+    # loop processed zero rows, the parser produced nothing (e.g. PyYAML absent AND
+    # the awk fallback failed). Fail loud — a "Installed: 0" reported as success is
+    # the exact silent-no-op that let `bstack bootstrap` green-light a zero-skill
+    # install on a fresh host.
+    if [ "$rows" -eq 0 ] && grep -qE '^[[:space:]]*-[[:space:]]+name:' "$ROSTER_YAML" 2>/dev/null; then
+        echo "bstack-skills: roster has entries but parsed to 0 rows — parser failed" >&2
+        echo "  (PyYAML missing and awk fallback did not match the roster format?)" >&2
+        return 1
+    fi
 
     echo ""
     echo "  ─────────────────────────────────────"

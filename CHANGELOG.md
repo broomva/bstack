@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.29.1 — 2026-07-01
+
+### fix: fresh-VPS install — kill 404s from deleted repos, correct self-install, status workspace resolution (BRO-1632)
+
+A fresh-VPS dogfood surfaced three breakages, all downstream of the BRO-1602 standalone-repo consolidation + bstack being treated as a skill.
+
+### Fixed
+
+- **`scripts/bootstrap.sh` — 404s on every fresh-host bootstrap.** The phase-1 skill install used a **hardcoded `SKILL_REPOS` map** pointing at ~18 standalone repos that no longer exist (`broomva/agentic-control-kernel`, `broomva/p9`, `broomva/persist`, `broomva/prompt-library`, `broomva/finance-substrate`, `broomva/deep-dive-research-skill`, …) — deleted in BRO-1602 — plus wrong entries (`content-creation`/`brand-icons` → `broomva/bstack`). Replaced the map + install loop with **delegation to `bin/bstack-skills install`** (roster-driven from `references/companion-skills.yaml`, inheriting the BRO-1588 `--skill <name> -g` fixes). The roster is now the single source of truth; there is no second skill→repo declaration to drift.
+- **`README.md` — bstack half-installed via `npx skills add broomva/bstack`.** bstack is a **CLI + governance substrate** (root `SKILL.md` beside `bin/scripts/schemas/assets/`), so skills.sh hit the repo-root-`SKILL.md` case of [vercel-labs/skills#1523](https://github.com/vercel-labs/skills/issues/1523) and dropped everything but `SKILL.md`. Self-install is now documented as **`git clone` + `bstack bootstrap`**; the primitives *primer* is available separately as `npx skills add broomva/skills --skill bstack`.
+- **`bstack status` — false blocking violations.** `bin/bstack-status` resolved the workspace as `${BROOMVA_WORKSPACE:-$PWD}` and never consulted the config `workspace:` key, so an unset env var + a cwd outside the workspace read the wrong `.control/` tree. New shared resolver `scripts/lib/resolve-workspace.sh` (`$BROOMVA_WORKSPACE` → `bstack-config get workspace` → `$PWD`); `bstack-status` resolves + **exports** `BROOMVA_WORKSPACE` so every collector it spawns inherits the correct root.
+- **`bin/bstack-skills` — silent zero-install on a PyYAML-absent fresh host (found by P20 review — the exact BRO-1632 target scenario).** `parse_roster` required PyYAML; a fresh Ubuntu VPS has `python3` but not `python3-yaml`, so the import failed → 0 rows → `bstack bootstrap` reported success while installing **nothing**. Added a dependency-free awk fallback parser (byte-identical output on the roster) + a 0-row guard in `cmd_install` (fail loud when a non-empty roster parses to zero rows).
+- **`scripts/revamp.sh` — a SECOND hardcoded map (found by P20 review).** `bstack revamp` (a shipped command) had its own `declare -A REPOS` over the same deleted repos → 404'd every invocation. Delegated to `bstack-skills install --all`.
+- **Dead install references swept** — `scripts/doctor.sh`, `SKILL.md` (both the quick-start block and the bootstrap description), `references/primitives.md`, `references/quickstart.md`, `references/new-workspace-flow.md`, `RELEASE.md`, `scripts/postinstall.sh`, and the **README "Stack layers" table** (every `https://skills.sh/broomva/<deleted>` link 404'd) → all now point at the monorepo `--skill <name>` form or the clone-install. Stale skill counts (31/30/27) corrected.
+- **`resolve-workspace.sh`** — added a `$PWD`-is-a-workspace tier (a cwd carrying `.control/policy.yaml` wins over the config default, so `cd other-ws && bstack status` reports the workspace you're in) and made `bstack-status` source the lib **fail-soft** (falls back to inline resolution instead of aborting under `set -e` if the lib is absent).
+
+### Added
+
+- **`tests/bootstrap-roster-source.test.sh`** — install-mechanism drift guard across **all** installer scripts (bin/ + scripts/): no literal standalone-repo install, no variable-indirected `npx skills add "$repo"` loop (the pattern the maps fed), no hardcoded `declare -A` skill→repo map, and both `bootstrap.sh` + `revamp.sh` delegate to `bstack-skills`. (The first version only scanned bootstrap.sh with a literal-match grep — it would have missed the revamp.sh map + variable indirection the P20 review caught.)
+- **`tests/resolve-workspace.test.sh`** — 4-tier resolution (env → cwd-is-workspace → config → PWD).
+
+### Notes
+
+- Primitive count unchanged (**20**). Install-correctness fixes. `VERSION` 0.29.0 → 0.29.1. Full `tests/*.test.sh`: 27/27. **P20 cross-model review (3 lenses) ran on the first cut and found the PyYAML silent-no-op, the revamp.sh second map, an inadequate drift guard, and 6 more dead-ref surfaces — all fixed in this same version.** bstack stays a standalone product (not folded into broomva/skills — a CLI isn't skill-shaped); companion primer skill ships separately in the monorepo.
+
 ## 0.29.0 — 2026-06-29
 
 ### feat: Tier-2 `permissions:` + `trust_tiers:` policy schema — path-based capability model, never-auto-granted set, signed grants approval flow (BRO-1600)
