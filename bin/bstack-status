@@ -41,8 +41,13 @@ STATE_DIR="${BSTACK_STATE_DIR:-$HOME/.bstack}"
 # command spawns (compute-budget-status, measure-S*, compute-lambda, …) inherits
 # the same resolved root instead of re-deriving `${BROOMVA_WORKSPACE:-$PWD}`.
 # shellcheck source=../scripts/lib/resolve-workspace.sh
-. "$BSTACK_DIR/scripts/lib/resolve-workspace.sh"
-WORKSPACE="$(resolve_workspace)"
+# Fail-soft: if the lib is missing (e.g. a half-installed bstack), fall back to the
+# old inline resolution rather than aborting `bstack status` under `set -e`.
+if . "$BSTACK_DIR/scripts/lib/resolve-workspace.sh" 2>/dev/null; then
+  WORKSPACE="$(resolve_workspace)"
+else
+  WORKSPACE="${BROOMVA_WORKSPACE:-$PWD}"
+fi
 export BROOMVA_WORKSPACE="$WORKSPACE"
 LATEST="$METRICS_DIR/latest.json"
 POLICY="$WORKSPACE/.control/policy.yaml"

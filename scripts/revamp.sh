@@ -18,53 +18,22 @@ echo "========================================="
 echo ""
 
 # ── Phase 1: Reinstall all skills ────────────────────────────────────────────
-echo "Phase 1: Reinstalling all 24 skills..."
+# Force-reinstall the companion-skills roster via bin/bstack-skills (--all). Single
+# source of truth = references/companion-skills.yaml; there is NO hardcoded repo map
+# here anymore — the old one pointed at repos deleted in BRO-1602 and 404'd every
+# `bstack revamp` (same defect as bootstrap.sh; BRO-1632). Each entry installs as
+# `npx skills add broomva/skills --skill <name> -g`.
+echo "Phase 1: Reinstalling the companion-skills roster (force)..."
 echo ""
 
-AGENTS_DIR="${HOME}/.agents/skills"
-CLAUDE_DIR="${HOME}/.claude/skills"
-
-declare -A REPOS=(
-  [broomva/agentic-control-kernel]=1
-  [broomva/control-metalayer]=1
-  [broomva/harness-engineering-skill]=1
-  [broomva/prompt-library]=1
-  [broomva/symphony]=1
-  [broomva/symphony-forge]=1
-  [broomva/autoany]=1
-  [broomva/deep-dive-research-skill]=1
-  [broomva/skills]=1
-  [broomva/arcan-glass]=1
-  [broomva/alkosto-wait-optimizer-skill]=1
-  [broomva/bstack]=1
-  [broomva/finance-substrate]=1
-  [broomva/strategy-skills]=1
-)
-
-installed=0
-failed=0
-
-for repo in "${!REPOS[@]}"; do
-  echo "  [reinstall] $repo"
-  if npx skills add "$repo" -y -g >/dev/null 2>&1; then
-    installed=$((installed + 1))
-  else
-    echo "    [FAIL] $repo"
-    failed=$((failed + 1))
-  fi
-done
-
+if bash "$SCRIPT_DIR/../bin/bstack-skills" install --all; then
+  echo ""
+  echo "=== skill reinstall complete ==="
+else
+  echo ""
+  echo "=== skill reinstall reported failures — run 'bstack skills status' ==="
+fi
 echo ""
-echo "  Repos processed: $installed OK, $failed failed"
-echo ""
-
-# Ensure all Claude symlinks
-for skill_dir in "$AGENTS_DIR"/*/; do
-  skill=$(basename "$skill_dir")
-  if [ ! -e "$CLAUDE_DIR/$skill" ]; then
-    ln -snf "$skill_dir" "$CLAUDE_DIR/$skill" 2>/dev/null || true
-  fi
-done
 
 # ── Phase 2: Wire control harness ────────────────────────────────────────────
 echo "Phase 2: Wiring control harness..."

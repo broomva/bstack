@@ -22,9 +22,10 @@ Bootstrap itself is **two-flow** — a deterministic structured scaffold (the fl
 
 ## Quick start
 
-Install:
+Install (bstack is a CLI/substrate — clone + bootstrap, NOT `npx skills add`, which
+would drop `bin/`/`scripts/` per vercel-labs/skills#1523):
 ```bash
-npx skills add broomva/bstack
+git clone https://github.com/broomva/bstack.git && cd bstack && ./bin/bstack bootstrap
 ```
 
 Then, in your agent session:
@@ -235,7 +236,7 @@ Future sessions inspect this for state. `bootstrap_status: failed` is captured t
 
 `scripts/bootstrap.sh` is the install/wire path. It:
 
-1. Installs all 30 skills via `npx skills add broomva/<skill>` — `broomva/autonomous` is the first in the roster (canonical operating mode)
+1. Installs the companion-skills roster by delegating to `bin/bstack-skills install` (reads `references/companion-skills.yaml`, installs each as `npx skills add broomva/skills --skill <name>`) — `autonomous` is the canonical operating mode
 2. **Scaffolds missing governance files** from `assets/templates/`:
    - `CLAUDE.md` (workspace invariants + RCS hierarchy + primitive table P1–P20 + §Ritual vs Substance)
    - `AGENTS.md` (operational rules + per-primitive sections + reflexive triggers for all reasoning-enforced primitives)

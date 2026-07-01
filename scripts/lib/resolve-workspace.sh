@@ -15,10 +15,19 @@
 #
 # Usage:  source "$BSTACK_DIR/scripts/lib/resolve-workspace.sh"; ws="$(resolve_workspace)"
 resolve_workspace() {
+  # 1. explicit env override
   if [ -n "${BROOMVA_WORKSPACE:-}" ]; then
     printf '%s\n' "${BROOMVA_WORKSPACE}"
     return 0
   fi
+  # 2. cwd IS a workspace → prefer it over the configured one. On a multi-workspace
+  #    host, `cd other-ws && bstack status` should report the workspace you're
+  #    standing in, not the config default. A `.control/policy.yaml` is the marker.
+  if [ -f "${PWD}/.control/policy.yaml" ]; then
+    printf '%s\n' "${PWD}"
+    return 0
+  fi
+  # 3. configured workspace (~/.bstack/config.yaml `workspace:` key)
   local _bin _cfg
   _bin="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../bin" 2>/dev/null && pwd || true)"
   if [ -n "${_bin}" ] && [ -f "${_bin}/bstack-config" ]; then
@@ -28,5 +37,6 @@ resolve_workspace() {
       return 0
     fi
   fi
+  # 4. last resort
   printf '%s\n' "${PWD}"
 }

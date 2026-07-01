@@ -45,17 +45,20 @@ Full reference with reflexive trigger rules, invariants, and cohesion narrative:
 
 The majority of primitives (P6, P9–P20) are *reasoning-enforced* — they bind every agent through reflexive trigger rules in `AGENTS.md` rather than through hooks. The mechanism-enforced primitives (P1, P2, P4, P5, P7, P8) run through hooks, scripts, or CI gates.
 
-## Stack layers (30 skills)
+## Companion-skill roster
 
-| Layer | Skills | Purpose |
+`bstack bootstrap` installs the companion skills from the **[broomva/skills](https://github.com/broomva/skills)** monorepo — `npx skills add broomva/skills --skill <name>` per entry. The authoritative, machine-readable list is [`references/companion-skills.yaml`](references/companion-skills.yaml).
+
+| Layer | Representative skills | Purpose |
 |-------|--------|---------|
-| **Foundation** | [agentic-control-kernel](https://skills.sh/broomva/agentic-control-kernel), [control-metalayer-loop](https://skills.sh/broomva/control-metalayer-loop), [harness-engineering-playbook](https://skills.sh/broomva/harness-engineering-playbook), [p9](https://skills.sh/broomva/p9) | Safety shields, governance, deterministic workflow, CI watcher + productive-wait |
-| **Memory & Consciousness** | [agent-consciousness](https://skills.sh/broomva/agent-consciousness), [knowledge-graph-memory](https://skills.sh/broomva/knowledge-graph-memory), [prompt-library](https://skills.sh/broomva/prompt-library) | Three-substrate consciousness, persistent context |
-| **Orchestration** | [symphony](https://skills.sh/broomva/symphony), [symphony-forge](https://skills.sh/broomva/symphony-forge), [autoany](https://skills.sh/broomva/autoany) | Agent dispatch, scaffold CLI, EGRI self-improvement |
-| **Research & Intelligence** | [deep-dive-research-orchestrator](https://skills.sh/broomva/deep-dive-research-orchestrator), [skills](https://skills.sh/broomva/skills), [skills-showcase](https://skills.sh/broomva/skills-showcase) | Multi-dimensional research, skills inventory |
-| **Design & Implementation** | [arcan-glass](https://skills.sh/broomva/arcan-glass), [next-forge](https://skills.sh/broomva/next-forge) | BroomVA design system, Next.js production templates |
-| **Platform Specialties** | [alkosto-wait-optimizer](https://skills.sh/broomva/alkosto-wait-optimizer), [content-creation](https://skills.sh/broomva/content-creation), [finance-substrate](https://skills.sh/broomva/finance-substrate), seo-llmeo, brand-icons | Decision optimizer, content pipeline, finance, SEO/LLMEO, brand assets |
-| **Strategy & Decision Intel** | [pre-mortem](https://skills.sh/broomva/strategy-skills), [braindump](https://skills.sh/broomva/strategy-skills), [morning-briefing](https://skills.sh/broomva/strategy-skills), [drift-check](https://skills.sh/broomva/strategy-skills), [strategy-critique](https://skills.sh/broomva/strategy-skills), [stakeholder-update](https://skills.sh/broomva/strategy-skills), [decision-log](https://skills.sh/broomva/strategy-skills), [weekly-review](https://skills.sh/broomva/strategy-skills) | Strategic thinking, decision intelligence, personal productivity |
+| **Foundation** | `agentic-control-kernel`, `harness-engineering-playbook`, `p9`, `cross-review` | Safety shields, governance, deterministic workflow, CI watcher, adversarial review |
+| **Memory & Knowledge** | `kg`, `bookkeeping`, `prompt-library` | Knowledge-graph loader, bookkeeping pipeline, persistent context |
+| **Orchestration** | `autonomous`, `persist`, `role-x`, `dogfood` | Full-discipline mode, cross-context loops, lens routing, empirical validation |
+| **Research & Intelligence** | `deep-dive-research-orchestrator`, `social-intelligence`, `skills-catalog` | Multi-dimensional research, engagement loop, skills inventory |
+| **Design** | `arcan-glass`, `design-engineering`, `brand-icons` | Design system, design-engineering, brand assets |
+| **Strategy & Finance** | `pre-mortem`, `decision-log`, `finance-substrate`, `investment-management` | Decision intelligence, Colombian tax substrate, portfolio tooling |
+
+> Every skill installs from the monorepo: `npx skills add broomva/skills --skill <name>`. The standalone `broomva/<name>` repos were consolidated into the monorepo (BRO-1561) — those install commands no longer resolve.
 
 ## Commands
 

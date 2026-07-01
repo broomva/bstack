@@ -1,14 +1,14 @@
 # New-workspace flow — what happens on first install
 
-The concrete sequence from `npx skills add broomva/bstack` to a fully-wired RCS-closed workspace.
+The concrete sequence from `git clone` to a fully-wired RCS-closed workspace.
 
 ## Install + onboard (one command each)
 
 ```bash
-npx skills add broomva/bstack         # clones bstack into ~/.agents/skills/bstack/
-/bstack onboard                       # wizard: workspace · profile · life · auto-merge
+git clone https://github.com/broomva/bstack.git && cd bstack   # bstack is a CLI, not a skill
+./bin/bstack onboard                  # wizard: workspace · profile · life · auto-merge
 # — or, without the wizard —
-/bstack bootstrap                     # scaffold governance + wire hooks + wire the loop
+./bin/bstack bootstrap                # scaffold governance + wire hooks + install roster + wire the loop
 ```
 
 Both paths wire the RCS control loop. `bootstrap.sh` scaffolds governance files (incl. `.control/arcs.yaml`), wires the base hooks, then — in **Phase 3.5** — calls `install-rcs-stability.sh` to deploy the multi-layer audit + enforcement plumbing. `onboard.sh` additionally runs the wizard and detects the tech stack. Skip loop wiring with `BSTACK_SKIP_RCS=1` (governance-only bootstrap). Previously only `onboard` wired the loop; `bootstrap` left it open — that split-brain is closed as of 0.22.0.

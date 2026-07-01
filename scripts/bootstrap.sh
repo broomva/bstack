@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# bstack bootstrap — install all 31 Broomva Stack skills + scaffold governance + wire hooks
+# bstack bootstrap — install the companion-skills roster + scaffold governance + wire hooks
 #
 # Four phases + loop wiring:
 #   1. Skill install: npx skills add for each ROSTER entry
