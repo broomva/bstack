@@ -18,7 +18,7 @@ Each primitive carries a **short name** for use in agent prose. When referencing
 
 **Canonical statement** lives in workspace `CLAUDE.md` §Bstack Core Automation Primitives and workspace `AGENTS.md` near line 93. This file restates the rule so it's visible when an agent loads the primitives reference directly.
 
-**Wait sits at P9 to match the `broomva/p9` skill name.** Skill repos that carry a numeric name (`broomva/p9` for Wait) commit to keeping that number stable. Skill repos with functional names (`broomva/bookkeeping` = P6, `broomva/persist` = P12) take their name from the function. This is why the canonical ordering keeps the productive-wait primitive at slot 9 — the alternative is renaming the skill repo, which would break every `npx skills add broomva/p9` install.
+**Wait sits at P9 to match the `p9` skill name.** Skills that carry a numeric name (`p9` for Wait) commit to keeping that name stable. Skills with functional names (`bookkeeping` = P6, `persist` = P12) take their name from the function. This is why the canonical ordering keeps the productive-wait primitive at slot 9 — the alternative is renaming the skill, which would break every `npx skills add broomva/skills --skill p9` install. (All skills are vendored in the broomva/skills monorepo; the `--skill <name>` handle is the stable identifier.)
 
 ---
 
@@ -172,7 +172,7 @@ This bans only *discovery* greps. `find`/`grep`/`cat` over `research/entities/` 
 
 **Invariant**: never `sleep` on a blocking wait. Every failure produces (a) a `state.jsonl` event, (b) a Linear ticket, or (c) both — silent state drops are forbidden (exit 99). Heal actions are scoped to files in PR diff (where applicable). All setpoints (`max_concurrent_prs`, `max_attempts`, `stability_floor`, `classified_failure_types`) live in `.control/policy.yaml` and fail closed if missing.
 
-**Skill name**: `broomva/p9` — name matches primitive number. When a skill repo carries a numeric name, the primitive numbering commits to keeping that number stable (renaming a skill repo would break every `npx skills add broomva/p9` install). The `broomva/p9` SKILL.md is the canonical implementation.
+**Skill name**: `p9` — name matches primitive number. When a skill carries a numeric name, the primitive numbering commits to keeping that name stable (renaming it would break every `npx skills add broomva/skills --skill p9` install). The monorepo `skills/orchestration/p9/SKILL.md` is the canonical implementation.
 
 ### P9 Reflexive Trigger Rule (binding on every agent)
 

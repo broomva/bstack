@@ -35,7 +35,15 @@ set -euo pipefail
 BSTACK_DIR="${BSTACK_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 METRICS_DIR="${BSTACK_METRICS_DIR:-$HOME/.bstack/metrics}"
 STATE_DIR="${BSTACK_STATE_DIR:-$HOME/.bstack}"
-WORKSPACE="${BROOMVA_WORKSPACE:-$PWD}"
+# Resolve workspace via $BROOMVA_WORKSPACE → config `workspace:` key → $PWD
+# (BRO-1632: prevents false blocking violations when the env var is unset and
+# the command runs outside the workspace). Export it so every collector this
+# command spawns (compute-budget-status, measure-S*, compute-lambda, …) inherits
+# the same resolved root instead of re-deriving `${BROOMVA_WORKSPACE:-$PWD}`.
+# shellcheck source=../scripts/lib/resolve-workspace.sh
+. "$BSTACK_DIR/scripts/lib/resolve-workspace.sh"
+WORKSPACE="$(resolve_workspace)"
+export BROOMVA_WORKSPACE="$WORKSPACE"
 LATEST="$METRICS_DIR/latest.json"
 POLICY="$WORKSPACE/.control/policy.yaml"
 UPGRADE_MARKER="$STATE_DIR/just-upgraded-from"

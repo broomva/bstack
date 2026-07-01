@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.29.1 — 2026-07-01
+
+### fix: fresh-VPS install — kill 404s from deleted repos, correct self-install, status workspace resolution (BRO-1632)
+
+A fresh-VPS dogfood surfaced three breakages, all downstream of the BRO-1602 standalone-repo consolidation + bstack being treated as a skill.
+
+### Fixed
+
+- **`scripts/bootstrap.sh` — 404s on every fresh-host bootstrap.** The phase-1 skill install used a **hardcoded `SKILL_REPOS` map** pointing at ~18 standalone repos that no longer exist (`broomva/agentic-control-kernel`, `broomva/p9`, `broomva/persist`, `broomva/prompt-library`, `broomva/finance-substrate`, `broomva/deep-dive-research-skill`, …) — deleted in BRO-1602 — plus wrong entries (`content-creation`/`brand-icons` → `broomva/bstack`). Replaced the map + install loop with **delegation to `bin/bstack-skills install`** (roster-driven from `references/companion-skills.yaml`, inheriting the BRO-1588 `--skill <name> -g` fixes). The roster is now the single source of truth; there is no second skill→repo declaration to drift.
+- **`README.md` — bstack half-installed via `npx skills add broomva/bstack`.** bstack is a **CLI + governance substrate** (root `SKILL.md` beside `bin/scripts/schemas/assets/`), so skills.sh hit the repo-root-`SKILL.md` case of [vercel-labs/skills#1523](https://github.com/vercel-labs/skills/issues/1523) and dropped everything but `SKILL.md`. Self-install is now documented as **`git clone` + `bstack bootstrap`**; the primitives *primer* is available separately as `npx skills add broomva/skills --skill bstack`.
+- **`bstack status` — false blocking violations.** `bin/bstack-status` resolved the workspace as `${BROOMVA_WORKSPACE:-$PWD}` and never consulted the config `workspace:` key, so an unset env var + a cwd outside the workspace read the wrong `.control/` tree. New shared resolver `scripts/lib/resolve-workspace.sh` (`$BROOMVA_WORKSPACE` → `bstack-config get workspace` → `$PWD`); `bstack-status` resolves + **exports** `BROOMVA_WORKSPACE` so every collector it spawns inherits the correct root.
+- **Dead install references swept** in `scripts/doctor.sh` (`broomva/autonomous` / `broomva/kg` → `broomva/skills --skill …`), `SKILL.md`, `references/primitives.md` (the p9 naming-invariant now protects the `--skill p9` handle in the monorepo, not a standalone `broomva/p9` repo).
+
+### Added
+
+- **`tests/bootstrap-roster-source.test.sh`** — drift guard: `bootstrap.sh` carries no standalone-repo install command and no hardcoded `SKILL_REPOS` map, and delegates to `bstack-skills install`.
+- **`tests/resolve-workspace.test.sh`** — 3-tier resolution (env → config → PWD).
+
+### Notes
+
+- Primitive count unchanged (**20**). Install-correctness fixes. `VERSION` 0.29.0 → 0.29.1. Full `tests/*.test.sh`: 27/27. bstack stays a standalone product (not folded into broomva/skills — a CLI isn't skill-shaped); companion primer skill ships separately in the monorepo.
+
 ## 0.29.0 — 2026-06-29
 
 ### feat: Tier-2 `permissions:` + `trust_tiers:` policy schema — path-based capability model, never-auto-granted set, signed grants approval flow (BRO-1600)

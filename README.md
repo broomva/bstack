@@ -1,12 +1,18 @@
 # bstack — The Broomva Stack
 
-**A portable harness metalayer for AI-native development.** Twenty irreducible primitives plus 30 curated agent skills that turn any agent-driven workspace into a self-operating system.
+**A portable harness metalayer for AI-native development.** Twenty irreducible primitives plus a curated agent-skill roster that turn any agent-driven workspace into a self-operating system.
+
+bstack is a **CLI + governance substrate** (not a skill), so it installs by clone + bootstrap — `npx skills add broomva/bstack` would drop its `bin/`, `scripts/`, `schemas/`, and templates (the repo-root-`SKILL.md` case of [vercel-labs/skills#1523](https://github.com/vercel-labs/skills/issues/1523)):
 
 ```bash
-npx skills add broomva/bstack
+git clone https://github.com/broomva/bstack.git
+cd bstack
+./bin/bstack bootstrap        # scaffolds governance + wires hooks + installs the skill roster
 ```
 
-This installs the meta-skill that bootstraps the full stack — primitive contract, governance scaffolding, hooks, and skill roster — into your project. Works with Claude Code, Codex, Gemini CLI, OpenCode, and the [50+ agent CLIs the skills ecosystem supports](https://github.com/vercel-labs/skills).
+`bstack bootstrap` installs the companion-skill roster from the **broomva/skills monorepo** — `npx skills add broomva/skills --skill <name>` per entry (see `references/companion-skills.yaml`). Works with Claude Code, Codex, Gemini CLI, OpenCode, and the [50+ agent CLIs the skills ecosystem supports](https://github.com/vercel-labs/skills).
+
+> Want just the primitives primer for an agent (no CLI)? `npx skills add broomva/skills --skill bstack`.
 
 ## The twenty primitives
 
