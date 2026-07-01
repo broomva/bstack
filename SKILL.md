@@ -3,6 +3,17 @@ name: bstack
 description: "bstack — the Broomva Stack. Twenty irreducible primitives (P1-P20) plus 30 curated skills that turn an agent-driven workspace into a self-operating system. Each primitive closes one specific failure mode (session amnesia, destructive ops, invisible work, dirty-tree drift, context rot, ritual phrases without substance, single-model echo chambers). The canonical operating mode is broomva/autonomous (fires every reflex without prompting). Use when: (1) bootstrapping a new agent-driven workspace, (2) verifying primitive compliance via 'bstack doctor', (3) repairing missing governance/hooks/policy via 'bstack repair', (4) listing installed-vs-missing skills via 'bstack status', (5) validating skill frontmatter health via 'bstack validate', (6) full reconfiguration via 'bstack revamp'. Triggers on 'bstack', 'broomva stack', 'bootstrap project', 'install all skills', 'P1' through 'P20', 'agent harness', 'self-operating workspace'."
 ---
 
+<!-- SELF-WARNING BANNER (BRO-1633) — do not remove; tests/skill-selfwarn-banner.test.sh asserts it. -->
+> [!CAUTION]
+> **Is this `SKILL.md` the only bstack file you have? Then you have a BROKEN partial install.**
+> If you ran `npx skills add broomva/bstack`, skills.sh copied only this file and **dropped `bin/`, `scripts/`, `schemas/`, and the templates** — the repo-root-`SKILL.md` case of [vercel-labs/skills#1523](https://github.com/vercel-labs/skills/issues/1523). There is **no `bstack` CLI, no `bstack bootstrap`, no `bstack doctor`.** bstack is a CLI + governance substrate, *not* a skill.
+>
+> **Fix — install the real thing:**
+> ```bash
+> git clone https://github.com/broomva/bstack.git && cd bstack && ./bin/bstack bootstrap
+> ```
+> Just want the primitives primer for an agent (no CLI)? `npx skills add broomva/skills --skill bstack`.
+
 # bstack — The Broomva Stack
 
 **Twenty irreducible primitives. Thirty curated skills. One canonical operating mode. One self-operating workspace.**

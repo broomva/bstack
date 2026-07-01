@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.29.2 — 2026-07-01
+
+### fix: self-warning banner makes the skills.sh partial-install self-diagnosing (BRO-1633)
+
+BRO-1632 documented around the skills.sh footgun but didn't eliminate it: `npx skills add broomva/bstack` still reports "✓ Installed 1 skill" while landing **only** the root `SKILL.md` and dropping `bin/`, `scripts/`, `schemas/`, and templates (the repo-root-`SKILL.md` case of vercel-labs/skills#1523) — a deceptive success with **no working CLI**.
+
+### Fixed
+
+- **`SKILL.md` — self-warning banner.** The one file that survives the partial install now opens with a `[!CAUTION]` banner: if this file is all you have, your install is broken, here is the clone + `bstack bootstrap` fix (and the `--skill bstack` primer path for agents who only want the primitives). Converts the silent-deceptive install into a self-correcting one — the moment an agent loads the lone `SKILL.md`, it's told it's broken and how to fix it. (Relocating the root `SKILL.md` to a subdir was the alternative — rejected: it breaks in-repo `/bstack` loading and fails without telling the user what to do.)
+
+### Added
+
+- **`tests/skill-selfwarn-banner.test.sh`** — asserts the banner (marker + broken-install warning + clone-install fix command) stays near the top of `SKILL.md`.
+
+### Notes
+
+- Primitive count unchanged (**20**). `VERSION` 0.29.1 → 0.29.2. Full `tests/*.test.sh` green.
+
 ## 0.29.1 — 2026-07-01
 
 ### fix: fresh-VPS install — kill 404s from deleted repos, correct self-install, status workspace resolution (BRO-1632)
