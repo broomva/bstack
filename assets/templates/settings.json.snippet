@@ -28,6 +28,13 @@
             "timeout": 10,
             "_bstack_primitive": "loop-wire",
             "_purpose": "Actuation wire: inject the self-improvement loop's worst-gap metric + its corrective actuator into the new session (reads .control/leverage-state.json)"
+          },
+          {
+            "type": "command",
+            "command": "${BROOMVA_HOME}/.claude/skills/bstack/scripts/auth-preflight-hook.sh",
+            "timeout": 8,
+            "_bstack_primitive": "auth-preflight",
+            "_purpose": "Warn (never block) if gh auth is missing, so an autonomous arc learns it at session start instead of dying on the push/PR step mid-task"
           }
         ]
       }
