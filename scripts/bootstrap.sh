@@ -6,8 +6,8 @@
 #   2. Workspace scaffold: install missing CLAUDE.md / AGENTS.md / .control/policy.yaml
 #      / .control/arcs.yaml from assets/templates/ (idempotent — never overwrites)
 #   3. Hooks wire-up: merge bstack hooks into .claude/settings.json (additive only)
-#   3.5 RCS loop wiring: install-rcs-stability.sh deploys L0/L1 audit hooks + audit
-#       dir + L3 gates (G0/G1/G2 + rcs-parameters.toml) so the control loop is
+#   3.5 RCS loop wiring: install-rcs-stability.sh deploys the loop-sensor Stop hook +
+#       audit dir + L3 gates (G0/G1/G2 + rcs-parameters.toml) so the control loop is
 #       actually wired + connected, not just declared. Skip with BSTACK_SKIP_RCS=1
 #       (governance-only bootstrap). Mirrors the wizard path (onboard.sh).
 #   4. bstack doctor --quiet to verify the primitive contract + loop closure (§23).
@@ -256,8 +256,8 @@ echo "  deployed: $deployed_hooks workspace hook script(s) (P1/P2/P6/P7)"
 # ─── Phase 3.5: wire the RCS control loop (L0/L1 audit + L3 gates) ─────────
 # Closes the split-brain: onboard.sh (the wizard) wired the loop here; the
 # bootstrap command did not, leaving freshly-bootstrapped workspaces with
-# governance files but an OPEN loop (no audit hooks, no audit dir). This
-# deploys L0 PostToolUse + L1 Stop audit hooks + .control/audit/ + L3 gates
+# governance files but an OPEN loop (no sensor, no audit dir). This
+# deploys the loop-sensor (leverage-sensor) Stop hook + .control/audit/ + L3 gates
 # via the same idempotent installer the wizard uses. Skip with BSTACK_SKIP_RCS=1.
 if [ "${BSTACK_SKIP_RCS:-0}" = "1" ]; then
   echo ""

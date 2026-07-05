@@ -76,9 +76,11 @@ echo ""
 echo "Step 3: .claude/settings.json wires hooks"
 if [ -f "$TW/.claude/settings.json" ]; then
     pass "settings.json present"
-    # Hook events the substrate ships: SessionStart, Stop, PreToolUse, plus
-    # PostToolUse (L0-audit hook wired by Phase 3.5 loop wiring).
-    for ev in SessionStart Stop PreToolUse PostToolUse; do
+    # Hook events the substrate ships: SessionStart (incl. the loop actuation
+    # wire), Stop (incl. the loop sensor), PreToolUse. PostToolUse is no longer
+    # required — the real leverage-sensor runs at Stop, replacing the fake
+    # PostToolUse l0-tool-audit (100% null latency).
+    for ev in SessionStart Stop PreToolUse; do
         if jq -e --arg ev "$ev" '.hooks[$ev]' "$TW/.claude/settings.json" >/dev/null 2>&1; then
             pass "hooks.$ev present"
         else
@@ -90,7 +92,9 @@ else
 fi
 
 # Step 3.5: RCS control loop wired (Phase 3.5). BSTACK_SKIP_RCS is unset, so
-# bootstrap calls install-rcs-stability.sh → L0/L1 audit hooks + audit dir.
+# bootstrap calls install-rcs-stability.sh → the real leverage-sensor (Stop) +
+# actuation wire (SessionStart) + audit dir. The prior fake l0/l1 audit hooks
+# (100% null / 100% zero) are replaced by the transcript-derived sensor.
 echo ""
 echo "Step 3.5: RCS control loop wired"
 if [ -d "$TW/.control/audit" ]; then
@@ -99,11 +103,16 @@ else
     fail ".control/audit/ missing (Phase 3.5 loop wiring did not run)"
 fi
 if [ -f "$TW/.claude/settings.json" ] \
-   && grep -q '"L0-audit"' "$TW/.claude/settings.json" 2>/dev/null \
-   && grep -q '"L1-audit"' "$TW/.claude/settings.json" 2>/dev/null; then
-    pass "L0-audit + L1-audit hook markers present"
+   && grep -q '"loop-sensor"' "$TW/.claude/settings.json" 2>/dev/null; then
+    pass "loop-sensor (real leverage-sensor) hook marker present"
 else
-    fail "L0/L1 audit hook markers missing"
+    fail "loop-sensor hook marker missing (install-rcs-stability did not wire the real sensor)"
+fi
+if [ -f "$TW/.claude/settings.json" ] \
+   && grep -q '"loop-wire"' "$TW/.claude/settings.json" 2>/dev/null; then
+    pass "loop-wire (SessionStart actuation) hook marker present"
+else
+    fail "loop-wire hook marker missing (actuation wire not wired at SessionStart)"
 fi
 
 # Step 4: doctor runs cleanly (no crash) and produces the expected report

@@ -1204,66 +1204,70 @@ fi
 # bootstrap for purely temporal reasons); (c) W && R → ok.
 section "23. Control-loop closure verdict"
 
-LOOP_AUDIT_DIR="$WORKSPACE/.control/audit"
+# CONTENT-AWARE closure verdict. The prior §23 checked only that an audit log
+# EXISTED and was recent — so a 100%-null / 100%-zero fake sensor passed as
+# "wired + running + closing." This reads the sensor's OWN per-RCS-level verdict
+# in .control/leverage-state.json (written by leverage-sensor.py) and FAILS on a
+# dead sensor or a level with no live signal. The verifier is now causally
+# independent of what it grades — it inspects row content, not file existence.
 LOOP_STRICT="${BSTACK_LOOP_STRICT:-0}"
+STATE_FILE="$WORKSPACE/.control/leverage-state.json"
 
-# W — wired. Claude Code merges settings.json + settings.local.json at runtime,
-# and shared repos legitimately keep machine-local hook paths (which carry an
-# absolute bstack path) out of the tracked settings.json by wiring them in the
-# gitignored settings.local.json. So check BOTH — the loop is wired if either
-# file carries the L0-audit + L1-audit markers.
-W_OK=0
-if [ -d "$LOOP_AUDIT_DIR" ]; then
-    _l0=0; _l1=0
-    for _s in "$WORKSPACE/.claude/settings.json" "$WORKSPACE/.claude/settings.local.json"; do
-        [ -f "$_s" ] || continue
-        grep -q '"L0-audit"' "$_s" 2>/dev/null && _l0=1
-        grep -q '"L1-audit"' "$_s" 2>/dev/null && _l1=1
-    done
-    [ "$_l0" = "1" ] && [ "$_l1" = "1" ] && W_OK=1
-fi
-
-# R — running (any L0/L1 log non-empty AND modified within 7 days)
-R_OK=0
-LOOP_FRESH=""
-for _log in l0-tools.jsonl l1-reflexes.jsonl; do
-    _p="$LOOP_AUDIT_DIR/$_log"
-    if [ -s "$_p" ] && [ -n "$(find "$_p" -mtime -7 2>/dev/null)" ]; then
-        R_OK=1
-        LOOP_FRESH="$LOOP_FRESH $_log"
-    fi
+# W — wired: settings carries the real sensor marker (loop-sensor @ Stop). Legacy
+# L0-audit / L1-audit markers = the FAKE sensors → wired-but-fake (a migration gap).
+W_OK=0; W_LEGACY=0
+for _s in "$WORKSPACE/.claude/settings.json" "$WORKSPACE/.claude/settings.local.json"; do
+    [ -f "$_s" ] || continue
+    grep -q '"loop-sensor"' "$_s" 2>/dev/null && W_OK=1
+    { grep -q '"L0-audit"' "$_s" 2>/dev/null || grep -q '"L1-audit"' "$_s" 2>/dev/null; } && W_LEGACY=1
 done
 
-# C — closing: the WORKSPACE has declared its own closure arcs AND composite-ω
-# is computable. We require the workspace's own .control/arcs.yaml (not the
-# bundled template fallback) — otherwise C would be true on every intact bstack
-# checkout and "closing" would mean nothing beyond "the repo shipped its files."
-C_OK=0
-if [ -f "$WORKSPACE/.control/arcs.yaml" ] && [ -f "$BSTACK_REPO/scripts/compute-budget-status.sh" ]; then
-    C_OK=1
-fi
-
-if [ "$W_OK" = "0" ]; then
-    # (a) substrate absent — legitimate under BSTACK_SKIP_RCS=1 governance-only bootstrap
-    [ "$QUIET" = "0" ] && echo "  [info] control loop NOT wired (L0/L1 audit hooks or .control/audit/ absent)"
+if [ "$W_OK" = "0" ] && [ "$W_LEGACY" = "1" ]; then
+    gap "control loop wired to the FAKE l0/l1 sensors (latency_ms 100% null; tool_call_count 100% zero)" \
+        "migrate: bash $BSTACK_REPO/scripts/install-rcs-stability.sh  (wires the real leverage-sensor)"
+elif [ "$W_OK" = "0" ]; then
+    [ "$QUIET" = "0" ] && echo "  [info] control loop NOT wired (no loop-sensor Stop hook)"
     [ "$QUIET" = "0" ] && echo "         → fix: bash $BSTACK_REPO/scripts/install-rcs-stability.sh  (or re-run \`bstack bootstrap\` without BSTACK_SKIP_RCS=1)"
-elif [ "$R_OK" = "0" ]; then
-    # (b) wired but idle — soft by default, hard only under BSTACK_LOOP_STRICT=1
-    _closing_note="arcs resolvable"; [ "$C_OK" = "0" ] && _closing_note="arcs/composite not resolvable"
+elif [ ! -f "$STATE_FILE" ]; then
+    # wired but idle — the sensor has not run yet (normal on a fresh workspace)
     if [ "$LOOP_STRICT" = "1" ]; then
-        gap "control loop WIRED but IDLE (no L0/L1 audit events in last 7d; $_closing_note)" \
-            "exercise a session so PostToolUse/Stop hooks fire; or unset BSTACK_LOOP_STRICT to treat idle as soft"
+        gap "control loop WIRED but IDLE (no .control/leverage-state.json yet)" \
+            "exercise a session so the Stop sensor fires; or unset BSTACK_LOOP_STRICT"
     else
-        [ "$QUIET" = "0" ] && echo "  [info] control loop WIRED but IDLE (no L0/L1 audit events in last 7d; $_closing_note)"
-        [ "$QUIET" = "0" ] && echo "         → this is normal for a freshly-bootstrapped or intermittent workspace; events accrue as sessions run"
-        [ "$QUIET" = "0" ] && echo "         → CI lanes: run with BSTACK_LOOP_STRICT=1 AND --strict to fail on idle"
+        [ "$QUIET" = "0" ] && echo "  [info] control loop WIRED but IDLE (sensor has not run yet; normal on a fresh bootstrap)"
+        [ "$QUIET" = "0" ] && echo "         → CI lanes: run with BSTACK_LOOP_STRICT=1 to fail on idle"
     fi
 else
-    # (c) wired + running (+ closing)
-    if [ "$C_OK" = "1" ]; then
-        ok "control loop: wired + running + closing (audit live:$LOOP_FRESH; arcs + composite-ω resolvable)"
+    # W_OK + state present — read the sensor's OWN closure verdict (content-aware)
+    _fresh=1; [ -z "$(find "$STATE_FILE" -mtime -7 2>/dev/null)" ] && _fresh=0
+    _verdict=$(python3 -c "
+import json
+c=json.load(open('$STATE_FILE')).get('closure',{})
+openlv=','.join(k for k,v in c.get('levels',{}).items() if not v.get('live')) or '-'
+print('%d %d %d %s' % (int(bool(c.get('sensor_live'))), int(bool(c.get('levels_closed'))), int(bool(c.get('reference_authored'))), openlv))
+" 2>/dev/null)
+    read -r _sensor_live _levels_closed _ref_authored _open_lv <<EOF_V
+$_verdict
+EOF_V
+
+    if [ -z "$_verdict" ]; then
+        gap "control loop state unreadable ($STATE_FILE has no closure block)" \
+            "re-run the sensor: python3 $BSTACK_REPO/scripts/leverage-sensor.py"
+    elif [ "$_sensor_live" != "1" ]; then
+        # THE un-blinding: a fake/dead sensor (all metrics null/zero) now FAILS
+        gap "control loop sensor is DEAD — all metrics null/zero over 0 sessions (a fake sensor certifying itself as running)" \
+            "verify leverage-sensor.py resolves the transcript path; this is exactly the failure §23 used to pass as 'closing'"
+    elif [ "$_levels_closed" != "1" ]; then
+        gap "control loop OPEN at RCS level(s): $_open_lv (no live metric there)" \
+            "add/verify a metric at each level in .control/leverage-setpoints.yaml"
+    elif [ "$_fresh" = "0" ] && [ "$LOOP_STRICT" = "1" ]; then
+        gap "control loop closed but STALE (leverage-state.json > 7d old)" \
+            "exercise a session so the Stop sensor refreshes"
+    elif [ "$_ref_authored" = "1" ]; then
+        ok "control loop: CLOSED across L0–L3 (sensor live, every level live, reference r0 authored)"
     else
-        ok "control loop: wired + running (audit live:$LOOP_FRESH; arcs/composite not yet resolvable)"
+        ok "control loop: closed across L0–L3 (sensor live, every level live)"
+        [ "$QUIET" = "0" ] && echo "         ⚠ reference r0 is bstack-default (endogenous r=g(x)) — author + sign .control/leverage-setpoints.yaml (causal priority)"
     fi
 fi
 

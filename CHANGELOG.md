@@ -1,5 +1,80 @@
 # Changelog
 
+## 0.30.0 — 2026-07-04
+
+### feat: close the self-improvement loop end-to-end across RCS L0–L3 (BRO-1696)
+
+bstack shipped a control loop that only *looked* closed. The two audit sensors read
+fields Claude Code never emits — `l0-tool-audit` keyed on `tool_result.latency_ms`
+(100% null), `l1-reflex-audit` on `tool_call_count` (100% zero, then it grepped the
+agent's own prose, so the sensor was correlated with the controller it graded). The
+SessionStart wire called `bookkeeping wakeup`, a subcommand that never existed, so the
+actuation channel emitted **0 bytes every session**. And `doctor` §23 certified the loop
+as "wired + running + closing" by checking only that an audit file *existed* and was
+recent — so a 100%-null sensor passed. Sensor faked, wire absent, checker blind: an
+**open loop wearing a closed loop's clothes**.
+
+This replaces all three with a real, transcript-derived loop whose verifier is causally
+independent of what it grades (`h ⟂ U`).
+
+### Added
+
+- **`scripts/leverage-sensor.py`** — the real sensor `h`. Reads raw session transcripts
+  (`message.content[].type`, `tool_result.is_error` — facts the agent cannot fake) and
+  derives 6 metrics, each tagged by RCS recursion level: **L0** tool-error-rate /
+  read-before-edit-rate / permission-bypass · **L1** continue-nudges-per-session · **L2**
+  kg-load-rate · **L3** meta-work-session-ratio (the anti-capture governor). Workspace and
+  Claude Code transcript dir are *derived*, not hardcoded, so it runs in any workspace.
+  `--closure` emits a machine-readable per-level verdict and exits non-zero if the loop is
+  open (CI/doctor gate). `--brief`/`--cached`/`--throttle` power the fast hook paths.
+- **`scripts/knowledge-wakeup-hook.sh`** — the actuation wire `U`. SessionStart injects the
+  worst-gap metric + its named corrective actuator (and any not-closed / unsigned-reference
+  warning) into the new context. Replaces the phantom `bookkeeping wakeup` call.
+- **`assets/templates/leverage-setpoints.yaml`** — the reference `r`, one setpoint per
+  metric with `level:`, `direction:`, `target`/`alert`, and a named `actuator`. Ships
+  `authored_by: bstack-default` — until a human signs `r0`, the sensor + doctor report
+  `reference_authored: false` (endogenous-reference-contamination: a reference the agent
+  authored makes "converged" and "drifted" the same event; signing r0 restores causal priority).
+- **`tests/loop-closure.test.sh`** — CI regression: a fixture with a live signal at every
+  RCS level proves closure PASSES (sensor_live + levels_closed L0–L3) and a 0-session dead
+  sensor proves it FAILS (`--closure` exits non-zero) — the un-blinding, machine-checked.
+
+### Changed
+
+- **`scripts/doctor.sh` §23** is now **content-aware**. It reads the sensor's own per-level
+  closure verdict instead of checking file existence: a dead sensor (all metrics null over 0
+  sessions) is a **gap**, a level with no live metric is a **gap**, and a `bstack-default`
+  reference raises a causal-priority warning. Legacy `L0-audit`/`L1-audit` wiring is detected
+  and flagged for migration.
+- **`assets/templates/settings.json.multi-layer-hooks.snippet`** wires the real `loop-sensor`
+  at Stop (throttled ≤6h) instead of the fake PostToolUse/Stop audit hooks;
+  **`settings.json.snippet`** adds the `loop-wire` at SessionStart.
+- **`scripts/install-rcs-stability.sh`** substitutes `${BROOMVA_WORKSPACE}`/`${BROOMVA_HOME}`
+  (not just `$BSTACK_REPO`) when merging the snippet.
+- **`tests/canary/01-fresh-bootstrap.test.sh`** asserts the new `loop-sensor` + `loop-wire`
+  markers; **`references/new-workspace-flow.md`** documents the real sensor, wire, and §23.
+
+### Notes
+
+- The fake `scripts/l0-tool-audit-hook.sh` / `l1-reflex-audit-hook.sh` remain on disk (no
+  longer wired) for backward compatibility with workspaces that already reference them; they
+  are superseded and a future release removes them. `compute-lambda`/§16–§18 still read the
+  legacy audit logs and degrade to "no data" on new installs — repointing them at the leverage
+  sensor is a tracked follow-up.
+- Dogfooded (P11): sensor verified live against real `~/broomva` transcripts (all 4 levels
+  live); §23 verified to PASS a real loop and FAIL a dead sensor; shellcheck + JSON-validate +
+  full `tests/*.test.sh` green. Primitive count unchanged (**20**). `VERSION` 0.29.2 → 0.30.0.
+- **Cross-review hardening (P20).** A cross-model adversarial pass found three real defects,
+  each now fixed with a regression test encoding the exact failing scenario: (1) the transcript
+  path-mangle kept `_`, but Claude Code hyphenates it — any workspace with an underscore
+  (`sde_vault`) globbed 0 files → false "sensor DEAD" forever; now `[^A-Za-z0-9]`. (2) `sensor_live`
+  was vacuously `sessions>0` because rate metrics return `0.0` (never null), so a wholesale-misread
+  parser (the original bug's *shape*) passed green; liveness now gates on positive raw structural
+  event counts, and the test feeds a populated-but-blind fixture. (3) m5 stringified the whole tool
+  input, so a `Grep(pattern="knowledge")` search counted as a kg-load (h⟂U leak); it now matches
+  path-bearing fields only (real-data m5 0.585 → 0.5). Also: the Stop sensor and SessionStart wire
+  now resolve the workspace the same way (git toplevel), fixing a worktree state-file divergence.
+
 ## 0.29.2 — 2026-07-01
 
 ### fix: self-warning banner makes the skills.sh partial-install self-diagnosing (BRO-1633)

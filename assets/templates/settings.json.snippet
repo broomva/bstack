@@ -21,6 +21,13 @@
             "command": "${BROOMVA_HOME}/.agents/skills/role-x/scripts/role-x-coverage-hook.sh",
             "timeout": 5,
             "_bstack_primitive": "P17"
+          },
+          {
+            "type": "command",
+            "command": "${BROOMVA_HOME}/.claude/skills/bstack/scripts/knowledge-wakeup-hook.sh",
+            "timeout": 10,
+            "_bstack_primitive": "loop-wire",
+            "_purpose": "Actuation wire: inject the self-improvement loop's worst-gap metric + its corrective actuator into the new session (reads .control/leverage-state.json)"
           }
         ]
       }

@@ -1,25 +1,14 @@
 {
-  "_doc": "bstack RCS multi-layer audit — Claude Code PostToolUse (L0) + Stop (L1) hook entries. Merged into .claude/settings.json by bstack/scripts/install-rcs-stability.sh. Composes with the existing L3-G0 PreToolUse hook from v0.14.0 (see settings.json.l3-stability-hook.snippet).",
+  "_doc": "bstack RCS self-improvement SENSOR — Claude Code Stop-hook entry. Merged into .claude/settings.json by bstack/scripts/install-rcs-stability.sh. scripts/leverage-sensor.py reads raw session transcripts (h ⟂ U) and writes .control/leverage-state.json with per-RCS-level metrics; the SessionStart wire (knowledge-wakeup-hook.sh) then injects the worst gap into the next context, and doctor §23 certifies closure. Throttled to recompute at most every 6h. The workspace is resolved from the session's cwd (git toplevel) — same as the SessionStart wire — so a session run from a worktree reads and writes the SAME .control/leverage-state.json the Stop sensor wrote. REPLACES the prior l0-tool-audit (read tool_result.latency_ms — a field Claude Code never emits → 100% null) and l1-reflex-audit (wrong transcript schema → tool_call_count 100% zero, then grepped the agent's own prose = h correlated with U) hooks. Composes with the existing L3-G0 PreToolUse hook (see settings.json.l3-stability-hook.snippet).",
   "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": ".*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "$BSTACK_REPO/scripts/l0-tool-audit-hook.sh",
-            "_bstack_primitive": "L0-audit"
-          }
-        ]
-      }
-    ],
     "Stop": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "$BSTACK_REPO/scripts/l1-reflex-audit-hook.sh",
-            "_bstack_primitive": "L1-audit"
+            "command": "$BSTACK_REPO/scripts/leverage-sensor.py --throttle 21600",
+            "timeout": 25,
+            "_bstack_primitive": "loop-sensor"
           }
         ]
       }

@@ -67,7 +67,7 @@ SETTINGS="$WORKSPACE/.claude/settings.json"
 SNIPPET="$BSTACK_REPO/assets/templates/settings.json.multi-layer-hooks.snippet"
 
 if [ "$DRY_RUN" = "1" ]; then
-    echo "  [dry] would merge L0-audit + L1-audit hooks into $SETTINGS"
+    echo "  [dry] would merge loop-sensor (leverage-sensor) Stop hook into $SETTINGS"
 elif ! command -v python3 >/dev/null 2>&1; then
     echo "  [skip] python3 not available; cannot merge JSON safely"
 else
@@ -135,7 +135,7 @@ if events_added:
     for e in events_added:
         print(f"           {e}")
 else:
-    print(f"  [skip] {settings_path} (L0-audit + L1-audit hooks already present)")
+    print(f"  [skip] {settings_path} (loop-sensor hook already present)")
 PYEOF
 fi
 
