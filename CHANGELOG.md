@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.31.0 — 2026-07-05
+
+### chore: close the loop's mechanical loose ends — retire the fake l0/l1 sensor + auth pre-flight (BRO-1697)
+
+Follow-up to v0.30.0 (loop closure). Finishes the deferred cleanup and adds a session-hygiene guard.
+
+### Changed
+
+- **Retired the fake l0/l1 sensor.** `scripts/l0-tool-audit-hook.sh` (logged `latency_ms` — 100% null) and `scripts/l1-reflex-audit-hook.sh` (read `tool_call_count` — 100% zero, then grepped the agent's own prose) are now **no-op deprecation stubs**: they drain stdin and exit 0 so any workspace still wiring them from a pre-v0.30.0 install gets a clean exit instead of a missing-file error (a future release deletes them). They no longer write fake audit rows.
+- **`doctor` §16 (L0 plant) and §17 (L1 reflex) are re-sourced** from the leverage-sensor's `.control/leverage-state.json` (m2/m3/m4 for L0, m1 for L1) instead of the retired logs — so they show real transcript-derived numbers and drop the misleading "wire the hook" nudge. §18 (L2 promotion, reads `l2-promotions.jsonl`) is unchanged; `compute-lambda` reads static `rcs-parameters.toml`, never the logs, so it is unaffected.
+
+### Added
+
+- **`scripts/auth-preflight-hook.sh`** (SessionStart) — warns (never blocks) if `gh` is unauthenticated, so an autonomous arc learns it at session start rather than dying on the push/PR step after the work is done. Minimal (gh only) per rule-of-three. Wired in `settings.json.snippet`.
+- **`tests/loop-retirement.test.sh`** — asserts the stubs are silent no-ops writing no audit rows, doctor dropped the `L0_LOG`/`L1_LOG` reads, and the auth pre-flight warns-without-blocking + is wired.
+
+### Deferred (tracked, not in this release)
+
+- **m4 allowlist default** — deferred: a proper `permissions.allow` default needs the bootstrap merger extended to merge top-level keys (it currently merges only `.hooks`), and it changes the user's permission posture (a decision best made with the user present). Real-workspace m4 is 0.02/session (far below the 0.50 target), so it is not an active problem. (BRO-1697)
+- **Read-before-Edit guard** — determined redundant: Claude Code already enforces read-before-edit natively (that native block *is* what m3 measures), and the loop already injects the m3 gap via the SessionStart wire; a bstack PreToolUse hook would duplicate the native guard without adding signal.
+- **Dither / persistent-excitation channel** — the deepest gap; design-first (touches L3, λ₃≈0.006). Tracked as BRO-1698 with a design spec.
+
+### Known adjacency (disclosed, tracked as BRO-1699)
+
+- `compute-budget-status.sh` (feeding doctor §19 multi-layer composite health) **still reads** the now-retired `l0-tools`/`l1-reflexes` logs for its L0/L1 *observed* overlay. With the stubs those read empty, so §19's L0/L1 overlay defaults to `stable` regardless. This is graceful (no crash, exit 0, nothing in CI invokes it) and the composite ω = min λᵢ (from static `rcs-parameters.toml`) is unaffected and correct — but it is a residual dead-log read (the real L0/L1 signal is in §16/§17/§23). Repointing the overlay at `leverage-state.json` is tracked in BRO-1699. Flagged here rather than left silent (P20 review).
+
+### Notes
+
+- Primitive count unchanged (**20**). `VERSION` 0.30.0 → 0.31.0. Full `tests/*.test.sh` + canary green; dogfooded against real `~/broomva` (§16/§17 render live metrics).
+
 ## 0.30.0 — 2026-07-04
 
 ### feat: close the self-improvement loop end-to-end across RCS L0–L3 (BRO-1696)

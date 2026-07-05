@@ -787,92 +787,62 @@ else
     [ "$QUIET" = "0" ] && echo "         → fix: $INSTALL_CMD"
 fi
 
-# ── Section 16: L0 plant audit (tool-call latency + error rate) ─────────────
-# Reads .control/audit/l0-tools.jsonl (written by PostToolUse hook). Reports
-# count in last τ_a_0 window, latency mean/p99, exit-nonzero rate. Hard gap
-# only on extreme runaway; soft warn on noisy patterns. Informational by
-# default (rule-of-three for promotion).
+# ── Section 16: L0 plant audit (tool calls) ─────────────────────────────────
+# SUPERSEDED (v0.31.0; sensor since v0.30.0): the L0 plant metrics now come from
+# the transcript-derived leverage-sensor (§23), not the retired PostToolUse
+# l0-tools.jsonl (which logged latency_ms — a field Claude Code never emits →
+# 100% null). Surface m2/m3/m4 from .control/leverage-state.json. Informational.
 section "16. L0 plant audit (tool calls)"
 
-L0_LOG="$WORKSPACE/.control/audit/l0-tools.jsonl"
+LEV_STATE="$WORKSPACE/.control/leverage-state.json"
 INSTALL_RCS="bash $BSTACK_REPO/scripts/install-rcs-stability.sh"
 
-if [ ! -f "$L0_LOG" ]; then
-    [ "$QUIET" = "0" ] && echo "  [info] no L0 audit log (PostToolUse hook not yet wired)"
+if [ ! -f "$LEV_STATE" ]; then
+    [ "$QUIET" = "0" ] && echo "  [info] no leverage-state yet — L0 metrics appear after the Stop sensor runs (see §23)"
     [ "$QUIET" = "0" ] && echo "         → fix: $INSTALL_RCS"
 elif ! command -v python3 >/dev/null 2>&1; then
-    [ "$QUIET" = "0" ] && echo "  [info] python3 missing — L0 audit summary skipped"
+    [ "$QUIET" = "0" ] && echo "  [info] python3 missing — L0 summary skipped"
 else
-    L0_SUMMARY=$(python3 - "$L0_LOG" <<'PYEOF'
-import sys, json, time
-log = sys.argv[1]
-now_ms = int(time.time() * 1000)
-window_ms = 10 * 60 * 1000  # last 10 minutes for human-readable § (τ_a_0 = 500ms is too narrow)
-rows = []
+    L0_SUMMARY=$(python3 - "$LEV_STATE" <<'PYEOF'
+import sys, json
 try:
-    with open(log) as f:
-        for line in f:
-            try:
-                r = json.loads(line)
-                if r.get("ts", 0) >= now_ms - window_ms:
-                    rows.append(r)
-            except Exception:
-                pass
+    m = json.load(open(sys.argv[1])).get("metrics", {})
+    print("tool_error_rate=%s read_before_edit_rate=%s permission_bypass/session=%s" % (
+        m.get("m2_tool_error_rate"), m.get("m3_read_before_edit_rate"),
+        m.get("m4_permission_bypass_per_session")))
 except Exception:
-    pass
-
-lats = [r["latency_ms"] for r in rows if isinstance(r.get("latency_ms"), (int, float))]
-errs = sum(1 for r in rows if r.get("is_error"))
-mean = (sum(lats) / len(lats)) if lats else None
-
-print(f"events={len(rows)} window=10min latency_mean={'-' if mean is None else f'{mean:.0f}ms'} errors={errs}")
+    print("unreadable")
 PYEOF
 )
-    ok "L0 audit: $L0_SUMMARY"
+    ok "L0 (leverage-sensor §23): $L0_SUMMARY"
 fi
 
-# ── Section 17: L1 autonomic reflex compliance ─────────────────────────────
-# Reads .control/audit/l1-reflexes.jsonl. Reports per-reflex compliance rate
-# across last τ_a_1 (or 1h, whichever larger). Hard gap only if compliance
-# < 30%; soft warn 30-60%. Informational by default.
-section "17. L1 autonomic reflex compliance"
+# ── Section 17: L1 autonomic reflex health ──────────────────────────────────
+# SUPERSEDED (v0.31.0; sensor since v0.30.0): the retired Stop hook inferred reflex
+# compliance by grepping the agent's own prose (h correlated with U). The
+# leverage-sensor's L1 signal — m1 continue_nudges_per_session — is transcript-
+# structural instead. Informational.
+section "17. L1 autonomic reflex health"
 
-L1_LOG="$WORKSPACE/.control/audit/l1-reflexes.jsonl"
-
-if [ ! -f "$L1_LOG" ]; then
-    [ "$QUIET" = "0" ] && echo "  [info] no L1 audit log (Stop hook not yet wired)"
+if [ ! -f "$LEV_STATE" ]; then
+    [ "$QUIET" = "0" ] && echo "  [info] no leverage-state yet — L1 signal appears after the Stop sensor runs (see §23)"
     [ "$QUIET" = "0" ] && echo "         → fix: $INSTALL_RCS"
 elif ! command -v python3 >/dev/null 2>&1; then
-    [ "$QUIET" = "0" ] && echo "  [info] python3 missing — L1 audit summary skipped"
+    [ "$QUIET" = "0" ] && echo "  [info] python3 missing — L1 summary skipped"
 else
-    L1_SUMMARY=$(python3 - "$L1_LOG" <<'PYEOF'
-import sys, json, time
-log = sys.argv[1]
-now_ms = int(time.time() * 1000)
-window_ms = 24 * 60 * 60 * 1000  # last 24h for human-readable § (multi-session)
-rows = []
+    L1_SUMMARY=$(python3 - "$LEV_STATE" <<'PYEOF'
+import sys, json
 try:
-    with open(log) as f:
-        for line in f:
-            try:
-                r = json.loads(line)
-                if r.get("ts", 0) >= now_ms - window_ms:
-                    rows.append(r)
-            except Exception:
-                pass
+    d = json.load(open(sys.argv[1]))
+    m = d.get("metrics", {})
+    print("continue_nudges/session=%s over %s sessions/%sd" % (
+        m.get("m1_continue_nudges_per_session"),
+        d.get("sessions_analyzed"), d.get("window_days")))
 except Exception:
-    pass
-
-if not rows:
-    print("sessions=0 window=24h")
-else:
-    rates = [r["compliance_rate"] for r in rows if isinstance(r.get("compliance_rate"), (int, float))]
-    mean_rate = sum(rates) / len(rates) if rates else None
-    yes_count = sum(1 for r in rows if (r.get("anti_rationalization") or {}).get("value") == "yes")
-    print(f"sessions={len(rows)} window=24h compliance_mean={'-' if mean_rate is None else f'{mean_rate:.2f}'} dogfood_yes={yes_count}")
+    print("unreadable")
 PYEOF
 )
-    ok "L1 audit: $L1_SUMMARY"
+    ok "L1 (leverage-sensor §23): $L1_SUMMARY"
 fi
 
 # ── Section 18: L2 EGRI promotion throttle ─────────────────────────────────
