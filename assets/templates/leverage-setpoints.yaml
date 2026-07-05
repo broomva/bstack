@@ -1,0 +1,81 @@
+# leverage-setpoints.yaml — the reference signal r for the bstack self-improvement loop.
+#
+# scripts/leverage-sensor.py measures each metric from raw session transcripts
+# (h ⟂ U — the agent cannot fake transcript structure), compares to these targets
+# (e = r − h), and scripts/knowledge-wakeup-hook.sh injects the worst gap + its
+# named actuator into the next SessionStart (the closure wire). doctor.sh §23
+# reads the resulting .control/leverage-state.json to certify closure per RCS level.
+#
+# ── CAUSAL PRIORITY (read this before trusting the loop) ──────────────────────
+# A reference the agent authored is endogenous: r = g(x) makes "converged" and
+# "drifted" the same event (endogenous-reference-contamination). The targets below
+# are bstack DEFAULTS — a starting point, not YOUR reference. Until a human edits
+# these targets and sets `authored_by` to their name, the sensor + doctor report
+# reference_authored: false and the loop is "closed but endogenous". Signing r0 is
+# the one durable human act — do it before you rely on the loop's self-correction.
+authored_by: bstack-default   # ← change to your name once you've reviewed the targets
+
+version: 1
+window_days: 7
+
+# Metrics are tagged by RCS recursion level so closure is verified end-to-end:
+#   L0 external plant (tool execution) · L1 agent internal (reflex loop) ·
+#   L2 meta-control (knowledge/promotion feedback) · L3 governance.
+# direction: lower_is_better → alert when value >= alert; higher_is_better → alert when value <= alert.
+metrics:
+  - id: m1
+    name: continue_nudges_per_session
+    level: L1
+    direction: lower_is_better
+    target: 0.30
+    alert: 1.00
+    actuator: "autonomous-loop limit-stall auto-resume + /goal (P19) — stop returning control mid-arc"
+    why: "A user 'continue' nudge means the agent returned control it should have kept — the L1 reflex loop stalling."
+
+  - id: m2
+    name: tool_error_rate
+    level: L0
+    direction: lower_is_better
+    target: 0.05
+    alert: 0.12
+    actuator: "triage the top error class each cycle; wire the specific PreToolUse guard"
+    why: "Fraction of tool_results that errored — L0 plant faults. Rising rate = wasted turns + context."
+
+  - id: m3
+    name: read_before_edit_rate
+    level: L0
+    direction: lower_is_better
+    target: 0.03
+    alert: 0.10
+    actuator: "PreToolUse Read-before-Edit guard hook (block Edit/Write on an unread path)"
+    why: "Read-before-edit errors per Edit/Write/MultiEdit — a true rate. One guard removes the whole class."
+
+  - id: m4
+    name: permission_bypass_per_session
+    level: L0
+    direction: lower_is_better
+    target: 0.50
+    alert: 3.00
+    actuator: "populate .claude/settings.json permissions.allow via fewer-permission-prompts"
+    why: "Genuine dangerouslyDisableSandbox invocations — an empty allowlist forcing the agent to route around the sandbox."
+
+  - id: m5
+    name: kg_load_rate
+    level: L2
+    direction: higher_is_better
+    target: 0.30
+    alert: 0.10
+    actuator: "if low, the knowledge substrate is written but not read — PRUNE production, do not add"
+    why: "Fraction of sessions that consumed knowledge (kg/entity reads) — the L2 meta-control feedback channel. Makes further knowledge production conditional on consumption."
+
+  - id: m6
+    name: meta_work_session_ratio
+    level: L3
+    direction: lower_is_better
+    target: 0.50
+    alert: 0.75
+    actuator: "freeze governance/primitive edits until a product/outcome milestone ships"
+    why: "Fraction of editing sessions that touched only meta paths vs any product path (sub-repos counted via absolute paths). THE anti-capture governor at L3 — the loop watching itself."
+
+# Optional: override the knowledge-read path regex the sensor uses for m5.
+# knowledge_paths: "research/entities|docs/knowledge-index|your/knowledge/dir"

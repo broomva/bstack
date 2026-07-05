@@ -72,13 +72,15 @@ elif ! command -v python3 >/dev/null 2>&1; then
     echo "  [skip] python3 not available; cannot merge JSON safely"
 else
     mkdir -p "$(dirname "$SETTINGS")"
-    python3 - "$SETTINGS" "$SNIPPET" "$BSTACK_REPO" <<'PYEOF'
+    python3 - "$SETTINGS" "$SNIPPET" "$BSTACK_REPO" "$WORKSPACE" "$HOME" <<'PYEOF'
 import sys, json
 from pathlib import Path
 
 settings_path = Path(sys.argv[1])
 snippet_path = Path(sys.argv[2])
 bstack_repo = sys.argv[3]
+workspace = sys.argv[4]
+home = sys.argv[5]
 
 if settings_path.exists():
     try:
@@ -108,7 +110,9 @@ def substitute(o):
     if isinstance(o, list):
         return [substitute(x) for x in o]
     if isinstance(o, str):
-        return o.replace("$BSTACK_REPO", bstack_repo)
+        return (o.replace("$BSTACK_REPO", bstack_repo)
+                 .replace("${BROOMVA_WORKSPACE}", workspace)
+                 .replace("${BROOMVA_HOME}", home))
     return o
 
 snippet_substituted = substitute(snippet)
