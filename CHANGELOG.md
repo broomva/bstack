@@ -22,6 +22,10 @@ Follow-up to v0.30.0 (loop closure). Finishes the deferred cleanup and adds a se
 - **Read-before-Edit guard** — determined redundant: Claude Code already enforces read-before-edit natively (that native block *is* what m3 measures), and the loop already injects the m3 gap via the SessionStart wire; a bstack PreToolUse hook would duplicate the native guard without adding signal.
 - **Dither / persistent-excitation channel** — the deepest gap; design-first (touches L3, λ₃≈0.006). Tracked as BRO-1698 with a design spec.
 
+### Known adjacency (disclosed, tracked as BRO-1699)
+
+- `compute-budget-status.sh` (feeding doctor §19 multi-layer composite health) **still reads** the now-retired `l0-tools`/`l1-reflexes` logs for its L0/L1 *observed* overlay. With the stubs those read empty, so §19's L0/L1 overlay defaults to `stable` regardless. This is graceful (no crash, exit 0, nothing in CI invokes it) and the composite ω = min λᵢ (from static `rcs-parameters.toml`) is unaffected and correct — but it is a residual dead-log read (the real L0/L1 signal is in §16/§17/§23). Repointing the overlay at `leverage-state.json` is tracked in BRO-1699. Flagged here rather than left silent (P20 review).
+
 ### Notes
 
 - Primitive count unchanged (**20**). `VERSION` 0.30.0 → 0.31.0. Full `tests/*.test.sh` + canary green; dogfooded against real `~/broomva` (§16/§17 render live metrics).

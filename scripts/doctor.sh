@@ -788,10 +788,10 @@ else
 fi
 
 # ── Section 16: L0 plant audit (tool calls) ─────────────────────────────────
-# SUPERSEDED (v0.30.0): the L0 plant metrics now come from the transcript-derived
-# leverage-sensor (§23), not the retired PostToolUse l0-tools.jsonl (which logged
-# latency_ms — a field Claude Code never emits → 100% null). Surface m2/m3/m4 from
-# .control/leverage-state.json. Informational.
+# SUPERSEDED (v0.31.0; sensor since v0.30.0): the L0 plant metrics now come from
+# the transcript-derived leverage-sensor (§23), not the retired PostToolUse
+# l0-tools.jsonl (which logged latency_ms — a field Claude Code never emits →
+# 100% null). Surface m2/m3/m4 from .control/leverage-state.json. Informational.
 section "16. L0 plant audit (tool calls)"
 
 LEV_STATE="$WORKSPACE/.control/leverage-state.json"
@@ -818,9 +818,10 @@ PYEOF
 fi
 
 # ── Section 17: L1 autonomic reflex health ──────────────────────────────────
-# SUPERSEDED (v0.30.0): the retired Stop hook inferred reflex compliance by grepping
-# the agent's own prose (h correlated with U). The leverage-sensor's L1 signal —
-# m1 continue_nudges_per_session — is transcript-structural instead. Informational.
+# SUPERSEDED (v0.31.0; sensor since v0.30.0): the retired Stop hook inferred reflex
+# compliance by grepping the agent's own prose (h correlated with U). The
+# leverage-sensor's L1 signal — m1 continue_nudges_per_session — is transcript-
+# structural instead. Informational.
 section "17. L1 autonomic reflex health"
 
 if [ ! -f "$LEV_STATE" ]; then

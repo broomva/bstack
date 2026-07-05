@@ -133,6 +133,12 @@ def percentile(values, p):
     return s[max(0, min(k, len(s) - 1))]
 
 # ── L0: tools ────────────────────────────────────────────────────────────
+# NOTE (v0.31.0): l0-tools.jsonl / l1-reflexes.jsonl are RETIRED (the writing
+# hooks are no-op stubs), so these overlays read empty → L0/L1 verdict defaults
+# to `stable`. The real L0/L1 signal now lives in the leverage-sensor
+# (.control/leverage-state.json; doctor §16/§17/§23). Repointing this overlay at
+# leverage-state is tracked in BRO-1699. The composite ω is unaffected (it comes
+# from the static rcs-parameters.toml, not these logs).
 l0_rows = read_jsonl(audit_dir / "l0-tools.jsonl")
 l0_params = level_params.get("L0", {})
 l0_tau_a_ms = int(float(l0_params.get("tau_a", 0.5)) * 1000)
