@@ -64,6 +64,16 @@ independent of what it grades (`h ⟂ U`).
 - Dogfooded (P11): sensor verified live against real `~/broomva` transcripts (all 4 levels
   live); §23 verified to PASS a real loop and FAIL a dead sensor; shellcheck + JSON-validate +
   full `tests/*.test.sh` green. Primitive count unchanged (**20**). `VERSION` 0.29.2 → 0.30.0.
+- **Cross-review hardening (P20).** A cross-model adversarial pass found three real defects,
+  each now fixed with a regression test encoding the exact failing scenario: (1) the transcript
+  path-mangle kept `_`, but Claude Code hyphenates it — any workspace with an underscore
+  (`sde_vault`) globbed 0 files → false "sensor DEAD" forever; now `[^A-Za-z0-9]`. (2) `sensor_live`
+  was vacuously `sessions>0` because rate metrics return `0.0` (never null), so a wholesale-misread
+  parser (the original bug's *shape*) passed green; liveness now gates on positive raw structural
+  event counts, and the test feeds a populated-but-blind fixture. (3) m5 stringified the whole tool
+  input, so a `Grep(pattern="knowledge")` search counted as a kg-load (h⟂U leak); it now matches
+  path-bearing fields only (real-data m5 0.585 → 0.5). Also: the Stop sensor and SessionStart wire
+  now resolve the workspace the same way (git toplevel), fixing a worktree state-file divergence.
 
 ## 0.29.2 — 2026-07-01
 

@@ -1,12 +1,12 @@
 {
-  "_doc": "bstack RCS self-improvement SENSOR — Claude Code Stop-hook entry. Merged into .claude/settings.json by bstack/scripts/install-rcs-stability.sh. scripts/leverage-sensor.py reads raw session transcripts (h ⟂ U) and writes .control/leverage-state.json with per-RCS-level metrics; the SessionStart wire (knowledge-wakeup-hook.sh) then injects the worst gap into the next context, and doctor §23 certifies closure. Throttled to recompute at most every 6h. REPLACES the prior l0-tool-audit (read tool_result.latency_ms — a field Claude Code never emits → 100% null) and l1-reflex-audit (wrong transcript schema → tool_call_count 100% zero, then grepped the agent's own prose = h correlated with U) hooks. Composes with the existing L3-G0 PreToolUse hook (see settings.json.l3-stability-hook.snippet).",
+  "_doc": "bstack RCS self-improvement SENSOR — Claude Code Stop-hook entry. Merged into .claude/settings.json by bstack/scripts/install-rcs-stability.sh. scripts/leverage-sensor.py reads raw session transcripts (h ⟂ U) and writes .control/leverage-state.json with per-RCS-level metrics; the SessionStart wire (knowledge-wakeup-hook.sh) then injects the worst gap into the next context, and doctor §23 certifies closure. Throttled to recompute at most every 6h. The workspace is resolved from the session's cwd (git toplevel) — same as the SessionStart wire — so a session run from a worktree reads and writes the SAME .control/leverage-state.json the Stop sensor wrote. REPLACES the prior l0-tool-audit (read tool_result.latency_ms — a field Claude Code never emits → 100% null) and l1-reflex-audit (wrong transcript schema → tool_call_count 100% zero, then grepped the agent's own prose = h correlated with U) hooks. Composes with the existing L3-G0 PreToolUse hook (see settings.json.l3-stability-hook.snippet).",
   "hooks": {
     "Stop": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "$BSTACK_REPO/scripts/leverage-sensor.py --workspace ${BROOMVA_WORKSPACE} --throttle 21600",
+            "command": "$BSTACK_REPO/scripts/leverage-sensor.py --throttle 21600",
             "timeout": 25,
             "_bstack_primitive": "loop-sensor"
           }

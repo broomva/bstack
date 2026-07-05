@@ -67,20 +67,18 @@ SETTINGS="$WORKSPACE/.claude/settings.json"
 SNIPPET="$BSTACK_REPO/assets/templates/settings.json.multi-layer-hooks.snippet"
 
 if [ "$DRY_RUN" = "1" ]; then
-    echo "  [dry] would merge L0-audit + L1-audit hooks into $SETTINGS"
+    echo "  [dry] would merge loop-sensor (leverage-sensor) Stop hook into $SETTINGS"
 elif ! command -v python3 >/dev/null 2>&1; then
     echo "  [skip] python3 not available; cannot merge JSON safely"
 else
     mkdir -p "$(dirname "$SETTINGS")"
-    python3 - "$SETTINGS" "$SNIPPET" "$BSTACK_REPO" "$WORKSPACE" "$HOME" <<'PYEOF'
+    python3 - "$SETTINGS" "$SNIPPET" "$BSTACK_REPO" <<'PYEOF'
 import sys, json
 from pathlib import Path
 
 settings_path = Path(sys.argv[1])
 snippet_path = Path(sys.argv[2])
 bstack_repo = sys.argv[3]
-workspace = sys.argv[4]
-home = sys.argv[5]
 
 if settings_path.exists():
     try:
@@ -110,9 +108,7 @@ def substitute(o):
     if isinstance(o, list):
         return [substitute(x) for x in o]
     if isinstance(o, str):
-        return (o.replace("$BSTACK_REPO", bstack_repo)
-                 .replace("${BROOMVA_WORKSPACE}", workspace)
-                 .replace("${BROOMVA_HOME}", home))
+        return o.replace("$BSTACK_REPO", bstack_repo)
     return o
 
 snippet_substituted = substitute(snippet)
@@ -139,7 +135,7 @@ if events_added:
     for e in events_added:
         print(f"           {e}")
 else:
-    print(f"  [skip] {settings_path} (L0-audit + L1-audit hooks already present)")
+    print(f"  [skip] {settings_path} (loop-sensor hook already present)")
 PYEOF
 fi
 

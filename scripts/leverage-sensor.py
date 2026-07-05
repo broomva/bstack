@@ -63,7 +63,12 @@ def transcript_glob(workspace, arg=None):
     env = os.environ.get("CLAUDE_TRANSCRIPTS")
     if env:
         return env
-    mangled = re.sub(r"[^A-Za-z0-9_]", "-", os.path.abspath(workspace))
+    # Claude Code replaces EVERY non-alphanumeric char (incl. '_' and '.') with
+    # '-'. Verified against a real projects dir: /private/var/folders/g9/_dhv_...
+    # is stored as -private-var-folders-g9--dhv-... — so '_' must be hyphenated
+    # too. Keeping '_' silently mismatches any path with an underscore (e.g.
+    # work/sde_vault, build_dir) → 0 files → false "sensor DEAD" forever.
+    mangled = re.sub(r"[^A-Za-z0-9]", "-", os.path.abspath(workspace))
     return os.path.join(HOME, ".claude", "projects", mangled, "*.jsonl")
 
 
@@ -169,7 +174,6 @@ def analyze(glob_pat, window_days, kg_read_re):
                         continue
                     name = it.get("name", "")
                     inp = it.get("input", {}) if isinstance(it.get("input"), dict) else {}
-                    inp_s = str(inp).lower()
                     if name == "Bash" and inp.get("dangerouslyDisableSandbox"):
                         sandbox_bypass += 1
                     if name in ("Edit", "Write", "MultiEdit"):
@@ -181,10 +185,21 @@ def analyze(glob_pat, window_days, kg_read_re):
                             edited_meta = True
                     if name == "Skill" and str(inp.get("skill", "")).lower() in KG_SKILLS:
                         used_kg = True
-                    elif name in ("Read", "Grep", "Glob") and (
-                        kg_read_re.search(inp_s) or "kg load" in inp_s
-                    ):
-                        used_kg = True
+                    elif name in ("Read", "Grep", "Glob"):
+                        # Match ONLY path-bearing fields, never the whole stringified
+                        # input — a Grep(pattern="knowledge", path="/unrelated/src") is a
+                        # search FOR the word, not a read OF the entity store. The pattern
+                        # is agent-authored free text (would break h ⟂ U); the path is
+                        # structural. Glob's `pattern` IS its path expression, so include it.
+                        if name == "Read":
+                            kg_target = str(inp.get("file_path", ""))
+                        elif name == "Grep":
+                            kg_target = str(inp.get("path", ""))
+                        else:  # Glob
+                            kg_target = str(inp.get("pattern", "")) + " " + str(inp.get("path", ""))
+                        kt = kg_target.lower()
+                        if kg_read_re.search(kt) or "kg load" in kt:
+                            used_kg = True
             elif t == "user":
                 content = obj.get("message", {}).get("content")
                 if isinstance(content, list):
@@ -270,20 +285,39 @@ def evaluate(metrics, setpoints):
 
 
 def closure_verdict(record, setpoints):
-    """Per-RCS-level closure: a level is LIVE iff it has >=1 metric with a non-null
-    value measured over >=1 session. sensor_live is the un-blinding assertion doctor
-    §23 + CI consume — a fake sensor (all-null / zero sessions) is NOT closed."""
+    """Per-RCS-level closure keyed on POSITIVE RAW EVENT COUNTS, not non-null metric
+    values. A rate metric returns 0.0 (never None) even when the parser extracted zero
+    events — so "value is not None" is vacuously true and would certify a wholesale-
+    misread sensor as live (exactly the original bug's shape: structural events present,
+    read as zero). Each level is LIVE only if the raw evidence its metrics are computed
+    FROM was actually extracted:
+      L0 (tool-error / read-before-edit / permission-bypass) ← tool_results>0 or edits>0
+      L1 (continue-nudges, a per-session rate where 0 is a valid healthy reading) ← sessions>0
+      L2 (kg-load, per-session rate; 0 is meaningful) ← sessions>0
+      L3 (meta-work ratio) ← working editing sessions > 0
+    sensor_live additionally requires the parser to have extracted STRUCTURE (tool_results
+    or edits > 0), so a session file that parses to zero structural events (schema drift,
+    the l0/l1 failure mode) is NOT live."""
+    raw = record.get("raw", {})
+    sessions = record["sessions_analyzed"]
+    tool_results = raw.get("tool_results", 0)
+    edits = raw.get("edits", 0)
+    working = raw.get("meta_sessions", 0) + raw.get("product_sessions", 0)
+    level_evidence = {
+        "L0": (tool_results > 0 or edits > 0),
+        "L1": sessions > 0,
+        "L2": sessions > 0,
+        "L3": working > 0,
+    }
     levels = {}
     for r in record["results"]:
         lv = r.get("level", "L?")
-        live = r.get("value") is not None
         e = levels.setdefault(lv, {"live": False, "metrics": []})
         e["metrics"].append({"name": r.get("name"), "value": r.get("value")})
-        if live:
+        if level_evidence.get(lv, False):
             e["live"] = True
-    sessions = record["sessions_analyzed"]
-    non_null = any(v is not None for v in record["metrics"].values())
-    sensor_live = sessions > 0 and non_null
+    # a sensor that opened files but extracted zero structural events is blind, not live
+    sensor_live = sessions > 0 and (tool_results > 0 or edits > 0)
     expected = ["L0", "L1", "L2", "L3"]
     levels_closed = all(levels.get(lv, {}).get("live") for lv in expected)
     authored_by = setpoints.get("authored_by", "unknown")
