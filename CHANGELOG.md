@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.34.0 — 2026-07-06
+
+### fix: fresh-install portability — the self-improving/autonomy layer was silently ~/broomva-hosted (BRO-1715)
+
+bstack's **discipline** harness (governance files, P1/P2/P6/P7 hooks) transplanted cleanly to a fresh non-`~/broomva` workspace, but its **self-improving / autonomy** layer did not: four packaging bugs made a fresh `git clone bstack && bstack bootstrap` install *look* healthy while the control loop was dead on arrival. The all-green in `~/broomva` was a self-hosting artifact — `~/broomva` *is* the bstack monorepo, so it is the one workspace that passes vacuously. The fix ships with a hermetic repro (`tests/fresh-install-portability.test.sh`) that bootstraps into an empty scratch workspace and asserts all four failures — RED before, GREEN after — so CI proves portability thereafter.
+
+### Fixed
+
+- **Bug 1 — five loop/autonomy hooks dangled (the loop actuation wire was dead).** `settings.json.snippet` wired `bstack-autoupdate`, `knowledge-wakeup` (the self-improvement loop's SessionStart actuation wire), `auth-preflight`, `autonomous-posture`, and `arc-continuation` under `${BROOMVA_HOME}/.claude/skills/bstack/scripts/` — a directory **no** install step creates. bstack installs by **git-clone**, never as a global `npx skills add` skill (a repo-root install drops sibling dirs, upstream `skills#1523`), so it is never at `~/.claude/skills/bstack/`. Every one of the five dangled, and the BRO-1707 ship-signal that rides `knowledge-wakeup` died with it. **Re-rooted all five at `$BSTACK_REPO/scripts/`** — the same substitution `install-rcs-stability.sh` already bakes for the loop-sensor Stop hook, and the only root where each hook's `SELF_DIR`-relative siblings (`leverage-sensor.py`, `leverage-ship-sensor.py`, `autonomous-arc.sh`) co-locate. `bootstrap.sh` (Phase 3) **and** `repair.sh` (which duplicates the snippet merge) now substitute `$BSTACK_REPO` alongside `${BROOMVA_WORKSPACE}`/`${BROOMVA_HOME}`.
+- **Bug 2 — the loop ran referenceless.** `.control/leverage-setpoints.yaml` (the reference signal r0 that `leverage-sensor.py` measures against) was never seeded by any install step, so the sensor fell back to empty metrics and doctor §23 could never certify closure. `bootstrap.sh` Phase 2 now scaffolds it from `assets/templates/leverage-setpoints.yaml` (idempotent, never overwrites, `authored_by: bstack-default` left for the human to sign). The wizard (`onboard.sh`) inherits it via bootstrap.
+- **Bug 3 — doctor §7 false-RED for globally-installed skills.** It checked workspace-relative `skills/<name>/scripts/*.py`, but P6/P9/P12 install **globally** (`npx skills add -g` → `~/.claude/skills` + `~/.agents/skills`). Every non-self-hosting install false-RED'd P6/P9/P12. §7 now also resolves the global skill dirs (mirrors the existing `/kg` global-dir check).
+- **Bug 4 — doctor false-GREEN off-broomva.** `WORKSPACE` defaulted to `$HOME/broomva`, so a bare `bstack doctor` from an unrelated directory silently audited the healthy self-hosting `~/broomva` and reported compliant. doctor now resolves the workspace via the shared resolver (`scripts/lib/resolve-workspace.sh`: env → cwd-is-workspace → `~/.bstack` config → cwd) and, if resolution lands on a non-workspace, **fails loud** (exit 3) rather than defaulting — "nothing to audit" is a hard error, distinct from the soft gaps a normal run exits 0 on. (Side effect: the CI `doctor` job, which scaffolds `.control/policy.yaml` into `$PWD` and ran with no `BROOMVA_WORKSPACE`, previously exited 0 *vacuously* on the `$HOME/broomva` default — it now actually lints the checkout.)
+
+### Added
+
+- **doctor §25 — Wired hook command resolution.** Every wiring check greps that a hook is wired *by name* (§24-style) but never that its command *resolves*; that is exactly how Bug 1 stayed silent. §25 resolves every wired hook command (interpreter/flag/env-assignment-aware path extraction, so `python3 /a/b.py` checks `/a/b.py`, not `python3`): a bstack-shipped command that dangles is a **hard gap**; a not-yet-installed companion skill (`~/.{claude,agents}/skills/<name>`, name ≠ `bstack`) is a **soft info**, fresh-aware per §23's soft-vs-hard nuance.
+- **`tests/fresh-install-portability.test.sh`** — hermetic (no network, no `gh`, isolated `$HOME`): bootstraps into an empty scratch workspace and asserts (1) every bstack-shipped hook command resolves, (2) `leverage-setpoints.yaml` is seeded with non-empty metrics, (3) doctor OKs P6/P9/P12 from the global skill dirs, (4) doctor fails loud off-broomva, (5) §25 hard-gaps an injected dangling hook.
+
+### Notes
+
+- **Migration for existing installs:** re-run `bstack repair` to re-root the five hooks and seed `leverage-setpoints.yaml`. A workspace whose live `.claude/settings.json` still carries the old `~/.claude/skills/bstack/scripts/` paths will now surface them as §25 hard gaps (a true finding — those hooks were dead).
+- **Scope:** packaging only — no primitive added, no governance rule changed. This is the merged-PR ship-signal the m6 governor rewards, not a meta edit.
+
 ## 0.33.0 — 2026-07-05
 
 ### feat: re-base the m6 leverage governor on an exogenous merged-PR ship-signal — SHADOW (BRO-1707)

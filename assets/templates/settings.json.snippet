@@ -1,12 +1,12 @@
 {
-  "_comment": "bstack-managed hooks — bootstrap merges these into your existing .claude/settings.json. Does NOT overwrite existing entries; only adds missing ones. ${BROOMVA_WORKSPACE} is replaced with the workspace root; ${BROOMVA_HOME} is replaced with $HOME (where npx skills add -g installs).",
+  "_comment": "bstack-managed hooks — bootstrap merges these into your existing .claude/settings.json. Does NOT overwrite existing entries; only adds missing ones. ${BROOMVA_WORKSPACE} is replaced with the workspace root; ${BROOMVA_HOME} is replaced with $HOME (where npx skills add -g installs companion skills); $BSTACK_REPO is replaced with the bstack clone root (where bstack ships its OWN hook scripts — bstack installs by git-clone, never as a global skill, so its hooks live in the clone, not ~/.claude/skills/bstack/). Keep $BSTACK_REPO durable: a hook rooted in a /tmp clone dangles after the clone is removed.",
   "hooks": {
     "SessionStart": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "${BROOMVA_HOME}/.claude/skills/bstack/scripts/bstack-autoupdate-hook.sh",
+            "command": "$BSTACK_REPO/scripts/bstack-autoupdate-hook.sh",
             "timeout": 10,
             "_bstack_primitive": "P7"
           },
@@ -24,14 +24,14 @@
           },
           {
             "type": "command",
-            "command": "${BROOMVA_HOME}/.claude/skills/bstack/scripts/knowledge-wakeup-hook.sh",
+            "command": "$BSTACK_REPO/scripts/knowledge-wakeup-hook.sh",
             "timeout": 10,
             "_bstack_primitive": "loop-wire",
             "_purpose": "Actuation wire: inject the self-improvement loop's worst-gap metric + its corrective actuator into the new session (reads .control/leverage-state.json)"
           },
           {
             "type": "command",
-            "command": "${BROOMVA_HOME}/.claude/skills/bstack/scripts/auth-preflight-hook.sh",
+            "command": "$BSTACK_REPO/scripts/auth-preflight-hook.sh",
             "timeout": 8,
             "_bstack_primitive": "auth-preflight",
             "_purpose": "Warn (never block) if gh auth is missing, so an autonomous arc learns it at session start instead of dying on the push/PR step mid-task"
@@ -50,7 +50,7 @@
           },
           {
             "type": "command",
-            "command": "${BROOMVA_HOME}/.claude/skills/bstack/scripts/autonomous-posture-hook.sh",
+            "command": "$BSTACK_REPO/scripts/autonomous-posture-hook.sh",
             "timeout": 5,
             "_bstack_primitive": "P19",
             "_purpose": "Loop-stall rejection (BRO-1700): self-bootstrap the session arc on /autonomous, then re-stamp the sticky-posture line each turn so the autonomous stance does not decay mid-arc"
@@ -76,7 +76,7 @@
           },
           {
             "type": "command",
-            "command": "${BROOMVA_HOME}/.claude/skills/bstack/scripts/arc-continuation-hook.sh",
+            "command": "$BSTACK_REPO/scripts/arc-continuation-hook.sh",
             "timeout": 10,
             "_bstack_primitive": "P19",
             "_purpose": "Loop-stall rejection (BRO-1700): if an autonomous arc is active and the final turn is a no-op terminal (empty / 'No response requested'), return a Stop-hook block so the arc continues instead of parking. Runs after bridge+catalog so capture still happens; bounded drain-retry for the transcript flush race; guarded by consecutive reconcile_count<2 + auto-release on completion"

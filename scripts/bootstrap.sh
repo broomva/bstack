@@ -93,6 +93,11 @@ scaffold_governance_file ".control/policy.yaml" "policy.yaml.template"
 # Closure-contract arcs (the loop DEFINITIONS — the workspace's own editable
 # copy; compute-arc-status.sh otherwise falls back to the bundled template).
 scaffold_governance_file ".control/arcs.yaml" "arcs.yaml.template"
+# Leverage setpoints — the reference signal r0 the self-improvement loop measures
+# against. Without it, leverage-sensor.py runs referenceless (empty metrics, no r);
+# doctor §23 can never certify closure. Idempotent — never overwrites, and
+# `authored_by: bstack-default` stays until the human reviews + signs r0.
+scaffold_governance_file ".control/leverage-setpoints.yaml" "leverage-setpoints.yaml"
 # Control-systems manifest (plant/controller/shield/feedback formalization).
 scaffold_governance_file "METALAYER.md" "METALAYER.md.template"
 # Typed interface schemas (state/action/trace/evaluator/egri-event) — the typed
@@ -169,6 +174,7 @@ if [ ! -f "$SETTINGS_FILE" ]; then
     mkdir -p "$WORKSPACE_DIR/.claude"
     sed -e "s|\${BROOMVA_WORKSPACE}|$WORKSPACE_DIR|g" \
         -e "s|\${BROOMVA_HOME}|$HOME|g" \
+        -e "s|\$BSTACK_REPO|$SKILL_ROOT|g" \
         "$TEMPLATES_DIR/settings.json.snippet" > "$SETTINGS_FILE"
 elif command -v python3 >/dev/null 2>&1; then
     # Use python3 to merge missing hooks without overwriting existing ones
@@ -181,10 +187,14 @@ settings_path = Path("$SETTINGS_FILE")
 template_path = Path("$TEMPLATES_DIR/settings.json.snippet")
 workspace = "$WORKSPACE_DIR"
 home = "$HOME"
+bstack_repo = "$SKILL_ROOT"
 
 raw = template_path.read_text()
 raw = raw.replace("\${BROOMVA_WORKSPACE}", workspace)
 raw = raw.replace("\${BROOMVA_HOME}", home)
+# bstack ships its own hook scripts from the clone (never a global skill) — see
+# settings.json.snippet _comment + install-rcs-stability.sh's identical \$BSTACK_REPO wire.
+raw = raw.replace("\$BSTACK_REPO", bstack_repo)
 
 current = json.loads(settings_path.read_text())
 template = json.loads(raw)

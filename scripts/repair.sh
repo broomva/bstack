@@ -341,6 +341,7 @@ merge_hooks_into_settings() {
             mkdir -p "$(dirname "$target")"
             sed -e "s|\${BROOMVA_WORKSPACE}|$WORKSPACE_DIR|g" \
                 -e "s|\${BROOMVA_HOME}|$HOME|g" \
+                -e "s|\$BSTACK_REPO|$SKILL_ROOT|g" \
                 "$snippet" > "$target"
             echo "  [fix] scaffolded .claude/settings.json"
         elif [ "$DRY_RUN" = "1" ]; then
@@ -350,16 +351,18 @@ merge_hooks_into_settings() {
         fi
         return
     fi
-    python3 - "$snippet" "$target" "$WORKSPACE_DIR" "$HOME" "$DRY_RUN" <<'PYEOF'
+    python3 - "$snippet" "$target" "$WORKSPACE_DIR" "$HOME" "$DRY_RUN" "$SKILL_ROOT" <<'PYEOF'
 import json
 import sys
 from pathlib import Path
 
-snippet_path, target_path, workspace, home, dry_run_str = sys.argv[1:6]
+snippet_path, target_path, workspace, home, dry_run_str, bstack_repo = sys.argv[1:7]
 dry_run = dry_run_str == "1"
 
 raw = Path(snippet_path).read_text()
 raw = raw.replace("${BROOMVA_WORKSPACE}", workspace).replace("${BROOMVA_HOME}", home)
+# bstack ships its own hook scripts from the clone (never a global skill).
+raw = raw.replace("$BSTACK_REPO", bstack_repo)
 template = json.loads(raw)
 template.pop("_comment", None)
 
