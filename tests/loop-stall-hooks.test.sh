@@ -87,15 +87,20 @@ out="$(echo "{\"session_id\":\"$SID\",\"transcript_path\":\"$DR\",\"stop_hook_ac
 wait $ap 2>/dev/null
 [ -z "$out" ] && ok "drain skipped the thinking intermediate, classified the text yield → silent" || bad "drain force-continued via a thinking entry (out='$out')"
 
-echo "== auto-release: completion-dominant releases; mid-arc mention does not =="
-for c in "All milestones shipped." "All done!" "Everything's shipped and merged to main." "The arc is complete."; do
+echo "== auto-release: WHOLE-message completion releases; anything multi-clause does not =="
+for c in "All milestones shipped." "All done!" "The arc is complete." "Task complete."; do
   "$ARC" set "$SID" demo >/dev/null
   cont "$SID" "$(fixture rel 0 "$c")" >/dev/null
   "$ARC" active "$SID" >/dev/null 2>&1 && bad "completion '$c' did NOT auto-release" || ok "'$c' → auto-released the arc"
 done
-"$ARC" set "$SID" demo >/dev/null
-cont "$SID" "$(fixture midc 0 'The first task is complete, moving on to the next slice now.')" >/dev/null
-"$ARC" active "$SID" >/dev/null 2>&1 && ok "mid-arc 'first task is complete' did NOT auto-release (anchored)" || bad "premature auto-release"
+# multi-clause / mid-arc / keep-going messages must NOT release (protection stays active) — CodeRabbit finding
+for c in "The first task is complete, moving on to the next slice now." \
+         "Task complete; continuing with the next slice." \
+         "Everything's shipped and merged to main. Now deploying."; do
+  "$ARC" set "$SID" demo >/dev/null
+  cont "$SID" "$(fixture norel 0 "$c")" >/dev/null
+  "$ARC" active "$SID" >/dev/null 2>&1 && ok "'$c' did NOT auto-release (protection stays active)" || bad "premature auto-release on '$c'"
+done
 
 echo "== consecutive cap resets on productive OUT of chain =="
 "$ARC" set "$SID" demo >/dev/null
@@ -156,6 +161,9 @@ echo "== posture hook: self-bootstrap + set-if-absent + re-stamp =="
 NS="posture-sid-2"
 echo "{\"session_id\":\"$NS\",\"prompt\":\"/autonomous ship it\"}" | bash "$POS" | grep -q 'sticky posture' && ok "/autonomous → posture line" || bad "no posture line"
 [ "$("$ARC" status "$NS")" = "active autonomous" ] && ok "/autonomous self-bootstrapped an arc" || bad "arc not created"
+PM="posture-noprose"
+echo "{\"session_id\":\"$PM\",\"prompt\":\"please do not use /autonomous here\"}" | bash "$POS" >/dev/null
+"$ARC" active "$PM" >/dev/null 2>&1 && bad "mid-prose /autonomous mention wrongly created an arc" || ok "mid-prose /autonomous mention did NOT bootstrap (leading-anchored, CodeRabbit fix)"
 "$ARC" bump "$NS" reconcile_count >/dev/null
 echo "{\"session_id\":\"$NS\",\"prompt\":\"/autonomous keep going\"}" | bash "$POS" >/dev/null
 [ "$("$ARC" get "$NS" reconcile_count)" = "1" ] && ok "re-typing /autonomous did NOT reset the counter (set-if-absent)" || bad "re-typing /autonomous reset counter"

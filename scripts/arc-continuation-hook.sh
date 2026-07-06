@@ -54,12 +54,15 @@ BUDGET = float(os.environ.get("ARC_DRAIN_MS", "1200")) / 1000.0
 INTERVAL = 0.05
 
 SENTINEL_RE = re.compile(r"^\s*no response requested[.\s]*$", re.I)   # whole-message only
-# completion-DOMINANT (leading-anchored) — broad enough to catch natural phrasings
-# but never a mid-arc mention ("the first task is complete, moving on" won't match).
+# completion = the WHOLE final message is a completion phrase (fully anchored ^…$,
+# modulo trailing punctuation). Neither a mid-arc mention ("the first task is complete,
+# moving on") nor a keep-going clause ("task complete; continuing with the next slice"
+# — a CodeRabbit finding) releases the arc; those keep loop-stall protection active.
 COMPLETE_RE = re.compile(
     r"^\s*(the\s+)?(arc (is )?complete|arc[- ]done|"
-    r"all milestones?\b.{0,60}?\b(shipped|done|complete)|milestones? complete|"
-    r"task complete|all done|everything(?:'s| is)?\s+(?:shipped|done|merged|complete))\b", re.I)
+    r"all milestones?\b.{0,40}?\b(shipped|done|complete)|milestones? complete|"
+    r"task complete|all done|everything(?:'s| is)?\s+(?:shipped|done|merged|complete))"
+    r"[.!\s]*$", re.I)
 
 def last_assistant(p):
     try:
