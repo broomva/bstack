@@ -20,4 +20,13 @@ WORKSPACE="${BSTACK_WORKSPACE:-${BROOMVA_WORKSPACE:-$(git rev-parse --show-tople
 if [ -f "$SENSOR" ] && command -v python3 >/dev/null 2>&1; then
     python3 "$SENSOR" --workspace "$WORKSPACE" --brief --cached --no-store 2>/dev/null || true
 fi
+
+# BRO-1707: refresh the exogenous ship-signal (shadow) in the BACKGROUND — never blocks
+# session start; throttled to once/24h; fails silent (gh may be offline/unauth). The main
+# sensor merges the resulting .control/leverage-ship-state.json as a NON-actuating shadow
+# metric (m6s) for calibration until BRO-1709 (enforced CICD gates) promotes it.
+SHIP_SENSOR="$SELF_DIR/leverage-ship-sensor.py"
+if [ -f "$SHIP_SENSOR" ] && command -v python3 >/dev/null 2>&1 && command -v gh >/dev/null 2>&1; then
+    ( python3 "$SHIP_SENSOR" --workspace "$WORKSPACE" --throttle 86400 >/dev/null 2>&1 & ) || true
+fi
 exit 0

@@ -37,6 +37,11 @@ L3_PATHS=(
     ".control/policy.yaml"
     ".control/rcs-parameters.toml"
     "METALAYER.md"
+    # BRO-1707: the leverage governor's own dial + sensors are L3 — an agent must not
+    # silently retune the metric that watches it (governor-edits-its-own-setpoints).
+    ".control/leverage-setpoints.yaml"
+    "scripts/leverage-sensor.py"
+    "scripts/leverage-ship-sensor.py"
 )
 
 # Check if file_path matches any L3 path (suffix match on basename or full
@@ -65,11 +70,21 @@ LOG_DIR="$WORKSPACE/.control/audit"
 mkdir -p "$LOG_DIR" 2>/dev/null || true
 LOG_FILE="$LOG_DIR/l3-edits.jsonl"
 if [ -w "$(dirname "$LOG_FILE")" ] 2>/dev/null; then
+    # tool_name must be a bare JSON string VALUE (e.g. "Edit"). The prior grep
+    # captured the whole `"tool_name":"Edit"` pair and re-embedded it under %s,
+    # producing malformed `"tool_name":"tool_name":"Edit"` (BRO-1707 fix).
+    if command -v jq >/dev/null 2>&1; then
+        TOOL_NAME=$(echo "$INPUT" | jq -c '.tool_name // "unknown"' 2>/dev/null || echo '"unknown"')
+    else
+        TOOL_NAME=$(echo "$INPUT" | grep -oE '"tool_name"[[:space:]]*:[[:space:]]*"[^"]+"' | head -1 \
+            | sed -E 's/.*:[[:space:]]*("[^"]+")$/\1/')
+    fi
+    [ -n "$TOOL_NAME" ] || TOOL_NAME='"unknown"'
     printf '{"ts":"%s","file":"%s","matched":"%s","tool_name":%s}\n' \
         "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
         "$FILE_PATH" \
         "$MATCHED" \
-        "$(echo "$INPUT" | grep -oE '"tool_name"[[:space:]]*:[[:space:]]*"[^"]+"' | head -1 || echo '"unknown"')" \
+        "$TOOL_NAME" \
         >> "$LOG_FILE" 2>/dev/null || true
 fi
 

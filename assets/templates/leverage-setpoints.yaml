@@ -74,8 +74,29 @@ metrics:
     direction: lower_is_better
     target: 0.50
     alert: 0.75
-    actuator: "freeze governance/primitive edits until a product/outcome milestone ships"
+    actuator: "anti-windup: freeze NEW governance/primitive edits (stops the numerator growing). The ONLY input that LOWERS m6 is MERGING an agent-authored PRODUCT PR (apps/core/work/…) — it is a trailing-window ratio, so expect a ~7d lag, not a one-PR clear. Waiting or a fresh session do nothing; only where you edit does."
     why: "Fraction of editing sessions that touched only meta paths vs any product path (sub-repos counted via absolute paths). THE anti-capture governor at L3 — the loop watching itself."
 
 # Optional: override the knowledge-read path regex the sensor uses for m5.
 # knowledge_paths: "research/entities|docs/knowledge-index|your/knowledge/dir"
+
+# ── Exogenous ship-signal (BRO-1707) — SHADOW ───────────────────────────────
+# leverage-ship-sensor.py re-bases the meta/product signal on MERGED PULL REQUESTS
+# (unit = 1 per PR → no size-padding; fractional diff-path split → no single-file
+# flip; agent-authored only → h ⟂ U) and writes .control/leverage-ship-state.json.
+# leverage-sensor.py merges the result as `m6s_meta_work_ship_ratio` — a metric with
+# NO setpoint here, so it is measured but NEVER graded/actuated (shadow). Once the
+# CICD gates are ENFORCED (BRO-1709: branch protection + required checks + workflow
+# attestation), promote it to an id `m6` setpoint and retire the session ratio.
+ship_signal:
+  shadow: true
+  repos:              # allowlist — ONLY these are scanned; teammate/upstream repos
+    - broomva/genesis        # (houston, code-graph-rag, stimulus-*) are omitted → h ⟂ U
+    - broomva/bstack
+    - broomva/broomva.tech
+  author_allowlist:   # count only the agent's own merged PRs, never a teammate's
+    - broomva
+  # product_paths / meta_paths default to the sensor's PRODUCT_EDIT_RE / META_EDIT_RE.
+  tier_weights:
+    green: 1.0        # all completed CI checks SUCCESS AND the PR did not modify its own .github/workflows
+    ungated: 0.5      # red / no-CI / self-modified-gate — capped until BRO-1709 enforces branch protection

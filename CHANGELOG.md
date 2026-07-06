@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.33.0 — 2026-07-05
+
+### feat: re-base the m6 leverage governor on an exogenous merged-PR ship-signal — SHADOW (BRO-1707)
+
+The m6 anti-capture governor classified sessions as meta/product by *edited file path* over transcripts. Two weaknesses: **(a) gameable** — one product-path edit flips a whole session to "product" without shipping anything; **(b) proxy** — an edit is not a merge, and it doesn't know if CI passed / it shipped / it was reverted. This release adds an **exogenous ship-signal** that re-bases the meta/product signal on **merged pull requests**, run in **shadow mode** (measured + logged, actuating on nothing) until its distribution is calibrated.
+
+A 9-agent design workflow (inventory → 3-approach design panel → adversarial red-team) drove the design. The red-team's decisive finding: "merged-green PR" is **not** strongly exogenous on self-owned repos — the agent authors the CI workflows and `main` is unprotected on genesis + bstack (verified 404), so "green" is agent-influenceable. Hence: full CI credit is capped for self-modified-gate PRs, and the promotion of this signal to *actuate* is gated on enforcing the CICD gates first (BRO-1709).
+
+### Added
+
+- **`scripts/leverage-ship-sensor.py`** — the exogenous ship-signal. Enumerates agent-authored merged PRs across a repo allowlist (`gh pr list`, one bounded call per repo), classifies each by **fractional diff file-share** across product/meta path families, and sums **unit-weighted** ship-value (1 per PR). This kills both weaknesses by construction: unit-weighting defeats size-padding; fractional classification defeats the single-file flip (one product file in a 9-file meta PR = 0.1, not the whole unit) and makes PR-splitting ratio-neutral. Signals are structural (merge event, `author.login`/`is_bot`, file paths, `statusCheckRollup` conclusion) — never agent-set labels/subjects. Author allowlist + repo allowlist keep teammate/upstream throughput out (h ⟂ U). A PR that modified its own `.github/workflows/*` is capped at the ungated tier (can't grant full credit for a gate it just authored). Graceful degradation: any `gh` failure → repo flagged in `errors`; all-fail → `gh_ok:false` + null signal (never fabricates a 0). Writes `.control/leverage-ship-state.json`.
+- **`tests/ship-signal.test.sh`** — 21 hermetic assertions (fixture-driven, no gh/yaml): fractional classification, unit-weighting, author/bot exclusion, CI + self-modified-gate tiering, degenerate inputs, the shadow-merge is non-actuating (never `worst`, status `no_setpoint`), staleness cutoff, and the l3 guard (setpoints now protected + the malformed-JSON bugfix).
+
+### Changed
+
+- **`scripts/leverage-sensor.py`** — `merge_ship_shadow()` merges the ship-signal as metric `m6s_meta_work_ship_ratio` when `.control/leverage-ship-state.json` is fresh (<48h). `metric_id()` → `m6s` has no setpoint, so `evaluate()` marks it `no_setpoint` — it is measured but **never graded, ranked as `worst`, or surfaced in the SessionStart nudge**. Any error leaves the sensor untouched. (The m1–m6 path, closure verdict, and the `--brief` contract are unchanged.)
+- **`scripts/knowledge-wakeup-hook.sh`** — refreshes the ship-signal in the **background** (throttled 24h, fail-silent) so calibration data accrues during normal use without ever blocking session start.
+- **`scripts/l3-stability-pretool-hook.sh`** — extends L3 protection to the governor's own dial (`.control/leverage-setpoints.yaml`) + the sensors (`leverage-sensor.py`, `leverage-ship-sensor.py`) — an agent must not silently retune the metric that watches it. Also fixes a pre-existing malformed-JSON bug where the audit row emitted `"tool_name":"tool_name":"Edit"` (the grep captured the whole key:value pair).
+- **`assets/templates/leverage-setpoints.yaml`** — adds the `ship_signal:` config block (repo allowlist, author allowlist, tier weights, `shadow:true`) and rewrites the m6 actuator message to state the *corrective input* (merge an agent-authored product PR) and the ~7d trailing-window lag — not just "freeze" (which is only anti-windup; waiting/fresh-session move m6 by nothing).
+
+### Notes
+
+- **Shadow only** — `m6s` actuates on nothing this release. Live smoke: m6s = 0.625 over 14d (bstack meta + broomva.tech product), close to the current session-ratio 0.667 but derived from validated merged PRs. Promotion to an actuating `m6` setpoint + per-surface normalization is **BRO-1709**, gated on enforcing branch protection + required checks + workflow attestation so CI-green becomes genuinely exogenous.
+- **P20 hardening** (3-lens cross-model gate, all PASS — correctness 7.5 / shadow-safety 9 / gaming 7): fail-**closed** author allowlist (a missing/mistyped key yields a null signal, never silently counts teammates); the green gate now reads StatusContext `.state` (external CI like Vercel — reading `.conclusion` alone false-greened a failed status check) and treats pending/`STALE` as non-green; product-precedence mutual-exclusion for dual-family paths; self-CI detection broadened to `.github/(workflows|actions)/`; atomic state write (temp+`os.replace`) for the background-write vs Stop-read race. **Known limits explicitly tracked on BRO-1709** (they need the enforced gate, not this shadow release): PR-split inflation — the unit is the PR and PR-count is agent-controlled, so splitting one pure-product PR into N multiplies its credit — and the weaken-then-harvest CI attack.
+- **L3 budget**: adding `leverage-setpoints.yaml` + the sensors to the l3-stability path list means editing them consumes the 1/day L3 stability budget — a sensor re-tune will surface as `l3_unstable` in `compute-budget-status.sh`. That is correct semantics (governor edits are L3 mutations), not a regression; the malformed-JSON fix is what makes these rows count at all (they were silently dropped before).
+
 ## 0.32.0 — 2026-07-05
 
 ### feat: loop-stall rejection hooks — the Tier-1 autonomy-spine flagship (BRO-1700)
