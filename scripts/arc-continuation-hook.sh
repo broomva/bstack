@@ -59,9 +59,12 @@ INTERVAL = 0.05
 
 SENTINEL_RE = re.compile(r"no response requested", re.I)   # the CC no-op sentinel (search)
 NO_OP_RE    = re.compile(r"^\s*acknowledged\.?\s*$", re.I)  # bare acknowledgement, anchored
+# ANCHORED (^…$): only a completion-DOMINANT final message releases the arc. A long
+# substantive turn that merely mentions "the first task is complete" must NOT auto-
+# release (premature release = silent under-protection, worse than a missed nudge).
 COMPLETE_RE = re.compile(
-    r"\b(arc complete|arc[- ]done|all milestones?\b.*\b(shipped|done|complete)|"
-    r"milestones? complete|task complete|nothing (?:left|more) to do)\b", re.I)
+    r"^\s*(arc complete|arc[- ]done|all milestones?\b.{0,40}?\b(shipped|done|complete)|"
+    r"milestones? complete|task complete|nothing (?:left|more) to do)\.?\s*$", re.I)
 
 def last_assistant(p):
     # bounded tail read (final assistant turn is always near EOF)
@@ -128,8 +131,8 @@ text = " ".join(p for p in parts if p).strip()
 
 if has_tool_use:
     print("PRODUCTIVE")                      # tool call = progress → reset the cap
-elif COMPLETE_RE.search(text):
-    print("COMPLETE")                        # finished → release the arc
+elif COMPLETE_RE.match(text):
+    print("COMPLETE")                        # finished (completion-dominant) → release the arc
 elif (not text) or SENTINEL_RE.search(text) or NO_OP_RE.match(text):
     print("BLOCK")                           # genuine no-op terminal → continue the arc
 else:

@@ -73,6 +73,12 @@ out=$(cont "$SID" "$(fixture cmp 0 'All milestones shipped.')")
 if [ -z "$out" ] && ! "$ARC" active "$SID" >/dev/null 2>&1; then ok "'All milestones shipped.' auto-released the arc + no block"; else bad "completion not auto-released (out='$out')"; fi
 "$ARC" set "$SID" demo >/dev/null
 [ -z "$(cont "$SID" "$(fixture doneword 0 'Done.')")" ] && ok "bare 'Done.' → silent (not force-continued; P20 fix)" || bad "'Done.' wrongly blocked"
+# a substantive turn that MENTIONS completion mid-arc must NOT auto-release (premature
+# release = silent under-protection). COMPLETE_RE is anchored so only a completion-
+# dominant message releases.
+"$ARC" set "$SID" demo >/dev/null
+cont "$SID" "$(fixture midcomplete 0 'The first task is complete, moving on to the next slice now.')" >/dev/null
+"$ARC" active "$SID" >/dev/null 2>&1 && ok "mid-arc 'first task is complete' did NOT auto-release (anchored guard)" || bad "premature auto-release on a substantive completion mention"
 
 echo "== reconcile_count bounds CONSECUTIVE stalls, resets on productive (P20 fix) =="
 "$ARC" set "$SID" demo >/dev/null
