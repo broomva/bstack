@@ -245,6 +245,26 @@ def analyze(glob_pat, window_days, kg_read_re):
     return metrics, raw
 
 
+def merge_ship_shadow(metrics, raw, workspace, max_age_sec=172800):
+    """BRO-1707 SHADOW: merge the exogenous ship-signal (leverage-ship-sensor.py →
+    .control/leverage-ship-state.json) as metric `m6s_meta_work_ship_ratio` if the
+    state file is fresh (<48h). metric_id() splits on the first "_" → "m6s", which has
+    NO setpoint, so evaluate() marks it `no_setpoint` and it can never become `worst`
+    or reach the SessionStart nudge. It is present only for calibration until BRO-1709
+    promotes it. Any error (missing/stale/malformed) leaves the sensor untouched."""
+    try:
+        ship_state = os.path.join(workspace, ".control", "leverage-ship-state.json")
+        with open(ship_state) as f:
+            sd = json.load(f)
+        age = time.time() - datetime.fromisoformat(sd["measured_at"]).timestamp()
+        r = sd.get("m6s_meta_work_ship_ratio")
+        if age < max_age_sec and r is not None:
+            metrics["m6s_meta_work_ship_ratio"] = r
+            raw["ship_signal"] = sd.get("raw")
+    except Exception:
+        pass
+
+
 def metric_id(key):
     return key.split("_", 1)[0]
 
@@ -432,6 +452,7 @@ def main():
     window = args.window if args.window is not None else setpoints.get("window_days", 7)
     kg_read_re = re.compile(setpoints.get("knowledge_paths", DEFAULT_KG_READ), re.IGNORECASE)
     metrics, raw = analyze(glob_pat, window, kg_read_re)
+    merge_ship_shadow(metrics, raw, workspace)
     results, worst = evaluate(metrics, setpoints)
 
     record = {
