@@ -2,35 +2,34 @@
 # arc-continuation-hook.sh — Stop hook. THE machine-checkable core of BRO-1700
 # (loop-stall rejection, disturbances #3 "No response requested." and #4
 # parent-never-resumes). When an autonomous arc is active and the agent's final
-# turn is a genuine no-op terminal (empty, or the literal CC sentinel
-# "No response requested"), returns a Stop-hook block decision so the harness
-# continues the arc instead of parking on a dead turn.
+# turn is an UNAMBIGUOUS no-op terminal, returns a Stop-hook block decision so the
+# harness continues the arc instead of parking on a dead turn.
 #
-# Correctness properties (each earned a P20 finding):
-#   - DRAIN-RETRY for the transcript race: Claude Code writes the final assistant
-#     entry ~125ms AFTER the Stop hook fires (BRO-1616). A single read would judge
-#     the PREVIOUS turn, so we poll (bounded) until an assistant entry written
-#     at/after hook start is present before classifying.
-#   - TIGHT no-op predicate: only empty text or a search for the literal
-#     "No response requested" sentinel counts. Conversational acknowledgements
-#     (ok / got it / done / …) are NOT no-ops — they are how an agent yields to a
-#     user's mid-arc pause, one of the legitimate stops this must respect.
-#   - AUTO-RELEASE: a completion phrase releases the arc (calls `complete`) rather
-#     than force-continuing a finished agent.
-#   - CONSECUTIVE runaway cap: reconcile_count<2 bounds *consecutive* no-op blocks;
-#     a productive/substantive turn resets it, so a healthy long arc is still
-#     nudged whenever it genuinely stalls, but two dead-ends in a row give up.
+# DESIGN: bias-to-safety. The two failure modes are asymmetric — a false positive
+# (force-continue a legitimate stop) fights the user and burns tokens; a false
+# negative (miss a stall) just costs one manual nudge (the status quo). So this
+# blocks ONLY on the two unambiguous no-ops — an empty final turn, or the literal
+# CC sentinel "No response requested." as the whole message — and accepts every
+# false negative. Bounded by BOTH a consecutive cap (reconcile_count<2, reset on a
+# productive turn) AND a lifetime cap (total_blocks<5, never reset) so an
+# interleaved-trivial-tool loop still terminates. Honors CC's stop_hook_active.
+#
+# Transcript race (BRO-1616): CC flushes the final assistant entry ~125ms AFTER
+# Stop fires, so a single read judges the PREVIOUS turn. We drain by IDENTITY —
+# poll until an assistant entry with a *different* signature than the one present
+# at hook start appears (not a timestamp window, which misfires on <2s-apart turns).
 set -uo pipefail
 
 SELF_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
 ARC_HELPER="$SELF_DIR/autonomous-arc.sh"
 INPUT="$(cat 2>/dev/null || echo '{}')"
-MAX_RECONCILE=2
+CONSEC_MAX=2
+LIFE_MAX=5
 
 command -v python3 >/dev/null 2>&1 || exit 0
 [ -x "$ARC_HELPER" ] || exit 0
 
-# session_id (l1) + transcript_path (l2) + stop_hook_active (l3, CC's loop signal)
+# session_id (l1) + transcript_path (l2) + stop_hook_active (l3)
 { read -r SID; read -r TRANSCRIPT; read -r STOP_ACTIVE; } < <(python3 - "$INPUT" <<'PY'
 import sys, json
 try:
@@ -45,29 +44,24 @@ PY
 
 [ -n "${SID:-}" ] || exit 0
 [ -n "${TRANSCRIPT:-}" ] && [ -f "$TRANSCRIPT" ] || exit 0
-"$ARC_HELPER" active "$SID" >/dev/null 2>&1 || exit 0   # arc must be active + not stale
+"$ARC_HELPER" active "$SID" >/dev/null 2>&1 || exit 0   # arc active + not stale
 
-# classify the final assistant turn (with a bounded drain-retry for the flush race)
 VERDICT="$(python3 - "$TRANSCRIPT" <<'PY'
-import sys, json, re, time, datetime
+import sys, json, re, time, os, hashlib
 
 path = sys.argv[1]
-HOOK_START = time.time()
-SKEW = 2.0                                    # accept turns written within 2s before start
-BUDGET = float(__import__("os").environ.get("ARC_DRAIN_MS", "1500")) / 1000.0
+BUDGET = float(os.environ.get("ARC_DRAIN_MS", "1200")) / 1000.0
 INTERVAL = 0.05
 
-SENTINEL_RE = re.compile(r"no response requested", re.I)   # the CC no-op sentinel (search)
-NO_OP_RE    = re.compile(r"^\s*acknowledged\.?\s*$", re.I)  # bare acknowledgement, anchored
-# ANCHORED (^…$): only a completion-DOMINANT final message releases the arc. A long
-# substantive turn that merely mentions "the first task is complete" must NOT auto-
-# release (premature release = silent under-protection, worse than a missed nudge).
+SENTINEL_RE = re.compile(r"^\s*no response requested[.\s]*$", re.I)   # whole-message only
+# completion-DOMINANT (leading-anchored) — broad enough to catch natural phrasings
+# but never a mid-arc mention ("the first task is complete, moving on" won't match).
 COMPLETE_RE = re.compile(
-    r"^\s*(arc complete|arc[- ]done|all milestones?\b.{0,40}?\b(shipped|done|complete)|"
-    r"milestones? complete|task complete|nothing (?:left|more) to do)\.?\s*$", re.I)
+    r"^\s*(the\s+)?(arc (is )?complete|arc[- ]done|"
+    r"all milestones?\b.{0,60}?\b(shipped|done|complete)|milestones? complete|"
+    r"task complete|all done|everything(?:'s| is)?\s+(?:shipped|done|merged|complete))\b", re.I)
 
 def last_assistant(p):
-    # bounded tail read (final assistant turn is always near EOF)
     try:
         with open(p, "rb") as f:
             f.seek(0, 2); size = f.tell()
@@ -89,26 +83,28 @@ def last_assistant(p):
             last = o
     return last
 
-def epoch(entry):
-    ts = entry.get("timestamp") if isinstance(entry, dict) else None
-    if not ts:
+def sig(entry):
+    if entry is None:
         return None
-    try:
-        return datetime.datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp()
-    except Exception:
-        return None
+    for k in ("uuid", "id", "messageId", "requestId"):
+        v = entry.get(k)
+        if v:
+            return "id:" + str(v)
+    msg = entry.get("message") if isinstance(entry.get("message"), dict) else entry
+    body = json.dumps(msg.get("content"), sort_keys=True, default=str)[:800]
+    return "h:" + hashlib.md5(body.encode()).hexdigest()
 
-# DRAIN: wait until an assistant entry written at/after hook start is present
+# DRAIN by identity: wait for an entry whose signature differs from the one present
+# at hook start (the freshly-flushed final turn). If none appears (already flushed),
+# fall through at budget and classify whatever is last.
+sig0 = sig(last_assistant(path))
 entry = last_assistant(path)
 waited = 0.0
 while waited < BUDGET:
-    ep = epoch(entry)
-    if ep is not None and ep >= HOOK_START - SKEW:
-        break                       # the fresh (post-Stop) turn has landed
-    if ep is None and waited >= 0.3:
-        break                       # no-timestamp transcripts: short settle then classify
-    time.sleep(INTERVAL); waited += INTERVAL
     entry = last_assistant(path)
+    if sig(entry) != sig0:
+        break
+    time.sleep(INTERVAL); waited += INTERVAL
 
 if entry is None:
     print("SKIP"); sys.exit(0)
@@ -130,28 +126,27 @@ elif isinstance(content, str):
 text = " ".join(p for p in parts if p).strip()
 
 if has_tool_use:
-    print("PRODUCTIVE")                      # tool call = progress → reset the cap
+    print("PRODUCTIVE")                      # tool call = progress
 elif COMPLETE_RE.match(text):
-    print("COMPLETE")                        # finished (completion-dominant) → release the arc
-elif (not text) or SENTINEL_RE.search(text) or NO_OP_RE.match(text):
-    print("BLOCK")                           # genuine no-op terminal → continue the arc
+    print("COMPLETE")                        # finished (completion-dominant) → release
+elif (not text) or SENTINEL_RE.match(text):
+    print("BLOCK")                           # unambiguous no-op → continue the arc
 else:
-    print("PRODUCTIVE")                      # substantive text = a healthy yield → reset
+    print("PRODUCTIVE")                      # substantive text = a healthy yield
 PY
 )"
 
 case "$VERDICT" in
     PRODUCTIVE)
-        "$ARC_HELPER" reset "$SID" reconcile_count >/dev/null 2>&1 || true
+        # reset the CONSECUTIVE counter only outside a hook-driven continuation chain,
+        # so an interleaved trivial tool_use cannot keep a forced loop alive.
+        [ "${STOP_ACTIVE:-0}" = "1" ] || "$ARC_HELPER" reset "$SID" reconcile_count >/dev/null 2>&1 || true
         exit 0 ;;
     COMPLETE)
         "$ARC_HELPER" complete "$SID" >/dev/null 2>&1 || true   # auto-release
         exit 0 ;;
     BLOCK)
-        RC="$("$ARC_HELPER" get "$SID" reconcile_count 2>/dev/null)"
-        case "$RC" in ''|*[!0-9]*) RC=0 ;; esac
-        [ "$RC" -lt "$MAX_RECONCILE" ] || exit 0              # consecutive-stall cap reached
-        "$ARC_HELPER" bump "$SID" reconcile_count >/dev/null 2>&1 || true
+        [ "$("$ARC_HELPER" try-block "$SID" "$CONSEC_MAX" "$LIFE_MAX" 2>/dev/null)" = "BLOCK" ] || exit 0
         NEXT="$("$ARC_HELPER" next "$SID" 2>/dev/null)"
         SLUG="$("$ARC_HELPER" status "$SID" 2>/dev/null | awk '{print $2}')"
         REASON="Autonomous arc${SLUG:+ $SLUG} is active and this turn ended without continuing it. 'No response requested' / an empty terminal is never a valid mid-arc stop. Reconcile git/PR/watcher state, then continue"

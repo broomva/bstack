@@ -20,7 +20,13 @@
 #   get    <sid> <field>                  print a scalar field (e.g. reconcile_count)
 #   bump   <sid> reconcile_count          increment + print the new value
 #   reset  <sid> reconcile_count          set to 0 (called on a productive turn so the
-#                                         runaway cap bounds CONSECUTIVE stalls, not lifetime)
+#                                         consecutive cap bounds CONSECUTIVE stalls)
+#   try-block <sid> <consec_max> <life_max>   atomic runaway guard: prints BLOCK and
+#                                         increments reconcile_count + total_blocks iff
+#                                         reconcile_count<consec_max AND total_blocks<life_max;
+#                                         else prints CAP. total_blocks NEVER resets — a
+#                                         lifetime ceiling so an interleaved-tool loop
+#                                         (which resets reconcile_count) still terminates.
 #
 # Concurrency: writes are serialized with an flock on <arc>.lock and land via an
 # atomic mkstemp+os.replace, so a Stop-hook bump and a UserPromptSubmit set can
@@ -111,7 +117,8 @@ if verb == "set":
         d.clear()
         d.update({
             "active": True, "slug": slug, "invoked_at": now_iso(),
-            "milestones": milestones, "reconcile_count": 0, "last_reconcile": None,
+            "milestones": milestones, "reconcile_count": 0, "total_blocks": 0,
+            "last_reconcile": None,
         })
         return f"active {slug}"
     print(with_lock(_set))
@@ -152,6 +159,20 @@ elif verb == "reset":
         d["reconcile_count"] = 0
         return 0
     print(with_lock(_r))
+
+elif verb == "try-block":
+    consec_max = int(rest[0]) if rest and rest[0].isdigit() else 2
+    life_max = int(rest[1]) if len(rest) > 1 and rest[1].isdigit() else 5
+    def _tb(d):
+        rc = int(d.get("reconcile_count", 0))
+        tb = int(d.get("total_blocks", 0))
+        if rc < consec_max and tb < life_max:
+            d["reconcile_count"] = rc + 1
+            d["total_blocks"] = tb + 1
+            d["last_reconcile"] = now_iso()
+            return "BLOCK"
+        return "CAP"
+    print(with_lock(_tb))
 
 else:
     print(f"autonomous-arc: unknown verb {verb!r}", file=sys.stderr)
