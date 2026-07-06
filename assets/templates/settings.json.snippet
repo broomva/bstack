@@ -47,6 +47,13 @@
             "command": "${BROOMVA_HOME}/.agents/skills/role-x/scripts/role-x-intake-hook.sh",
             "timeout": 5,
             "_bstack_primitive": "P17"
+          },
+          {
+            "type": "command",
+            "command": "${BROOMVA_HOME}/.claude/skills/bstack/scripts/autonomous-posture-hook.sh",
+            "timeout": 5,
+            "_bstack_primitive": "P19",
+            "_purpose": "Loop-stall rejection (BRO-1700): self-bootstrap the session arc on /autonomous, then re-stamp the sticky-posture line each turn so the autonomous stance does not decay mid-arc"
           }
         ]
       }
@@ -66,6 +73,13 @@
             "timeout": 5,
             "_bstack_primitive": "P6",
             "_purpose": "Regenerate dense LLM-loadable catalog (LLM-as-index architecture; routes /kg load)"
+          },
+          {
+            "type": "command",
+            "command": "${BROOMVA_HOME}/.claude/skills/bstack/scripts/arc-continuation-hook.sh",
+            "timeout": 10,
+            "_bstack_primitive": "P19",
+            "_purpose": "Loop-stall rejection (BRO-1700): if an autonomous arc is active and the final turn is a no-op terminal (empty / 'No response requested'), return a Stop-hook block so the arc continues instead of parking. Runs after bridge+catalog so capture still happens; bounded drain-retry for the transcript flush race; guarded by consecutive reconcile_count<2 + auto-release on completion"
           }
         ]
       }

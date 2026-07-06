@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.32.0 — 2026-07-05
+
+### feat: loop-stall rejection hooks — the Tier-1 autonomy-spine flagship (BRO-1700)
+
+The #1-ranked finding of the July-1 session-leverage audit: an autonomous arc returns control it should keep (~180 continue-nudges across 64 sessions; documented 4h13m + 5h29m of dead wall-clock on rate-limit kills; 24 "No response requested." mid-arc stops; "/autonomous" manually re-stamped 143×). The leverage loop (v0.30.0) *measures* this as m1; this release ships the *actuator* the m1 setpoint already names — the machine-checkable core, keyed on one session-scoped arc file (`~/.config/broomva/autonomous/<session_id>.arc`) so the pieces compose instead of bolting on separately.
+
+Hardened by a cross-model adversarial P20 pass (3 diverse lenses) before merge — the round-2 fixes below (drain-retry, tight predicate, auto-release, consecutive cap, flock, staleness) each closed a reproduced defect.
+
+### Added
+
+- **`scripts/autonomous-arc.sh`** — the shared arc-state substrate (`set|next|complete|status|active|get|bump|reset|try-block`). One JSON file per session; the complete-sentinel (`active:false`) is a false-positive guard. Writes are serialized (`flock` on a sidecar) and land atomically (`mkstemp`+`os.replace`), so a concurrent Stop-bump and UserPromptSubmit-set can never corrupt or lose an update. `try-block` is the atomic runaway guard: it blocks iff `reconcile_count` (consecutive stalls) AND `total_blocks` (lifetime, never reset) are both under their caps. An arc older than `BROOMVA_ARC_STALE_SECONDS` (default 8h) reads as inactive — a never-completed arc cannot fight the user forever.
+- **`scripts/autonomous-posture-hook.sh`** (UserPromptSubmit) — self-bootstraps the arc on a `/autonomous` invocation **only if none is active** (so re-typing `/autonomous` mid-arc does not reset the stall counter), then re-stamps one sticky-posture line each turn so the autonomous stance does not decay. Closes disturbance #5.
+- **`scripts/arc-continuation-hook.sh`** (Stop) — the m1 core, designed **bias-to-safety** because the failure modes are asymmetric: a false positive (force-continue a legitimate stop) fights the user, while a false negative (miss a stall) just costs one manual nudge. So it blocks on **only the two unambiguous no-ops** — an empty final turn, or the literal `No response requested.` sentinel as the whole message (anchored, not a substring search) — and accepts every false negative. Correctness properties: an **identity-based drain-retry** waits for a *real yield* (a text/tool entry whose signature differs from hook-start), **skipping thinking-only entries** — CC writes each extended-thinking block as its own assistant entry flushed ~125ms *after* Stop (BRO-1616), and a thinking-only entry is never treated as an empty no-op; a **consecutive** cap (`reconcile_count<2`, reset on a productive turn only when *not* in a hook-continuation chain per `stop_hook_active`) **and** a **lifetime** cap (`total_blocks<5`, never reset) so an interleaved-trivial-tool loop still terminates; and **auto-release** on a completion-dominant final message (leading-anchored, so a mid-arc "the first task is complete…" cannot prematurely release). Closes disturbances #3/#4.
+- **`tests/loop-stall-hooks.test.sh`** — 46 assertions: the arc lifecycle + `try-block`, the bias-to-safety predicate (empty/exact-sentinel→block; wrapped-sentinel/substantive-mention/ack/ok/got-it/done/tool-use/completion/inactive→silent), thinking-only entries never force-continued (+ drain skips a thinking intermediate), the identity drain-retry race, auto-release vs mid-arc mention, the consecutive cap with in-chain suppression, the lifetime cap, staleness, flock concurrency (8 parallel bumps → no lost updates), set-if-absent, and the snippet wiring.
+- **`doctor` §24** — reports loop-stall hook wiring + active-arc count.
+
+### Changed
+
+- **`assets/templates/settings.json.snippet`** — wires the posture hook (UserPromptSubmit, after role-x) and the continuation hook (Stop, after bridge+catalog so capture still happens before any block decision).
+
+### Deferred (tracked, not in this release)
+
+- **Sequencing-question ban** (disturbance #2) — reasoning-enforced classification (a hard PreToolUse deny would false-block the 3 legitimate mid-arc pauses), so it lands as prose in the `/autonomous` SKILL.md, not a bstack hook (skills-monorepo PR, BRO-1700 Wave-1 #3).
+- **Live limit-auto-resume + the log-only calibration probe** (disturbance #1) — the probe was dropped from this release after the P20 review showed a raw-tail regex self-pollutes (any session *discussing* rate limits logs itself as a candidate), defeating its calibration goal. Deferred until it can be gated on a genuine terminal-error transcript shape (BRO-1700).
+
 ## 0.31.0 — 2026-07-05
 
 ### chore: close the loop's mechanical loose ends — retire the fake l0/l1 sensor + auth pre-flight (BRO-1697)

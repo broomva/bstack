@@ -1241,6 +1241,38 @@ EOF_V
     fi
 fi
 
+# ── 24. Loop-stall rejection hooks (BRO-1700) ──────────────────────────────
+section "24. Loop-stall rejection hooks (P19)"
+SETTINGS="$WORKSPACE/.claude/settings.json"
+LOOPSTALL_HOOKS=(
+    "autonomous-posture-hook.sh"
+    "arc-continuation-hook.sh"
+)
+LOOPSTALL_LABELS=(
+    "UserPromptSubmit — sticky posture + /autonomous self-bootstrap (disturbance #5)"
+    "Stop — no-op-terminal → block, the m1 machine-checkable core (disturbances #3/#4)"
+)
+if [ -f "$SETTINGS" ]; then
+    for i in "${!LOOPSTALL_HOOKS[@]}"; do
+        hk="${LOOPSTALL_HOOKS[$i]}"
+        label="${LOOPSTALL_LABELS[$i]}"
+        if grep -q "$hk" "$SETTINGS"; then
+            ok "$hk wired — $label"
+        else
+            gap "$hk not wired in .claude/settings.json — $label" \
+                "run 'bstack repair' or 'bstack bootstrap' to wire from assets/templates/settings.json.snippet"
+        fi
+    done
+else
+    [ "$QUIET" = "0" ] && echo "         (no .claude/settings.json — skipping loop-stall wiring check)"
+fi
+# arc-file health — informational, never a gap
+ARC_HOME="${BROOMVA_AUTONOMOUS_HOME:-$HOME/.config/broomva/autonomous}"
+if [ -d "$ARC_HOME" ] && [ "$QUIET" = "0" ]; then
+    _active=$(grep -l '"active": true' "$ARC_HOME"/*.arc 2>/dev/null | wc -l | tr -d ' ')
+    echo "         arc state: ${_active:-0} active arc(s)"
+fi
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 TOTAL=$((PASSES + GAPS))
