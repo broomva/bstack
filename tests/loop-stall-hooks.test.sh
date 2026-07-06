@@ -68,6 +68,25 @@ done
 "$ARC" complete "$SID" >/dev/null
 [ -z "$(cont "$SID" "$(fixture inact 0 'No response requested.')")" ] && ok "inactive arc → silent" || bad "inactive arc blocked"
 
+echo "== thinking-only entries are NEVER force-continued (P20 r3 HIGH) =="
+"$ARC" set "$SID" demo >/dev/null
+TH="$TMP/think.jsonl"
+printf '{"type":"assistant","uuid":"th1","message":{"role":"assistant","content":[{"type":"thinking","thinking":"pondering the next step"}]}}\n' > "$TH"
+[ -z "$(cont "$SID" "$TH")" ] && ok "thinking-only final entry → silent (not force-continued)" || bad "thinking-only entry force-continued"
+"$ARC" set "$SID" demo >/dev/null
+printf '{"type":"assistant","uuid":"th2","message":{"role":"assistant","content":[{"type":"thinking","thinking":"x"},{"type":"text","text":"Here is the plan and next steps."}]}}\n' > "$TH"
+[ -z "$(cont "$SID" "$TH")" ] && ok "thinking + substantive text → silent" || bad "thinking+text blocked"
+# drain must SKIP a thinking-only intermediate entry and wait for the real text yield
+"$ARC" set "$SID" demo >/dev/null
+DR="$TMP/drain-think.jsonl"
+printf '{"type":"assistant","uuid":"prior2","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{}}]}}\n' > "$DR"
+( sleep 0.2; printf '{"type":"assistant","uuid":"thk","message":{"role":"assistant","content":[{"type":"thinking","thinking":"y"}]}}\n' >> "$DR"; \
+  sleep 0.3; printf '{"type":"assistant","uuid":"txt","message":{"role":"assistant","content":[{"type":"text","text":"Here is my substantive answer."}]}}\n' >> "$DR" ) &
+ap=$!
+out="$(echo "{\"session_id\":\"$SID\",\"transcript_path\":\"$DR\",\"stop_hook_active\":false}" | ARC_DRAIN_MS=3000 bash "$CONT")"
+wait $ap 2>/dev/null
+[ -z "$out" ] && ok "drain skipped the thinking intermediate, classified the text yield → silent" || bad "drain force-continued via a thinking entry (out='$out')"
+
 echo "== auto-release: completion-dominant releases; mid-arc mention does not =="
 for c in "All milestones shipped." "All done!" "Everything's shipped and merged to main." "The arc is complete."; do
   "$ARC" set "$SID" demo >/dev/null

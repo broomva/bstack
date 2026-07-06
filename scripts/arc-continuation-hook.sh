@@ -65,7 +65,7 @@ def last_assistant(p):
     try:
         with open(p, "rb") as f:
             f.seek(0, 2); size = f.tell()
-            f.seek(max(0, size - 262144))
+            f.seek(max(0, size - 1048576))   # 1MB tail — holds even a large thinking block
             data = f.read().decode("utf-8", "replace")
     except OSError:
         return None
@@ -94,41 +94,54 @@ def sig(entry):
     body = json.dumps(msg.get("content"), sort_keys=True, default=str)[:800]
     return "h:" + hashlib.md5(body.encode()).hexdigest()
 
-# DRAIN by identity: wait for an entry whose signature differs from the one present
-# at hook start (the freshly-flushed final turn). If none appears (already flushed),
-# fall through at budget and classify whatever is last.
+def parse_entry(entry):
+    # returns (has_tool_use, has_thinking, text). CC writes each extended-thinking
+    # block as its OWN assistant entry (content=[{type:thinking}]) emitted BEFORE the
+    # turn's text/tool — a thinking-only entry is NOT an empty no-op and must never
+    # be force-continued.
+    msg = entry.get("message") if isinstance(entry.get("message"), dict) else entry
+    content = msg.get("content")
+    has_tool = has_think = False
+    parts = []
+    if isinstance(content, list):
+        for b in content:
+            if not isinstance(b, dict):
+                continue
+            t = b.get("type")
+            if t == "tool_use":
+                has_tool = True
+            elif t in ("thinking", "redacted_thinking"):
+                has_think = True
+            elif t == "text":
+                parts.append(b.get("text", ""))
+    elif isinstance(content, str):
+        parts.append(content)
+    return has_tool, has_think, " ".join(p for p in parts if p).strip()
+
+# DRAIN by identity: wait for a NEW entry that is a real yield (text or tool_use),
+# skipping thinking-only intermediate entries (which flush before the turn's text).
+# If none appears (already flushed), fall through at budget and classify what is last.
 sig0 = sig(last_assistant(path))
 entry = last_assistant(path)
 waited = 0.0
 while waited < BUDGET:
     entry = last_assistant(path)
-    if sig(entry) != sig0:
-        break
+    tu, th, txt = parse_entry(entry) if entry is not None else (False, False, "")
+    if sig(entry) != sig0 and (tu or txt):
+        break                                # a real (text/tool) yield landed
     time.sleep(INTERVAL); waited += INTERVAL
 
 if entry is None:
     print("SKIP"); sys.exit(0)
 
-msg = entry.get("message") if isinstance(entry.get("message"), dict) else entry
-content = msg.get("content")
-has_tool_use = False
-parts = []
-if isinstance(content, list):
-    for b in content:
-        if not isinstance(b, dict):
-            continue
-        if b.get("type") == "tool_use":
-            has_tool_use = True
-        elif b.get("type") == "text":
-            parts.append(b.get("text", ""))
-elif isinstance(content, str):
-    parts.append(content)
-text = " ".join(p for p in parts if p).strip()
+has_tool_use, has_thinking, text = parse_entry(entry)
 
 if has_tool_use:
     print("PRODUCTIVE")                      # tool call = progress
 elif COMPLETE_RE.match(text):
     print("COMPLETE")                        # finished (completion-dominant) → release
+elif has_thinking and not text:
+    print("SKIP")                            # thinking-only entry → never a no-op block
 elif (not text) or SENTINEL_RE.match(text):
     print("BLOCK")                           # unambiguous no-op → continue the arc
 else:
