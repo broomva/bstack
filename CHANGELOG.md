@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.32.0 — 2026-07-05
+
+### feat: loop-stall rejection hooks — the Tier-1 autonomy-spine flagship (BRO-1700)
+
+The #1-ranked finding of the July-1 session-leverage audit: an autonomous arc returns control it should keep (~180 continue-nudges across 64 sessions; documented 4h13m + 5h29m of dead wall-clock on rate-limit kills; 24 "No response requested." mid-arc stops; "/autonomous" manually re-stamped 143×). The leverage loop (v0.30.0) *measures* this as m1; this release ships the *actuator* the m1 setpoint already names — the machine-checkable core, keyed on one session-scoped arc file (`~/.config/broomva/autonomous/<session_id>.arc`) so the pieces compose instead of bolting on separately.
+
+### Added
+
+- **`scripts/autonomous-arc.sh`** — the shared arc-state substrate (`set|next|complete|status|active|get|bump`). One JSON file per session; the complete-sentinel (`active:false`) is the false-positive guard the hooks rely on.
+- **`scripts/autonomous-posture-hook.sh`** (UserPromptSubmit) — self-bootstraps the arc on a `/autonomous` invocation (no skill change required for the loop to work), then re-stamps one sticky-posture line each turn so the autonomous stance does not decay. Closes disturbance #5.
+- **`scripts/arc-continuation-hook.sh`** (Stop) — the m1 core. When an arc is active and the final turn is a no-op terminal (empty / "No response requested" / bare acknowledgement) with no tool calls, returns a `{"decision":"block"}` Stop decision so the harness continues the arc. Guards: the complete-sentinel + a `reconcile_count < 2` runaway cap (blocks twice, then gives up — can never loop forever). Never blocks a productive (tool-using) turn. Closes disturbances #3/#4.
+- **`scripts/limit-stall-resume-hook.sh`** (Stop) — LOG-ONLY calibration probe. The live auto-resume path is deferred on two empirical unknowns (the exact live rate-limit string; whether Stop even fires on a hard limit-kill), so this appends a candidate to `resume-dryrun.jsonl` when it sees limit-ish tokens during an active arc — it never schedules, sleeps, or acts. Captures the real string to calibrate the live path (disturbance #1).
+- **`tests/loop-stall-hooks.test.sh`** — 30 assertions: the arc lifecycle, the continuation predicate (no-op→block; tool-use/substantive/completion/inactive→silent), the runaway cap, the posture self-bootstrap + re-stamp, the log-only probe, and the snippet wiring.
+- **`doctor` §24** — reports loop-stall hook wiring + arc-file health (active arcs, calibration candidates captured).
+
+### Changed
+
+- **`assets/templates/settings.json.snippet`** — wires the posture hook (UserPromptSubmit, after role-x) and the continuation + limit-stall hooks (Stop, after bridge+catalog so capture still happens before any block decision).
+
+### Deferred (tracked, not in this release)
+
+- **Sequencing-question ban** (disturbance #2) — reasoning-enforced classification (a hard PreToolUse deny would false-block the 3 legitimate mid-arc pauses), so it lands as prose in the `/autonomous` SKILL.md, not a bstack hook (skills-monorepo PR, BRO-1700 Wave-1 #3).
+- **Live limit-auto-resume** — deferred behind the log-only calibration probe until a genuine rate-limit string is captured (BRO-1700).
+
 ## 0.31.0 — 2026-07-05
 
 ### chore: close the loop's mechanical loose ends — retire the fake l0/l1 sensor + auth pre-flight (BRO-1697)
