@@ -107,6 +107,54 @@ J
 )
 eq "pure-meta PR → m6s 1.0" "$(m6s "$F")" "1.0"
 
+echo "== StatusContext .state green gate (Vercel-style external CI) =="
+F=$(fx statefail <<'J'
+[{"number":10,"author":{"login":"broomva","is_bot":false},"mergedAt":"2026-07-05T00:00:00Z",
+"files":[{"path":"apps/g/x.ts"}],"statusCheckRollup":[{"conclusion":"SUCCESS"},{"state":"FAILURE"}]}]
+J
+)
+eq "passing CheckRun + failing StatusContext → not green (0.5)" "$(rawget "$F" "['product_ship']")" "0.5"
+F=$(fx statepend <<'J'
+[{"number":11,"author":{"login":"broomva","is_bot":false},"mergedAt":"2026-07-05T00:00:00Z",
+"files":[{"path":"apps/g/x.ts"}],"statusCheckRollup":[{"state":"PENDING"}]}]
+J
+)
+eq "merged-before-green (pending) → not green (0.5)" "$(rawget "$F" "['product_ship']")" "0.5"
+
+echo "== fail-closed: missing author_allowlist counts NOTHING (h ⟂ U) =="
+F=$(fx noallow <<'J'
+[{"number":12,"author":{"login":"some-teammate","is_bot":false},"mergedAt":"2026-07-05T00:00:00Z",
+"files":[{"path":"apps/g/x.ts"}],"statusCheckRollup":[{"conclusion":"SUCCESS"}]}]
+J
+)
+GOT=$(python3 "$SHIP" --fixture "$F" --config-json '{"tier_weights":{"green":1.0}}' --json 2>/dev/null \
+  | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["m6s_meta_work_ship_ratio"])')
+eq "no allowlist → m6s None (fail closed, not count-all)" "$GOT" "None"
+
+echo "== dual-family path counts ONCE (product-precedence) =="
+F=$(fx dual <<'J'
+[{"number":13,"author":{"login":"broomva","is_bot":false},"mergedAt":"2026-07-05T00:00:00Z",
+"files":[{"path":"apps/web/docs/readme.md"}],"statusCheckRollup":[{"conclusion":"SUCCESS"}]}]
+J
+)
+eq "apps/.../docs/ matches both → product wins (m6s 0.0)" "$(m6s "$F")" "0.0"
+
+echo "== PR-split inflation is a KNOWN LIMIT, not neutral (tracked BRO-1709) =="
+F=$(fx split1 <<'J'
+[{"number":14,"author":{"login":"broomva","is_bot":false},"mergedAt":"2026-07-05T00:00:00Z",
+"files":[{"path":"apps/g/a.ts"},{"path":"apps/g/b.ts"}],"statusCheckRollup":[{"conclusion":"SUCCESS"}]}]
+J
+)
+F2=$(fx split2 <<'J'
+[{"number":15,"author":{"login":"broomva","is_bot":false},"mergedAt":"2026-07-05T00:00:00Z",
+"files":[{"path":"apps/g/a.ts"}],"statusCheckRollup":[{"conclusion":"SUCCESS"}]},
+{"number":16,"author":{"login":"broomva","is_bot":false},"mergedAt":"2026-07-05T00:00:00Z",
+"files":[{"path":"apps/g/b.ts"}],"statusCheckRollup":[{"conclusion":"SUCCESS"}]}]
+J
+)
+eq "1 PR (2 files) → 1.0 product" "$(rawget "$F" "['product_ship']")" "1.0"
+eq "split into 2 PRs → 2.0 (inflation, BRO-1709 normalizes)" "$(rawget "$F2" "['product_ship']")" "2.0"
+
 echo "== main sensor SHADOW merge: non-actuating, never worst =="
 mkdir -p "$TMP/.control"
 python3 - "$TMP" <<'PY'
@@ -147,6 +195,12 @@ ROW=$(tail -1 "$TMP/.control/audit/l3-edits.jsonl" 2>/dev/null)
 echo "$ROW" | python3 -c 'import json,sys;json.load(sys.stdin)' 2>/dev/null && ok "logged row is valid JSON (malformed bug fixed)" || bad "logged row malformed: $ROW"
 TN=$(echo "$ROW" | python3 -c 'import json,sys;print(json.load(sys.stdin)["tool_name"])' 2>/dev/null)
 eq "logged tool_name is a bare value" "$TN" "Edit"
+# the no-jq sed fallback branch (never hit above since jq is installed) must also
+# extract a bare JSON string value — verify the exact sed the hook uses:
+SEDTN=$(printf '{"tool_name":"Write","tool_input":{"file_path":"x"}}' \
+  | grep -oE '"tool_name"[[:space:]]*:[[:space:]]*"[^"]+"' | head -1 \
+  | sed -E 's/.*:[[:space:]]*("[^"]+")$/\1/')
+eq "sed fallback yields a bare JSON string" "$SEDTN" '"Write"'
 # non-L3 file → approve silently, no new row
 rm -f "$TMP/.control/audit/l3-edits.jsonl"
 printf '{"tool_name":"Edit","tool_input":{"file_path":"%s/apps/g/x.ts"}}' "$TMP" | bash "$L3HOOK" >/dev/null

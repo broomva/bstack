@@ -405,6 +405,10 @@ def render_human(record):
     out.append(f"  closure: {'CLOSED' if cl.get('closed') else 'OPEN'}  "
                f"(sensor_live={cl.get('sensor_live')}, levels_closed={cl.get('levels_closed')}, "
                f"reference_authored={cl.get('reference_authored')})")
+    m6s = record.get("metrics", {}).get("m6s_meta_work_ship_ratio")
+    if m6s is not None:
+        out.append(f"  [shadow] m6s_meta_work_ship_ratio = {m6s}  "
+                   f"(exogenous ship-signal — NON-actuating, calibrating for BRO-1709)")
     worst = record.get("worst")
     out.append(f"  Focus: {worst['name']} → {worst['actuator']}" if worst else "  All setpoints within target.")
     return "\n".join(out)

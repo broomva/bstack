@@ -9,10 +9,13 @@ meta- vs product-EDITING sessions, classified by edited file path. Two weaknesse
 
 This sensor re-bases the meta/product signal on MERGED PULL REQUESTS instead of raw
 edits, addressing both:
-  - unit of account = ONE merged PR (not per-line) → kills size-padding;
+  - unit of account = ONE merged PR (not per-line) → kills size-padding WITHIN a PR;
   - classification = FRACTIONAL by diff file-share across product/meta path families
-    (not winner-take-all) → one product file in a 9-file meta PR moves 0.1, not 1.0,
-    and PR-splitting is ratio-neutral;
+    (not winner-take-all) → one product file in a 9-file meta PR moves 0.1, not 1.0;
+    (KNOWN LIMIT, tracked on BRO-1709: because the unit is the PR and PR-count is
+    agent-controlled, splitting one pure-product PR into N still multiplies its ship
+    credit — so PR-split inflation is NOT closed here; the enforced-gate promotion adds
+    per-surface normalization + branch protection to make each merge cost real work;)
   - only agent-authored PRs count (author allowlist, is_bot excluded, teammate/upstream
     repos omitted from the repo allowlist) → the signal is the AGENT'S leverage, not
     the team's (h ⟂ U preserved).
@@ -41,6 +44,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -52,10 +56,16 @@ DEFAULT_META = (
     r"/(CLAUDE|AGENTS|METALAYER)\.md$|/Makefile$"
 )
 # A PR that modifies its own CI definition cannot be granted full green credit — the
-# gate it "passed" is one it just authored (h ∈ U). Capped at the ungated tier.
-CI_DEF_RE = re.compile(r"/\.github/workflows/", re.IGNORECASE)
-# statusCheckRollup conclusions that mean a completed check did NOT pass.
-FAIL_CONCLUSIONS = {"FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"}
+# gate it "passed" is one it just authored (h ∈ U). Capped at the ungated tier. (Note:
+# a per-PR cap does NOT stop the weaken-then-harvest temporal attack — that needs the
+# enforced branch protection + workflow attestation of BRO-1709.)
+CI_DEF_RE = re.compile(r"/\.github/(workflows|actions)/", re.IGNORECASE)
+# statusCheckRollup signals that mean a check did NOT pass. CheckRun reports via
+# `.conclusion`, StatusContext (Vercel/external CI) via `.state` — we read both.
+FAIL_SIGNALS = {"FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED",
+                "STARTUP_FAILURE", "ERROR", "STALE"}
+# Not-yet-complete → NOT green (a PR merged before its gate finished).
+PENDING_SIGNALS = {"PENDING", "EXPECTED", "IN_PROGRESS", "QUEUED", "WAITING"}
 
 
 def resolve_workspace(arg=None):
@@ -98,6 +108,15 @@ def classify_prs(prs, cfg):
     w_green = float(tw.get("green", 1.0))
     w_ungated = float(tw.get("ungated", 0.5))
 
+    # FAIL CLOSED: the author allowlist is the h ⟂ U-critical filter. A missing/mistyped
+    # `author_allowlist` must NOT silently count every author (teammates, upstream) — that
+    # would poison the governor with the team's throughput. No allowlist → null signal.
+    if not author_allow:
+        return {"m6s_meta_work_ship_ratio": None,
+                "raw": {"pr_count_counted": 0, "product_ship": 0.0, "meta_ship": 0.0,
+                        "excluded": {"bot": 0, "author": len(prs), "unclassifiable": 0},
+                        "details": [], "note": "no author_allowlist — failing closed (h ⟂ U)"}}
+
     product_ship = meta_ship = 0.0
     counted = 0
     excluded = {"bot": 0, "author": 0, "unclassifiable": 0}
@@ -108,9 +127,8 @@ def classify_prs(prs, cfg):
         if author.get("is_bot"):
             excluded["bot"] += 1
             continue
-        # Author allowlist preserves h ⟂ U: only the agent's own merged PRs count,
-        # never a teammate's throughput. Empty allowlist = count all (opt-in gate).
-        if author_allow and login not in author_allow:
+        # Only the agent's own merged PRs count, never a teammate's throughput.
+        if login not in author_allow:
             excluded["author"] += 1
             continue
         # gh returns REPO-RELATIVE paths (apps/x.ts, scripts/y.sh, CLAUDE.md); the
@@ -118,19 +136,33 @@ def classify_prs(prs, cfg):
         # surrounding slashes, so normalize each to a leading-slash form before matching
         # (else "apps/x.ts" fails "/(apps|…)/" and everything reads unclassifiable).
         files = ["/" + str(f.get("path", "")).lstrip("/") for f in (pr.get("files") or [])]
-        pf = sum(1 for f in files if prod_re.search(f))
-        mf = sum(1 for f in files if meta_re.search(f))
+        # Mutually exclusive, PRODUCT-precedence (mirrors leverage-sensor.py's session
+        # rule: `if product elif meta`). Otherwise a path matching BOTH families (e.g.
+        # apps/x/docs/y.md) double-counts, tot > len(files), and shares don't sum to 1.
+        pf = mf = 0
+        for f in files:
+            if prod_re.search(f):
+                pf += 1
+            elif meta_re.search(f):
+                mf += 1
         tot = pf + mf
         if tot == 0:
             # nothing classifiable (e.g. a PR touching only .github/ or root configs)
             excluded["unclassifiable"] += 1
             continue
-        # ship gate — exogenous: green only if at least one completed check exists and
-        # none failed, AND the PR did not modify its own CI definition.
+        # ship gate — exogenous: green only if at least one completed check exists, none
+        # failed, and none is still pending, AND the PR did not modify its own CI. Read
+        # BOTH CheckRun `.conclusion` and StatusContext `.state` (Vercel/external CI report
+        # only the latter — reading conclusion alone false-greens a failed status check).
         roll = pr.get("statusCheckRollup") or []
         concls = [str(c.get("conclusion", "")).upper() for c in roll
                   if isinstance(c, dict) and c.get("conclusion")]
-        green = bool(concls) and not any(c in FAIL_CONCLUSIONS for c in concls)
+        states = [str(c.get("state", "")).upper() for c in roll
+                  if isinstance(c, dict) and c.get("state") and not c.get("conclusion")]
+        signals = concls + states
+        green = (bool(signals)
+                 and not any(s in FAIL_SIGNALS for s in signals)
+                 and not any(s in PENDING_SIGNALS for s in signals))
         touched_ci = any(CI_DEF_RE.search(f) for f in files)
         gate = w_green if (green and not touched_ci) else w_ungated
         # unit-weighted: the PR contributes `gate` total, split by file-share. A
@@ -211,7 +243,7 @@ def compute(cfg, window_days, now=None):
         if prs is None:
             errors.append(repo)
             continue
-        # belt+suspenders: filter client-side by mergedAt (the --search + --limit 100
+        # belt+suspenders: filter client-side by mergedAt (the --search + --limit 200
         # cap can otherwise let an old PR slip in on a very active repo).
         cutoff = (now - timedelta(days=window_days))
         kept = [p for p in prs if _in_window(p.get("mergedAt"), cutoff)]
@@ -288,9 +320,21 @@ def main():
 
     if not args.no_store and not args.fixture:
         state_file = os.path.join(workspace, ".control", "leverage-ship-state.json")
-        os.makedirs(os.path.dirname(state_file), exist_ok=True)
-        with open(state_file, "w") as f:
-            json.dump(record, f, indent=2)
+        d = os.path.dirname(state_file)
+        os.makedirs(d, exist_ok=True)
+        # atomic swap — the background SessionStart writer must never expose a truncated
+        # file to the main sensor's Stop-time read (merge_ship_shadow json.load).
+        fd, tmp = tempfile.mkstemp(dir=d, prefix=".ship-", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(record, f, indent=2)
+            os.replace(tmp, state_file)
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
 
     if args.json:
         print(json.dumps(record, indent=2))
