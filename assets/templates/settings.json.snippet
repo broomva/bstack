@@ -79,14 +79,7 @@
             "command": "${BROOMVA_HOME}/.claude/skills/bstack/scripts/arc-continuation-hook.sh",
             "timeout": 10,
             "_bstack_primitive": "P19",
-            "_purpose": "Loop-stall rejection (BRO-1700): if an autonomous arc is active and the final turn is a no-op terminal (empty / 'No response requested'), return a Stop-hook block so the arc continues instead of parking. Runs after bridge+catalog so capture still happens; guarded by reconcile_count<2 + the complete-sentinel"
-          },
-          {
-            "type": "command",
-            "command": "${BROOMVA_HOME}/.claude/skills/bstack/scripts/limit-stall-resume-hook.sh",
-            "timeout": 8,
-            "_bstack_primitive": "P19",
-            "_purpose": "Loop-stall rejection (BRO-1700): LOG-ONLY calibration probe — appends a rate-limit-stall candidate to resume-dryrun.jsonl during an active arc. Never schedules/acts; captures the real limit string to calibrate the deferred live auto-resume path"
+            "_purpose": "Loop-stall rejection (BRO-1700): if an autonomous arc is active and the final turn is a no-op terminal (empty / 'No response requested'), return a Stop-hook block so the arc continues instead of parking. Runs after bridge+catalog so capture still happens; bounded drain-retry for the transcript flush race; guarded by consecutive reconcile_count<2 + auto-release on completion"
           }
         ]
       }

@@ -1247,12 +1247,10 @@ SETTINGS="$WORKSPACE/.claude/settings.json"
 LOOPSTALL_HOOKS=(
     "autonomous-posture-hook.sh"
     "arc-continuation-hook.sh"
-    "limit-stall-resume-hook.sh"
 )
 LOOPSTALL_LABELS=(
     "UserPromptSubmit — sticky posture + /autonomous self-bootstrap (disturbance #5)"
     "Stop — no-op-terminal → block, the m1 machine-checkable core (disturbances #3/#4)"
-    "Stop — log-only rate-limit calibration probe (disturbance #1, live path deferred)"
 )
 if [ -f "$SETTINGS" ]; then
     for i in "${!LOOPSTALL_HOOKS[@]}"; do
@@ -1272,8 +1270,7 @@ fi
 ARC_HOME="${BROOMVA_AUTONOMOUS_HOME:-$HOME/.config/broomva/autonomous}"
 if [ -d "$ARC_HOME" ] && [ "$QUIET" = "0" ]; then
     _active=$(grep -l '"active": true' "$ARC_HOME"/*.arc 2>/dev/null | wc -l | tr -d ' ')
-    _cand=0; [ -f "$ARC_HOME/resume-dryrun.jsonl" ] && _cand=$(wc -l < "$ARC_HOME/resume-dryrun.jsonl" 2>/dev/null | tr -d ' ')
-    echo "         arc state: ${_active:-0} active arc(s); ${_cand:-0} rate-limit calibration candidate(s) captured"
+    echo "         arc state: ${_active:-0} active arc(s)"
 fi
 
 # ── summary ─────────────────────────────────────────────────────────────────

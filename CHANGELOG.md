@@ -6,23 +6,24 @@
 
 The #1-ranked finding of the July-1 session-leverage audit: an autonomous arc returns control it should keep (~180 continue-nudges across 64 sessions; documented 4h13m + 5h29m of dead wall-clock on rate-limit kills; 24 "No response requested." mid-arc stops; "/autonomous" manually re-stamped 143×). The leverage loop (v0.30.0) *measures* this as m1; this release ships the *actuator* the m1 setpoint already names — the machine-checkable core, keyed on one session-scoped arc file (`~/.config/broomva/autonomous/<session_id>.arc`) so the pieces compose instead of bolting on separately.
 
+Hardened by a cross-model adversarial P20 pass (3 diverse lenses) before merge — the round-2 fixes below (drain-retry, tight predicate, auto-release, consecutive cap, flock, staleness) each closed a reproduced defect.
+
 ### Added
 
-- **`scripts/autonomous-arc.sh`** — the shared arc-state substrate (`set|next|complete|status|active|get|bump`). One JSON file per session; the complete-sentinel (`active:false`) is the false-positive guard the hooks rely on.
-- **`scripts/autonomous-posture-hook.sh`** (UserPromptSubmit) — self-bootstraps the arc on a `/autonomous` invocation (no skill change required for the loop to work), then re-stamps one sticky-posture line each turn so the autonomous stance does not decay. Closes disturbance #5.
-- **`scripts/arc-continuation-hook.sh`** (Stop) — the m1 core. When an arc is active and the final turn is a no-op terminal (empty / "No response requested" / bare acknowledgement) with no tool calls, returns a `{"decision":"block"}` Stop decision so the harness continues the arc. Guards: the complete-sentinel + a `reconcile_count < 2` runaway cap (blocks twice, then gives up — can never loop forever). Never blocks a productive (tool-using) turn. Closes disturbances #3/#4.
-- **`scripts/limit-stall-resume-hook.sh`** (Stop) — LOG-ONLY calibration probe. The live auto-resume path is deferred on two empirical unknowns (the exact live rate-limit string; whether Stop even fires on a hard limit-kill), so this appends a candidate to `resume-dryrun.jsonl` when it sees limit-ish tokens during an active arc — it never schedules, sleeps, or acts. Captures the real string to calibrate the live path (disturbance #1).
-- **`tests/loop-stall-hooks.test.sh`** — 30 assertions: the arc lifecycle, the continuation predicate (no-op→block; tool-use/substantive/completion/inactive→silent), the runaway cap, the posture self-bootstrap + re-stamp, the log-only probe, and the snippet wiring.
-- **`doctor` §24** — reports loop-stall hook wiring + arc-file health (active arcs, calibration candidates captured).
+- **`scripts/autonomous-arc.sh`** — the shared arc-state substrate (`set|next|complete|status|active|get|bump|reset`). One JSON file per session; the complete-sentinel (`active:false`) is the false-positive guard the hooks rely on. Writes are serialized (`flock` on a sidecar) and land atomically (`mkstemp`+`os.replace`), so a concurrent Stop-bump and UserPromptSubmit-set can never corrupt or lose an update. An arc older than `BROOMVA_ARC_STALE_SECONDS` (default 8h) reads as inactive — a never-completed arc cannot fight the user forever.
+- **`scripts/autonomous-posture-hook.sh`** (UserPromptSubmit) — self-bootstraps the arc on a `/autonomous` invocation **only if none is active** (so re-typing `/autonomous` mid-arc does not reset the stall counter), then re-stamps one sticky-posture line each turn so the autonomous stance does not decay. Closes disturbance #5.
+- **`scripts/arc-continuation-hook.sh`** (Stop) — the m1 core. When an arc is active and the final turn is a genuine no-op terminal (empty, or a search-match for the literal "No response requested" sentinel), returns a `{"decision":"block"}` Stop decision so the harness continues the arc. Correctness properties: a **bounded drain-retry** waits for an assistant entry written at/after hook start before classifying (Claude Code flushes the final entry ~125ms *after* Stop fires — BRO-1616); a **tight** predicate that does NOT treat conversational acknowledgements (`ok`/`got it`/`done`/…) as no-ops (they are how an agent yields to a user's mid-arc pause); **auto-release** of the arc on a completion phrase (never force-continues a finished agent); and a **consecutive**-stall cap (`reconcile_count<2`, reset on any productive/substantive turn) so a healthy long arc is still nudged whenever it genuinely stalls. Reads `stop_hook_active`. Bounded tail read for perf. Closes disturbances #3/#4.
+- **`tests/loop-stall-hooks.test.sh`** — 39 assertions: the arc lifecycle, the tight continuation predicate (sentinel/empty/acknowledged→block; ok/got it/done/tool-use/substantive/completion/inactive→silent), the drain-retry race (late-flushed turn), auto-release, the consecutive cap with productive-reset, staleness expiry, flock concurrency (8 parallel bumps → no lost updates), set-if-absent, and the snippet wiring.
+- **`doctor` §24** — reports loop-stall hook wiring + active-arc count.
 
 ### Changed
 
-- **`assets/templates/settings.json.snippet`** — wires the posture hook (UserPromptSubmit, after role-x) and the continuation + limit-stall hooks (Stop, after bridge+catalog so capture still happens before any block decision).
+- **`assets/templates/settings.json.snippet`** — wires the posture hook (UserPromptSubmit, after role-x) and the continuation hook (Stop, after bridge+catalog so capture still happens before any block decision).
 
 ### Deferred (tracked, not in this release)
 
 - **Sequencing-question ban** (disturbance #2) — reasoning-enforced classification (a hard PreToolUse deny would false-block the 3 legitimate mid-arc pauses), so it lands as prose in the `/autonomous` SKILL.md, not a bstack hook (skills-monorepo PR, BRO-1700 Wave-1 #3).
-- **Live limit-auto-resume** — deferred behind the log-only calibration probe until a genuine rate-limit string is captured (BRO-1700).
+- **Live limit-auto-resume + the log-only calibration probe** (disturbance #1) — the probe was dropped from this release after the P20 review showed a raw-tail regex self-pollutes (any session *discussing* rate limits logs itself as a candidate), defeating its calibration goal. Deferred until it can be gated on a genuine terminal-error transcript shape (BRO-1700).
 
 ## 0.31.0 — 2026-07-05
 

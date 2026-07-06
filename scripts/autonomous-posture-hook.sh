@@ -35,9 +35,14 @@ PY
 
 [ -n "${SID:-}" ] || exit 0
 
-# 1. self-bootstrap on a /autonomous invocation (slash command at line start or after space)
+# 1. self-bootstrap on a /autonomous invocation (slash command at line start or after
+#    space) — but ONLY if no arc is already active, so re-typing /autonomous mid-arc
+#    (the posture-decay remedy) does not reset the consecutive-stall counter and
+#    re-arm the runaway cap (a P20 finding).
 if printf '%s' "${PROMPT:-}" | grep -qiE '(^|[[:space:]])/autonomous([[:space:]]|$)'; then
-    "$ARC_HELPER" set "$SID" "autonomous" >/dev/null 2>&1 || true
+    if ! "$ARC_HELPER" active "$SID" >/dev/null 2>&1; then
+        "$ARC_HELPER" set "$SID" "autonomous" >/dev/null 2>&1 || true
+    fi
 fi
 
 # 2. re-stamp sticky posture while the arc is active
