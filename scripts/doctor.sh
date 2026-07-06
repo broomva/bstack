@@ -74,10 +74,25 @@ while [ $# -gt 0 ]; do
 done
 
 # ── locate workspace ────────────────────────────────────────────────────────
-WORKSPACE="${BROOMVA_WORKSPACE:-$HOME/broomva}"
+# Resolve via the shared resolver (env → cwd-is-workspace → ~/.bstack config →
+# cwd) — NEVER a hardcoded $HOME/broomva default. A bare `bstack doctor` from an
+# unrelated dir used to silently audit the healthy self-hosting ~/broomva and
+# report false-GREEN off-broomva (BRO-1715). If resolution lands on a non-workspace,
+# FAIL LOUD (exit non-zero) rather than default — "nothing to audit" is a hard
+# error, distinct from the soft gaps the run otherwise exits 0 on.
+_DOCTOR_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/resolve-workspace.sh"
+if [ -f "$_DOCTOR_LIB" ]; then
+    # shellcheck source=scripts/lib/resolve-workspace.sh
+    . "$_DOCTOR_LIB"
+    WORKSPACE="$(resolve_workspace)"
+else
+    # Degraded install (no resolver lib) — still never default to ~/broomva.
+    WORKSPACE="${BROOMVA_WORKSPACE:-$PWD}"
+fi
 if [ ! -d "$WORKSPACE/.git" ] && [ ! -d "$WORKSPACE/.control" ]; then
-    echo "[bstack doctor] workspace not found at $WORKSPACE (set BROOMVA_WORKSPACE)"
-    exit 0
+    echo "[bstack doctor] workspace not found at $WORKSPACE" >&2
+    echo "                set BROOMVA_WORKSPACE, or run from inside a bstack workspace" >&2
+    exit 3
 fi
 
 # ── locate bstack repo (needed by §14 + §15 L3 stability checks) ────────────
@@ -297,11 +312,25 @@ SCRIPT_LABELS=(P1 P2 P6 P7 P8 P9 P12)
 for i in "${!SCRIPT_PATHS[@]}"; do
     path="${SCRIPT_PATHS[$i]}"
     label="${SCRIPT_LABELS[$i]}"
+    _found=""
     if [ -e "$WORKSPACE/$path" ]; then
-        ok "$label: $path"
+        _found="$path"
+    elif [[ "$path" == skills/* ]]; then
+        # Skill mechanisms (P6/P9/P12) install GLOBALLY — `npx skills add -g` lands
+        # them in ~/.claude/skills AND ~/.agents/skills, not the workspace tree. A
+        # workspace-relative miss is NOT a real gap if the skill resolves globally
+        # (BRO-1715 — this section used to false-RED every non-self-hosting install).
+        # Mirrors the /kg global-dir check below.
+        _rel="${path#skills/}"
+        for _g in "$HOME/.claude/skills/$_rel" "$HOME/.agents/skills/$_rel"; do
+            if [ -e "$_g" ]; then _found="$_g"; break; fi
+        done
+    fi
+    if [ -n "$_found" ]; then
+        ok "$label: $_found"
     else
         gap "$label mechanism missing: $path" \
-            "install the corresponding skill: npx skills add broomva/<skill>"
+            "install the corresponding skill: npx skills add broomva/skills --skill <name> -g"
     fi
 done
 
@@ -1271,6 +1300,108 @@ ARC_HOME="${BROOMVA_AUTONOMOUS_HOME:-$HOME/.config/broomva/autonomous}"
 if [ -d "$ARC_HOME" ] && [ "$QUIET" = "0" ]; then
     _active=$(grep -l '"active": true' "$ARC_HOME"/*.arc 2>/dev/null | wc -l | tr -d ' ')
     echo "         arc state: ${_active:-0} active arc(s)"
+fi
+
+# ── Section 25: Wired hook command resolution (BRO-1715) ───────────────────
+# §24 (and every wiring check) greps that a hook is WIRED by name — it never
+# checks the command PATH resolves. That let 5 bstack hooks dangle at a
+# ${BROOMVA_HOME}/.claude/skills/bstack/scripts/ dir no install step creates
+# (bstack installs by git-clone, never as a global skill), silently dead while
+# doctor stayed green. This resolves EVERY wired command: a bstack-shipped one
+# that dangles is a HARD gap; a not-yet-installed companion skill
+# (~/.{claude,agents}/skills/<name>, name != bstack) is a SOFT info, not a gap
+# (fresh-aware, mirrors §23's soft-vs-hard nuance — a workspace can be audited
+# before `npx skills add` has run).
+section "25. Wired hook command resolution"
+_HOOK_SETTINGS=()
+for _s in "$WORKSPACE/.claude/settings.json" "$WORKSPACE/.claude/settings.local.json"; do
+    [ -f "$_s" ] && _HOOK_SETTINGS+=("$_s")
+done
+if [ ${#_HOOK_SETTINGS[@]} -eq 0 ]; then
+    [ "$QUIET" = "0" ] && echo "  [info] no .claude/settings.json — skipping hook-resolution check"
+elif ! command -v python3 >/dev/null 2>&1; then
+    [ "$QUIET" = "0" ] && echo "  [info] python3 unavailable — skipping hook-resolution check"
+else
+    _HOOK_REPORT=$(python3 - "$HOME" "${_HOOK_SETTINGS[@]}" <<'PYEOF'
+import json, os, shlex, sys
+home = sys.argv[1]
+roots = (os.path.join(home, ".claude", "skills") + os.sep,
+         os.path.join(home, ".agents", "skills") + os.sep)
+
+def script_path(cmd):
+    # The absolute script a hook runs — skipping a leading interpreter
+    # (python3/bash/node), flags (-x), and env-assignments (VAR=val). Without
+    # this, `python3 /a/b.py` would check isfile("python3") → false-dangle.
+    #
+    # Deliberately CONSERVATIVE: only a single absolute-path command is verified.
+    # We bias to false-NEGATIVE over false-positive — a spurious HARD gap would
+    # break `doctor --strict` on a hook that actually resolves, which is worse
+    # than silently not-verifying an exotic form. So: shlex-parse (handles
+    # quotes/spaces), bail on shell composites we can't statically resolve
+    # (&&/||/;/pipes, `sh -c <code>`), and return only an absolute path.
+    try:
+        toks = shlex.split(cmd)
+    except ValueError:
+        return None   # unbalanced quotes etc — don't guess
+    if any(t in ("&&", "||", ";", "|", "&", ">", ">>", "<", "`") for t in toks):
+        return None
+    for i, t in enumerate(toks):
+        if t.startswith("-"):
+            continue
+        if "=" in t and not t.startswith("/"):
+            continue   # env assignment VAR=val
+        if t in ("sh", "bash", "zsh", "dash") and i + 1 < len(toks) and toks[i + 1] == "-c":
+            return None   # `sh -c '<code>'` — the next token is code, not a path
+        if t.startswith("/"):
+            return t
+        # otherwise a bare command/interpreter (python3, make, node) — keep scanning
+    return None   # no absolute script path to verify
+
+dangling, softmiss, seen = [], [], set()
+for path_file in sys.argv[2:]:
+    try:
+        data = json.load(open(path_file))
+    except Exception:
+        continue
+    for event, blocks in (data.get("hooks") or {}).items():
+        for b in blocks or []:
+            for h in b.get("hooks", []):
+                cmd = h.get("command", "")
+                p = script_path(cmd) if cmd else None
+                if not p or p in seen:
+                    continue
+                seen.add(p)
+                if os.path.isfile(p):
+                    continue
+                companion = None
+                for r in roots:
+                    if p.startswith(r):
+                        name = p[len(r):].split(os.sep)[0]
+                        if name != "bstack":   # bstack is NOT a companion skill — no hiding here
+                            companion = name
+                if companion:
+                    softmiss.append((companion, p))
+                else:
+                    dangling.append(p)
+for c, p in softmiss:
+    print("SOFT\t%s\t%s" % (c, p))
+for p in dangling:
+    print("HARD\t-\t%s" % p)   # "-" name placeholder: an empty field collapses under IFS=$'\t'
+PYEOF
+)
+    if [ -z "$_HOOK_REPORT" ]; then
+        ok "every wired hook command resolves to an existing file"
+    else
+        while IFS=$'\t' read -r _kind _name _p; do
+            [ -z "${_kind:-}" ] && continue
+            if [ "$_kind" = "HARD" ]; then
+                gap "wired hook command dangles: $_p" \
+                    "re-run 'bstack repair' (re-roots bstack hooks at \$BSTACK_REPO); if custom, fix its path in .claude/settings.json"
+            else
+                [ "$QUIET" = "0" ] && echo "  [info] companion skill '$_name' not installed yet (hook $_p) — 'npx skills add broomva/skills --skill $_name -g'"
+            fi
+        done <<< "$_HOOK_REPORT"
+    fi
 fi
 
 # ── summary ─────────────────────────────────────────────────────────────────
