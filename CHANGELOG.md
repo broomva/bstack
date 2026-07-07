@@ -1,5 +1,65 @@
 # Changelog
 
+## 0.34.1 — 2026-07-06
+
+### fix: doctor §25 crashed under macOS system bash 3.2 — backtick in a $()-nested quoted heredoc (BRO-1718)
+
+v0.34.0's §25 (`script_path()` python heredoc) carried a literal backtick in the shell-operator
+blacklist tuple — plus four more in the surrounding python comments. The heredoc delimiter is quoted
+(`<<'PYEOF'`), but the block lives inside `$( ... )` command substitution, and **bash 3.2's `$()`
+pre-parser dies on backticks there even when the delimiter is quoted** (a known 3.2 parser bug):
+
+```
+doctor.sh: line 1354: unexpected EOF while looking for matching ``'
+doctor.sh: line 1426: syntax error: unexpected end of file
+```
+
+Doctor died mid-run at §25 with no verdict. The shebang is `#!/bin/bash`, which on stock macOS *is*
+bash 3.2 — so **any fresh-install user without homebrew bash got a dead doctor**, hours after
+BRO-1715 shipped the fresh-install fix. Every verification layer missed it because every layer
+resolves bash from a modern PATH (the `bstack` wrapper's `exec bash`, ubuntu CI, and the test suite's
+`bash "$t"` invocations — all bash ≥ 5). The one path nobody exercised was the **delivery interface**:
+direct shebang execution. Four "independent" green gates shared a single unexamined premise
+(bash ≥ 4) — the infrastructure-layer instance of `pattern/shared-assumption-drift`, sibling of
+0.34.0's `pattern/self-hosting-vacuous-pass`.
+
+### Fixed
+
+- **All 5 backticks removed from the §25 heredoc body** — the operator tuple now uses `chr(96)`
+  (behaviorally identical membership test, empirically verified); the 4 comment backticks became
+  plain quotes; an NB comment in the body documents the constraint for future editors. `doctor.sh`
+  contains no bash-4-only runtime constructs, so with the parse fixed it is fully bash-3.2-clean:
+  direct shebang execution under 3.2.57 now runs all 25 sections to a verdict (verified against the
+  self-hosting workspace — same section-by-section output as bash 5.3).
+
+### Added
+
+- **`tests/bash32-parse-safety.test.sh`** — the class guard, proven RED on 0.34.0 (flags exactly the
+  five doctor.sh lines + the parse failure) → GREEN here. Assertion 1 (deterministic on every
+  platform, including ubuntu CI): no literal backtick inside any quoted-heredoc body opened inside an
+  unclosed `$(`/`<(` on the same line, scanning `scripts/`, `tests/`, and `bin/`. Standalone heredocs
+  (`python3 - <<'PY'` as a bare command) are parse-safe in 3.2 and deliberately not flagged
+  (compute-arc-status.sh et al. carry them today and parse fine). Known residual: a heredoc opened on
+  a later line than its enclosing `$(` is not caught statically — Assertion 2 backstops it on macOS.
+  Assertion 2: `/bin/bash -n` must parse every `scripts/` + `tests/` script and bash-shebang `bin/*`
+  — under the **system** bash, which on macOS dev machines is a real 3.2, making the local suite
+  exercise the delivery interface CI's ubuntu image cannot.
+
+### Notes
+
+- **The P20 cross-review round was load-bearing, twice.** The first version of the guard itself
+  carried a literal backtick inside its own `$()`-nested heredoc (the scanner's comparison line) —
+  the guard embodied the bug it polices and was unparseable on the exact machines it protects
+  (caught adversarially at 6/10; fix round applied; `tests/` added to the guard's own scan scope).
+  Fixing that surfaced the fuller truth: bash 3.2's `$()` pre-parser dies not only on backticks but
+  also on **unbalanced quotes** and reacts to dollar-paren openers in raw heredoc body text — so the
+  scanner now builds every parser-hostile character via `chr()` and the heredoc-body rule is
+  documented in both files: no backticks, no unbalanced quotes, no bare command-substitution openers.
+- Considered and rejected: a `BASH_VERSINFO` re-exec guard at the top of doctor.sh. It would mask the
+  class (silently upgrading to a newer bash when available) rather than keep the script honest on the
+  interpreter its shebang declares; and with zero bash-4-isms in the file, 3.2 compatibility is the
+  cheaper invariant to hold.
+
 ## 0.34.0 — 2026-07-06
 
 ### fix: fresh-install portability — the self-improving/autonomy layer was silently ~/broomva-hosted (BRO-1715)

@@ -1331,19 +1331,22 @@ roots = (os.path.join(home, ".claude", "skills") + os.sep,
 def script_path(cmd):
     # The absolute script a hook runs — skipping a leading interpreter
     # (python3/bash/node), flags (-x), and env-assignments (VAR=val). Without
-    # this, `python3 /a/b.py` would check isfile("python3") → false-dangle.
+    # this, 'python3 /a/b.py' would check isfile("python3") → false-dangle.
     #
     # Deliberately CONSERVATIVE: only a single absolute-path command is verified.
     # We bias to false-NEGATIVE over false-positive — a spurious HARD gap would
-    # break `doctor --strict` on a hook that actually resolves, which is worse
+    # break 'doctor --strict' on a hook that actually resolves, which is worse
     # than silently not-verifying an exotic form. So: shlex-parse (handles
     # quotes/spaces), bail on shell composites we can't statically resolve
-    # (&&/||/;/pipes, `sh -c <code>`), and return only an absolute path.
+    # (&&/||/;/pipes, 'sh -c <code>'), and return only an absolute path.
+    # NB: no literal backticks anywhere in this heredoc body — it lives inside
+    # $( ... ) and bash 3.2's pre-parser dies on them even though the delimiter
+    # is quoted (BRO-1718). The operator tuple uses chr(96) for the same reason.
     try:
         toks = shlex.split(cmd)
     except ValueError:
         return None   # unbalanced quotes etc — don't guess
-    if any(t in ("&&", "||", ";", "|", "&", ">", ">>", "<", "`") for t in toks):
+    if any(t in ("&&", "||", ";", "|", "&", ">", ">>", "<", chr(96)) for t in toks):
         return None
     for i, t in enumerate(toks):
         if t.startswith("-"):
@@ -1351,7 +1354,7 @@ def script_path(cmd):
         if "=" in t and not t.startswith("/"):
             continue   # env assignment VAR=val
         if t in ("sh", "bash", "zsh", "dash") and i + 1 < len(toks) and toks[i + 1] == "-c":
-            return None   # `sh -c '<code>'` — the next token is code, not a path
+            return None   # sh -c '<code>' — the next token is code, not a path
         if t.startswith("/"):
             return t
         # otherwise a bare command/interpreter (python3, make, node) — keep scanning
