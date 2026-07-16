@@ -26,19 +26,41 @@ not #1523.)
 - `UserPromptSubmit` → `autonomous-posture-hook.sh` (Orchestrate P19)
 - `PreToolUse` [`Edit|Write|MultiEdit`] → `l3-stability-pretool-hook.sh` (L3-G0 gate)
 
-**Additive / non-breaking.** The existing `assets/templates/settings.json.snippet` wiring stays for
-backward-compat during the transition — a consuming workspace still bootstraps hooks the old way.
-Adoption is opt-in: enable the plugin and remove the six hand-wired `settings.json` entries (they would
-otherwise **double-fire**). `bstack bootstrap` will prefer the plugin over the snippet in a follow-up.
+**Ships disabled — hooks do not fire until you enable it.** A skills-directory plugin *auto-loads on
+presence* (`bstack@skills-dir`, no install step) the next session bstack is vendored under
+`~/.claude/skills/`. To keep that from silently double-firing the still-present `settings.json` snippet
+hooks, this plugin sets **`defaultEnabled: false`** (in both `plugin.json` and the marketplace entry):
+it loads but stays **disabled** until you run `claude plugin enable bstack@skills-dir` (or `/plugin`).
+The existing `assets/templates/settings.json.snippet` wiring is untouched, so nothing changes for any
+install until you deliberately opt in.
+
+> **Client-version floor.** `defaultEnabled` is honored on **Claude Code ≥ 2.1.154**; earlier clients
+> ignore it and enable the plugin on presence. `source: "."` (plugin at marketplace root) needs
+> **≥ 2.1.196**. On an older client, adopt by removing the snippet hooks *first* (see Migration).
 
 ### Migration
 
-None required. Existing installs keep working via the `settings.json` snippet. To adopt the plugin on a
-workspace, enable it (`bstack@skills-dir` auto-loads when bstack is vendored under `~/.claude/skills/`,
-or `claude plugin marketplace add broomva/bstack && claude plugin install bstack@bstack`) and delete the
-six bstack hook entries from that workspace's `settings.json` in the same change — running both sources
-fires every hook twice. Note the `Stop` `arc-continuation-hook.sh` expects to run after the workspace's
-own capture hooks (conversation-bridge, knowledge-catalog); verify Stop ordering on first session.
+None required — existing installs keep working via the `settings.json` snippet, and the plugin ships
+disabled. To **adopt** the plugin on a workspace (do all three in one change):
+
+1. Ensure the vendored bstack carries this version (git-clone swap into `~/.claude/skills/bstack`, or
+   `claude plugin marketplace add broomva/bstack && claude plugin install bstack@bstack`).
+2. `claude plugin enable bstack@skills-dir` — this is the gate; it also writes `enabledPlugins`, which
+   persists across future updates.
+3. **Delete the six bstack hook entries from that workspace's `settings.json`** in the same change.
+   Running both the plugin (once enabled) and the snippet fires every hook twice — concretely: two
+   `leverage-sensor.py` writers race on `.control/leverage-state.json`, and `l3-stability-pretool-hook`
+   double-counts the L3 rate budget.
+
+Two things to verify on the first session after enabling:
+- **Stop ordering** — `arc-continuation-hook.sh` expects to run *after* the workspace's own capture
+  hooks (`conversation-bridge`, `knowledge-catalog`); plugin-vs-settings.json Stop ordering is not
+  guaranteed, so confirm capture still happens first.
+- **Side effects of enabling** — the plugin root also carries `SKILL.md` (loads as the `bstack` plugin
+  skill) and `bin/` (added to the Bash PATH while enabled).
+
+`bstack bootstrap`/`repair` will perform this snippet→plugin swap atomically in a follow-up (BRO-1926
+Phase 3), which is also the fix for clients below the `defaultEnabled` floor.
 
 ## 0.34.1 — 2026-07-06
 
