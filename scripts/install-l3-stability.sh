@@ -42,15 +42,15 @@ done
 
 BSTACK_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# BRO-1929: skip the L3-G0 PreToolUse hook when the bstack@skills-dir plugin
-# already provides it — either the caller signaled preference
-# (BSTACK_PLUGIN_PREFERRED=1, set by bootstrap/onboard/repair) or the plugin is
-# enabled host-scope. Hand-wiring alongside the enabled plugin double-counts the
-# L3 stability budget.
+# BRO-1929: skip the L3-G0 PreToolUse hook when the bstack@skills-dir plugin is
+# enabled host-scope (bootstrap/onboard/repair enable it before reaching here).
+# The persisted enable-state is the single source of truth — no env coupling — so
+# a direct invocation is double-fire-safe too. Hand-wiring alongside the enabled
+# plugin double-counts the L3 stability budget.
 # shellcheck source=scripts/lib/plugin-preference.sh
 . "$BSTACK_REPO/scripts/lib/plugin-preference.sh"
 SKIP_PLUGIN_HOOKS=0
-if [ "${BSTACK_PLUGIN_PREFERRED:-0}" = "1" ] || bstack_plugin_enabled; then
+if bstack_plugin_enabled; then
     SKIP_PLUGIN_HOOKS=1
 fi
 

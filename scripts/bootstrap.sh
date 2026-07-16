@@ -186,7 +186,6 @@ if [ "${BSTACK_NO_PLUGIN:-0}" = "1" ]; then
 elif bstack_plugin_preferred && command -v python3 >/dev/null 2>&1; then
     if bstack_enable_plugin; then
         PLUGIN_PREFERRED=1
-        export BSTACK_PLUGIN_PREFERRED=1
         echo "  [plugin] preferring bstack@skills-dir — plugin-provided hooks will not be hand-wired"
     fi
 fi
@@ -229,12 +228,13 @@ else:
 current.setdefault("hooks", {})
 
 def base(cmd):
-    # Basename of the script a hook runs. Strip a trailing flag-args tail
-    # (" --throttle 21600") so args don't leak into the name, while preserving
-    # spaces inside the directory path (only leverage-sensor.py carries args).
+    # Basename of the script a hook runs. Strip a trailing double-dash flag tail
+    # (" --throttle 21600" — the only args any hook carries) so args don't leak
+    # into the name. Split on " --" (not " -") so a hyphen anywhere in the
+    # directory path (e.g. "/my repo - v2/…") never truncates the path.
     if not cmd:
         return ""
-    head = re.split(r"\s+-", cmd, maxsplit=1)[0].rstrip()
+    head = re.split(r"\s+--", cmd, maxsplit=1)[0].rstrip()
     return Path(head).name
 
 # Migration: with the plugin preferred, strip any hand-wired copy of a

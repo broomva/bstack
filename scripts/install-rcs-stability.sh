@@ -41,13 +41,13 @@ done
 BSTACK_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # BRO-1929: skip the loop-sensor (leverage-sensor) Stop hook when the
-# bstack@skills-dir plugin already provides it (caller preference or enabled
-# plugin) — hand-wiring alongside it races two writers on leverage-state.json.
-# install-l3-stability.sh (invoked below) self-determines the same condition.
+# bstack@skills-dir plugin is enabled host-scope — hand-wiring alongside it races
+# two writers on leverage-state.json. Enable-state (persisted) is the single
+# source of truth; install-l3-stability.sh (invoked below) self-determines the same.
 # shellcheck source=scripts/lib/plugin-preference.sh
 . "$BSTACK_REPO/scripts/lib/plugin-preference.sh"
 SKIP_PLUGIN_HOOKS=0
-if [ "${BSTACK_PLUGIN_PREFERRED:-0}" = "1" ] || bstack_plugin_enabled; then
+if bstack_plugin_enabled; then
     SKIP_PLUGIN_HOOKS=1
 fi
 

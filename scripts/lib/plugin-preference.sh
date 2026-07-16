@@ -19,7 +19,9 @@
 #
 # Usage:
 #   source "$BSTACK_DIR/scripts/lib/plugin-preference.sh"
-#   if bstack_plugin_preferred; then bstack_enable_plugin; export BSTACK_PLUGIN_PREFERRED=1; fi
+#   if bstack_plugin_preferred; then bstack_enable_plugin; fi
+#   # the RCS installers then self-skip the plugin's hooks via bstack_plugin_enabled
+#   # (persisted enable-state is the single source of truth — no env coupling)
 
 # Canonical plugin identifier: <name-from-plugin.json>@skills-dir.
 BSTACK_PLUGIN_ID="bstack@skills-dir"
@@ -80,12 +82,12 @@ PYEOF
 }
 
 # True if $1 (a hook command string or bare basename) is provided by the plugin.
-# Snippet commands are direct-path form ("/path/to/hook.sh [args]"), so the
-# script is the FIRST whitespace-delimited token — mirrors the python base()
-# used by the installers.
+# Snippet commands are direct-path form ("/path/to/hook.sh [--flag ...]"). Strip a
+# trailing " --flag" tail (mirrors the installers' python base()); splitting on
+# " --" (not " -") keeps a hyphen anywhere in the directory path intact.
 bstack_plugin_provides_hook() {
   local first base
-  first="${1%%[[:space:]]*}"
+  first="${1%% --*}"
   base="$(basename "$first")"
   case " $BSTACK_PLUGIN_HOOK_BASENAMES " in
     *" $base "*) return 0 ;;

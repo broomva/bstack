@@ -353,7 +353,6 @@ merge_hooks_into_settings() {
             echo "  [dry-run] would enable bstack@skills-dir + skip/migrate plugin-provided hooks"
         elif bstack_enable_plugin; then
             plugin_preferred=1
-            export BSTACK_PLUGIN_PREFERRED=1
             echo "  [plugin] preferring bstack@skills-dir — plugin hooks skipped + migrated"
         fi
     fi
@@ -396,11 +395,12 @@ plugin_preferred = os.environ.get("PLUGIN_PREFERRED") == "1"
 plugin_hooks = set(os.environ.get("BSTACK_PLUGIN_HOOK_BASENAMES", "").split())
 
 def base(cmd):
-    # Basename of the script a hook runs. Strip a trailing flag-args tail
-    # (" --throttle 21600") while preserving spaces inside the directory path.
+    # Basename of the script a hook runs. Strip a trailing double-dash flag tail
+    # (" --throttle 21600"); split on " --" (not " -") so a hyphen anywhere in
+    # the directory path never truncates it.
     if not cmd:
         return ""
-    head = re.split(r"\s+-", cmd, maxsplit=1)[0].rstrip()
+    head = re.split(r"\s+--", cmd, maxsplit=1)[0].rstrip()
     return Path(head).name
 
 raw = Path(snippet_path).read_text()

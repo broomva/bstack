@@ -216,6 +216,19 @@ else
     assert_fail "bootstrap(BSTACK_NO_PLUGIN): hooks=$(plugin_hooks_in "$S10") (want ≥4), enabled_after='$_enabled_after' (want False)"
 fi
 
+# 11. base() must not truncate on a hyphen in the DIRECTORY path (a space-then-dash
+# path like ".../my repo - v2/ws" collapsed sibling Stop hooks under the old regex).
+H11="$TMP/h11"; mkdir -p "$H11"; W11="$TMP/my repo - v2/ws"; mkdir -p "$W11"
+run_bootstrap "$H11" "$W11"
+S11="$W11/.claude/settings.json"
+if grep -q 'conversation-bridge-hook.sh' "$S11" \
+   && grep -q 'knowledge-catalog-refresh-hook.sh' "$S11" \
+   && grep -q 'skill-freshness-hook.sh' "$S11"; then
+    assert_pass "bootstrap(space-dash path): sibling Stop/SessionStart hooks all survive"
+else
+    assert_fail "bootstrap(space-dash path): a non-plugin hook was truncated/lost by base()"
+fi
+
 echo ""
 echo "plugin-preference: $PASS passed, $FAIL failed"
 if [ "$FAIL" -gt 0 ]; then
