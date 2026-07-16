@@ -25,11 +25,11 @@ Design notes:
   (`bstack_plugin_preferred`), enablement (`bstack_enable_plugin` / `bstack_plugin_enabled`), and the
   canonical six-basename set (kept in sync with `hooks/hooks.json`).
 - `install-l3-stability.sh` skips the L3-G0 `PreToolUse` merge and `install-rcs-stability.sh` skips the
-  `leverage-sensor` Stop merge when the plugin provides them — each self-determines via the caller's
-  `BSTACK_PLUGIN_PREFERRED` signal **or** an already-enabled plugin, so even direct invocation is
-  double-fire-safe. Their other work (pre-commit G1, GH Actions, `rcs-parameters.toml`, the audit dir)
-  is unchanged. `onboard` is covered transitively (it runs bootstrap, which enables the plugin, before
-  its own RCS wiring).
+  `leverage-sensor` Stop merge when the plugin is enabled host-scope — each self-determines from the
+  persisted enable-state (`bstack_plugin_enabled`, the single source of truth), so even a direct
+  invocation is double-fire-safe. Their other work (pre-commit G1, GH Actions, `rcs-parameters.toml`,
+  the audit dir) is unchanged. `onboard` is covered transitively (it runs bootstrap, which enables the
+  plugin, before its own RCS wiring).
 - `bstack doctor` §23/§24 now count a plugin-provided `loop-sensor` / `arc-continuation` /
   `autonomous-posture` as satisfied instead of gapping them as "not wired".
 - The create-or-merge is **matcher-scoped**: `control-gate` (P2 Gate) is wired under three `PreToolUse`

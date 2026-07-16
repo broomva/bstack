@@ -42,7 +42,7 @@ make_home_with_plugin() {
 }
 
 # ── Lib unit tests ─────────────────────────────────────────────────────────
-unset BSTACK_HOME BSTACK_NO_PLUGIN BSTACK_PLUGIN_PREFERRED 2>/dev/null || true
+unset BSTACK_HOME BSTACK_NO_PLUGIN 2>/dev/null || true
 # shellcheck source=scripts/lib/plugin-preference.sh
 . "$LIB"
 
