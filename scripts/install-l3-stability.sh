@@ -42,6 +42,18 @@ done
 
 BSTACK_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# BRO-1929: skip the L3-G0 PreToolUse hook when the bstack@skills-dir plugin
+# already provides it — either the caller signaled preference
+# (BSTACK_PLUGIN_PREFERRED=1, set by bootstrap/onboard/repair) or the plugin is
+# enabled host-scope. Hand-wiring alongside the enabled plugin double-counts the
+# L3 stability budget.
+# shellcheck source=scripts/lib/plugin-preference.sh
+. "$BSTACK_REPO/scripts/lib/plugin-preference.sh"
+SKIP_PLUGIN_HOOKS=0
+if [ "${BSTACK_PLUGIN_PREFERRED:-0}" = "1" ] || bstack_plugin_enabled; then
+    SKIP_PLUGIN_HOOKS=1
+fi
+
 if [ ! -d "$WORKSPACE" ]; then
     echo "install-l3-stability: workspace not found: $WORKSPACE" >&2
     exit 2
@@ -145,7 +157,9 @@ echo "4. Claude Code PreToolUse hook (.claude/settings.json)"
 SETTINGS="$WORKSPACE/.claude/settings.json"
 SNIPPET="$BSTACK_REPO/assets/templates/settings.json.l3-stability-hook.snippet"
 
-if [ "$DRY_RUN" = "1" ]; then
+if [ "$SKIP_PLUGIN_HOOKS" = "1" ]; then
+    echo "  [skip] L3-G0 PreToolUse hook — provided by the bstack@skills-dir plugin (BRO-1929)"
+elif [ "$DRY_RUN" = "1" ]; then
     echo "  [dry] would merge L3-G0 PreToolUse hook into $SETTINGS"
 elif ! command -v python3 >/dev/null 2>&1; then
     echo "  [skip] python3 not available; cannot merge JSON safely"

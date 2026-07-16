@@ -33,6 +33,11 @@ WORKSPACE_DIR="${BROOMVA_WORKSPACE:-$PWD}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKILL_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 TEMPLATES_DIR="$SKILL_ROOT/assets/templates"
+
+# BRO-1929: plugin-preference helpers (detect/enable/filter the bstack@skills-dir
+# plugin so hand-wired hooks don't double-fire alongside the enabled plugin).
+# shellcheck source=scripts/lib/plugin-preference.sh
+. "$SKILL_ROOT/scripts/lib/plugin-preference.sh"
 DOCTOR="$SCRIPT_DIR/doctor.sh"
 
 if [ ! -f "$DOCTOR" ]; then
@@ -336,28 +341,58 @@ merge_hooks_into_settings() {
         echo "         manual: copy entries from $snippet into $target"
         return
     fi
+    # BRO-1929: prefer the plugin — enable bstack@skills-dir (unless dry-run) and
+    # filter/migrate the plugin-provided hooks so they don't double-fire.
+    local plugin_preferred=0
+    if bstack_plugin_preferred; then
+        if [ "$DRY_RUN" = "1" ]; then
+            plugin_preferred=1
+            echo "  [dry-run] would enable bstack@skills-dir + skip/migrate plugin-provided hooks"
+        elif bstack_enable_plugin; then
+            plugin_preferred=1
+            export BSTACK_PLUGIN_PREFERRED=1
+            echo "  [plugin] preferring bstack@skills-dir — plugin hooks skipped + migrated"
+        fi
+    fi
     if [ ! -f "$target" ]; then
-        if confirm "Scaffold .claude/settings.json from snippet?"; then
+        if [ "$plugin_preferred" = "1" ]; then
+            # Plugin preferred: don't sed the raw snippet (it carries the plugin
+            # hooks). Seed an empty settings.json and let the python merge below
+            # wire only the non-plugin hooks. (Dry-run seeds nothing; the python
+            # treats a missing target as {}.)
+            mkdir -p "$(dirname "$target")"
+            [ "$DRY_RUN" = "1" ] || printf '{}\n' > "$target"
+        elif confirm "Scaffold .claude/settings.json from snippet?"; then
             mkdir -p "$(dirname "$target")"
             sed -e "s|\${BROOMVA_WORKSPACE}|$WORKSPACE_DIR|g" \
                 -e "s|\${BROOMVA_HOME}|$HOME|g" \
                 -e "s|\$BSTACK_REPO|$SKILL_ROOT|g" \
                 "$snippet" > "$target"
             echo "  [fix] scaffolded .claude/settings.json"
+            return
         elif [ "$DRY_RUN" = "1" ]; then
             echo "  [dry-run] would scaffold .claude/settings.json"
+            return
         else
             echo "  [skip] .claude/settings.json (declined)"
+            return
         fi
-        return
     fi
+    PLUGIN_PREFERRED="$plugin_preferred" \
+    BSTACK_PLUGIN_HOOK_BASENAMES="$BSTACK_PLUGIN_HOOK_BASENAMES" \
     python3 - "$snippet" "$target" "$WORKSPACE_DIR" "$HOME" "$DRY_RUN" "$SKILL_ROOT" <<'PYEOF'
-import json
+import json, os
 import sys
 from pathlib import Path
 
 snippet_path, target_path, workspace, home, dry_run_str, bstack_repo = sys.argv[1:7]
 dry_run = dry_run_str == "1"
+plugin_preferred = os.environ.get("PLUGIN_PREFERRED") == "1"
+plugin_hooks = set(os.environ.get("BSTACK_PLUGIN_HOOK_BASENAMES", "").split())
+
+def base(cmd):
+    # basename of the script a hook runs (skip a leading interpreter + args)
+    return Path((cmd or "").split()[0]).name if cmd else ""
 
 raw = Path(snippet_path).read_text()
 raw = raw.replace("${BROOMVA_WORKSPACE}", workspace).replace("${BROOMVA_HOME}", home)
@@ -366,8 +401,23 @@ raw = raw.replace("$BSTACK_REPO", bstack_repo)
 template = json.loads(raw)
 template.pop("_comment", None)
 
-target = json.loads(Path(target_path).read_text())
+# Robust to a missing target (plugin-preferred dry-run seeds nothing).
+target = json.loads(Path(target_path).read_text()) if Path(target_path).exists() else {}
 target.setdefault("hooks", {})
+
+# Migration: with the plugin preferred, strip hand-wired copies of the
+# plugin-provided hooks so they don't double-fire alongside the enabled plugin.
+removed = []
+if plugin_preferred:
+    for event, blocks in list(target["hooks"].items()):
+        for block in blocks:
+            for h in block.get("hooks", []):
+                if base(h.get("command")) in plugin_hooks:
+                    removed.append(f"{event}: {base(h.get('command'))}")
+            block["hooks"] = [h for h in block.get("hooks", []) if base(h.get("command")) not in plugin_hooks]
+        target["hooks"][event] = [b for b in blocks if b.get("hooks")]
+        if not target["hooks"][event]:
+            del target["hooks"][event]
 
 added = []
 for event, blocks in template.get("hooks", {}).items():
@@ -375,9 +425,11 @@ for event, blocks in template.get("hooks", {}).items():
     for block in blocks:
         for hook in block.get("hooks", []):
             cmd = hook.get("command", "")
-            script_name = Path(cmd).name
+            script_name = base(cmd)
+            if plugin_preferred and script_name in plugin_hooks:
+                continue
             already = any(
-                any(Path(h.get("command", "")).name == script_name
+                any(base(h.get("command", "")) == script_name
                     for h in cb.get("hooks", []))
                 for cb in current_blocks
             )
@@ -399,20 +451,30 @@ for event, blocks in template.get("hooks", {}).items():
                 label += f"[{block['matcher']}]"
             added.append(f"{label}: {script_name}")
 
-if not added:
+if not added and not removed:
     print("  ✓ all template hooks already wired")
     sys.exit(0)
 
 if dry_run:
-    print(f"  [dry-run] would add {len(added)} hook(s):")
-    for line in added:
-        print(f"    + {line}")
+    if added:
+        print(f"  [dry-run] would add {len(added)} hook(s):")
+        for line in added:
+            print(f"    + {line}")
+    if removed:
+        print(f"  [dry-run] would migrate out {len(removed)} plugin-provided hook(s):")
+        for line in removed:
+            print(f"    - {line}")
     sys.exit(0)
 
 Path(target_path).write_text(json.dumps(target, indent=2) + "\n")
-print(f"  [fix] added {len(added)} hook(s):")
-for line in added:
-    print(f"    + {line}")
+if added:
+    print(f"  [fix] added {len(added)} hook(s):")
+    for line in added:
+        print(f"    + {line}")
+if removed:
+    print(f"  [fix] migrated out {len(removed)} plugin-provided hook(s):")
+    for line in removed:
+        print(f"    - {line}")
 PYEOF
 }
 

@@ -168,19 +168,35 @@ fi
 # Idempotent: never overwrites existing hook entries. Only adds missing ones.
 echo ""
 echo "=== bstack hooks wire-up ==="
+
+# ── Plugin preference (BRO-1929) ───────────────────────────────────────────
+# If bstack is installed as a skills-dir plugin (.claude-plugin/plugin.json at a
+# Claude-scanned skills dir), PREFER it: enable bstack@skills-dir host-scope and
+# skip hand-wiring the six hooks it already provides. Hand-wiring alongside the
+# enabled plugin double-fires (two leverage-sensor writers; l3 double-count), and
+# the plugin path is installer-immune. Legacy path (no manifest / no python3 /
+# BSTACK_NO_PLUGIN=1) hand-wires everything as before.
+# shellcheck source=scripts/lib/plugin-preference.sh
+. "$SKILL_ROOT/scripts/lib/plugin-preference.sh"
+PLUGIN_PREFERRED=0
+if bstack_plugin_preferred && command -v python3 >/dev/null 2>&1; then
+    if bstack_enable_plugin; then
+        PLUGIN_PREFERRED=1
+        export BSTACK_PLUGIN_PREFERRED=1
+        echo "  [plugin] preferring bstack@skills-dir — plugin-provided hooks will not be hand-wired"
+    fi
+fi
+
 SETTINGS_FILE="$WORKSPACE_DIR/.claude/settings.json"
-if [ ! -f "$SETTINGS_FILE" ]; then
-    echo "  [scaffold] .claude/settings.json ← assets/templates/settings.json.snippet"
-    mkdir -p "$WORKSPACE_DIR/.claude"
-    sed -e "s|\${BROOMVA_WORKSPACE}|$WORKSPACE_DIR|g" \
-        -e "s|\${BROOMVA_HOME}|$HOME|g" \
-        -e "s|\$BSTACK_REPO|$SKILL_ROOT|g" \
-        "$TEMPLATES_DIR/settings.json.snippet" > "$SETTINGS_FILE"
-elif command -v python3 >/dev/null 2>&1; then
-    # Use python3 to merge missing hooks without overwriting existing ones
+if command -v python3 >/dev/null 2>&1; then
+    # python3 handles create-or-merge uniformly, applying the plugin filter +
+    # double-wire migration. (The legacy sed-scaffold below is the no-python3
+    # fallback only — where the plugin can't be enabled either, so hand-wiring
+    # everything is correct: no plugin, no double-fire.)
+    PLUGIN_PREFERRED="$PLUGIN_PREFERRED" \
+    BSTACK_PLUGIN_HOOK_BASENAMES="$BSTACK_PLUGIN_HOOK_BASENAMES" \
     python3 - <<PYEOF
-import json
-import sys
+import json, os
 from pathlib import Path
 
 settings_path = Path("$SETTINGS_FILE")
@@ -188,6 +204,8 @@ template_path = Path("$TEMPLATES_DIR/settings.json.snippet")
 workspace = "$WORKSPACE_DIR"
 home = "$HOME"
 bstack_repo = "$SKILL_ROOT"
+plugin_preferred = os.environ.get("PLUGIN_PREFERRED") == "1"
+plugin_hooks = set(os.environ.get("BSTACK_PLUGIN_HOOK_BASENAMES", "").split())
 
 raw = template_path.read_text()
 raw = raw.replace("\${BROOMVA_WORKSPACE}", workspace)
@@ -196,39 +214,71 @@ raw = raw.replace("\${BROOMVA_HOME}", home)
 # settings.json.snippet _comment + install-rcs-stability.sh's identical \$BSTACK_REPO wire.
 raw = raw.replace("\$BSTACK_REPO", bstack_repo)
 
-current = json.loads(settings_path.read_text())
 template = json.loads(raw)
-
-# Drop the _comment if present
 template.pop("_comment", None)
 
+if settings_path.exists():
+    current = json.loads(settings_path.read_text())
+else:
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    current = {}
 current.setdefault("hooks", {})
+
+def base(cmd):
+    # basename of the script a hook runs (skip a leading interpreter + args)
+    return Path((cmd or "").split()[0]).name if cmd else ""
+
+# Migration: with the plugin preferred, strip any hand-wired copy of a
+# plugin-provided hook so it does not double-fire alongside the plugin.
+removed = 0
+if plugin_preferred:
+    for event, blocks in list(current["hooks"].items()):
+        for block in blocks:
+            kept = [h for h in block.get("hooks", []) if base(h.get("command")) not in plugin_hooks]
+            removed += len(block.get("hooks", [])) - len(kept)
+            block["hooks"] = kept
+        current["hooks"][event] = [b for b in blocks if b.get("hooks")]
+        if not current["hooks"][event]:
+            del current["hooks"][event]
+
 added = 0
+skipped = 0
 for event, blocks in template.get("hooks", {}).items():
     current_blocks = current["hooks"].setdefault(event, [])
     for block in blocks:
         for hook in block.get("hooks", []):
             cmd = hook.get("command")
+            if plugin_preferred and base(cmd) in plugin_hooks:
+                skipped += 1
+                continue
             # Check if any existing hook for this event references the same script
             already = any(
-                any(h.get("command", "").endswith(Path(cmd).name)
+                any(base(h.get("command")) == base(cmd)
                     for h in cb.get("hooks", []))
                 for cb in current_blocks
             )
             if already:
-                print(f"  [keep] {event}: {Path(cmd).name} (already wired)")
+                print(f"  [keep] {event}: {base(cmd)} (already wired)")
             else:
                 # Append a new block for this hook
                 new_block = {"hooks": [hook]}
                 if "matcher" in block:
                     new_block["matcher"] = block["matcher"]
                 current_blocks.append(new_block)
-                print(f"  [wire] {event}: {Path(cmd).name} ({hook.get('_bstack_primitive', 'P?')})")
+                print(f"  [wire] {event}: {base(cmd)} ({hook.get('_bstack_primitive', 'P?')})")
                 added += 1
 
 settings_path.write_text(json.dumps(current, indent=2) + "\n")
-print(f"  added: {added} new hook(s)")
+_extra = f"; migrated out {removed} plugin copy(ies); skipped {skipped} plugin hook(s)" if plugin_preferred else ""
+print(f"  added: {added} new hook(s){_extra}")
 PYEOF
+elif [ ! -f "$SETTINGS_FILE" ]; then
+    echo "  [scaffold] .claude/settings.json ← assets/templates/settings.json.snippet (no python3; legacy hand-wire)"
+    mkdir -p "$WORKSPACE_DIR/.claude"
+    sed -e "s|\${BROOMVA_WORKSPACE}|$WORKSPACE_DIR|g" \
+        -e "s|\${BROOMVA_HOME}|$HOME|g" \
+        -e "s|\$BSTACK_REPO|$SKILL_ROOT|g" \
+        "$TEMPLATES_DIR/settings.json.snippet" > "$SETTINGS_FILE"
 else
     echo "  [skip] python3 not available; cannot merge into existing settings.json"
     echo "  manual: see assets/templates/settings.json.snippet"

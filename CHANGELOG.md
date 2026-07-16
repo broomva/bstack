@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.37.0 — 2026-07-16
+
+### feat: install prefers the plugin — bootstrap/repair stop hand-wiring the six plugin hooks (BRO-1929)
+
+With the scope-safe plugin shipped (0.35.0 + 0.36.0), the installers now **prefer it**. When bstack is
+present as a skills-dir plugin (`.claude-plugin/plugin.json` under `~/.agents/skills/bstack` or
+`~/.claude/skills/bstack`), `bstack bootstrap` / `onboard` / `repair`:
+
+- **enable `bstack@skills-dir`** host-scope (idempotent write of `enabledPlugins` in `~/.claude/settings.json`), and
+- **skip hand-wiring the six hooks the plugin provides** — `bstack-autoupdate`, `knowledge-wakeup`,
+  `autonomous-posture`, `arc-continuation`, `leverage-sensor`, `l3-stability-pretool` — into the
+  workspace `.claude/settings.json`, and
+- **migrate away any already-wired copy** of those six, so a machine that adopts the plugin and then
+  re-runs bootstrap/repair no longer **double-fires** (two `leverage-sensor` writers racing; the L3
+  budget double-counted). The hazard existed because the plugin's `${CLAUDE_PLUGIN_ROOT}` paths and the
+  snippet's `$BSTACK_REPO` paths differ, so the old name-only dedup never caught the overlap.
+
+Non-plugin hooks stay hand-wired exactly as before: `control-gate` (P2), `conversation-bridge` (P1),
+`knowledge-catalog-refresh` (P6), `skill-freshness` (P7), `auth-preflight`, and the `role-x` hooks.
+
+Design notes:
+- **New `scripts/lib/plugin-preference.sh`** is the single source of truth: plugin detection
+  (`bstack_plugin_preferred`), enablement (`bstack_enable_plugin` / `bstack_plugin_enabled`), and the
+  canonical six-basename set (kept in sync with `hooks/hooks.json`).
+- `install-l3-stability.sh` skips the L3-G0 `PreToolUse` merge and `install-rcs-stability.sh` skips the
+  `leverage-sensor` Stop merge when the plugin provides them — each self-determines via the caller's
+  `BSTACK_PLUGIN_PREFERRED` signal **or** an already-enabled plugin, so even direct invocation is
+  double-fire-safe. Their other work (pre-commit G1, GH Actions, `rcs-parameters.toml`, the audit dir)
+  is unchanged. `onboard` is covered transitively (it runs bootstrap, which enables the plugin, before
+  its own RCS wiring).
+- `bstack doctor` §23/§24 now count a plugin-provided `loop-sensor` / `arc-continuation` /
+  `autonomous-posture` as satisfied instead of gapping them as "not wired".
+- **Escape hatch:** `BSTACK_NO_PLUGIN=1` forces the legacy hand-wire path (e.g. Claude Code < 2.1.154
+  that ignores `defaultEnabled`). No manifest or no `python3` → legacy path automatically; in that mode
+  the plugin is never enabled, so hand-wiring everything is correct (no double-fire).
+
+Covered by `tests/plugin-preference.test.sh` (12 cases: detection, basename membership, idempotent
+enable, and real `bootstrap` runs in preferred / migration / fallback modes). No behavior change for an
+install without the plugin manifest.
+
 ## 0.36.0 — 2026-07-16
 
 ### feat: plugin hooks stay scope-safe outside a bstack workspace — good-citizen global plugin (BRO-1926)
