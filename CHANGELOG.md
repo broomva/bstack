@@ -2,26 +2,36 @@
 
 ## 0.36.0 — 2026-07-16
 
-### feat: plugin hooks no-op outside a bstack workspace — scope-safe global plugin (BRO-1926)
+### feat: plugin hooks stay scope-safe outside a bstack workspace — good-citizen global plugin (BRO-1926)
 
 The bstack plugin loads at **personal scope** (`~/.claude/skills/bstack`), so once a workspace enables
-`bstack@skills-dir` its hooks fire in **every** Claude Code session — including non-bstack repos. Several
-hooks write workspace state: `leverage-sensor.py` + `leverage-ship-sensor.py` create
-`<workspace>/.control/*.json` (`os.makedirs(..., exist_ok=True)`), and `l3-stability-pretool` logs to
-`<workspace>/.control/audit/`. Left unguarded, the global plugin would litter `.control/` into unrelated
-repos (e.g. a client repo) on every session.
+`bstack@skills-dir` its hooks fire in **every** Claude Code session — including non-bstack repos. Two
+hooks write `<workspace>/.control/`: the Stop `leverage-sensor.py` (`os.makedirs(..., exist_ok=True)` +
+writes `leverage-*.json`), and the SessionStart `knowledge-wakeup-hook.sh` (runs `leverage-ship-sensor.py`,
+which writes `leverage-ship-state.json`). `l3-stability-pretool` also logs to `.control/audit/` on
+L3-file edits. Left unguarded, the global plugin would litter `.control/` into unrelated repos (e.g. a
+client repo) every session.
 
-New **`hooks/bstack-hook-guard.sh`** gates each hook on the workspace being bstack-governed (has a
-`.control/` dir). If not, the hook is a no-op — PreToolUse hooks still emit `{"decision":"approve"}` so
-tools are never left undecided. `hooks/hooks.json` now routes the five workspace hooks
-(knowledge-wakeup, arc-continuation, leverage-sensor, autonomous-posture, l3-stability) through the
-guard; `bstack-autoupdate-hook.sh` stays **unguarded** (it keeps the install itself fresh and is
-workspace-agnostic). Sibling `$0`/`dirname` resolution is preserved — the guard `exec`s the real script
-by full path. Covered by `tests/hook-guard.test.sh` (4 cases).
+Fixes, matched to how each hook actually behaves:
 
+- **New `hooks/bstack-hook-guard.sh`** wraps only the two workspace-`.control` **writers**
+  (`knowledge-wakeup`, `leverage-sensor`) — both fire once per SessionStart/Stop. It no-ops the hook
+  (silent `exit 0`) when the workspace has no `.control/` dir. `exec`s the real script by full path, so
+  exit codes, stdout, and sibling `$0`/`dirname` resolution pass through transparently.
+- **`arc-continuation` + `autonomous-posture` run unwrapped.** They are session-scoped (arc state lives
+  at `~/.config/broomva/autonomous/`, cwd-independent), self-guarding (no-op without an active arc), and
+  write nothing to `<workspace>/.control`. Routing them through a cwd-`.control` gate would
+  *false-negative* the loop-stall / posture logic when cwd is a nested non-governed git repo (caught by
+  the P20 review) — for zero pollution benefit.
+- **`l3-stability-pretool` is source-guarded** internally: it approves without creating `.control/audit`
+  when the workspace is not bstack-governed. This adds **no** per-edit `git` cost (the check is reached
+  only for L3-file edits, after the fast non-L3 approve path).
+- `bstack-autoupdate-hook.sh` stays **unguarded** — it keeps the install fresh and is workspace-agnostic.
+
+Covered by `tests/hook-guard.test.sh` (7 cases incl. exit-code propagation, stdout passthrough, and the
+l3 source-guard both ways). No behavior change in a bstack workspace (`.control/` always present there).
 This makes the personal-scope plugin (0.35.0) a good citizen in non-bstack repos — the prerequisite for
-adopting it in place of hand-wired `settings.json` hooks (BRO-1926 Phase 2). No behavior change in a
-bstack workspace (`.control/` always present there).
+adopting it in place of hand-wired `settings.json` hooks (BRO-1926 Phase 2).
 
 ## 0.35.0 — 2026-07-16
 

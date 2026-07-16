@@ -66,6 +66,16 @@ fi
 
 # Log the event for audit
 WORKSPACE="${BROOMVA_WORKSPACE:-$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")}"
+
+# Scope guard (BRO-1926): this hook loads globally via the bstack plugin. In a
+# non-bstack workspace (no .control/), don't create .control/audit and don't
+# surface the L3 warning — just approve. Keeps the global plugin from polluting
+# unrelated repos. Reached only for L3-file edits, so it adds no per-edit git cost.
+if [ ! -d "$WORKSPACE/.control" ]; then
+    echo '{"decision":"approve"}'
+    exit 0
+fi
+
 LOG_DIR="$WORKSPACE/.control/audit"
 mkdir -p "$LOG_DIR" 2>/dev/null || true
 LOG_FILE="$LOG_DIR/l3-edits.jsonl"
