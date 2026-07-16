@@ -1,12 +1,12 @@
 {
-  "description": "bstack governance hooks. Paths self-locate via ${CLAUDE_PLUGIN_ROOT} so they survive reinstalls and are invisible to the skills CLI. Primitive map: SessionStart = P6 knowledge-wakeup + P7 autoupdate; Stop = P19 arc-continuation + loop-sensor leverage measurement; UserPromptSubmit = P19 autonomous-posture; PreToolUse = L3-G0 stability gate on edits.",
+  "description": "bstack governance hooks. Paths self-locate via ${CLAUDE_PLUGIN_ROOT} so they survive reinstalls and are invisible to the skills CLI. The two hooks that WRITE <workspace>/.control (knowledge-wakeup via leverage-ship-sensor; leverage-sensor at Stop) run through bstack-hook-guard.sh, which no-ops them outside a bstack-governed workspace so this personal-scope plugin never pollutes non-bstack repos. arc-continuation + autonomous-posture are session-scoped, self-guarding, and write nothing to the workspace, so they run unwrapped (wrapping them would false-negative the loop-stall logic when cwd is a nested non-governed repo). l3-stability is source-guarded internally. bstack-autoupdate is workspace-agnostic (global). Primitive map: SessionStart = P6 knowledge-wakeup + P7 autoupdate; Stop = P19 arc-continuation + loop-sensor; UserPromptSubmit = P19 autonomous-posture; PreToolUse = L3-G0 gate.",
   "hooks": {
     "SessionStart": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/knowledge-wakeup-hook.sh\"",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/bstack-hook-guard.sh\" bash \"${CLAUDE_PLUGIN_ROOT}/scripts/knowledge-wakeup-hook.sh\"",
             "timeout": 10
           },
           {
@@ -27,7 +27,7 @@
           },
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/leverage-sensor.py\" --throttle 21600",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/bstack-hook-guard.sh\" python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/leverage-sensor.py\" --throttle 21600",
             "timeout": 25
           }
         ]
