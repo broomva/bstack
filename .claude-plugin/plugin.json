@@ -1,0 +1,10 @@
+{
+  "name": "bstack",
+  "description": "Broomva Stack — the governance metalayer that turns an agent workspace into a self-operating system. Wires the P1–P20 automation primitives as Claude Code hooks (SessionStart knowledge-wakeup + autoupdate, Stop arc-continuation + leverage-sensor, UserPromptSubmit autonomous-posture, PreToolUse L3-stability gate) alongside the bstack CLI. Hook paths self-locate via ${CLAUDE_PLUGIN_ROOT}, so the checkout stays installer-immune.",
+  "version": "0.35.0",
+  "author": {
+    "name": "Broomva",
+    "url": "https://github.com/broomva"
+  },
+  "homepage": "https://github.com/broomva/bstack"
+}

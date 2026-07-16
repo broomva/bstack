@@ -1,0 +1,59 @@
+{
+  "description": "bstack governance hooks. Paths self-locate via ${CLAUDE_PLUGIN_ROOT} so they survive reinstalls and are invisible to the skills CLI. Primitive map: SessionStart = P6 knowledge-wakeup + P7 autoupdate; Stop = P19 arc-continuation + loop-sensor leverage measurement; UserPromptSubmit = P19 autonomous-posture; PreToolUse = L3-G0 stability gate on edits.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/knowledge-wakeup-hook.sh\"",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/bstack-autoupdate-hook.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/arc-continuation-hook.sh\"",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/leverage-sensor.py\" --throttle 21600",
+            "timeout": 25
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/autonomous-posture-hook.sh\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/l3-stability-pretool-hook.sh\""
+          }
+        ]
+      }
+    ]
+  }
+}

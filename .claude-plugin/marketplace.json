@@ -1,0 +1,18 @@
+{
+  "name": "bstack",
+  "description": "Broomva Stack governance metalayer for Claude Code — the P1–P20 automation primitives wired as hooks plus the bstack CLI, shipped as one versioned plugin.",
+  "owner": {
+    "name": "Broomva",
+    "url": "https://github.com/broomva"
+  },
+  "plugins": [
+    {
+      "name": "bstack",
+      "description": "The bstack governance metalayer: P1–P20 automation primitives wired as Claude Code hooks (installer-immune, ${CLAUDE_PLUGIN_ROOT}-relative) plus the bstack CLI.",
+      "source": ".",
+      "version": "0.35.0",
+      "category": "productivity",
+      "tags": ["governance", "hooks", "automation", "self-operating", "bstack"]
+    }
+  ]
+}
