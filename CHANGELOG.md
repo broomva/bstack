@@ -1,5 +1,67 @@
 # Changelog
 
+## 0.35.0 — 2026-07-16
+
+### feat: bstack ships as a Claude Code plugin — installer-immune hooks (BRO-1926)
+
+bstack now carries a plugin manifest (`.claude-plugin/plugin.json` + `.claude-plugin/marketplace.json`)
+and `hooks/hooks.json`, so its six governance hooks load as a **Claude Code plugin** instead of being
+hand-wired as absolute paths in every consuming workspace's `settings.json`. When vendored under
+`~/.claude/skills/bstack/` the plugin auto-loads as `bstack@skills-dir` (Claude Code ≥ 2.1.x); it is
+also marketplace-installable via `claude plugin marketplace add broomva/bstack`.
+
+**Why.** The six hooks previously pointed at `~/.claude/skills/bstack/scripts/*.sh`, under the
+skills-CLI-managed directory. A `npx skills update` that re-pulls the primer-only monorepo `bstack`
+skill (`skills/governance/bstack/`, intentionally SKILL.md-only) strips `scripts/`/`bin/` and breaks
+all six hooks with `No such file or directory`. As a plugin, hook `command`s self-locate via
+`${CLAUDE_PLUGIN_ROOT}`, the checkout is structurally invisible to the vercel-labs skills CLI, and the
+unit is versioned + marketplace-installable. (Distinct from vercel-labs/skills#1523, the repo-root
+sibling-drop bug fixed in skills@1.5.18 — bstack's clobber came from the primer-only monorepo source,
+not #1523.)
+
+**Hooks provided** (event → script, `${CLAUDE_PLUGIN_ROOT}`-relative):
+
+- `SessionStart` → `knowledge-wakeup-hook.sh` (Bookkeeping P6), `bstack-autoupdate-hook.sh` (Freshness P7)
+- `Stop` → `arc-continuation-hook.sh` (Orchestrate P19), `leverage-sensor.py --throttle 21600` (loop-sensor)
+- `UserPromptSubmit` → `autonomous-posture-hook.sh` (Orchestrate P19)
+- `PreToolUse` [`Edit|Write|MultiEdit`] → `l3-stability-pretool-hook.sh` (L3-G0 gate)
+
+**Ships disabled — hooks do not fire until you enable it.** A skills-directory plugin *auto-loads on
+presence* (`bstack@skills-dir`, no install step) the next session bstack is vendored under
+`~/.claude/skills/`. To keep that from silently double-firing the still-present `settings.json` snippet
+hooks, this plugin sets **`defaultEnabled: false`** (in both `plugin.json` and the marketplace entry):
+it loads but stays **disabled** until you run `claude plugin enable bstack@skills-dir` (or `/plugin`).
+The existing `assets/templates/settings.json.snippet` wiring is untouched, so nothing changes for any
+install until you deliberately opt in.
+
+> **Client-version floor.** `defaultEnabled` is honored on **Claude Code ≥ 2.1.154**; earlier clients
+> ignore it and enable the plugin on presence. `source: "."` (plugin at marketplace root) needs
+> **≥ 2.1.196**. On an older client, adopt by removing the snippet hooks *first* (see Migration).
+
+### Migration
+
+None required — existing installs keep working via the `settings.json` snippet, and the plugin ships
+disabled. To **adopt** the plugin on a workspace (do all three in one change):
+
+1. Ensure the vendored bstack carries this version (git-clone swap into `~/.claude/skills/bstack`, or
+   `claude plugin marketplace add broomva/bstack && claude plugin install bstack@bstack`).
+2. `claude plugin enable bstack@skills-dir` — this is the gate; it also writes `enabledPlugins`, which
+   persists across future updates.
+3. **Delete the six bstack hook entries from that workspace's `settings.json`** in the same change.
+   Running both the plugin (once enabled) and the snippet fires every hook twice — concretely: two
+   `leverage-sensor.py` writers race on `.control/leverage-state.json`, and `l3-stability-pretool-hook`
+   double-counts the L3 rate budget.
+
+Two things to verify on the first session after enabling:
+- **Stop ordering** — `arc-continuation-hook.sh` expects to run *after* the workspace's own capture
+  hooks (`conversation-bridge`, `knowledge-catalog`); plugin-vs-settings.json Stop ordering is not
+  guaranteed, so confirm capture still happens first.
+- **Side effects of enabling** — the plugin root also carries `SKILL.md` (loads as the `bstack` plugin
+  skill) and `bin/` (added to the Bash PATH while enabled).
+
+`bstack bootstrap`/`repair` will perform this snippet→plugin swap atomically in a follow-up (BRO-1926
+Phase 3), which is also the fix for clients below the `defaultEnabled` floor.
+
 ## 0.34.1 — 2026-07-06
 
 ### fix: doctor §25 crashed under macOS system bash 3.2 — backtick in a $()-nested quoted heredoc (BRO-1718)
