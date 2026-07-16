@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.36.0 — 2026-07-16
+
+### feat: plugin hooks no-op outside a bstack workspace — scope-safe global plugin (BRO-1926)
+
+The bstack plugin loads at **personal scope** (`~/.claude/skills/bstack`), so once a workspace enables
+`bstack@skills-dir` its hooks fire in **every** Claude Code session — including non-bstack repos. Several
+hooks write workspace state: `leverage-sensor.py` + `leverage-ship-sensor.py` create
+`<workspace>/.control/*.json` (`os.makedirs(..., exist_ok=True)`), and `l3-stability-pretool` logs to
+`<workspace>/.control/audit/`. Left unguarded, the global plugin would litter `.control/` into unrelated
+repos (e.g. a client repo) on every session.
+
+New **`hooks/bstack-hook-guard.sh`** gates each hook on the workspace being bstack-governed (has a
+`.control/` dir). If not, the hook is a no-op — PreToolUse hooks still emit `{"decision":"approve"}` so
+tools are never left undecided. `hooks/hooks.json` now routes the five workspace hooks
+(knowledge-wakeup, arc-continuation, leverage-sensor, autonomous-posture, l3-stability) through the
+guard; `bstack-autoupdate-hook.sh` stays **unguarded** (it keeps the install itself fresh and is
+workspace-agnostic). Sibling `$0`/`dirname` resolution is preserved — the guard `exec`s the real script
+by full path. Covered by `tests/hook-guard.test.sh` (4 cases).
+
+This makes the personal-scope plugin (0.35.0) a good citizen in non-bstack repos — the prerequisite for
+adopting it in place of hand-wired `settings.json` hooks (BRO-1926 Phase 2). No behavior change in a
+bstack workspace (`.control/` always present there).
+
 ## 0.35.0 — 2026-07-16
 
 ### feat: bstack ships as a Claude Code plugin — installer-immune hooks (BRO-1926)

@@ -1,12 +1,12 @@
 {
-  "description": "bstack governance hooks. Paths self-locate via ${CLAUDE_PLUGIN_ROOT} so they survive reinstalls and are invisible to the skills CLI. Primitive map: SessionStart = P6 knowledge-wakeup + P7 autoupdate; Stop = P19 arc-continuation + loop-sensor leverage measurement; UserPromptSubmit = P19 autonomous-posture; PreToolUse = L3-G0 stability gate on edits.",
+  "description": "bstack governance hooks. Paths self-locate via ${CLAUDE_PLUGIN_ROOT} so they survive reinstalls and are invisible to the skills CLI. All workspace-state hooks run through bstack-hook-guard.sh, which no-ops the hook when the current workspace is not bstack-governed (no .control/) — so this personal-scope plugin never pollutes or fires governance hooks in non-bstack repos. bstack-autoupdate-hook.sh is intentionally unguarded (it keeps the install itself fresh, workspace-agnostic). Primitive map: SessionStart = P6 knowledge-wakeup + P7 autoupdate; Stop = P19 arc-continuation + loop-sensor leverage measurement; UserPromptSubmit = P19 autonomous-posture; PreToolUse = L3-G0 stability gate on edits.",
   "hooks": {
     "SessionStart": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/knowledge-wakeup-hook.sh\"",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/bstack-hook-guard.sh\" bash \"${CLAUDE_PLUGIN_ROOT}/scripts/knowledge-wakeup-hook.sh\"",
             "timeout": 10
           },
           {
@@ -22,12 +22,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/arc-continuation-hook.sh\"",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/bstack-hook-guard.sh\" bash \"${CLAUDE_PLUGIN_ROOT}/scripts/arc-continuation-hook.sh\"",
             "timeout": 10
           },
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/leverage-sensor.py\" --throttle 21600",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/bstack-hook-guard.sh\" python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/leverage-sensor.py\" --throttle 21600",
             "timeout": 25
           }
         ]
@@ -38,7 +38,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/autonomous-posture-hook.sh\"",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/bstack-hook-guard.sh\" bash \"${CLAUDE_PLUGIN_ROOT}/scripts/autonomous-posture-hook.sh\"",
             "timeout": 5
           }
         ]
@@ -50,7 +50,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/l3-stability-pretool-hook.sh\""
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/bstack-hook-guard.sh\" bash \"${CLAUDE_PLUGIN_ROOT}/scripts/l3-stability-pretool-hook.sh\""
           }
         ]
       }
