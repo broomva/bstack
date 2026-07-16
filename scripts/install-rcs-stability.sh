@@ -40,6 +40,17 @@ done
 
 BSTACK_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# BRO-1929: skip the loop-sensor (leverage-sensor) Stop hook when the
+# bstack@skills-dir plugin is enabled host-scope — hand-wiring alongside it races
+# two writers on leverage-state.json. Enable-state (persisted) is the single
+# source of truth; install-l3-stability.sh (invoked below) self-determines the same.
+# shellcheck source=scripts/lib/plugin-preference.sh
+. "$BSTACK_REPO/scripts/lib/plugin-preference.sh"
+SKIP_PLUGIN_HOOKS=0
+if bstack_plugin_enabled; then
+    SKIP_PLUGIN_HOOKS=1
+fi
+
 echo "install-rcs-stability: target = $WORKSPACE"
 echo "install-rcs-stability: bstack = $BSTACK_REPO"
 echo ""
@@ -66,7 +77,9 @@ echo "─── L0 + L1 audit hooks ───"
 SETTINGS="$WORKSPACE/.claude/settings.json"
 SNIPPET="$BSTACK_REPO/assets/templates/settings.json.multi-layer-hooks.snippet"
 
-if [ "$DRY_RUN" = "1" ]; then
+if [ "$SKIP_PLUGIN_HOOKS" = "1" ]; then
+    echo "  [skip] loop-sensor (leverage-sensor) Stop hook — provided by the bstack@skills-dir plugin (BRO-1929)"
+elif [ "$DRY_RUN" = "1" ]; then
     echo "  [dry] would merge loop-sensor (leverage-sensor) Stop hook into $SETTINGS"
 elif ! command -v python3 >/dev/null 2>&1; then
     echo "  [skip] python3 not available; cannot merge JSON safely"

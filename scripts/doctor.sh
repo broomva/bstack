@@ -98,6 +98,15 @@ fi
 # ── locate bstack repo (needed by §14 + §15 L3 stability checks) ────────────
 BSTACK_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# BRO-1929: plugin-preference helpers. When bstack@skills-dir is enabled it
+# provides the loop-sensor, arc-continuation, autonomous-posture and l3 hooks
+# globally, so the §23/§24 settings.json wiring checks below must count those as
+# satisfied-by-plugin instead of gapping them as "not wired".
+# shellcheck source=scripts/lib/plugin-preference.sh
+. "$BSTACK_REPO/scripts/lib/plugin-preference.sh"
+BSTACK_PLUGIN_ON=0
+if bstack_plugin_enabled; then BSTACK_PLUGIN_ON=1; fi
+
 # ── helpers ─────────────────────────────────────────────────────────────────
 GAPS=0
 PASSES=0
@@ -1220,6 +1229,12 @@ for _s in "$WORKSPACE/.claude/settings.json" "$WORKSPACE/.claude/settings.local.
     grep -q '"loop-sensor"' "$_s" 2>/dev/null && W_OK=1
     { grep -q '"L0-audit"' "$_s" 2>/dev/null || grep -q '"L1-audit"' "$_s" 2>/dev/null; } && W_LEGACY=1
 done
+# BRO-1929: the enabled bstack@skills-dir plugin provides the loop-sensor Stop
+# hook globally — count it wired even when it's not in a workspace settings.json.
+if [ "$W_OK" = "0" ] && [ "$BSTACK_PLUGIN_ON" = "1" ]; then
+    W_OK=1
+    [ "$QUIET" = "0" ] && echo "  [info] loop-sensor provided by the bstack@skills-dir plugin (not hand-wired)"
+fi
 
 if [ "$W_OK" = "0" ] && [ "$W_LEGACY" = "1" ]; then
     gap "control loop wired to the FAKE l0/l1 sensors (latency_ms 100% null; tool_call_count 100% zero)" \
@@ -1287,6 +1302,8 @@ if [ -f "$SETTINGS" ]; then
         label="${LOOPSTALL_LABELS[$i]}"
         if grep -q "$hk" "$SETTINGS"; then
             ok "$hk wired — $label"
+        elif [ "$BSTACK_PLUGIN_ON" = "1" ]; then
+            ok "$hk provided by the bstack@skills-dir plugin — $label"
         else
             gap "$hk not wired in .claude/settings.json — $label" \
                 "run 'bstack repair' or 'bstack bootstrap' to wire from assets/templates/settings.json.snippet"
