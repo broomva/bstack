@@ -60,7 +60,11 @@ bstack_plugin_preferred() {
 # enabledPlugins["bstack@skills-dir"]==true in the personal ~/.claude/settings.json).
 # doctor uses THIS (not _preferred): a present-but-disabled plugin does not fire,
 # so its hooks are genuinely missing and should still gap. Prints nothing.
+# Honors BSTACK_NO_PLUGIN=1 so the legacy-forced path is consistent across the
+# installers (bootstrap disables the real plugin under that flag — see
+# bstack_disable_plugin — so "not enabled" is then also the ground truth).
 bstack_plugin_enabled() {
+  [ "${BSTACK_NO_PLUGIN:-0}" = "1" ] && return 1
   bstack_plugin_manifest_path >/dev/null 2>&1 || return 1
   command -v python3 >/dev/null 2>&1 || return 1
   python3 - "$HOME/.claude/settings.json" "$BSTACK_PLUGIN_ID" <<'PYEOF'
@@ -119,5 +123,30 @@ enabled[plugin_id] = True
 settings_path.parent.mkdir(parents=True, exist_ok=True)
 settings_path.write_text(json.dumps(data, indent=2) + "\n")
 print(f"  [enable] {plugin_id} in {settings_path} (host-scope; hooks now fire via the plugin)")
+PYEOF
+}
+
+# Idempotently DISABLE bstack@skills-dir (explicit enabledPlugins=false, which
+# overrides defaultEnabled even on old Claude Code that auto-enables). Used when
+# BSTACK_NO_PLUGIN=1 forces the legacy hand-wire path: leaving the plugin enabled
+# while hand-wiring its hooks would double-fire — the exact hazard this all
+# prevents. No-op if the manifest/settings/python3 are absent or it's already off.
+bstack_disable_plugin() {
+  command -v python3 >/dev/null 2>&1 || return 0
+  [ -f "$HOME/.claude/settings.json" ] || return 0
+  python3 - "$HOME/.claude/settings.json" "$BSTACK_PLUGIN_ID" <<'PYEOF'
+import json, sys
+from pathlib import Path
+settings_path, plugin_id = Path(sys.argv[1]), sys.argv[2]
+try:
+    data = json.loads(settings_path.read_text())
+except (OSError, ValueError):
+    sys.exit(0)
+enabled = data.get("enabledPlugins", {})
+if enabled.get(plugin_id) is False or plugin_id not in enabled:
+    sys.exit(0)
+enabled[plugin_id] = False
+settings_path.write_text(json.dumps(data, indent=2) + "\n")
+print(f"  [disable] {plugin_id} in {settings_path} (BSTACK_NO_PLUGIN=1 → legacy hand-wire, plugin off)")
 PYEOF
 }

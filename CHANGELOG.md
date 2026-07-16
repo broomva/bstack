@@ -32,13 +32,18 @@ Design notes:
   its own RCS wiring).
 - `bstack doctor` §23/§24 now count a plugin-provided `loop-sensor` / `arc-continuation` /
   `autonomous-posture` as satisfied instead of gapping them as "not wired".
+- The create-or-merge is **matcher-scoped**: `control-gate` (P2 Gate) is wired under three `PreToolUse`
+  matchers (`Bash`/`Write`/`Edit`), so the hook-dedup keys on `(matcher, basename)` — a basename-only
+  check would collapse the three into one and silently drop the `Write`/`Edit` gates on a fresh install.
+  Hook-name extraction preserves spaces inside the install path.
 - **Escape hatch:** `BSTACK_NO_PLUGIN=1` forces the legacy hand-wire path (e.g. Claude Code < 2.1.154
-  that ignores `defaultEnabled`). No manifest or no `python3` → legacy path automatically; in that mode
-  the plugin is never enabled, so hand-wiring everything is correct (no double-fire).
+  that ignores `defaultEnabled`); in that mode the installer also **disables** the plugin
+  (`enabledPlugins=false`) before hand-wiring, so a previously-adopted machine doesn't double-fire. No
+  manifest or no `python3` → legacy path automatically (plugin never enabled → hand-wiring is correct).
 
-Covered by `tests/plugin-preference.test.sh` (12 cases: detection, basename membership, idempotent
-enable, and real `bootstrap` runs in preferred / migration / fallback modes). No behavior change for an
-install without the plugin manifest.
+Covered by `tests/plugin-preference.test.sh` (15 cases: detection, basename membership, idempotent
+enable, real `bootstrap` in preferred / migration / fallback / `BSTACK_NO_PLUGIN` modes, and the
+all-three-`control-gate`-matchers invariant). No behavior change for an install without the plugin manifest.
 
 ## 0.36.0 — 2026-07-16
 

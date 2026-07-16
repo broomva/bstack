@@ -344,7 +344,10 @@ merge_hooks_into_settings() {
     # BRO-1929: prefer the plugin — enable bstack@skills-dir (unless dry-run) and
     # filter/migrate the plugin-provided hooks so they don't double-fire.
     local plugin_preferred=0
-    if bstack_plugin_preferred; then
+    if [ "${BSTACK_NO_PLUGIN:-0}" = "1" ]; then
+        # Legacy forced: turn the real plugin OFF so hand-wiring won't double-fire.
+        [ "$DRY_RUN" = "1" ] || bstack_disable_plugin
+    elif bstack_plugin_preferred; then
         if [ "$DRY_RUN" = "1" ]; then
             plugin_preferred=1
             echo "  [dry-run] would enable bstack@skills-dir + skip/migrate plugin-provided hooks"
@@ -358,10 +361,12 @@ merge_hooks_into_settings() {
         if [ "$plugin_preferred" = "1" ]; then
             # Plugin preferred: don't sed the raw snippet (it carries the plugin
             # hooks). Seed an empty settings.json and let the python merge below
-            # wire only the non-plugin hooks. (Dry-run seeds nothing; the python
-            # treats a missing target as {}.)
-            mkdir -p "$(dirname "$target")"
-            [ "$DRY_RUN" = "1" ] || printf '{}\n' > "$target"
+            # wire only the non-plugin hooks. Dry-run touches NOTHING (no mkdir,
+            # no write); the python treats a missing target as {}.
+            if [ "$DRY_RUN" != "1" ]; then
+                mkdir -p "$(dirname "$target")"
+                printf '{}\n' > "$target"
+            fi
         elif confirm "Scaffold .claude/settings.json from snippet?"; then
             mkdir -p "$(dirname "$target")"
             sed -e "s|\${BROOMVA_WORKSPACE}|$WORKSPACE_DIR|g" \
@@ -381,7 +386,7 @@ merge_hooks_into_settings() {
     PLUGIN_PREFERRED="$plugin_preferred" \
     BSTACK_PLUGIN_HOOK_BASENAMES="$BSTACK_PLUGIN_HOOK_BASENAMES" \
     python3 - "$snippet" "$target" "$WORKSPACE_DIR" "$HOME" "$DRY_RUN" "$SKILL_ROOT" <<'PYEOF'
-import json, os
+import json, os, re
 import sys
 from pathlib import Path
 
@@ -391,8 +396,12 @@ plugin_preferred = os.environ.get("PLUGIN_PREFERRED") == "1"
 plugin_hooks = set(os.environ.get("BSTACK_PLUGIN_HOOK_BASENAMES", "").split())
 
 def base(cmd):
-    # basename of the script a hook runs (skip a leading interpreter + args)
-    return Path((cmd or "").split()[0]).name if cmd else ""
+    # Basename of the script a hook runs. Strip a trailing flag-args tail
+    # (" --throttle 21600") while preserving spaces inside the directory path.
+    if not cmd:
+        return ""
+    head = re.split(r"\s+-", cmd, maxsplit=1)[0].rstrip()
+    return Path(head).name
 
 raw = Path(snippet_path).read_text()
 raw = raw.replace("${BROOMVA_WORKSPACE}", workspace).replace("${BROOMVA_HOME}", home)
@@ -428,15 +437,18 @@ for event, blocks in template.get("hooks", {}).items():
             script_name = base(cmd)
             if plugin_preferred and script_name in plugin_hooks:
                 continue
+            # Dedup is MATCHER-SCOPED (control-gate is wired under Bash/Write/Edit;
+            # a basename-only check would collapse them to one).
+            matcher = block.get("matcher")
             already = any(
-                any(base(h.get("command", "")) == script_name
-                    for h in cb.get("hooks", []))
+                cb.get("matcher") == matcher
+                and any(base(h.get("command", "")) == script_name for h in cb.get("hooks", []))
                 for cb in current_blocks
             )
             if already:
                 continue
             matching = next(
-                (cb for cb in current_blocks if cb.get("matcher") == block.get("matcher")),
+                (cb for cb in current_blocks if cb.get("matcher") == matcher),
                 None,
             )
             if matching is None:

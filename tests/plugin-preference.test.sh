@@ -177,6 +177,45 @@ else
     assert_fail "bootstrap(fallback): plugin hooks=$(plugin_hooks_in "$S7") (want ≥4) or spuriously enabled"
 fi
 
+# control-gate (P2 Gate) is wired under 3 PreToolUse matchers — the merge dedup
+# must be matcher-scoped or Write/Edit collapse into Bash (P2 safety regression).
+control_gate_matchers() {  # sorted, space-joined matchers whose block wires control-gate
+    python3 - "$1" <<'PYX'
+import json, sys
+d = json.load(open(sys.argv[1]))
+ms = sorted({b.get("matcher","") for b in d.get("hooks", {}).get("PreToolUse", [])
+             if any("control-gate-hook.sh" in h.get("command","") for h in b.get("hooks", []))})
+print(" ".join(ms))
+PYX
+}
+# 8. preferred path preserves all 3 matchers
+if [ "$(control_gate_matchers "$S5")" = "Bash Edit Write" ]; then
+    assert_pass "bootstrap(preferred): control-gate wired under all 3 matchers (Bash/Edit/Write)"
+else
+    assert_fail "bootstrap(preferred): control-gate matchers = '$(control_gate_matchers "$S5")' (want 'Bash Edit Write')"
+fi
+# 9. fallback path preserves all 3 matchers
+if [ "$(control_gate_matchers "$S7")" = "Bash Edit Write" ]; then
+    assert_pass "bootstrap(fallback): control-gate wired under all 3 matchers (Bash/Edit/Write)"
+else
+    assert_fail "bootstrap(fallback): control-gate matchers = '$(control_gate_matchers "$S7")' (want 'Bash Edit Write')"
+fi
+
+# 10. BSTACK_NO_PLUGIN=1 with a manifest present + plugin already enabled →
+# bootstrap turns the plugin OFF and hand-wires (no double-fire).
+H10="$TMP/h10"; make_home_with_plugin "$H10"
+HOME="$H10" bstack_enable_plugin >/dev/null   # pre-enable it
+W10="$TMP/w10"; mkdir -p "$W10"
+HOME="$H10" BROOMVA_WORKSPACE="$W10" BSTACK_NO_PLUGIN=1 BSTACK_SKIP_SKILLS=1 BSTACK_SKIP_RCS=1 \
+    bash "$BOOTSTRAP" >/dev/null 2>&1
+S10="$W10/.claude/settings.json"
+_enabled_after="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["enabledPlugins"]["bstack@skills-dir"])' "$H10/.claude/settings.json" 2>/dev/null || echo ERR)"
+if [ "$(plugin_hooks_in "$S10")" -ge 4 ] && [ "$_enabled_after" = "False" ]; then
+    assert_pass "bootstrap(BSTACK_NO_PLUGIN): plugin disabled + hooks hand-wired (no double-fire)"
+else
+    assert_fail "bootstrap(BSTACK_NO_PLUGIN): hooks=$(plugin_hooks_in "$S10") (want ≥4), enabled_after='$_enabled_after' (want False)"
+fi
+
 echo ""
 echo "plugin-preference: $PASS passed, $FAIL failed"
 if [ "$FAIL" -gt 0 ]; then

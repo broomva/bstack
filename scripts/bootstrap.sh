@@ -179,7 +179,11 @@ echo "=== bstack hooks wire-up ==="
 # shellcheck source=scripts/lib/plugin-preference.sh
 . "$SKILL_ROOT/scripts/lib/plugin-preference.sh"
 PLUGIN_PREFERRED=0
-if bstack_plugin_preferred && command -v python3 >/dev/null 2>&1; then
+if [ "${BSTACK_NO_PLUGIN:-0}" = "1" ]; then
+    # Legacy forced: turn the real plugin OFF so hand-wiring its hooks below
+    # won't double-fire alongside a still-enabled plugin.
+    bstack_disable_plugin
+elif bstack_plugin_preferred && command -v python3 >/dev/null 2>&1; then
     if bstack_enable_plugin; then
         PLUGIN_PREFERRED=1
         export BSTACK_PLUGIN_PREFERRED=1
@@ -196,7 +200,7 @@ if command -v python3 >/dev/null 2>&1; then
     PLUGIN_PREFERRED="$PLUGIN_PREFERRED" \
     BSTACK_PLUGIN_HOOK_BASENAMES="$BSTACK_PLUGIN_HOOK_BASENAMES" \
     python3 - <<PYEOF
-import json, os
+import json, os, re
 from pathlib import Path
 
 settings_path = Path("$SETTINGS_FILE")
@@ -225,8 +229,13 @@ else:
 current.setdefault("hooks", {})
 
 def base(cmd):
-    # basename of the script a hook runs (skip a leading interpreter + args)
-    return Path((cmd or "").split()[0]).name if cmd else ""
+    # Basename of the script a hook runs. Strip a trailing flag-args tail
+    # (" --throttle 21600") so args don't leak into the name, while preserving
+    # spaces inside the directory path (only leverage-sensor.py carries args).
+    if not cmd:
+        return ""
+    head = re.split(r"\s+-", cmd, maxsplit=1)[0].rstrip()
+    return Path(head).name
 
 # Migration: with the plugin preferred, strip any hand-wired copy of a
 # plugin-provided hook so it does not double-fire alongside the plugin.
@@ -251,10 +260,14 @@ for event, blocks in template.get("hooks", {}).items():
             if plugin_preferred and base(cmd) in plugin_hooks:
                 skipped += 1
                 continue
-            # Check if any existing hook for this event references the same script
+            # Dedup is MATCHER-SCOPED: the same script wired under a different
+            # PreToolUse matcher is a distinct hook. control-gate is wired under
+            # Bash / Write / Edit — a basename-only check would collapse all three
+            # to one (dropping the Write/Edit gates on a fresh install).
+            matcher = block.get("matcher")
             already = any(
-                any(base(h.get("command")) == base(cmd)
-                    for h in cb.get("hooks", []))
+                cb.get("matcher") == matcher
+                and any(base(h.get("command")) == base(cmd) for h in cb.get("hooks", []))
                 for cb in current_blocks
             )
             if already:
