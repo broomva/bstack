@@ -328,6 +328,9 @@ def main():
         try:
             with os.fdopen(fd, "w") as f:
                 json.dump(record, f, indent=2)
+                # POSIX trailing newline — same contract as the main sensor's
+                # leverage-state.json write. Governed repos may TRACK this file.
+                f.write("\n")
             os.replace(tmp, state_file)
         except Exception:
             try:
