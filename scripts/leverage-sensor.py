@@ -362,6 +362,10 @@ def store(record, state_file, store_file):
     os.makedirs(os.path.dirname(state_file), exist_ok=True)
     with open(state_file, "w") as f:
         json.dump(record, f, indent=2)
+        # POSIX trailing newline. Governed repos may TRACK this file, so without it
+        # every session leaves the workspace git-dirty and formatter gates (biome /
+        # ultracite / prettier) fail on a repo that is otherwise green.
+        f.write("\n")
 
 
 def render_brief(record):

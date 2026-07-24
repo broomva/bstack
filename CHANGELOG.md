@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.37.1 — 2026-07-23
+
+### fix: leverage sensors write their state JSON with a trailing newline (BRO-1973)
+
+`leverage-sensor.py` and `leverage-ship-sensor.py` both serialized their snapshot with
+`json.dump(..., indent=2)` and stopped — no POSIX trailing newline. Their sibling JSONL write
+(`f.write(json.dumps(record) + "\n")`, same function) has always been correct, so the omission
+was an inconsistency inside one `store()`, not a format choice.
+
+A bstack-governed repo that **tracks** `.control/leverage-state.json` or
+`.control/leverage-ship-state.json` therefore went git-dirty after *every* session, and
+formatter gates (biome / ultracite / prettier) reported `Formatter would have printed …` — so
+`bun run lint` failed spuriously with the repo otherwise green. Observed live in a downstream
+repo where a composed-on-`main` verify failed on lint for exactly this and nothing else.
+
+Both writes now end with `f.write("\n")`. The ship sensor's write still goes through its
+tempfile + `os.replace` atomic swap; the newline is inside the swap, so a concurrent reader
+never sees a partially-written file.
+
+**New regression test** — `tests/leverage-state-trailing-newline.test.sh` runs both sensors
+hermetically (no network, no `gh` auth: the ship sensor is driven with an empty repo
+allowlist) and asserts every file either sensor emits into `.control/` ends with `0x0a`, still
+parses as JSON, accumulates exactly one newline across repeated runs, and leaves no
+`.ship-*.tmp` behind. Reverting either `f.write("\n")` turns it red.
+
+**Migration** — none. Existing tracked state files pick up the newline on the next sensor run;
+that is a one-line diff to commit once, after which the file stops moving.
+
 ## 0.37.0 — 2026-07-16
 
 ### feat: install prefers the plugin — bootstrap/repair stop hand-wiring the six plugin hooks (BRO-1929)
