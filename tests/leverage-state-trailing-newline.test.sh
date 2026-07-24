@@ -27,6 +27,20 @@ ends_with_newline() {
   [ "$(tail -c 1 "$1" | od -An -tu1 | tr -d ' ')" = "10" ]
 }
 
+# assert_single_trailing_newline <file> <label> — a rewrite path that appends where it
+# meant to truncate looks identical to a correct one on the first run.
+assert_single_trailing_newline() {
+  local file="$1" label="$2" n
+  n=$(python3 -c "
+import sys
+b = open(sys.argv[1],'rb').read()
+print(len(b) - len(b.rstrip(b'\n')))
+" "$file")
+  [ "$n" = "1" ] \
+    && ok "$label carries exactly one trailing newline (no accumulation across runs)" \
+    || bad "$label carries $n trailing newlines — the writer is appending, not rewriting"
+}
+
 assert_newline() {
   local file="$1" label="$2"
   if [ ! -f "$file" ]; then bad "$label — file not written ($file)"; return; fi
@@ -74,20 +88,21 @@ python3 -c "import json,sys;json.load(open(sys.argv[1]))" "$STATE" 2>/dev/null \
 # newline, and must not accumulate blank lines either.
 python3 "$SENSOR" --workspace "$WS" --transcripts "$TX/*.jsonl" --window 3650 >/dev/null 2>&1
 assert_newline "$STATE" "leverage-state.json after a second run (rewrite path)"
-TRAILING=$(python3 -c "
-import sys
-b = open(sys.argv[1],'rb').read()
-print(len(b) - len(b.rstrip(b'\n')))
-" "$STATE")
-[ "$TRAILING" = "1" ] \
-  && ok "exactly one trailing newline (no accumulation across runs)" \
-  || bad "found $TRAILING trailing newlines — rewrite path is appending"
+assert_single_trailing_newline "$STATE" "leverage-state.json"
 
 echo "== leverage-ship-sensor.py (.control/leverage-ship-state.json) =="
 # No ship_signal.repos configured → compute() makes zero `gh` calls and returns
 # gh_ok=False, but the store path still runs. Hermetic: no network, no auth.
 python3 "$SHIP" --workspace "$WS" --config-json '{"repos": []}' >/dev/null 2>&1
 assert_newline "$SHIP_STATE" "leverage-ship-state.json"
+
+# Same rewrite-path guard as the main sensor. The ship writer swaps a fresh tempfile
+# in rather than reopening the target, so it should be structurally immune — assert it
+# rather than assuming it, so a future refactor away from os.replace cannot regress
+# silently. (CodeRabbit, PR #97.)
+python3 "$SHIP" --workspace "$WS" --config-json '{"repos": []}' >/dev/null 2>&1
+assert_newline "$SHIP_STATE" "leverage-ship-state.json after a second run"
+assert_single_trailing_newline "$SHIP_STATE" "leverage-ship-state.json"
 
 python3 -c "import json,sys;json.load(open(sys.argv[1]))" "$SHIP_STATE" 2>/dev/null \
   && ok "leverage-ship-state.json still parses as JSON with the newline appended" \
