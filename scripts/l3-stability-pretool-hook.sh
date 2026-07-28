@@ -8,14 +8,22 @@
 #
 # Claude Code PreToolUse hook protocol (May 2026):
 #   - stdin: JSON with { "tool_name", "tool_input": { "file_path": ..., ... } }
-#   - stdout: JSON with { "decision": "approve" | "block", "reason": "..." }
+#   - stdout: JSON with { "decision": "approve" | "block", "reason": "..." } —
+#     OPTIONAL. Structured output is how a hook *says something*; it is not how
+#     it allows. Allow is the default: exit 0 with EMPTY stdout proceeds, and is
+#     the harness convention every silent bstack hook already relies on
+#     (bstack-hook-guard.sh no-ops by writing nothing at all).
 #   - exit 0: hook ran successfully (decision honored)
 #   - exit non-zero: hook errored (Claude Code may treat as approve)
 #
-# Default behavior is to APPROVE the edit (don't block agent work), but with a
-# loud reason that gets logged to the agent's context. The block path is
-# reserved for cases where the workspace's policy.yaml explicitly disables
-# governance edits (a stricter mode).
+# Default behavior is to APPROVE the edit (don't block agent work). A bare
+# `{"decision":"approve"}` carries ZERO information but is still recorded as a
+# context attachment on EVERY Edit/Write/MultiEdit — pure noise in the agent's
+# window, on the hottest tool path there is. So the two informationless approve
+# paths (non-L3 file; non-governed workspace) now exit 0 SILENTLY, and stdout is
+# reserved for the one approve that has something to say: the L3-mutation
+# warning below, which still emits approve + reason. The block path stays
+# reserved for a workspace policy.yaml that explicitly disables governance edits.
 
 set -uo pipefail
 
@@ -59,8 +67,9 @@ for pattern in "${L3_PATHS[@]}"; do
 done
 
 if [ "$IS_L3" = "0" ]; then
-    # Not an L3 file — approve silently
-    echo '{"decision":"approve"}'
+    # Not an L3 file — allow by saying nothing (exit 0 + empty stdout = proceed).
+    # This is the every-Edit/Write path; emitting a bare approve here attached a
+    # zero-information JSON blob to the agent context on every single edit.
     exit 0
 fi
 
@@ -72,7 +81,7 @@ WORKSPACE="${BROOMVA_WORKSPACE:-$(git rev-parse --show-toplevel 2>/dev/null || e
 # surface the L3 warning — just approve. Keeps the global plugin from polluting
 # unrelated repos. Reached only for L3-file edits, so it adds no per-edit git cost.
 if [ ! -d "$WORKSPACE/.control" ]; then
-    echo '{"decision":"approve"}'
+    # Same reasoning as the non-L3 path: nothing to say, so say nothing.
     exit 0
 fi
 

@@ -1,5 +1,75 @@
 # Changelog
 
+## 0.37.2 — 2026-07-28
+
+### feat: `doctor` §26 — hook liveness across all three registration surfaces (BRO-2021)
+
+Claude Code loads hooks from **three** places, not one:
+
+1. project — `<workspace>/.claude/settings.json` (+ `.local`)
+2. user — `~/.claude/settings.json`
+3. plugin — `<plugin-root>/hooks/hooks.json`, `${CLAUDE_PLUGIN_ROOT}`-rooted (how bstack has
+   shipped its own six hooks since 0.35.0)
+
+Every check bstack had read surface 1 only. §25 additionally resolves just the **first
+absolute-path token** of a command, which by construction verifies *neither* script in a wrapper
+form like `bash "${CLAUDE_PLUGIN_ROOT}/hooks/bstack-hook-guard.sh" python3
+"${CLAUDE_PLUGIN_ROOT}/scripts/leverage-sensor.py"` — the `${VAR}` form is not an absolute path
+until it is expanded. So a hook could be registered, fire on every session, and do nothing, with
+`doctor` green.
+
+**The observed failure** (the one that motivated this): a workspace `Stop` hook whose own path
+resolved fine, but which internally invoked `${BROOMVA_ROOT}/skills/bookkeeping/scripts/
+bookkeeping.py` — a path that moved during a monorepo reorg. Guarded by `[ -f "$TOOL" ] || exit 0`,
+it burned ~136ms at every session end doing nothing, for 8 days, silently.
+
+**§26** resolves, for each surface, every script each command actually invokes — expanding
+`${CLAUDE_PLUGIN_ROOT}`, `~`, `$HOME`/`${HOME}` — and reports the dead ones:
+
+- **missing → GAP** (a dead hook is dead on every surface). A not-yet-installed companion skill
+  under `~/.{claude,agents}/skills/<name>/` stays **info**, mirroring §25.
+- **not executable → GAP only when invoked directly** (`/p/x.sh`). Under an explicit interpreter
+  (`bash /p/x.sh`) the mode bit is irrelevant, so that is info — gapping it would be a false positive.
+- **self-guarding commands are not defects.** The inline form some installers emit —
+  `if [ -f '/p/x.sh' ] && [ -x '/p/x.sh' ]; then /bin/sh '/p/x.sh'; else cat >/dev/null; fi` —
+  checks its own target before running it, so an absent target there is the *intended* no-op.
+  Guarded paths are collected per-command and excluded, then reported as a count
+  (`11 self-guarded (intended no-op)`).
+- **unresolvable `${VAR}`** is counted, never guessed at.
+- **advisory:** a live hook whose *own* internal script reference is dead (the class above). Static
+  resolution of literal assignments only — no command substitution is ever evaluated — so it is
+  info, never a gap, and never fails `--strict`.
+
+New resolver: `scripts/lib/hook-liveness.py` (the parsing model + the guard carve-out are documented
+in its header). New env: `BSTACK_DOCTOR_USER_SETTINGS` overrides surface 2 so tests never read the
+operator's live personal settings.
+
+### fix: §25 false-positived on self-guarding inline conditionals
+
+§25's composite bail compared tokens **exactly**, but plain `shlex.split` glues trailing punctuation
+to the preceding word: `if [ -f '/p/x.sh' ]; then …` tokenizes as `[…, "];", "then", "/p/x.sh;", …]`,
+so no token equals `;`, the bail never fired, and §25 returned the path *from inside the guard* as a
+HARD gap — a spurious `--strict` failure on a command whose missing target is intended. It now bails
+on any token **containing** a shell operator or naming a shell keyword. §26 resolves these forms
+properly instead.
+
+### fix: the L3 stability PreToolUse hook stops narrating its own approvals
+
+`l3-stability-pretool-hook.sh` printed `{"decision":"approve"}` on the allow path. Allow is the
+default — exit 0 with empty stdout proceeds — so that JSON carried zero information while being
+recorded as a context attachment on **every** `Edit`/`Write`/`MultiEdit`, the hottest tool path there
+is. Both informationless approve paths (non-L3 file; non-governed workspace) now exit 0 silently.
+The one approve that *says* something — the L3-mutation warning with its reason — is unchanged.
+
+**New tests** — `tests/hook-liveness.test.sh` (13 assertions, hermetic: scratch workspace + scratch
+HOME) covers all three surfaces, `${CLAUDE_PLUGIN_ROOT}` expansion, the wrapper form, the executability
+split, the inner-reference advisory, and — as explicit anti-false-positive guards — the self-guarding
+conditional, the `sh -c` composite, and a proof that the advisory paths add zero gaps.
+`tests/hook-guard.test.sh` now asserts *silence* (exit 0 + empty stdout) on both allow paths, which is
+a strictly tighter assertion than "contains approve".
+
+**Migration** — none.
+
 ## 0.37.1 — 2026-07-23
 
 ### fix: leverage sensors write their state JSON with a trailing newline (BRO-1973)
