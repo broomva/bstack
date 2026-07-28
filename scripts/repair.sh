@@ -497,7 +497,7 @@ PYEOF
 # workspaces bootstrapped before these scripts shipped. Idempotent — never
 # overwrites a workspace's existing hook script.
 deploy_workspace_hooks() {
-    local hooks=(control-gate-hook.sh skill-freshness-hook.sh conversation-bridge-hook.sh knowledge-catalog-refresh-hook.sh)
+    local hooks=(control-gate-hook.sh skill-freshness-hook.sh conversation-bridge-hook.sh)
     local n=0
     for hook in "${hooks[@]}"; do
         local src="$SKILL_ROOT/scripts/$hook"

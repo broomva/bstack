@@ -1,5 +1,117 @@
 # Changelog
 
+## 0.37.2 — 2026-07-28
+
+### feat: `doctor` §26 — hook liveness across all three registration surfaces (BRO-2021)
+
+Claude Code loads hooks from **three** places, not one:
+
+1. project — `<workspace>/.claude/settings.json` (+ `.local`)
+2. user — `~/.claude/settings.json`
+3. plugin — `<plugin-root>/hooks/hooks.json`, `${CLAUDE_PLUGIN_ROOT}`-rooted (how bstack has
+   shipped its own six hooks since 0.35.0)
+
+Every check bstack had read surface 1 only. §25 additionally resolves just the **first
+absolute-path token** of a command, which by construction verifies *neither* script in a wrapper
+form like `bash "${CLAUDE_PLUGIN_ROOT}/hooks/bstack-hook-guard.sh" python3
+"${CLAUDE_PLUGIN_ROOT}/scripts/leverage-sensor.py"` — the `${VAR}` form is not an absolute path
+until it is expanded. So a hook could be registered, fire on every session, and do nothing, with
+`doctor` green.
+
+**The observed failure** (the one that motivated this): a workspace `Stop` hook whose own path
+resolved fine, but which internally invoked `${BROOMVA_ROOT}/skills/bookkeeping/scripts/
+bookkeeping.py` — a path that moved during a monorepo reorg. Guarded by `[ -f "$TOOL" ] || exit 0`,
+it burned ~136ms at every session end doing nothing, for 8 days, silently.
+
+**§26** resolves, for each surface, every script each command actually invokes — expanding
+`${CLAUDE_PLUGIN_ROOT}`, `~`, `$HOME`/`${HOME}` — and reports the dead ones:
+
+- **missing → GAP** (a dead hook is dead on every surface). A not-yet-installed companion skill
+  under `~/.{claude,agents}/skills/<name>/` stays **info**, mirroring §25.
+- **not executable → GAP only when invoked directly** (`/p/x.sh`). Under an explicit interpreter
+  (`bash /p/x.sh`) the mode bit is irrelevant, so that is info — gapping it would be a false positive.
+- **self-guarding commands are not defects.** The inline form some installers emit —
+  `if [ -f '/p/x.sh' ] && [ -x '/p/x.sh' ]; then /bin/sh '/p/x.sh'; else cat >/dev/null; fi` —
+  checks its own target before running it, so an absent target there is the *intended* no-op.
+  Guarded paths are collected per-command and excluded, then reported as a count
+  (`11 self-guarded (intended no-op)`).
+- **unresolvable `${VAR}`** is counted, never guessed at.
+- **advisory:** a live hook whose *own* internal script reference is dead (the class above). Static
+  resolution of literal assignments only — no command substitution is ever evaluated — so it is
+  info, never a gap, and never fails `--strict`.
+
+New resolver: `scripts/lib/hook-liveness.py` (the parsing model + the guard carve-out are documented
+in its header). New env: `BSTACK_DOCTOR_USER_SETTINGS` overrides surface 2 so tests never read the
+operator's live personal settings.
+
+### fix: §25 false-positived on self-guarding inline conditionals
+
+§25's composite bail compared tokens **exactly**, but plain `shlex.split` glues trailing punctuation
+to the preceding word: `if [ -f '/p/x.sh' ]; then …` tokenizes as `[…, "];", "then", "/p/x.sh;", …]`,
+so no token equals `;`, the bail never fired, and §25 returned the path *from inside the guard* as a
+HARD gap — a spurious `--strict` failure on a command whose missing target is intended. It now bails
+on any token **containing** a shell operator or naming a shell keyword. §26 resolves these forms
+properly instead.
+
+### fix: the L3 stability PreToolUse hook stops narrating its own approvals
+
+`l3-stability-pretool-hook.sh` printed `{"decision":"approve"}` on the allow path. Allow is the
+default — exit 0 with empty stdout proceeds — so that JSON carried zero information while being
+recorded as a context attachment on **every** `Edit`/`Write`/`MultiEdit`, the hottest tool path there
+is. Both informationless approve paths (non-L3 file; non-governed workspace) now exit 0 silently.
+The one approve that *says* something — the L3-mutation warning with its reason — is unchanged.
+
+**New tests** — `tests/hook-liveness.test.sh` (13 assertions, hermetic: scratch workspace + scratch
+HOME) covers all three surfaces, `${CLAUDE_PLUGIN_ROOT}` expansion, the wrapper form, the executability
+split, the inner-reference advisory, and — as explicit anti-false-positive guards — the self-guarding
+conditional, the `sh -c` composite, and a proof that the advisory paths add zero gaps.
+`tests/hook-guard.test.sh` now asserts *silence* (exit 0 + empty stdout) on both allow paths, which is
+a strictly tighter assertion than "contains approve".
+
+### retire: `knowledge-catalog-refresh-hook.sh` — the step moves into the bridge (BRO-2021)
+
+The P6 catalog hook is **removed from bstack**: the shipped script is deleted, and it is no longer
+wired by `assets/templates/settings.json.snippet` nor deployed by `bootstrap.sh` /
+`repair.sh`.
+
+Why, on bstack's own evidence: the shipped copy resolved its dependency at
+`$REPO_ROOT/skills/bookkeeping/scripts/bookkeeping.py` — **workspace-relative**, while bookkeeping
+installs **globally** (`npx skills add -g` → `~/.claude/skills`, `~/.agents/skills`). That is the same
+class of defect `doctor` §7 already documents as BRO-1715 bug 3. So on every workspace that did not
+vendor bookkeeping in-tree, the hook was a silent no-op **by construction** — it spawned a process at
+every session end and did nothing. Downstream, the same hook (with a stale post-reorg path) ran 136ms
+per session for 8 days without regenerating anything.
+
+Two Stop hooks with two cooldowns for one dependency chain was also one too many: the catalog must be
+regenerated **after** the session is captured, which makes it a step in the bridge's background chain,
+not a second hook racing it.
+
+**The capability is preserved, not dropped.** `scripts/conversation-bridge-hook.sh` now runs
+`bookkeeping index` at the end of its background chain — on both the richer-bridge and minimal-bridge
+paths — and resolves `bookkeeping.py` from the workspace **and** the two global skill dirs, the
+resolution the retired hook never had.
+
+**`doctor` §7 now asserts the CAPABILITY, not the implementation.** It used to gap on
+`scripts/knowledge-catalog-refresh-hook.sh present + executable`, which would have fired a **false gap**
+on every run for any workspace that folded the step into its bridge. It now asks whether **some** Stop
+hook's script actually runs `bookkeeping … index` (via `hook-liveness.py --capability`) and reports it
+as info — the outcome (`docs/knowledge-index.md` fresh < 48h) remains the hard gate, so a workspace
+reaching a fresh catalog through an indirection the static scan cannot see is never gapped for it.
+
+**New test** — `tests/catalog-hook-retirement.test.sh` (9 assertions) pins both ends of the retirement:
+bstack ships/wires it nowhere; **`bootstrap` and `repair --apply-all` do not resurrect it** (the vector
+that silently undoes a merged deletion); the bridge carries the capability with global resolution; and
+— executed, not grepped — the bridge **actually invokes `bookkeeping index`**, proven with a recording
+stub planted in the global skill dir. Plus: doctor recognizes the bridge as satisfying the capability,
+never gaps on the retired hook by name, and a workspace without the capability gets info with an
+unchanged gap total.
+
+**Migration** — none for §26, the §25 fix, or the L3 hook. For the retirement: a workspace that
+already has the catalog hook keeps it (bstack deletes nothing from a workspace), and it simply stops
+being re-deployed. To adopt the new shape, delete `scripts/knowledge-catalog-refresh-hook.sh`, drop its
+`Stop` entry from `.claude/settings.json`, and re-run `bstack repair` to pick up the bridge that carries
+the step.
+
 ## 0.37.1 — 2026-07-23
 
 ### fix: leverage sensors write their state JSON with a trailing newline (BRO-1973)

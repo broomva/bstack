@@ -42,7 +42,7 @@ POLICY_FILE="${BROOMVA_ROOT}/.control/policy.yaml"
 2. `~/broomva/skills/bookkeeping/scripts/bookkeeping.py`
 3. `~/broomva/scripts/bench-kg.py`
 4. `~/broomva/scripts/bench-kg-haystack.py`
-5. `~/broomva/scripts/knowledge-catalog-refresh-hook.sh`
+5. `~/broomva/scripts/conversation-bridge-hook.sh` (carries the catalog refresh since bstack 0.37.2; the standalone `knowledge-catalog-refresh-hook.sh` was retired — BRO-2021)
 6. `~/broomva/skills/bookkeeping/tests/test_index.py`
 
 **Historical synonym**: `BROOMVA_WORKSPACE` was used by `bstack/scripts/doctor.sh` (and downstream `scripts/compute-lambda.sh` invocations) before this convention was crystallized. Treat `BROOMVA_WORKSPACE` as **semantically equivalent** to `BROOMVA_ROOT` for backward compatibility, but new scripts SHOULD use `BROOMVA_ROOT` going forward. A defensive read:

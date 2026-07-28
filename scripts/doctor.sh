@@ -51,6 +51,11 @@
 #   bash scripts/doctor.sh --strict      # exit 1 if any gap found (CI mode)
 #
 # Env:
+#   BSTACK_DOCTOR_USER_SETTINGS
+#                          §26 only — path to the PERSONAL settings.json read as
+#                          hook registration surface 2. Defaults to
+#                          ~/.claude/settings.json; overridden by tests so they
+#                          never read (or risk writing) the operator's live file.
 #   BSTACK_LOOP_STRICT=1   §23 only — treat a wired-but-idle control loop as a
 #                          gap. To FAIL CI on it you must ALSO pass --strict
 #                          (i.e. `BSTACK_LOOP_STRICT=1 doctor.sh --strict`);
@@ -353,16 +358,39 @@ else
       "install/rebuild from bstack repo HEAD"
 fi
 
-# P6 catalog: knowledge-catalog-refresh-hook + docs/knowledge-index.md freshness
+# P6 catalog: CAPABILITY at Stop + docs/knowledge-index.md freshness
 # (LLM-as-index architecture — substrate routes through the catalog; the
 # catalog must regenerate at Stop time and stay <48h old)
-_CATALOG_HOOK="$WORKSPACE/scripts/knowledge-catalog-refresh-hook.sh"
+#
+# BRO-2021: this used to assert one IMPLEMENTATION —
+# `scripts/knowledge-catalog-refresh-hook.sh present + executable` — and gapped
+# any workspace that folded the same work into its conversation bridge. bstack
+# retired that hook in 0.37.2: the shipped copy resolved bookkeeping.py
+# WORKSPACE-relative while bookkeeping installs globally (see §7 above, BRO-1715
+# bug 3), so it was a silent no-op by construction on every workspace that did
+# not vendor bookkeeping in-tree. The step now lives in the bridge.
+#
+# So: assert the capability — SOME Stop hook whose script actually runs
+# `bookkeeping … index`. Advisory (info), because the OUTCOME is what matters and
+# the freshness check below already hard-gates it; a workspace may reach a fresh
+# catalog through an indirection this static scan cannot see (a python bridge, a
+# scheduled job), and gapping that would be exactly the false positive this
+# section is being fixed for.
 _CATALOG="$WORKSPACE/docs/knowledge-index.md"
-if [ -x "$_CATALOG_HOOK" ]; then
-    ok "P6 catalog hook: scripts/knowledge-catalog-refresh-hook.sh present + executable"
+_CAP_LIVENESS="$BSTACK_REPO/scripts/lib/hook-liveness.py"
+_CATALOG_CAP=""
+if [ -f "$_CAP_LIVENESS" ] && command -v python3 >/dev/null 2>&1; then
+    _CAP_ARGS=(--home "$HOME" --capability "Stop|(?i)bookkeeping[^\n]*index")
+    for _cs in "$WORKSPACE/.claude/settings.json" "$WORKSPACE/.claude/settings.local.json"; do
+        [ -f "$_cs" ] && _CAP_ARGS+=(--surface "project|project|$_cs|")
+    done
+    _CATALOG_CAP=$(python3 "$_CAP_LIVENESS" "${_CAP_ARGS[@]}" 2>/dev/null \
+        | awk -F'\t' '$1 == "CAP" { print $3; exit }')
+fi
+if [ -n "$_CATALOG_CAP" ]; then
+    ok "P6 catalog capability: Stop hook regenerates the catalog ($_CATALOG_CAP)"
 else
-    gap "P6 catalog hook missing or not executable: scripts/knowledge-catalog-refresh-hook.sh" \
-        "copy from bstack/assets/templates/ or rerun 'bstack repair'"
+    [ "$QUIET" = "0" ] && echo "  [info] P6 catalog capability: no Stop hook statically resolves to a 'bookkeeping index' run — fold it into your conversation bridge (bstack ships that step since 0.37.2); the freshness check below is the gate"
 fi
 if [ -f "$_CATALOG" ]; then
     if [ "$(uname)" = "Darwin" ]; then
@@ -1363,7 +1391,17 @@ def script_path(cmd):
         toks = shlex.split(cmd)
     except ValueError:
         return None   # unbalanced quotes etc — don't guess
-    if any(t in ("&&", "||", ";", "|", "&", ">", ">>", "<", chr(96)) for t in toks):
+    # BRO-2021: the composite bail used to compare tokens EXACTLY, but plain
+    # shlex glues trailing punctuation to the preceding word — an inline
+    # self-guarding conditional tokenizes as [..., "];", "then", "/p/x.sh;", ...]
+    # so no token equals ";" and the bail never fired. It then returned the path
+    # from inside the guard as a HARD gap: a false positive on a command whose
+    # missing target is INTENDED. Now: any token CONTAINING a shell operator, or
+    # naming a shell keyword, is a composite this resolver refuses to guess at.
+    # §26 (hook liveness) resolves these forms properly, guard-aware.
+    _ops = (";", "|", "&", ">", "<", chr(96))
+    _kw = ("if", "then", "else", "elif", "fi", "for", "while", "do", "done", "case", "esac")
+    if any(any(o in t for o in _ops) or t in _kw for t in toks):
         return None
     for i, t in enumerate(toks):
         if t.startswith("-"):
@@ -1421,6 +1459,109 @@ PYEOF
                 [ "$QUIET" = "0" ] && echo "  [info] companion skill '$_name' not installed yet (hook $_p) — 'npx skills add broomva/skills --skill $_name -g'"
             fi
         done <<< "$_HOOK_REPORT"
+    fi
+fi
+
+# ── Section 26: Hook liveness across all three surfaces (BRO-2021) ─────────
+# §25 answers a narrower question than the harness poses: it resolves the FIRST
+# absolute-path token of hooks wired in the WORKSPACE settings.json. Claude Code
+# loads hooks from THREE registration surfaces —
+#   1. project  <workspace>/.claude/settings.json (+ .local)
+#   2. user     ~/.claude/settings.json
+#   3. plugin   <plugin-root>/hooks/hooks.json  (${CLAUDE_PLUGIN_ROOT}-rooted —
+#               how bstack ships its own six since 0.35.0)
+# — and a single command is often a WRAPPER carrying two scripts
+# (`bash GUARD.sh python3 SENSOR.py`), of which §25 verifies neither (the
+# ${CLAUDE_PLUGIN_ROOT} form is not an absolute path until expanded).
+#
+# The failure class this closes: a Stop hook whose OWN path resolved fine, but
+# whose internal bookkeeping.py reference had moved during a monorepo reorg. It
+# burned ~136ms at every session end doing nothing, for 8 days, silently, with
+# doctor green throughout.
+#
+# Resolution + the self-guarding-command carve-out live in the resolver header
+# (scripts/lib/hook-liveness.py) — read that before changing severities.
+# Severity mirrors §25: a missing script is a HARD gap (a dead hook is dead on
+# every surface); a not-yet-installed companion skill is SOFT info; a
+# self-guarding `if [ -f X ] ... then X` command is NOT a defect (its absence is
+# the intended no-op); an unresolvable ${VAR} is counted, never guessed at.
+# Inner-reference findings are advisory only — heuristic static resolution must
+# never fail --strict.
+section "26. Hook liveness (three registration surfaces)"
+_LIVENESS_PY="$BSTACK_REPO/scripts/lib/hook-liveness.py"
+if ! command -v python3 >/dev/null 2>&1; then
+    [ "$QUIET" = "0" ] && echo "  [info] python3 unavailable — skipping hook-liveness check"
+elif [ ! -f "$_LIVENESS_PY" ]; then
+    [ "$QUIET" = "0" ] && echo "  [info] scripts/lib/hook-liveness.py missing — skipping hook-liveness check"
+else
+    _LIVE_ARGS=(--home "$HOME" --inner-root "$WORKSPACE" --inner-root "$BSTACK_REPO")
+    # Surface 1 — project. Both files: Claude Code merges them at runtime and a
+    # shared repo legitimately keeps machine-local hooks in settings.local.json
+    # (same reasoning as §23).
+    _LIVE_ARGS+=(--surface "project|project .claude/settings.json|$WORKSPACE/.claude/settings.json|")
+    _LIVE_ARGS+=(--surface "project|project .claude/settings.local.json|$WORKSPACE/.claude/settings.local.json|")
+    # Surface 2 — user. BSTACK_DOCTOR_USER_SETTINGS overrides for tests, which
+    # must never touch the operator's live personal settings.
+    _LIVE_ARGS+=(--surface "user|user ~/.claude/settings.json|${BSTACK_DOCTOR_USER_SETTINGS:-$HOME/.claude/settings.json}|")
+    # Surface 3 — plugin. The bstack repo under audit AND, if different, the
+    # installed skills-dir plugin that Claude Code actually loads. Third-party
+    # plugin roots are deliberately out of scope: bstack cannot repair them and a
+    # gap it cannot fix is noise.
+    _PLUGIN_ROOTS=("$BSTACK_REPO")
+    _pm="$(bstack_plugin_manifest_path 2>/dev/null || true)"
+    if [ -n "$_pm" ]; then
+        _proot="$(cd "$(dirname "$_pm")/.." 2>/dev/null && pwd -P)"
+        _canon_repo="$(cd "$BSTACK_REPO" 2>/dev/null && pwd -P)"
+        if [ -n "$_proot" ] && [ "$_proot" != "$_canon_repo" ]; then
+            _PLUGIN_ROOTS+=("$_proot")
+        fi
+    fi
+    for _root in "${_PLUGIN_ROOTS[@]}"; do
+        [ -f "$_root/hooks/hooks.json" ] || continue
+        _disp="$_root"
+        case "$_disp" in "$HOME"/*) _disp="~${_disp#"$HOME"}" ;; esac
+        _LIVE_ARGS+=(--surface "plugin|plugin $_disp/hooks/hooks.json|$_root/hooks/hooks.json|$_root")
+    done
+
+    _LIVE_REPORT=$(python3 "$_LIVENESS_PY" "${_LIVE_ARGS[@]}" 2>/dev/null)
+    if [ -z "$_LIVE_REPORT" ]; then
+        [ "$QUIET" = "0" ] && echo "  [info] no hook registration surface found — nothing to resolve"
+    else
+        while IFS=$'\t' read -r _k _a _b _c _d _e; do
+            case "${_k:-}" in
+                STAT)
+                    # _a label · _b entries · _c scripts · _d guarded · _e unresolved+dead
+                    _sfx=""
+                    [ "${_d:-0}" != "0" ] && _sfx="$_sfx, $_d self-guarded (intended no-op)"
+                    _unres="${_e%%:*}"; _ndead="${_e##*:}"
+                    [ "${_unres:-0}" != "0" ] && _sfx="$_sfx, $_unres unresolvable \${VAR}"
+                    if [ "${_ndead:-0}" = "0" ]; then
+                        ok "$_a — $_b hook entries, $_c script(s), all live$_sfx"
+                    else
+                        [ "$QUIET" = "0" ] && echo "  [info] $_a — $_b hook entries, $_c script(s)$_sfx"
+                    fi
+                    ;;
+                NONE)
+                    # Absence of a surface is normal — not every workspace or host
+                    # carries all three.
+                    [ "$QUIET" = "0" ] && echo "  [info] $_a — not registered on this host (normal)"
+                    ;;
+                DEAD)
+                    gap "dead hook on $_a [$_c]: $_b ($_d)" \
+                        "fix the path or drop the entry; for bstack-shipped hooks run 'bstack repair'"
+                    ;;
+                SOFT)
+                    [ "$QUIET" = "0" ] && echo "  [info] companion skill '$_d' not installed yet (hook $_b on $_a) — 'npx skills add broomva/skills --skill $_d -g'"
+                    ;;
+                INFO)
+                    [ "$QUIET" = "0" ] && echo "  [info] $_a [$_c]: $_b — $_d"
+                    ;;
+                INNER)
+                    # The 8-day-silent class: hook resolves, its own dependency does not.
+                    [ "$QUIET" = "0" ] && echo "  [info] live hook $_b references a dead path via \$$_c → $_d — the hook likely no-ops silently; repoint it or drop the hook"
+                    ;;
+            esac
+        done <<< "$_LIVE_REPORT"
     fi
 fi
 

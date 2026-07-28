@@ -14,7 +14,9 @@
 #           3. governed → wrapped script's $0/dirname resolves to its own dir
 #           4. governed → non-zero exit of the wrapped hook propagates (exec transparency)
 #           5. governed → stdout of the wrapped hook passes through
-#   l3:     6. non-governed + L3-file edit → approve, and NO .control/ is created
+#   l3:     6. non-governed + L3-file edit → allow SILENTLY (exit 0, empty stdout),
+#              and NO .control/ is created
+#          6b. non-L3 file edit → allow SILENTLY (the every-Edit/Write hot path)
 #           7. governed + L3-file edit → an audit line is written to .control/audit/
 
 set -uo pipefail
@@ -81,13 +83,26 @@ else
     assert_fail "guard: wrapped hook stdout passes through (got: $out)"
 fi
 
-# 6. l3 source-guard: non-governed + L3-file edit → approve, no .control/ created
+# 6. l3 source-guard: non-governed + L3-file edit → allow, no .control/ created.
+# Allow is asserted as exit 0 + EMPTY stdout (BRO-2021): a bare
+# {"decision":"approve"} carries no information and is recorded as a context
+# attachment on every edit, so the informationless approve paths went silent.
+# Empty is a strictly tighter assertion than "contains approve".
 l3in='{"tool_name":"Edit","tool_input":{"file_path":"CLAUDE.md"}}'
-out="$(cd "$TMP/nogov" && echo "$l3in" | bash "$L3_HOOK" 2>/dev/null)"
-if echo "$out" | grep -q '"decision":"approve"' && [ ! -d "$TMP/nogov/.control" ]; then
-    assert_pass "l3: non-governed L3 edit approves and creates no .control/"
+out="$(cd "$TMP/nogov" && echo "$l3in" | bash "$L3_HOOK" 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] && [ -z "$out" ] && [ ! -d "$TMP/nogov/.control" ]; then
+    assert_pass "l3: non-governed L3 edit allows silently (exit 0, no stdout) and creates no .control/"
 else
-    assert_fail "l3: non-governed L3 edit approves and creates no .control/ (out=$out, control=$([ -d "$TMP/nogov/.control" ] && echo yes || echo no))"
+    assert_fail "l3: non-governed L3 edit allows silently and creates no .control/ (rc=$rc, out=$out, control=$([ -d "$TMP/nogov/.control" ] && echo yes || echo no))"
+fi
+
+# 6b. the hot path: a NON-L3 file edit must also be silent (fires on every
+# Edit/Write/MultiEdit — the noise source BRO-2021 removed).
+out="$(cd "$TMP/gov" && echo '{"tool_name":"Write","tool_input":{"file_path":"src/app.ts"}}' | bash "$L3_HOOK" 2>/dev/null)"; rc=$?
+if [ "$rc" -eq 0 ] && [ -z "$out" ]; then
+    assert_pass "l3: non-L3 edit allows silently (exit 0, no stdout)"
+else
+    assert_fail "l3: non-L3 edit allows silently (rc=$rc, out=$out)"
 fi
 
 # 7. l3 source-guard: governed + L3-file edit → audit line written
