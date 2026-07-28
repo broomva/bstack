@@ -358,16 +358,39 @@ else
       "install/rebuild from bstack repo HEAD"
 fi
 
-# P6 catalog: knowledge-catalog-refresh-hook + docs/knowledge-index.md freshness
+# P6 catalog: CAPABILITY at Stop + docs/knowledge-index.md freshness
 # (LLM-as-index architecture — substrate routes through the catalog; the
 # catalog must regenerate at Stop time and stay <48h old)
-_CATALOG_HOOK="$WORKSPACE/scripts/knowledge-catalog-refresh-hook.sh"
+#
+# BRO-2021: this used to assert one IMPLEMENTATION —
+# `scripts/knowledge-catalog-refresh-hook.sh present + executable` — and gapped
+# any workspace that folded the same work into its conversation bridge. bstack
+# retired that hook in 0.37.2: the shipped copy resolved bookkeeping.py
+# WORKSPACE-relative while bookkeeping installs globally (see §7 above, BRO-1715
+# bug 3), so it was a silent no-op by construction on every workspace that did
+# not vendor bookkeeping in-tree. The step now lives in the bridge.
+#
+# So: assert the capability — SOME Stop hook whose script actually runs
+# `bookkeeping … index`. Advisory (info), because the OUTCOME is what matters and
+# the freshness check below already hard-gates it; a workspace may reach a fresh
+# catalog through an indirection this static scan cannot see (a python bridge, a
+# scheduled job), and gapping that would be exactly the false positive this
+# section is being fixed for.
 _CATALOG="$WORKSPACE/docs/knowledge-index.md"
-if [ -x "$_CATALOG_HOOK" ]; then
-    ok "P6 catalog hook: scripts/knowledge-catalog-refresh-hook.sh present + executable"
+_CAP_LIVENESS="$BSTACK_REPO/scripts/lib/hook-liveness.py"
+_CATALOG_CAP=""
+if [ -f "$_CAP_LIVENESS" ] && command -v python3 >/dev/null 2>&1; then
+    _CAP_ARGS=(--home "$HOME" --capability "Stop|(?i)bookkeeping[^\n]*index")
+    for _cs in "$WORKSPACE/.claude/settings.json" "$WORKSPACE/.claude/settings.local.json"; do
+        [ -f "$_cs" ] && _CAP_ARGS+=(--surface "project|project|$_cs|")
+    done
+    _CATALOG_CAP=$(python3 "$_CAP_LIVENESS" "${_CAP_ARGS[@]}" 2>/dev/null \
+        | awk -F'\t' '$1 == "CAP" { print $3; exit }')
+fi
+if [ -n "$_CATALOG_CAP" ]; then
+    ok "P6 catalog capability: Stop hook regenerates the catalog ($_CATALOG_CAP)"
 else
-    gap "P6 catalog hook missing or not executable: scripts/knowledge-catalog-refresh-hook.sh" \
-        "copy from bstack/assets/templates/ or rerun 'bstack repair'"
+    [ "$QUIET" = "0" ] && echo "  [info] P6 catalog capability: no Stop hook statically resolves to a 'bookkeeping index' run — fold it into your conversation bridge (bstack ships that step since 0.37.2); the freshness check below is the gate"
 fi
 if [ -f "$_CATALOG" ]; then
     if [ "$(uname)" = "Darwin" ]; then

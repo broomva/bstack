@@ -29,8 +29,9 @@ BSTACK_PLUGIN_ID="bstack@skills-dir"
 # Canonical basenames of the hooks that hooks/hooks.json provides. Kept in sync
 # with the bstack repo's hooks/hooks.json — when the plugin is enabled these must
 # NOT also be wired into a workspace settings.json. NON-plugin bstack hooks
-# (control-gate, conversation-bridge, knowledge-catalog-refresh, skill-freshness,
-# auth-preflight, role-x-*) are deliberately absent here — they stay hand-wired.
+# (control-gate, conversation-bridge, skill-freshness, auth-preflight, role-x-*)
+# are deliberately absent here — they stay hand-wired. knowledge-catalog-refresh
+# was retired in 0.37.2 (BRO-2021): its step lives in conversation-bridge-hook.sh.
 BSTACK_PLUGIN_HOOK_BASENAMES="bstack-autoupdate-hook.sh knowledge-wakeup-hook.sh autonomous-posture-hook.sh arc-continuation-hook.sh leverage-sensor.py l3-stability-pretool-hook.sh"
 
 # Echo the plugin manifest path if bstack is installed at a Claude-scanned

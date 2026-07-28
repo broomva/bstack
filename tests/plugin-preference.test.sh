@@ -7,7 +7,7 @@
 # hand-wired into a workspace .claude/settings.json — that double-fires. bootstrap
 # / repair now PREFER the plugin: enable it host-scope, skip those six, and
 # migrate away any already-wired copy. Non-plugin hooks (control-gate,
-# conversation-bridge, knowledge-catalog-refresh, skill-freshness, auth-preflight,
+# conversation-bridge, skill-freshness, auth-preflight,
 # role-x-*) stay hand-wired.
 #
 # Validates:
@@ -135,7 +135,6 @@ S5="$W5/.claude/settings.json"
 if [ "$(plugin_hooks_in "$S5")" = "0" ] \
    && grep -q 'control-gate-hook.sh' "$S5" \
    && grep -q 'conversation-bridge-hook.sh' "$S5" \
-   && grep -q 'knowledge-catalog-refresh-hook.sh' "$S5" \
    && grep -q 'skill-freshness-hook.sh' "$S5"; then
     assert_pass "bootstrap(preferred): 0 plugin hooks wired, non-plugin hooks present"
 else
@@ -222,7 +221,7 @@ H11="$TMP/h11"; mkdir -p "$H11"; W11="$TMP/my repo - v2/ws"; mkdir -p "$W11"
 run_bootstrap "$H11" "$W11"
 S11="$W11/.claude/settings.json"
 if grep -q 'conversation-bridge-hook.sh' "$S11" \
-   && grep -q 'knowledge-catalog-refresh-hook.sh' "$S11" \
+   && grep -q 'control-gate-hook.sh' "$S11" \
    && grep -q 'skill-freshness-hook.sh' "$S11"; then
     assert_pass "bootstrap(space-dash path): sibling Stop/SessionStart hooks all survive"
 else

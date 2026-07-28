@@ -62,6 +62,15 @@ Output: TSV on stdout, one finding per line, for doctor.sh to format —
     SOFT<TAB>surface<TAB>path<TAB>event<TAB>skill   (companion skill not installed)
     INFO<TAB>surface<TAB>path<TAB>event<TAB>reason  (advisory)
     INNER<TAB>surface<TAB>hook<TAB>var<TAB>path     (live hook, dead inner ref)
+    CAP<TAB>surface<TAB>path<TAB>event              (--capability match, see below)
+
+CAPABILITY MODE (--capability EVENT|REGEX):
+  Answers "does SOME hook on <EVENT> actually do <thing>?" by resolving the live
+  scripts on that event and matching REGEX against their source. Used by doctor
+  §7 to assert the P6 catalog CAPABILITY (a Stop hook that runs `bookkeeping …
+  index`) instead of naming one implementation — a hook can be retired and its
+  work folded into a sibling without the check going red.
+
 Exit 0 always — this is a reporter, not a gate.
 """
 
@@ -294,11 +303,19 @@ def inner_refs(path, home):
 def main(argv):
     home = os.path.expanduser("~")
     surfaces, inner_roots = [], []
+    cap_event, cap_re = None, None
     i = 1
     while i < len(argv):
         arg = argv[i]
         if arg == "--home":
             home = argv[i + 1]
+            i += 2
+        elif arg == "--capability":
+            cap_event, _, pattern = argv[i + 1].partition("|")
+            try:
+                cap_re = re.compile(pattern)
+            except re.error:
+                cap_re = None
             i += 2
         elif arg == "--inner-root":
             inner_roots.append(os.path.realpath(argv[i + 1]))
@@ -330,10 +347,13 @@ def main(argv):
                 if unresolved(script):
                     unres_n += 1
                     continue
-                key = (script, direct)
-                seen.setdefault(key, event)
+                # A script is frequently wired on SEVERAL events (a bridge on
+                # Stop + Notification). Keep them all: capability matching asks
+                # about one specific event, so first-event-wins would miss it.
+                seen.setdefault((script, direct), set()).add(event)
         live, findings, dead_n = [], [], 0
-        for (script, direct), event in sorted(seen.items()):
+        for (script, direct), events in sorted(seen.items()):
+            event = ",".join(sorted(events))
             if not os.path.exists(script):
                 skill = companion_skill(script, home)
                 if skill:
@@ -350,6 +370,13 @@ def main(argv):
                 findings.append("INFO\t%s\t%s\t%s\tnot executable (invoked under an "
                                 "interpreter, so it still fires)" % (label, script, event))
             live.append(script)
+            if cap_re is not None and cap_event in events:
+                try:
+                    if os.path.getsize(script) <= MAX_SCAN_BYTES and cap_re.search(
+                            open(script, encoding="utf-8", errors="replace").read()):
+                        findings.append("CAP\t%s\t%s\t%s" % (label, script, cap_event))
+                except OSError:
+                    pass
 
         if inner_roots:
             for script in sorted(set(live)):

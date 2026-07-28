@@ -69,17 +69,10 @@
           },
           {
             "type": "command",
-            "command": "${BROOMVA_WORKSPACE}/scripts/knowledge-catalog-refresh-hook.sh",
-            "timeout": 5,
-            "_bstack_primitive": "P6",
-            "_purpose": "Regenerate dense LLM-loadable catalog (LLM-as-index architecture; routes /kg load)"
-          },
-          {
-            "type": "command",
             "command": "$BSTACK_REPO/scripts/arc-continuation-hook.sh",
             "timeout": 10,
             "_bstack_primitive": "P19",
-            "_purpose": "Loop-stall rejection (BRO-1700): if an autonomous arc is active and the final turn is a no-op terminal (empty / 'No response requested'), return a Stop-hook block so the arc continues instead of parking. Runs after bridge+catalog so capture still happens; bounded drain-retry for the transcript flush race; guarded by consecutive reconcile_count<2 + auto-release on completion"
+            "_purpose": "Loop-stall rejection (BRO-1700): if an autonomous arc is active and the final turn is a no-op terminal (empty / 'No response requested'), return a Stop-hook block so the arc continues instead of parking. Runs after the bridge so capture (and the P6 catalog refresh the bridge now carries, 0.37.2) still happens; bounded drain-retry for the transcript flush race; guarded by consecutive reconcile_count<2 + auto-release on completion"
           }
         ]
       }

@@ -306,7 +306,7 @@ fi
 echo ""
 echo "=== bstack workspace hook deploy ==="
 mkdir -p "$WORKSPACE_DIR/scripts"
-WORKSPACE_HOOKS=(control-gate-hook.sh skill-freshness-hook.sh conversation-bridge-hook.sh knowledge-catalog-refresh-hook.sh)
+WORKSPACE_HOOKS=(control-gate-hook.sh skill-freshness-hook.sh conversation-bridge-hook.sh)
 deployed_hooks=0
 for hook in "${WORKSPACE_HOOKS[@]}"; do
     src="$SKILL_ROOT/scripts/$hook"

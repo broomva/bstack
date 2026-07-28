@@ -70,7 +70,7 @@ skills:
     required: true
     introduced_in: 0.14.0
     min_bstack_version: 0.14.0
-    description: "LLM-as-index loader for research/entities/. Two-tier scoring (catalog tier-1, body-grep tier-2 fallback) routes a topic to top-N entity bodies the agent reasons over. Pairs with bookkeeping's cmd_index (catalog generator) and the workspace's knowledge-catalog-refresh-hook.sh Stop hook (P6)."
+    description: "LLM-as-index loader for research/entities/. Two-tier scoring (catalog tier-1, body-grep tier-2 fallback) routes a topic to top-N entity bodies the agent reasons over. Pairs with bookkeeping's cmd_index (catalog generator) and the catalog refresh the workspace's conversation-bridge-hook.sh Stop chain runs (P6)."
 
   - name: bookkeeping
     repo: broomva/skills
@@ -78,7 +78,7 @@ skills:
     primitive: P6
     required: true
     introduced_in: 0.28.0
-    description: "P6 — universal knowledge engine: scores, promotes, and compounds knowledge from all sources into a permanent, query-able entity graph. The catalog generator (cmd_index) behind the knowledge-catalog-refresh Stop hook."
+    description: "P6 — universal knowledge engine: scores, promotes, and compounds knowledge from all sources into a permanent, query-able entity graph. The catalog generator (cmd_index) behind the Stop-time catalog refresh in conversation-bridge-hook.sh."
 
   - name: prompt-library
     repo: broomva/skills

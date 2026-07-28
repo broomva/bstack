@@ -8,6 +8,15 @@
 #     workspace still captures something.
 # Non-blocking, cooldown-throttled, always exit 0.
 #
+# P6 CATALOG REFRESH is part of this chain (0.37.2, BRO-2021). It used to be a
+# second Stop hook, scripts/knowledge-catalog-refresh-hook.sh — retired because
+# it resolved bookkeeping.py WORKSPACE-relative while bookkeeping installs
+# GLOBALLY (npx skills add -g → ~/.claude/skills, ~/.agents/skills), making it a
+# silent no-op by construction on every workspace that did not vendor bookkeeping
+# in-tree. Two Stop hooks with two cooldowns for one dependency chain was also
+# one too many: the catalog must be regenerated AFTER the session is captured, so
+# it belongs in this background chain, sequenced, not racing it.
+#
 # Claude Code Stop protocol: stdin { "transcript_path", "session_id", ... }.
 
 set -uo pipefail
@@ -24,10 +33,28 @@ if [ -f "$STAMP" ]; then
 fi
 mkdir -p "$(dirname "$STAMP")"; touch "$STAMP"
 
-# Prefer a richer bridge if the workspace ships one.
+# P6 catalog generator. Workspace-vendored copy first, then the GLOBAL install
+# dirs that `npx skills add -g` actually writes to — the resolution the retired
+# catalog hook lacked. Empty when bookkeeping is not installed: the chain then
+# simply skips the step (never an error).
+BOOKKEEPING=""
+for _bk in "$REPO_ROOT/skills/bookkeeping/scripts/bookkeeping.py" \
+           "$HOME/.claude/skills/bookkeeping/scripts/bookkeeping.py" \
+           "$HOME/.agents/skills/bookkeeping/scripts/bookkeeping.py"; do
+  [ -f "$_bk" ] && { BOOKKEEPING="$_bk"; break; }
+done
+
+# Prefer a richer bridge if the workspace ships one. The catalog refresh runs
+# AFTER it in the same background subshell — the index must see the session the
+# bridge just wrote, so this is a sequence, not two racing hooks.
 BRIDGE="$REPO_ROOT/scripts/conversation-history.py"
 if [ -f "$BRIDGE" ] && command -v python3 >/dev/null 2>&1; then
-  ( cd "$REPO_ROOT" && python3 "$BRIDGE" >/dev/null 2>&1 ) &
+  (
+    cd "$REPO_ROOT" || exit 0
+    python3 "$BRIDGE" >/dev/null 2>&1
+    [ -n "$BOOKKEEPING" ] && python3 "$BOOKKEEPING" index >/dev/null 2>&1
+    exit 0
+  ) &
   disown 2>/dev/null || true
   exit 0
 fi
@@ -50,5 +77,12 @@ ts = time.strftime("%Y-%m-%d %H:%M:%S")
 with open(out, "a") as f:
     f.write(f"- {ts} — session {sid} (bstack minimal bridge; install knowledge-graph-memory for full capture)\n")
 PYEOF
+fi
+
+# Same catalog refresh on the minimal-bridge path — the capability must not
+# depend on which bridge the workspace happens to ship.
+if [ -n "$BOOKKEEPING" ] && command -v python3 >/dev/null 2>&1; then
+  ( cd "$REPO_ROOT" && python3 "$BOOKKEEPING" index >/dev/null 2>&1 ) &
+  disown 2>/dev/null || true
 fi
 exit 0

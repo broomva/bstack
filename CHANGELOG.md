@@ -68,7 +68,49 @@ conditional, the `sh -c` composite, and a proof that the advisory paths add zero
 `tests/hook-guard.test.sh` now asserts *silence* (exit 0 + empty stdout) on both allow paths, which is
 a strictly tighter assertion than "contains approve".
 
-**Migration** — none.
+### retire: `knowledge-catalog-refresh-hook.sh` — the step moves into the bridge (BRO-2021)
+
+The P6 catalog hook is **removed from bstack**: the shipped script is deleted, and it is no longer
+wired by `assets/templates/settings.json.snippet` nor deployed by `bootstrap.sh` /
+`repair.sh`.
+
+Why, on bstack's own evidence: the shipped copy resolved its dependency at
+`$REPO_ROOT/skills/bookkeeping/scripts/bookkeeping.py` — **workspace-relative**, while bookkeeping
+installs **globally** (`npx skills add -g` → `~/.claude/skills`, `~/.agents/skills`). That is the same
+class of defect `doctor` §7 already documents as BRO-1715 bug 3. So on every workspace that did not
+vendor bookkeeping in-tree, the hook was a silent no-op **by construction** — it spawned a process at
+every session end and did nothing. Downstream, the same hook (with a stale post-reorg path) ran 136ms
+per session for 8 days without regenerating anything.
+
+Two Stop hooks with two cooldowns for one dependency chain was also one too many: the catalog must be
+regenerated **after** the session is captured, which makes it a step in the bridge's background chain,
+not a second hook racing it.
+
+**The capability is preserved, not dropped.** `scripts/conversation-bridge-hook.sh` now runs
+`bookkeeping index` at the end of its background chain — on both the richer-bridge and minimal-bridge
+paths — and resolves `bookkeeping.py` from the workspace **and** the two global skill dirs, the
+resolution the retired hook never had.
+
+**`doctor` §7 now asserts the CAPABILITY, not the implementation.** It used to gap on
+`scripts/knowledge-catalog-refresh-hook.sh present + executable`, which would have fired a **false gap**
+on every run for any workspace that folded the step into its bridge. It now asks whether **some** Stop
+hook's script actually runs `bookkeeping … index` (via `hook-liveness.py --capability`) and reports it
+as info — the outcome (`docs/knowledge-index.md` fresh < 48h) remains the hard gate, so a workspace
+reaching a fresh catalog through an indirection the static scan cannot see is never gapped for it.
+
+**New test** — `tests/catalog-hook-retirement.test.sh` (9 assertions) pins both ends of the retirement:
+bstack ships/wires it nowhere; **`bootstrap` and `repair --apply-all` do not resurrect it** (the vector
+that silently undoes a merged deletion); the bridge carries the capability with global resolution; and
+— executed, not grepped — the bridge **actually invokes `bookkeeping index`**, proven with a recording
+stub planted in the global skill dir. Plus: doctor recognizes the bridge as satisfying the capability,
+never gaps on the retired hook by name, and a workspace without the capability gets info with an
+unchanged gap total.
+
+**Migration** — none for §26, the §25 fix, or the L3 hook. For the retirement: a workspace that
+already has the catalog hook keeps it (bstack deletes nothing from a workspace), and it simply stops
+being re-deployed. To adopt the new shape, delete `scripts/knowledge-catalog-refresh-hook.sh`, drop its
+`Stop` entry from `.claude/settings.json`, and re-run `bstack repair` to pick up the bridge that carries
+the step.
 
 ## 0.37.1 — 2026-07-23
 
