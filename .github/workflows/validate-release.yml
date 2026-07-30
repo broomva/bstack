@@ -20,9 +20,11 @@ jobs:
 
       - name: Detect VERSION change
         id: version
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
-          base="${{ github.event.pull_request.base.sha }}"
+          base="$BASE_SHA"
           if ! git diff --name-only "$base"...HEAD | grep -qx VERSION; then
             echo "VERSION not modified in this PR — nothing to validate."
             echo "changed=false" >> "$GITHUB_OUTPUT"
@@ -38,9 +40,11 @@ jobs:
 
       - name: CHANGELOG has matching section
         if: steps.version.outputs.changed == 'true'
+        env:
+          NEW: ${{ steps.version.outputs.new }}
         run: |
           set -euo pipefail
-          new="${{ steps.version.outputs.new }}"
+          new="$NEW"
           if ! grep -qE "^## ${new}([[:space:]]|$)" CHANGELOG.md; then
             echo "::error file=CHANGELOG.md::No '## ${new}' section found — every VERSION bump needs a matching CHANGELOG entry."
             exit 1
@@ -49,10 +53,13 @@ jobs:
 
       - name: VERSION moves forward
         if: steps.version.outputs.changed == 'true'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          NEW: ${{ steps.version.outputs.new }}
         run: |
           set -euo pipefail
-          base="${{ github.event.pull_request.base.sha }}"
-          new="${{ steps.version.outputs.new }}"
+          base="$BASE_SHA"
+          new="$NEW"
           old="$(git show "$base:VERSION" 2>/dev/null | tr -d '[:space:]' || echo '0.0.0')"
           # Lexicographic comparison works for left-padded semver but not generally.
           # Use sort -V for correctness.
