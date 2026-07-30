@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.37.3 — 2026-07-29
+
+### fix: the trigger surface claims P1-P20 and never says where to stay quiet (BRO-2031)
+
+The frontmatter `description` is the only part of this skill the model routes on, and it
+carried a `Use when:` list with **no exclusion clause at all** — while claiming `'P1'
+through 'P20'` as trigger phrases. Those are twenty of the most collision-prone tokens in
+an engineering workspace: "the checkout is down, this is a P1" is incident severity, and a
+P2 in a tracker is a priority label. Neither is a bstack primitive.
+
+Without a NOT-FOR clause a near-miss cannot be *authored against the artifact*: any negative
+eval case would be grading a carve-out that exists only in the skill body, below the surface
+the model actually receives. That is document divergence, not routing, and it is the reason
+`skills/governance/bstack` still ships no prompt set.
+
+Four exclusions, each traceable to measured evidence rather than invented:
+
+- **incident / ticket severity labels** — the `P1`-`P20` collision above.
+- **app or framework scaffolding** — `'bootstrap project'` is a claimed trigger phrase and
+  matches "bootstrap a Next.js project with pnpm" word for word; bootstrap here is the
+  governance metalayer.
+- **editing bstack's own scripts, tests or docs** — empirically the dominant behaviour:
+  1,104 Bash calls to the `bstack` CLI across 96 transcripts against 0 Skill invocations in
+  the same project. None of the six declared modes is "edit bstack's source".
+- **a passing mention inside another imperative** — two byte-verbatim production turns name
+  `/bstack` in a list of meta-skills while the imperative asks for `/handoff` and
+  `/autonomous`; both correctly did not fire.
+
+Length is budget-checked, not guessed: the description goes 939 → 1,348 chars, against the
+1,536-char per-skill render cap (`skill_evals/listing.py`), so it still renders FULL rather
+than truncating mid-sentence. The measured session listing is 30,071 chars against a ~39,013
+cap, so the extra 409 chars bump no other skill to BARE.
+
 ## 0.37.2 — 2026-07-28
 
 ### feat: `doctor` §26 — hook liveness across all three registration surfaces (BRO-2021)
