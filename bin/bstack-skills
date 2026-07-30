@@ -53,6 +53,13 @@ Subcommands:
                                  coherence, unused, roots (≥ 0.21.8), untested
                                  code, eval coverage (≥ 0.38.0). Gate with
                                  --require-tests / --require-evals.
+                                 Eval coverage has four classes: covered,
+                                 no_trigger_eval (a real suite of another shape),
+                                 present_but_vacuous, none. --require-evals fires
+                                 on present_but_vacuous ONLY — an artifact that
+                                 reaches for the trigger keys and misses. Absence
+                                 and other-shaped suites are never gated, so
+                                 deleting evals/ is never the way to go green.
   help | --help                  This message
 
 Examples:
