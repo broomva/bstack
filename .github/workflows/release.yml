@@ -44,9 +44,11 @@ jobs:
 
       - name: Check existing tag
         id: tag_check
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
           set -euo pipefail
-          tag="${{ steps.version.outputs.tag }}"
+          tag="$TAG"
           if git rev-parse "$tag" >/dev/null 2>&1; then
             echo "  $tag already exists — skipping release."
             echo "exists=true"  >> "$GITHUB_OUTPUT"
@@ -58,9 +60,12 @@ jobs:
       - name: Extract release notes from CHANGELOG
         if: steps.tag_check.outputs.exists == 'false'
         id: notes
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
           set -euo pipefail
-          v="${{ steps.version.outputs.version }}"
+          v="$VERSION"
           awk -v ver="$v" '
             $0 ~ "^## " ver "( |$)" { flag=1; next }
             flag && /^## / { exit }
@@ -71,8 +76,11 @@ jobs:
             exit 1
           fi
           # Title = first `### ` heading inside the section, else fall back to vX.Y.Z.
-          title=$(awk '/^### / { sub(/^### /, ""); print; exit }' /tmp/release-notes.md)
-          [ -z "$title" ] && title="${{ steps.version.outputs.tag }}"
+          # Backticks are stripped: a markdown code span renders as literal
+          # backticks in a GitHub release title, and carrying them any further
+          # is what made this step a command-injection sink for four releases.
+          title=$(awk '/^### / { sub(/^### /, ""); gsub(/`/, ""); print; exit }' /tmp/release-notes.md)
+          [ -z "$title" ] && title="$TAG"
           echo "  title=$title"
           # Multi-line outputs need the heredoc form.
           {
@@ -85,10 +93,18 @@ jobs:
         if: steps.tag_check.outputs.exists == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # TAG and TITLE arrive through the environment, never spliced into the
+          # script text. `${{ }}` is substituted by the runner BEFORE bash parses,
+          # so a CHANGELOG heading containing a backtick span or $(...) becomes
+          # executable code in a job holding contents:write and GH_TOKEN.
+          # That is not hypothetical: run 30406298067 died at exit 127 executing
+          # `doctor` out of the v0.37.2 heading, which is why v0.37.2 has no tag.
+          TAG: ${{ steps.version.outputs.tag }}
+          TITLE: ${{ steps.notes.outputs.title }}
         run: |
           set -euo pipefail
-          tag="${{ steps.version.outputs.tag }}"
-          title="${{ steps.notes.outputs.title }}"
+          tag="$TAG"
+          title="$TITLE"
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "$tag" -m "$tag — $title"
@@ -106,9 +122,10 @@ jobs:
         if: steps.tag_check.outputs.exists == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
           set -euo pipefail
-          tag="${{ steps.version.outputs.tag }}"
+          tag="$TAG"
           tarball="bstack-${tag}.tar.gz"
           # Build a clean staging tree — the extracted root must contain
           # VERSION + bin/ + scripts/ + assets/ + references/ + schemas/ +
