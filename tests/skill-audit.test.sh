@@ -367,6 +367,101 @@ prompt = "b"
 should_trigger = false
 TEOF
 
+# ── round-3 fixtures ──────────────────────────────────────────────────────────
+# no_trigger_eval — MAJOR-1: a fully graded other-shaped suite standing next to a
+# STRAY ungradable sibling. Ranking "ungradable" above "other/parsed" let one
+# 0-byte file gate a 34-assertion behavioural suite as a vacuous TRIGGER claim
+# whose own trigger_keys was 0 — the --json entry contradicted itself. The stray
+# files must still be NAMED (appended to the reason), just not decide the class.
+make_skill "$EC_ROOT" straysuite straysuite "Graded suite plus a stray ungradable sibling."
+mkdir -p "$EC_ROOT/straysuite/evals"
+cat > "$EC_ROOT/straysuite/evals/evals.json" <<'JEOF'
+{"skill_name": "straysuite",
+ "evals": [{"id": 1, "prompt": "set up auth", "expected_output": "installs the package",
+            "expectations": ["Installs the framework package", "Does NOT install the SPA package"]}]}
+JEOF
+echo '# TODO: add trigger evals' > "$EC_ROOT/straysuite/evals/notes.yaml"
+: > "$EC_ROOT/straysuite/evals/todo.json"
+# covered — MAJOR-1, the other direction: the exception the docstring already
+# documented ("covered wins over an ungradable sibling") but nothing tested.
+make_skill "$EC_ROOT" straycovered straycovered "Two-sided set plus a stray ungradable sibling."
+mkdir -p "$EC_ROOT/straycovered/evals"
+cat > "$EC_ROOT/straycovered/evals/prompts.json" <<'JEOF'
+{"cases": [{"prompt": "a", "should_trigger": true}, {"prompt": "b", "should_trigger": false}]}
+JEOF
+: > "$EC_ROOT/straycovered/evals/todo.json"
+# present_but_vacuous — the ungradable state stays REACHABLE when it is the only
+# thing in evals/. Moving the branch below other/parsed must not delete the state.
+make_skill "$EC_ROOT" lonetodo lonetodo "Only a 0-byte placeholder artifact."
+mkdir -p "$EC_ROOT/lonetodo/evals"; : > "$EC_ROOT/lonetodo/evals/todo.json"
+
+# covered — MINOR-3: three real resolver-eval shapes the round-1 `else: return None`
+# fallthrough downgraded to vacuous. Under a KEY-polarity key the value position
+# holds prompts, so a name->prompt map and a bare prompt string are both coverage.
+make_skill "$EC_ROOT" keydict keydict "Resolver eval as a name->prompt map."
+mkdir -p "$EC_ROOT/keydict/evals"
+cat > "$EC_ROOT/keydict/evals/resolver.yaml" <<'YEOF'
+should_fire: {c1: "run the thing"}
+should_not_fire: {c3: "summarize this PDF"}
+YEOF
+make_skill "$EC_ROOT" keystr keystr "Resolver eval with one prompt per side."
+mkdir -p "$EC_ROOT/keystr/evals"
+cat > "$EC_ROOT/keystr/evals/resolver.yaml" <<'YEOF'
+should_fire: "add a permission"
+should_not_fire: "hello"
+YEOF
+make_skill "$EC_ROOT" keymixed keymixed "Resolver eval, list on one side and a string on the other."
+mkdir -p "$EC_ROOT/keymixed/evals"
+cat > "$EC_ROOT/keymixed/evals/resolver.yaml" <<'YEOF'
+should_fire: ["a"]
+should_not_fire: "hello"
+YEOF
+# present_but_vacuous — MINOR-3's own fail-open guard: admitting maps under the
+# key-polarity keys must not reopen BLOCKER-2 wearing the other key class. A
+# schema DESCRIBING the resolver format is not the resolver eval.
+make_skill "$EC_ROOT" resolverschema resolverschema "JSON Schema for the resolver format."
+mkdir -p "$EC_ROOT/resolverschema/evals"
+cat > "$EC_ROOT/resolverschema/evals/resolver.schema.json" <<'JEOF'
+{"$schema": "http://json-schema.org/draft-07/schema#", "type": "object",
+ "properties": {"should_fire": {"type": "array", "items": {"type": "string"}},
+                "should_not_fire": {"type": "array", "items": {"type": "string"}}}}
+JEOF
+
+# no_trigger_eval — the mutation target for _other_assertion_weight's empty-value
+# guard. Deleting that guard left the whole suite green, which contradicted the
+# CHANGELOG's "every one is mutation-proven": here it flips other_assertions 0 -> 3.
+make_skill "$EC_ROOT" emptyother emptyother "Other-shape suite whose assertions are all empty."
+mkdir -p "$EC_ROOT/emptyother/evals"
+cat > "$EC_ROOT/emptyother/evals/cases.json" <<'JEOF'
+{"cases": [{"prompt": "a", "expect": "", "expected": null, "assertion": "   "}]}
+JEOF
+
+# covered — MINOR-5: `name.upper().startswith("README")` classified a real
+# two-sided case set as `none` because its filename begins with those six letters.
+make_skill "$EC_ROOT" readmecases readmecases "Case set whose name starts with README."
+mkdir -p "$EC_ROOT/readmecases/evals"
+cat > "$EC_ROOT/readmecases/evals/README-cases.json" <<'JEOF'
+{"cases": [{"prompt": "a", "should_trigger": true}, {"prompt": "b", "should_trigger": false}]}
+JEOF
+# none — and the two other real README spellings stay documentation, not artifacts
+make_skill "$EC_ROOT" readmebare readmebare "Evals dir with an extensionless README."
+mkdir -p "$EC_ROOT/readmebare/evals"
+echo 'evals are TODO' > "$EC_ROOT/readmebare/evals/README"
+make_skill "$EC_ROOT" readmetxt readmetxt "Evals dir with a README.txt."
+mkdir -p "$EC_ROOT/readmetxt/evals"
+echo 'evals are TODO' > "$EC_ROOT/readmetxt/evals/README.txt"
+
+# Roots holding exactly ONE vacuous sub-state each, so the gate's wording can be
+# checked against a known sub-state with no other entry able to supply the words.
+EC_UNG="$FX3/ungradable"; EC_CLAIM="$FX3/claimed"; mkdir -p "$EC_UNG" "$EC_CLAIM"
+make_skill "$EC_UNG" ungonly ungonly "Only a 0-byte placeholder artifact."
+mkdir -p "$EC_UNG/ungonly/evals"; : > "$EC_UNG/ungonly/evals/todo.json"
+make_skill "$EC_CLAIM" claimonly claimonly "Positive cases only."
+mkdir -p "$EC_CLAIM/claimonly/evals"
+cat > "$EC_CLAIM/claimonly/evals/prompts.json" <<'JEOF'
+{"cases": [{"prompt": "a", "should_trigger": true}]}
+JEOF
+
 # Clean root: honest absence + real coverage + a real eval suite of ANOTHER shape,
 # plus an UNTESTED skill — proves (a) the two gates are independent and (b) the
 # BLOCKER-1 incentive is right way up: shipping a 2-expectation behavioural suite
@@ -399,6 +494,23 @@ cat > "$EC_IO/unreadable/evals/prompts.json" <<'JEOF'
 JEOF
 chmod 000 "$EC_IO/unreadable/evals/prompts.json"
 
+# ...and the same stray-sibling precedence for the IO-error flavour: `unreadable`
+# above covers the LONE case (still gated), this covers "next to a real suite".
+# Kept in the IO root so it inherits the running-as-root skip below.
+make_skill "$EC_IO" straysuiteio straysuiteio "Graded suite plus an unreadable sibling."
+mkdir -p "$EC_IO/straysuiteio/evals"
+cat > "$EC_IO/straysuiteio/evals/scenarios.yaml" <<'YEOF'
+skill: straysuiteio
+scenarios:
+  - id: s1
+    expect: { decision: defer }
+    deterministic_test: tests/test_loop.py::test_defer
+YEOF
+cat > "$EC_IO/straysuiteio/evals/locked.json" <<'JEOF'
+{"cases": [{"prompt": "a", "should_trigger": true}]}
+JEOF
+chmod 000 "$EC_IO/straysuiteio/evals/locked.json"
+
 # Deep root: nesting past the depth cap. Assertions below it are NOT graded — the
 # auditor must say so out loud rather than silently under-counting.
 make_skill "$EC_DEEP" deep deep "Absurdly nested prompt set."
@@ -415,6 +527,8 @@ ec_audit()    { BSTACK_AUDIT_ROOTS="$EC_ROOT"  BSTACK_DIR="$FAKE_BSTACK" python3
 ec_clean()    { BSTACK_AUDIT_ROOTS="$EC_CLEAN" BSTACK_DIR="$FAKE_BSTACK" python3 "$AUDIT_PY" "$@"; }
 ec_io()       { BSTACK_AUDIT_ROOTS="$EC_IO"    BSTACK_DIR="$FAKE_BSTACK" python3 "$AUDIT_PY" "$@"; }
 ec_deep()     { BSTACK_AUDIT_ROOTS="$EC_DEEP"  BSTACK_DIR="$FAKE_BSTACK" python3 "$AUDIT_PY" "$@"; }
+ec_ung()      { BSTACK_AUDIT_ROOTS="$EC_UNG"   BSTACK_DIR="$FAKE_BSTACK" python3 "$AUDIT_PY" "$@"; }
+ec_claim()    { BSTACK_AUDIT_ROOTS="$EC_CLAIM" BSTACK_DIR="$FAKE_BSTACK" python3 "$AUDIT_PY" "$@"; }
 
 # Print the eval-coverage class of one skill (or MISSING / DUPLICATE). The class
 # list is read from the auditor's own `counts` block, so a new class cannot be
@@ -508,6 +622,163 @@ else
     got="$(ec_state tomlcovered)"
     if [ "$got" = "no_trigger_eval" ]; then ap "$t"; else af "$t" "got '$got'"; fi
 fi
+
+# ── round-3 checks ────────────────────────────────────────────────────────────
+# T40: MAJOR-1 — a stray ungradable sibling must NOT outrank a real graded suite.
+#      Mutation: hoist the ungradable branch back above other/parsed → this reads
+#      present_but_vacuous with trigger_keys 0 / other_assertions 2, and the gate
+#      fires on a skill that never made a trigger claim.
+ec_expect straysuite no_trigger_eval
+# T40b: the documented exception, finally pinned — covered wins over the stray too
+ec_expect straycovered covered
+# T40c: and the ungradable state stays REACHABLE when it is the ONLY thing present
+#       (the precedence guard must narrow the branch, not delete it)
+ec_expect lonetodo present_but_vacuous
+# T40d: the stray is still NAMED in both winning classes — silently dropping it
+#       would trade a false gate for a blind spot
+t="a stray ungradable sibling is still named in the winning class's reason"
+if ec_audit --json --no-logs 2>/dev/null | python3 -c '
+import json, sys
+cov = json.load(sys.stdin)["eval_coverage"]
+o = next(x for x in cov["no_trigger_eval"] if x["name"] == "straysuite")
+assert o["trigger_keys"] == 0 and o["other_assertions"] >= 2, o
+assert "ungradable sibling" in o["reason"] and "todo.json" in o["reason"], o["reason"]
+c = next(x for x in cov["covered"] if x["name"] == "straycovered")
+assert "ungradable sibling" in c["reason"] and "todo.json" in c["reason"], c["reason"]
+' 2>/dev/null; then ap "$t"; else af "$t"; fi
+# T40e: the IO-error flavour of the same precedence (skipped when running as root,
+#       which reads a chmod-000 file regardless)
+t="an UNREADABLE stray sibling does not outrank a real graded suite"
+if [ -r "$EC_IO/straysuiteio/evals/locked.json" ]; then
+    as_ "$t (file still readable — running as root?)"
+else
+    io2_state=$(ec_io --json --no-logs 2>/dev/null | python3 -c '
+import json, sys
+cov = json.load(sys.stdin)["eval_coverage"]
+print(next(s for s in cov["counts"] if any(e["name"] == "straysuiteio" for e in cov[s])))
+' 2>/dev/null)
+    if [ "$io2_state" = "no_trigger_eval" ]; then ap "$t"; else af "$t" "got '$io2_state'"; fi
+fi
+
+# T41: MAJOR-2 — the gate's words and the entry's own trigger_keys cannot disagree.
+#      An entry with trigger_keys == 0 must never be described as "uses trigger
+#      keys", and must never be told to "add the missing side" of a claim it did
+#      not make. Checked on a root whose ONLY vacuous skill is that sub-state, so
+#      no other entry can supply the words.
+t="ungradable-only gate message never claims trigger keys (MAJOR-2)"
+out=$(ec_ung --no-logs --require-evals 2>/dev/null); rc=$?
+if [ "$rc" -eq 1 ] \
+   && ! echo "$out" | grep -q 'uses trigger keys' \
+   && ! echo "$out" | grep -q 'add the missing side' \
+   && echo "$out" | grep -q 'is not two-sided coverage' \
+   && echo "$out" | grep -q 'make the artifact gradable'; then
+    ap "$t"
+else
+    af "$t" "rc=$rc"
+fi
+# T41b: converse — a real one-sided claim still gets the "add the missing side"
+#       advice, so the branch above is a split and not a blanket softening
+t="one-sided claim still gets the 'add the missing side' advice"
+out=$(ec_claim --no-logs --require-evals 2>/dev/null); rc=$?
+if [ "$rc" -eq 1 ] \
+   && echo "$out" | grep -q 'uses trigger keys' \
+   && echo "$out" | grep -q 'add the missing side' \
+   && ! echo "$out" | grep -q 'make the artifact gradable'; then
+    ap "$t"
+else
+    af "$t" "rc=$rc"
+fi
+# T41c: on a MIXED root the two sub-headers' counts must equal the --json split by
+#       trigger_keys — the report cannot narrate a distribution the data denies
+t="vacuous sub-header counts match the --json split by trigger_keys"
+if python3 - <<PYEOF 2>/dev/null
+import json, re, subprocess, sys
+env_args = ["--json", "--no-logs"]
+j = json.loads(subprocess.run([sys.executable, "$AUDIT_PY", *env_args],
+    env={**__import__("os").environ, "BSTACK_AUDIT_ROOTS": "$EC_ROOT",
+         "BSTACK_DIR": "$FAKE_BSTACK"},
+    capture_output=True, text=True).stdout)
+vac = j["eval_coverage"]["present_but_vacuous"]
+want_claimed = sum(1 for v in vac if v["trigger_keys"])
+want_ung = sum(1 for v in vac if not v["trigger_keys"])
+assert want_claimed and want_ung, "fixture root must exercise BOTH sub-states"
+human = subprocess.run([sys.executable, "$AUDIT_PY", "--no-logs"],
+    env={**__import__("os").environ, "BSTACK_AUDIT_ROOTS": "$EC_ROOT",
+         "BSTACK_DIR": "$FAKE_BSTACK"},
+    capture_output=True, text=True).stdout
+got_claimed = re.search(r"uses trigger keys without reaching two-sided coverage \((\d+)\)", human)
+got_ung = re.search(r"ships an evals/ artifact that is not two-sided coverage \((\d+)\)", human)
+assert got_claimed and int(got_claimed.group(1)) == want_claimed, (got_claimed, want_claimed)
+assert got_ung and int(got_ung.group(1)) == want_ung, (got_ung, want_ung)
+PYEOF
+then ap "$t"; else af "$t"; fi
+
+# T42: MINOR-3 — three real resolver shapes the round-1 fallthrough downgraded
+ec_expect keydict covered
+ec_expect keystr covered
+ec_expect keymixed covered
+# T42b: and each is TWO distinct sets, not one contradictory case — reading the
+#       distinct-set property off `isinstance(v, list)` made keystr/keydict read
+#       contradictory once their values stopped being lists
+t="key-polarity sides are distinct sets in every value shape (1 pos / 1 neg, 0 contradictory)"
+if ec_audit --json --no-logs 2>/dev/null | python3 -c '
+import json, sys
+cov = json.load(sys.stdin)["eval_coverage"]
+for name in ("keydict", "keystr", "keymixed"):
+    e = next(x for x in cov["covered"] if x["name"] == name)
+    assert (e["positive"], e["negative"], e["contradictory"]) == (1, 1, 0), (name, e)
+' 2>/dev/null; then ap "$t"; else af "$t"; fi
+# T42c: BLOCKER-2 stays closed on BOTH key classes. schemafile/template pin the
+#       value-polarity side (T31/T31b/T32); this pins the side MINOR-3 opened.
+ec_expect resolverschema present_but_vacuous
+t="a schema describing the RESOLVER format contributes ZERO polarity (BLOCKER-2, key-polarity side)"
+if ec_audit --json --no-logs 2>/dev/null | python3 -c '
+import json, sys
+cov = json.load(sys.stdin)["eval_coverage"]
+e = next(x for x in cov["present_but_vacuous"] if x["name"] == "resolverschema")
+assert (e["positive"], e["negative"]) == (0, 0), e
+assert e["trigger_keys"] >= 2, e
+' 2>/dev/null; then ap "$t"; else af "$t"; fi
+
+# T43: _other_assertion_weight's empty-value guard, pinned. Deleting the guard
+#      left 55/55 green — the count is the only observable, so assert the COUNT.
+#      Mutation: drop the `if value is None or (str and not strip())` line →
+#      other_assertions becomes 3 and this goes red.
+t="empty/None/whitespace other-assertion values weigh 0 (mutation-proof)"
+if ec_audit --json --no-logs 2>/dev/null | python3 -c '
+import json, sys
+cov = json.load(sys.stdin)["eval_coverage"]
+e = next(x for x in cov["no_trigger_eval"] if x["name"] == "emptyother")
+assert e["other_assertions"] == 0, e
+assert "no trigger keys" in e["reason"], e["reason"]
+' 2>/dev/null; then ap "$t"; else af "$t"; fi
+
+# T44: MINOR-5 — README matching is extension-aware, not a bare name prefix
+ec_expect readmecases covered
+ec_expect readmebare none
+ec_expect readmetxt none
+
+# T45: the .toml < 3.11 degrade path, pinned by SIMULATING the import failure.
+#      Previously it was reachable only on an interpreter this repo does not run,
+#      so the CHANGELOG called proven a branch nothing exercised. Mutation: return
+#      None instead of _UNSUPPORTED for a missing tomllib → present_but_vacuous.
+t=".toml degrades to a NON-gated class when tomllib is absent (simulated <3.11)"
+if python3 - "$AUDIT_PY" "$EC_ROOT/tomlcovered" <<'PYEOF' 2>/dev/null
+import importlib.util, sys
+from pathlib import Path
+spec = importlib.util.spec_from_file_location("skill_audit_toml_degrade", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+d = Path(sys.argv[2])
+if m.tomllib is not None:                       # control on 3.11+
+    assert m.classify_eval_coverage(d)["state"] == "covered", m.classify_eval_coverage(d)
+m.tomllib = None                                # simulate python < 3.11
+info = m.classify_eval_coverage(d)
+assert info["state"] == "no_trigger_eval", info
+assert "cannot parse" in info["reason"] and "3.11" in info["reason"], info["reason"]
+assert (info["positive"], info["negative"]) == (0, 0), info
+PYEOF
+then ap "$t"; else af "$t"; fi
 
 # T24: --require-evals exits 1 when any skill is present_but_vacuous
 t="--require-evals exits 1 on a vacuous evals/ artifact"
@@ -692,6 +963,7 @@ assert cov["counts"]["no_trigger_eval"] == len(cov["no_trigger_eval"])
 ' 2>/dev/null; then ap "$t"; else af "$t"; fi
 
 chmod 644 "$EC_IO/unreadable/evals/prompts.json" 2>/dev/null || true
+chmod 644 "$EC_IO/straysuiteio/evals/locked.json" 2>/dev/null || true
 rm -rf "$FX3"
 rm -rf "$FX2"
 rm -rf "$FX"

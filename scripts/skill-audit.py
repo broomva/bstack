@@ -26,7 +26,8 @@ Seven reports (1-5 are hygiene; 6-7 are correctness — skillify steps 3 and 5):
   7. Eval coverage — trigger-eval state per skill: none / no_trigger_eval /
                      present_but_vacuous / covered; informational by default. Under
                      --require-evals it is a hard gate on present_but_vacuous ONLY —
-                     an unmet trigger-coverage claim (skillify step 5, BRO-2005)
+                     an unmet trigger-coverage claim, or an evals/ dir holding
+                     nothing gradable (skillify step 5, BRO-2005)
 
 Env overrides (test fixtures):
   BSTACK_DIR                  bstack root (for default companion-skills.yaml)
@@ -272,6 +273,33 @@ _NEGATIVE_TRIGGER_KEYS = frozenset({
     "negative_case", "negativeCase",
 })
 
+# KEY-polarity keys: the key NAMES a whole prompt set, so its value position holds
+# PROMPTS, not a boolean. That is what separates them from the value-polarity keys
+# (`should_trigger`, `should_not_trigger`, `negative_case`), whose value position
+# holds the polarity itself. The split matters twice:
+#   - one prompt is one prompt in any container — a bare string ("add a permission"),
+#     a list, or a name->prompt map are all real coverage; requiring a boolean
+#     spelling here rejected three real resolver-eval shapes.
+#   - a dict under a VALUE-polarity key is a JSON Schema node, never a case, so it
+#     must keep asserting nothing (BLOCKER-2). Under a key-polarity key a dict is a
+#     named prompt map, so it does assert.
+# Two key-polarity keys in one mapping are two DISTINCT sets by construction — see
+# _tally_assertions, which reads this same set to decide that.
+_KEY_POLARITY_KEYS = frozenset({
+    "should_fire", "shouldFire",
+    "should_not_fire", "shouldNotFire",
+})
+
+# JSON Schema keywords. A mapping carrying any of them under a key-polarity key is
+# a node DESCRIBING the resolver format (`properties.should_fire: {"type": "array"}`)
+# — BLOCKER-2's shape wearing the other key class. Admitting name->prompt maps under
+# those keys would reopen it there without this guard.
+_SCHEMA_NODE_KEYWORDS = frozenset({
+    "type", "items", "properties", "$ref", "$defs", "definitions", "enum", "const",
+    "oneOf", "anyOf", "allOf", "not", "format", "pattern", "required", "examples",
+    "additionalProperties", "minItems", "maxItems", "default",
+})
+
 # Assertion keys of OTHER eval shapes (behavioural evals, scenario evals). They
 # never make a trigger-coverage claim, so they never gate — they are counted only
 # to say out loud, in the report, that the artifact is a real suite of another kind.
@@ -326,15 +354,24 @@ def _assertion_polarity(key: str, value: object) -> str | None:
     key's polarity. An EMPTY one asserts nothing: `should_fire: []` is a
     placeholder, not coverage.
 
-    Everything else asserts nothing. That default is load-bearing in two places:
+    What a free-form (non-boolean) scalar or a dict means depends on the KEY CLASS:
 
-      dict — a JSON Schema DESCRIBING the eval format (`properties.cases.items.
-             properties.should_trigger: {"type": "boolean"}`) has trigger keys at
-             mapping positions and zero cases. Scoring it as the eval it describes
-             is the exact fail-open shape report 7 exists to catch.
-      free-form string — `should_trigger: "<FILL ME>"` in a TEMPLATE.json is a
-             placeholder. Only recognised boolean spellings carry polarity.
+      value-polarity (`should_trigger`, `should_not_trigger`, `negative_case`) —
+             the value position holds the polarity, so only a recognised boolean
+             spelling asserts. Everything else is a placeholder or a type node:
+             `should_trigger: "<FILL ME>"` in a TEMPLATE.json, and the JSON Schema
+             shape `properties.should_trigger: {"type": "boolean"}`, which has a
+             trigger key at a mapping position and zero cases. Scoring the schema
+             as the eval it describes is the exact fail-open report 7 exists to
+             catch (BLOCKER-2).
+      key-polarity (`should_fire`, `should_not_fire`) — the value position holds
+             PROMPTS. A non-empty string is one prompt, a non-empty name->prompt
+             map is a set of them; both are real coverage. An EMPTY value of any
+             shape still asserts nothing: `should_fire: []` / `should_fire: ""` is
+             a placeholder, and a map carrying JSON Schema keywords is a type node
+             describing the format, not a case set.
     """
+    key_polarity = key in _KEY_POLARITY_KEYS
     if isinstance(value, (bool, int, float)):
         flipped = not value
     elif isinstance(value, str):
@@ -343,10 +380,16 @@ def _assertion_polarity(key: str, value: object) -> str | None:
             flipped = False
         elif low in _FALSE_STRINGS:
             flipped = True
+        elif key_polarity and low:
+            flipped = False   # a prompt, not a boolean
         else:
             return None
     elif isinstance(value, (list, tuple, set)):
         if not value:
+            return None
+        flipped = False
+    elif isinstance(value, dict):
+        if not value or not key_polarity or (_SCHEMA_NODE_KEYWORDS & value.keys()):
             return None
         flipped = False
     else:
@@ -384,7 +427,11 @@ def _tally_assertions(node: object, counts: dict[str, int], depth: int = 0) -> N
       key-polarity    {"should_fire": [a, b], "should_not_fire": [c]} — the key
                       names the polarity of a whole prompt list, so the two keys
                       are distinct case sets by construction and the resolver
-                      shape stays two-sided from one mapping (as it should).
+                      shape stays two-sided from one mapping (as it should). The
+                      distinct-set property belongs to the KEY, not to the value's
+                      container, so `should_fire: "a"` / `should_not_fire: "b"` is
+                      two sets too — reading it off `isinstance(v, list)` instead
+                      made those one contradictory case.
 
     A trigger key only counts as a real mapping KEY — the word "should_trigger"
     inside a `notes` prose blob must not certify a skill as covered.
@@ -399,7 +446,8 @@ def _tally_assertions(node: object, counts: dict[str, int], depth: int = 0) -> N
             if key in TRIGGER_ASSERTION_KEYS:
                 counts["trigger_keys"] += 1
                 polarity = _assertion_polarity(key, v)
-                if polarity and isinstance(v, (list, tuple, set)):
+                if polarity and (key in _KEY_POLARITY_KEYS
+                                 or isinstance(v, (list, tuple, set))):
                     counts[polarity] += 1
                 elif polarity == "positive":
                     case_pos += 1
@@ -470,9 +518,17 @@ def _is_non_artifact(name: str) -> bool:
 
     `.gitkeep` is the whole point: git cannot track an empty directory, so a skill
     that honestly has no evals yet but wants the directory present can only express
-    it this way. README* is documentation about the (absent) evals, not an eval.
+    it this way. A README is documentation about the (absent) evals, not an eval.
+
+    README matching is EXTENSION-aware, not a bare name prefix: a README carries
+    .md, .txt, or no extension. `README-cases.json` is a case set that happens to
+    start with those six letters, and a prefix match classified a real two-sided
+    suite as `none`.
     """
-    return name in _NON_ARTIFACT_NAMES or name.upper().startswith("README")
+    if name in _NON_ARTIFACT_NAMES:
+        return True
+    p = Path(name)
+    return p.stem.upper() == "README" and p.suffix.lower() in ("", ".md", ".txt")
 
 
 def _is_run_output(rel: str) -> bool:
@@ -505,7 +561,7 @@ def classify_eval_coverage(skill_dir: Path) -> dict:
     """Classify one skill's trigger-eval state into exactly one of EVAL_STATES.
 
       none                — no evals/ dir, or it holds only placeholder files
-                            (.gitkeep, .DS_Store, README*)
+                            (.gitkeep, .DS_Store, a README)
       no_trigger_eval     — a real, parseable artifact that uses NO trigger keys:
                             a behavioural/scenario/results suite of another shape.
                             Reported, never gated — it makes no claim to miss.
@@ -517,10 +573,11 @@ def classify_eval_coverage(skill_dir: Path) -> dict:
 
     One-sided stays in present_but_vacuous: a positives-only set cannot detect
     over-firing, and over-firing is the failure a skill description actually has.
-    Ungradable stays there too — fail closed — with one exception noted inline:
-    if another artifact in the same evals/ dir does establish two-sided coverage,
-    `covered` wins and the ungradable file is only reported. The gate must catch a
-    false claim of coverage, not punish a stray file next to a real one.
+    Ungradable stays there too — fail closed — but only when it is the ONLY thing
+    in evals/. A gradable sibling outranks it in BOTH directions: `covered` wins,
+    and so does `no_trigger_eval`. The gate must catch a false claim of coverage,
+    not let one stray file gate the real suite standing next to it. The stray is
+    still named, appended to the winning class's reason.
     """
     files = _skill_eval_artifacts(skill_dir)
     artifacts = [f for f in files if not _is_non_artifact(Path(f).name)]
@@ -573,9 +630,21 @@ def classify_eval_coverage(skill_dir: Path) -> dict:
            "other_assertions": counts["other"],
            "depth_capped": counts["depth_capped"]}
 
+    # Artifacts that could not be graded at all. Built once: the same list decides
+    # the class when it is ALL there is, and is otherwise appended to whatever the
+    # gradable artifacts said, so a stray file is never silently dropped.
+    ungradable_bits = []
+    if unreadable:
+        ungradable_bits.append(f"unreadable (IO error): {', '.join(unreadable[:3])}")
+    if unparseable:
+        ungradable_bits.append(f"empty or unparseable: {', '.join(unparseable[:3])}")
+    stray_note = ("" if not ungradable_bits else
+                  " (plus ungradable sibling(s) — " + "; ".join(ungradable_bits) + ")")
+
     if pos and neg:
         return {**out, "state": "covered",
-                "reason": f"{pos} positive / {neg} negative trigger assertion(s) over distinct cases"}
+                "reason": f"{pos} positive / {neg} negative trigger assertion(s) over distinct "
+                          f"cases{stray_note}"}
 
     if counts["trigger_keys"]:
         if pos or neg:
@@ -594,14 +663,15 @@ def classify_eval_coverage(skill_dir: Path) -> dict:
             reason += f" ({counts['contradictory']} self-contradictory case(s) counted as neither)"
         return {**out, "state": "present_but_vacuous", "reason": reason}
 
-    if unreadable or unparseable:
-        bits = []
-        if unreadable:
-            bits.append(f"unreadable (IO error): {', '.join(unreadable[:3])}")
-        if unparseable:
-            bits.append(f"empty or unparseable: {', '.join(unparseable[:3])}")
+    # Precedence: an ungradable artifact decides the class only when it is the ONLY
+    # thing here. This is the same rule `covered` already got above — a real graded
+    # suite standing next to a stray unparseable file IS that suite. Ranked first
+    # instead, one 0-byte todo.json gated a fully graded 34-assertion behavioural
+    # suite as a vacuous TRIGGER claim the entry's own trigger_keys (0) says it
+    # never made.
+    if ungradable_bits and not (counts["other"] or parsed):
         return {**out, "state": "present_but_vacuous",
-                "reason": "eval artifact(s) could not be graded — " + "; ".join(bits)}
+                "reason": "eval artifact(s) could not be graded — " + "; ".join(ungradable_bits)}
 
     if counts["other"]:
         reason = (f"{counts['other']} non-trigger assertion(s) across {len(parsed)} artifact(s) "
@@ -618,7 +688,7 @@ def classify_eval_coverage(skill_dir: Path) -> dict:
     else:
         reason = (f"{len(artifacts)} eval artifact(s), none JSON/JSONL/YAML/TOML: "
                   f"{', '.join(artifacts[:3])}")
-    return {**out, "state": "no_trigger_eval", "reason": reason}
+    return {**out, "state": "no_trigger_eval", "reason": reason + stray_note}
 
 
 def detect_eval_coverage(skills: list[dict]) -> dict:
@@ -656,7 +726,8 @@ def main() -> int:
                     help="Gate: exit 1 if any skill ships deterministic code without tests (skillify step 3, BRO-1411).")
     ap.add_argument("--require-evals", action="store_true",
                     help="Gate: exit 1 if any skill ships an evals/ artifact that USES trigger keys "
-                         "without establishing two-sided coverage (skillify step 5, BRO-2005). Skills "
+                         "without establishing two-sided coverage, or whose evals/ holds nothing "
+                         "gradable at all (skillify step 5, BRO-2005). Skills "
                          "with no evals (none) and skills whose evals are a real suite of another shape "
                          "(no_trigger_eval) are NOT gated — deleting an eval suite is never the fix.")
     ap.add_argument("--json", action="store_true", help="Machine-readable output.")
@@ -783,10 +854,23 @@ def main() -> int:
     other_shape = eval_cov["no_trigger_eval"]
     print(f"## Eval coverage  [{len(eval_cov['covered'])} covered / {len(vacuous)} vacuous / "
           f"{len(other_shape)} no-trigger-eval / {len(eval_cov['none'])} none]")
+    # The gated class has two sub-states and they need different words. An entry
+    # with trigger_keys == 0 (a lone empty/unparseable/unreadable artifact) reached
+    # for nothing, so "uses trigger keys" and "add the missing side" would both be
+    # false OF THAT ENTRY — and its own reported trigger_keys says so. Split the
+    # header and the advice on the same predicate the JSON exposes.
+    claimed = [v for v in vacuous if v["trigger_keys"]]
+    ungradable = [v for v in vacuous if not v["trigger_keys"]]
     if vacuous:
-        print(f"  present_but_vacuous ({len(vacuous)}) — uses trigger keys without reaching two-sided coverage:")
-        for v in vacuous:
-            print(f"    {v['name']}: {v['reason']}")
+        print(f"  present_but_vacuous ({len(vacuous)}):")
+        if claimed:
+            print(f"    uses trigger keys without reaching two-sided coverage ({len(claimed)}):")
+            for v in claimed:
+                print(f"      {v['name']}: {v['reason']}")
+        if ungradable:
+            print(f"    ships an evals/ artifact that is not two-sided coverage ({len(ungradable)}):")
+            for v in ungradable:
+                print(f"      {v['name']}: {v['reason']}")
     if other_shape:
         print(f"  no_trigger_eval ({len(other_shape)}) — a real eval suite of another shape "
               f"(no trigger keys; never gated):")
@@ -798,9 +882,15 @@ def main() -> int:
     print(f"  none ({len(eval_cov['none'])}) — no evals/ artifact (honest absence; never gated)")
     if vacuous:
         if args.require_evals:
-            print(f"  ⚠ {len(vacuous)} skill(s) ship a trigger-eval artifact that does not establish "
-                  f"two-sided coverage — --require-evals gate FAILED")
-            print("    fix by adding the missing side; deleting evals/ is NOT a fix "
+            print(f"  ⚠ {len(vacuous)} skill(s) ship an evals/ artifact that does not establish "
+                  f"two-sided trigger coverage — --require-evals gate FAILED")
+            if claimed:
+                print(f"    {len(claimed)}: add the missing side — the artifact uses trigger keys "
+                      f"but does not assert both directions over distinct cases")
+            if ungradable:
+                print(f"    {len(ungradable)}: make the artifact gradable — it is empty, "
+                      f"unparseable, or unreadable, so it asserts nothing in either direction")
+            print("    deleting evals/ is NOT a fix "
                   "(an eval suite of another shape is reported as no_trigger_eval and never gated)")
         else:
             print("  (informational — pass --require-evals to gate CI on this)")
