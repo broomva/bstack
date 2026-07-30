@@ -1,5 +1,70 @@
 # Changelog
 
+## 0.38.0 — 2026-07-29
+
+### feat: `bstack skills audit` gains report 7 — eval coverage (BRO-2005)
+
+`bstack skills audit --require-tests` is the only HARD skill gate in the workspace. It fails
+other skills for shipping deterministic code without tests, and until now `grep -n "eval"
+scripts/skill-audit.py` returned nothing — the gate was blind to evals, including its own.
+That asymmetry is closed.
+
+**Report 7 — eval coverage.** Every audited skill is classified into exactly one of three states:
+
+| state | meaning |
+|---|---|
+| `none` | no `evals/` dir, or the dir holds no files |
+| `present_but_vacuous` | an `evals/` artifact exists but does not establish two-sided trigger coverage |
+| `covered` | ≥1 positive AND ≥1 negative trigger assertion |
+
+Semantics are ported from `skillify_check.py` step 5 in the `broomva/skills` monorepo
+(`TRIGGER_ASSERTION_KEYS` / `_is_trigger_eval`) and **reimplemented rather than imported** —
+bstack stays self-contained, installable standalone, with no cross-repo import path. The lesson
+that check encodes: an EMPTY `evals/` dir used to score "present", which is how the stack could
+report ~10% eval coverage while holding ZERO trigger assertions (BRO-2005 audit: 38/376 skills
+with an eval artifact, 0 with a single `should_trigger` case). Presence is not assertion — grade
+the content.
+
+Both artifact schemas in use classify. Prompt sets carry polarity in the **value**
+(`{"cases": [{"should_trigger": true|false}]}`); resolver evals carry it in the **key**
+(`should_fire: [...]` / `should_not_fire: [...]`). A falsey scalar flips the key's base polarity,
+so `should_trigger: false` is a negative case and `should_not_fire: false` is a positive one.
+Empty values (`should_fire: []`, `should_trigger: ""`) assert nothing — a placeholder is not
+coverage. JSON and YAML are parsed (both already have precedent in this file); other file types
+inside `evals/` count as an artifact but contribute no assertion.
+
+**`--require-evals` gates on `present_but_vacuous`, not on `none`.** Against the real roster
+today that is 3 skills, not 370. `none` is the honest day-one baseline for nearly every skill and
+an absence misleads nobody; a vacuous `evals/` dir is a standing *claim* of coverage that isn't
+there, and any tool counting directories reports it as covered. This is the same shape as
+`--require-tests`, which likewise exempts the honest absence (markdown-only skills) and fails the
+unmet claim. The `none` count stays in the report and in `--json` so the absence remains
+measurable and can be ratcheted later.
+
+One-sided eval sets land in `present_but_vacuous` rather than a fourth class: a positives-only
+set cannot detect over-firing, and over-firing is the failure a skill *description* actually has.
+
+Unparseable artifacts **fail closed**. A malformed `prompts.json` classifies as
+`present_but_vacuous`, never as `covered` — an unreadable eval asserts exactly as much as a
+missing one while still being a standing claim.
+
+**Wiring** — `--require-evals` is a second, independent gate: it does not fire on untested code,
+and `--require-tests` does not fire on vacuous evals. Either failing exits 1. `--json` gains
+`eval_coverage` (per-class entries plus a `counts` block) and `require_evals`.
+
+**New tests** — `tests/skill-audit.test.sh` grows from 14 to 33 checks, all hermetic (fake skill
+roots in a tmpdir via `BSTACK_AUDIT_ROOTS` / `BSTACK_DIR`). Every one is mutation-proven: 20
+distinct mutations of `scripts/skill-audit.py` were applied one at a time and each turned at
+least one check red — classifying an empty `evals/` dir as covered, dropping the two-sided
+requirement, failing open on a malformed artifact, regexing raw text instead of walking parsed
+keys (so a `notes` prose blob certifies a skill), treating an empty `should_fire: []` as an
+assertion, ignoring value polarity, dropping `should_not_fire` from the negative-key set, not
+parsing YAML, scanning `evals/` one level deep, unwiring the gate from the exit code, gating on
+`none`, firing the gate without the flag, and coupling the two gates. No mutation left the suite
+green.
+
+**Migration** — none. Report 7 is informational by default and the exit code is unchanged unless
+`--require-evals` is passed.
 ## 0.37.3 — 2026-07-29
 
 ### fix: the trigger surface claims P1-P20 and never says where to stay quiet (BRO-2031)

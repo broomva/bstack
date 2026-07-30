@@ -50,7 +50,9 @@ Subcommands:
                                  into the broomva/skills Tier-2 monorepo
                                  (≥ 0.21.7). Run `bstack skills graduate --help`.
   audit [--json] [--no-logs]     Registry audit: budget, duplicates, registry
-                                 coherence, unused, roots (≥ 0.21.8).
+                                 coherence, unused, roots (≥ 0.21.8), untested
+                                 code, eval coverage (≥ 0.38.0). Gate with
+                                 --require-tests / --require-evals.
   help | --help                  This message
 
 Examples:
@@ -60,6 +62,7 @@ Examples:
   bstack skills status --json
   bstack skills audit
   bstack skills audit --no-logs --json
+  bstack skills audit --no-logs --require-tests --require-evals
   bstack skills graduate handoff --category lifecycle --dry-run
 EOF
 }

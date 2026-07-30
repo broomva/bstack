@@ -165,6 +165,193 @@ if [ "$rc" -eq 0 ]; then ap "$t"; else af "$t" "rc=$rc (expected 0)"; fi
 t="human report includes '## Untested deterministic code'"
 if rt_audit --no-logs 2>/dev/null | grep -q '## Untested deterministic code'; then ap "$t"; else af "$t"; fi
 
+# ── Report 7: eval coverage / --require-evals (skillify step 5, BRO-2005) ─────
+# Classes: none | present_but_vacuous | covered. Presence is NOT assertion, so
+# every fixture below distinguishes "an evals/ artifact exists" from "it asserts
+# trigger behaviour in both directions".
+FX3="$(mktemp -d)"; EC_ROOT="$FX3/skills"; EC_CLEAN="$FX3/clean"
+mkdir -p "$EC_ROOT" "$EC_CLEAN"
+
+# none — no evals/ dir at all
+make_skill "$EC_ROOT" noevals noevals "No evals directory."
+# none — evals/ dir present but EMPTY (must NOT read as covered; anti-shopping)
+make_skill "$EC_ROOT" emptydir emptydir "Empty evals dir."
+mkdir -p "$EC_ROOT/emptydir/evals"
+# present_but_vacuous — prompt set with cases but zero trigger keys
+make_skill "$EC_ROOT" vacuous vacuous "Eval artifact asserting nothing."
+mkdir -p "$EC_ROOT/vacuous/evals"
+cat > "$EC_ROOT/vacuous/evals/prompts.json" <<'JEOF'
+{"skill": "vacuous", "cases": [{"id": "c1", "prompt": "do the thing"}]}
+JEOF
+# present_but_vacuous — evals/ holds only prose (no JSON/YAML at all)
+make_skill "$EC_ROOT" proseonly proseonly "Evals dir with only a README."
+mkdir -p "$EC_ROOT/proseonly/evals"
+echo '# Evals: TODO, will add should_trigger cases later' > "$EC_ROOT/proseonly/evals/README.md"
+# present_but_vacuous — malformed JSON must NOT fail open into covered
+make_skill "$EC_ROOT" malformed malformed "Unparseable prompt set."
+mkdir -p "$EC_ROOT/malformed/evals"
+printf '{"cases": [{"should_trigger": true}, {"should_trigger": false},\n' \
+    > "$EC_ROOT/malformed/evals/prompts.json"
+# present_but_vacuous — positives only (cannot catch over-firing)
+make_skill "$EC_ROOT" posonly posonly "Positive cases only."
+mkdir -p "$EC_ROOT/posonly/evals"
+cat > "$EC_ROOT/posonly/evals/prompts.json" <<'JEOF'
+{"cases": [{"prompt": "a", "should_trigger": true}, {"prompt": "b", "should_trigger": true}]}
+JEOF
+# present_but_vacuous — trigger key mentioned only in a PROSE blob, never a key
+make_skill "$EC_ROOT" prosekey prosekey "Trigger key named in prose only."
+mkdir -p "$EC_ROOT/prosekey/evals"
+cat > "$EC_ROOT/prosekey/evals/prompts.json" <<'JEOF'
+{"notes": "11 cases with should_trigger true and 6 with should_trigger false",
+ "cases": [{"prompt": "a"}, {"prompt": "b"}]}
+JEOF
+# present_but_vacuous — trigger keys present but with EMPTY values (both
+# polarities), so a placeholder cannot be mistaken for an assertion
+make_skill "$EC_ROOT" emptyvals emptyvals "Resolver eval with empty prompt lists."
+mkdir -p "$EC_ROOT/emptyvals/evals"
+cat > "$EC_ROOT/emptyvals/evals/resolver.yaml" <<'YEOF'
+lens: emptyvals
+should_fire: []
+should_not_fire: []
+should_trigger: ""
+should_not_trigger: ""
+YEOF
+# covered — string-encoded booleans (YAML/JSON quoting) still carry polarity
+make_skill "$EC_ROOT" strvals strvals "Prompt set with quoted booleans."
+mkdir -p "$EC_ROOT/strvals/evals"
+cat > "$EC_ROOT/strvals/evals/prompts.json" <<'JEOF'
+{"cases": [{"prompt": "a", "should_trigger": "true"}, {"prompt": "b", "should_trigger": "false"}]}
+JEOF
+# covered — prompt set, polarity in the VALUE (should_trigger true + false).
+# 3 positive / 2 negative so the tally itself is assertable (T30).
+make_skill "$EC_ROOT" coveredjson coveredjson "Two-sided prompt set."
+mkdir -p "$EC_ROOT/coveredjson/evals"
+cat > "$EC_ROOT/coveredjson/evals/prompts.json" <<'JEOF'
+{"cases": [{"prompt": "a", "should_trigger": true},
+           {"prompt": "b", "should_trigger": true},
+           {"prompt": "c", "should_trigger": true},
+           {"prompt": "d", "should_trigger": false},
+           {"prompt": "e", "should_trigger": false}]}
+JEOF
+# covered — resolver eval YAML, polarity in the KEY (should_fire / should_not_fire)
+make_skill "$EC_ROOT" coveredyaml coveredyaml "Two-sided resolver eval."
+mkdir -p "$EC_ROOT/coveredyaml/evals"
+cat > "$EC_ROOT/coveredyaml/evals/resolver.yaml" <<'YEOF'
+lens: coveredyaml
+should_fire: ["run the thing", "do it now"]
+should_not_fire: ["summarize this PDF"]
+YEOF
+
+# covered — one case per file, nested under evals/cases/ (evals/ is scanned
+# recursively; skillify's _eval_files does the same)
+make_skill "$EC_ROOT" nested nested "One case per file."
+mkdir -p "$EC_ROOT/nested/evals/cases"
+echo '{"prompt": "a", "should_trigger": true}'  > "$EC_ROOT/nested/evals/cases/pos.json"
+echo '{"prompt": "b", "should_trigger": false}' > "$EC_ROOT/nested/evals/cases/neg.json"
+
+# Clean root: only honest absence + real coverage, plus an UNTESTED skill —
+# proves the two gates are independent (evals gate must ignore untested code).
+make_skill "$EC_CLEAN" cnone cnone "No evals — honest absence."
+mkdir -p "$EC_CLEAN/cnone/scripts"; echo 'print(1)' > "$EC_CLEAN/cnone/scripts/run.py"
+make_skill "$EC_CLEAN" ccovered ccovered "Two-sided prompt set."
+mkdir -p "$EC_CLEAN/ccovered/evals"
+cat > "$EC_CLEAN/ccovered/evals/prompts.json" <<'JEOF'
+{"cases": [{"prompt": "a", "should_trigger": true}, {"prompt": "b", "should_trigger": false}]}
+JEOF
+
+ec_audit()    { BSTACK_AUDIT_ROOTS="$EC_ROOT"  BSTACK_DIR="$FAKE_BSTACK" python3 "$AUDIT_PY" "$@"; }
+ec_clean()    { BSTACK_AUDIT_ROOTS="$EC_CLEAN" BSTACK_DIR="$FAKE_BSTACK" python3 "$AUDIT_PY" "$@"; }
+
+# Print the eval-coverage class of one skill (or MISSING / DUPLICATE).
+ec_state() {
+    ec_audit --json --no-logs 2>/dev/null | python3 -c '
+import json, sys
+cov = json.load(sys.stdin)["eval_coverage"]
+want = sys.argv[1]
+hits = [s for s in ("covered", "present_but_vacuous", "none")
+        if any(e["name"] == want for e in cov[s])]
+print(hits[0] if len(hits) == 1 else ("MISSING" if not hits else "DUPLICATE"))
+' "$1"
+}
+
+ec_expect() {  # <skill> <expected-class>
+    local t="eval class: $1 → $2" got
+    got="$(ec_state "$1")"
+    if [ "$got" = "$2" ]; then ap "$t"; else af "$t" "got '$got'"; fi
+}
+
+# T14: no evals/ dir at all → none
+ec_expect noevals none
+# T15: EMPTY evals/ dir → none, never silently covered (anti-shopping)
+ec_expect emptydir none
+# T16: cases present but zero trigger keys → present_but_vacuous
+ec_expect vacuous present_but_vacuous
+# T17: evals/ holding only prose → present_but_vacuous (presence is not assertion)
+ec_expect proseonly present_but_vacuous
+# T18: malformed JSON does NOT fail open into covered
+ec_expect malformed present_but_vacuous
+# T19: positives only → present_but_vacuous (cannot catch over-firing)
+ec_expect posonly present_but_vacuous
+# T20: trigger key in a prose blob only → not covered (must be a real mapping key)
+ec_expect prosekey present_but_vacuous
+# T21: trigger keys present but with EMPTY values → asserts nothing
+ec_expect emptyvals present_but_vacuous
+# T22: two-sided prompt set (polarity in the value) → covered
+ec_expect coveredjson covered
+# T23: two-sided resolver eval YAML (polarity in the key) → covered
+ec_expect coveredyaml covered
+# T23b: string-encoded booleans still carry polarity → covered
+ec_expect strvals covered
+# T23c: cases split one-per-file under evals/cases/ are still seen → covered
+ec_expect nested covered
+
+# T24: --require-evals exits 1 when any skill is present_but_vacuous
+t="--require-evals exits 1 on a vacuous evals/ artifact"
+ec_audit --no-logs --require-evals >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 1 ]; then ap "$t"; else af "$t" "rc=$rc (expected 1)"; fi
+
+# T25: without --require-evals the report is informational (exit 0)
+t="eval report informational without --require-evals (exit 0)"
+ec_audit --no-logs >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 0 ]; then ap "$t"; else af "$t" "rc=$rc (expected 0)"; fi
+
+# T26: the gate does NOT fire on 'none' — absence is honest, and an untested
+#      skill must not turn the EVAL gate red (gates are independent)
+t="--require-evals exits 0 on none+covered only (absence not gated)"
+ec_clean --no-logs --require-evals >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 0 ]; then ap "$t"; else af "$t" "rc=$rc (expected 0)"; fi
+
+# T27: converse independence — same root still fails --require-tests
+t="--require-tests still exits 1 on that root (gate independence)"
+ec_clean --no-logs --require-tests >/dev/null 2>&1; rc=$?
+if [ "$rc" -eq 1 ]; then ap "$t"; else af "$t" "rc=$rc (expected 1)"; fi
+
+# T28: human report includes the Eval coverage section with all three counts
+t="human report includes '## Eval coverage' with 3 class counts"
+if ec_audit --no-logs 2>/dev/null | grep -qE '^## Eval coverage +\[[0-9]+ covered / [0-9]+ vacuous / [0-9]+ none\]'; then
+    ap "$t"
+else
+    af "$t"
+fi
+
+# T29: the gate's failure line names the vacuous skills (a silent gate is unusable)
+t="--require-evals human output names the FAILED gate + a vacuous skill"
+out=$(ec_audit --no-logs --require-evals 2>/dev/null)
+if echo "$out" | grep -q -- '--require-evals gate FAILED' && echo "$out" | grep -q 'posonly:'; then
+    ap "$t"
+else
+    af "$t"
+fi
+
+# T30: the polarity tally is reported per case, not collapsed to a flag
+t="eval tally counts every case (coveredjson = 3 positive / 2 negative)"
+if ec_audit --json --no-logs 2>/dev/null | python3 -c '
+import json, sys
+e = next(x for x in json.load(sys.stdin)["eval_coverage"]["covered"] if x["name"] == "coveredjson")
+assert (e["positive"], e["negative"]) == (3, 2), e
+' 2>/dev/null; then ap "$t"; else af "$t"; fi
+
+rm -rf "$FX3"
 rm -rf "$FX2"
 rm -rf "$FX"
 echo ""

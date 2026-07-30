@@ -13,7 +13,7 @@ skill-cleaner (steipete/agent-scripts) algorithm for Claude Code + bstack:
   - usage-trace scanning of Claude Code logs (~/.claude/projects/**/*.jsonl)
     rather than Codex's ~/.codex/history.jsonl
 
-Six reports (1-5 are hygiene; 6 is correctness — skillify step 3, BRO-1411):
+Seven reports (1-5 are hygiene; 6-7 are correctness — skillify steps 3 and 5):
   1. Budget        — total description token cost vs ceiling (default 2% of 1M)
   2. Duplicates    — same skill name across >1 distinct realpath
   3. Registry      — coherence between companion-skills.yaml and installed roots
@@ -22,6 +22,10 @@ Six reports (1-5 are hygiene; 6 is correctness — skillify step 3, BRO-1411):
   5. Roots         — skill count per root
   6. Untested      — ships deterministic code (scripts/*.{py,sh,mjs,js,ts}) but no
                      tests; informational by default, a hard gate under --require-tests
+                     (skillify step 3, BRO-1411)
+  7. Eval coverage — trigger-eval state per skill: none / present_but_vacuous /
+                     covered; informational by default, a hard gate under
+                     --require-evals (skillify step 5, BRO-2005)
 
 Env overrides (test fixtures):
   BSTACK_DIR                  bstack root (for default companion-skills.yaml)
@@ -211,6 +215,203 @@ def detect_untested(skills: list[dict]) -> list[dict]:
     return sorted(out, key=lambda x: x["name"])
 
 
+# --- report 7: trigger-eval coverage (skillify step 5, BRO-2005) -------------
+#
+# Semantics ported from `skillify_check.py` step 5 in the broomva/skills monorepo
+# (skills/tooling/skillify/scripts/skillify_check.py — TRIGGER_ASSERTION_KEYS /
+# _is_trigger_eval). Reimplemented rather than imported: bstack must stay
+# self-contained, installable standalone, with no cross-repo import path.
+#
+# The lesson that check encodes, in one line: an EMPTY evals/ dir used to score
+# "present", which is how the stack could report ~10% eval coverage while holding
+# ZERO trigger assertions (BRO-2005 audit: 38/376 skills with an eval artifact, 0
+# with a single should_trigger case). Presence is not assertion — grade the
+# CONTENT. Report 6 already refuses that trap for the deterministic half; report 7
+# closes it for the latent half, including for this auditor's own skill.
+#
+# Two artifact schemas are in use here and both must classify:
+#   prompt sets    {"cases": [{"prompt": …, "should_trigger": true|false}]}
+#                  — polarity lives in the VALUE
+#   resolver evals {"should_fire": [prompt, …], "should_not_fire": [prompt, …]}
+#                  — polarity lives in the KEY, value is a non-empty list
+TRIGGER_ASSERTION_KEYS = frozenset({
+    "should_trigger", "should_not_trigger", "shouldTrigger",
+    "should_fire", "should_not_fire", "negative_case",
+})
+
+# Keys whose bare presence means "this case must NOT fire".
+_NEGATIVE_TRIGGER_KEYS = frozenset({"should_not_trigger", "should_not_fire", "negative_case"})
+
+# Only structured artifacts are graded. A .md/.py/.sh file inside evals/ still
+# counts as an artifact (so the dir is not "empty") but contributes no assertion.
+EVAL_DATA_EXTS = {".json", ".yaml", ".yml"}
+
+EVAL_STATES = ("covered", "present_but_vacuous", "none")
+
+
+def _assertion_polarity(key: str, value: object) -> str | None:
+    """'positive' | 'negative' | None when the key asserts nothing.
+
+    Base polarity comes from the key NAME; a falsey scalar FLIPS it — so
+    `should_trigger: false` is a negative case and `should_not_fire: false` is a
+    positive one. A non-empty collection (the resolver-eval shape) keeps the key's
+    polarity. Empty collections, empty strings and None assert nothing at all:
+    `should_fire: []` is a placeholder, not coverage.
+    """
+    if value is None:
+        return None
+    negated_key = key in _NEGATIVE_TRIGGER_KEYS
+    if isinstance(value, (bool, int, float)):
+        flipped = not value
+    elif isinstance(value, str):
+        low = value.strip().lower()
+        if not low:
+            return None
+        flipped = low in {"false", "no", "0"}
+    elif isinstance(value, (list, tuple, set, dict)):
+        if not value:
+            return None
+        flipped = False
+    else:
+        flipped = False
+    return "negative" if (negated_key != flipped) else "positive"
+
+
+def _count_trigger_assertions(node: object, counts: dict[str, int], depth: int = 0) -> None:
+    """Tally trigger assertions by polarity, at any nesting depth.
+
+    One assertion = one asserting KEY, not one prompt: `_assertion_polarity` is
+    the single place that decides whether a key asserts anything, so an empty
+    value cannot slip through as a zero-weight assertion.
+
+    A trigger key only counts as a real mapping KEY — the word "should_trigger"
+    inside a `notes` prose blob must not certify a skill as covered.
+    """
+    if depth > 40:
+        return
+    if isinstance(node, dict):
+        for k, v in node.items():
+            polarity = _assertion_polarity(str(k), v) if str(k) in TRIGGER_ASSERTION_KEYS else None
+            if polarity:
+                counts[polarity] += 1
+            _count_trigger_assertions(v, counts, depth + 1)
+    elif isinstance(node, list):
+        for v in node:
+            _count_trigger_assertions(v, counts, depth + 1)
+
+
+def _parse_eval_artifact(path: Path):
+    """Parse a structured eval artifact, or None if it cannot be parsed.
+
+    None means ZERO assertions, never coverage: a malformed prompts.json must not
+    fail OPEN into 'covered'. The caller reports it as present_but_vacuous — an
+    unreadable eval asserts exactly as much as a missing one, while still being a
+    standing claim of coverage.
+    """
+    if path.suffix not in EVAL_DATA_EXTS:
+        return None
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    if not text.strip():
+        return None
+    try:
+        return json.loads(text) if path.suffix == ".json" else yaml.safe_load(text)
+    except (json.JSONDecodeError, yaml.YAMLError, RecursionError):
+        return None
+
+
+def _skill_eval_artifacts(skill_dir: Path) -> list[str]:
+    """Every file under the skill's evals/ dir (recursive). Presence only.
+
+    Scoped to evals/ deliberately: a `scripts/run-evals.sh` runner is not a case
+    set, and misreading one as a vacuous eval would fail a hard gate on a skill
+    that never claimed coverage.
+    """
+    d = skill_dir / "evals"
+    if not d.is_dir():
+        return []
+    return sorted(
+        str(f.relative_to(skill_dir))
+        for f in d.rglob("*")
+        if f.is_file() and "__pycache__" not in f.parts
+    )
+
+
+def classify_eval_coverage(skill_dir: Path) -> dict:
+    """Classify one skill's trigger-eval state into exactly one of EVAL_STATES.
+
+      none                — no evals/ dir, or the dir holds no files
+      present_but_vacuous — an evals/ artifact exists but does not establish
+                            two-sided trigger coverage (zero assertions,
+                            unparseable, or one-sided)
+      covered             — >=1 positive AND >=1 negative trigger assertion
+
+    One-sided lands in present_but_vacuous rather than a fourth class: a
+    positives-only set cannot detect over-firing, and over-firing is the failure
+    a skill description actually has. It is still a claim of coverage that the
+    artifact does not deliver, which is what this state names.
+    """
+    artifacts = _skill_eval_artifacts(skill_dir)
+    if not artifacts:
+        return {"state": "none", "reason": "no evals/ artifact",
+                "artifacts": [], "positive": 0, "negative": 0}
+
+    counts = {"positive": 0, "negative": 0}
+    structured = [a for a in artifacts if Path(a).suffix in EVAL_DATA_EXTS]
+    unparseable = []
+    for rel in structured:
+        data = _parse_eval_artifact(skill_dir / rel)
+        if data is None:
+            unparseable.append(rel)
+            continue
+        _count_trigger_assertions(data, counts)
+
+    pos, neg = counts["positive"], counts["negative"]
+    if pos and neg:
+        state = "covered"
+        reason = f"{pos} positive / {neg} negative trigger assertion(s)"
+    elif pos or neg:
+        state = "present_but_vacuous"
+        have, missing = ("positive", "negative") if pos else ("negative", "positive")
+        misses = "over-firing" if pos else "under-firing"
+        reason = (f"{pos + neg} {have} trigger assertion(s) but no {missing} case "
+                  f"— one-sided evals cannot catch {misses}")
+    elif not structured:
+        state = "present_but_vacuous"
+        reason = f"{len(artifacts)} eval artifact(s), none JSON/YAML: {', '.join(artifacts[:3])}"
+    elif len(unparseable) == len(structured):
+        state = "present_but_vacuous"
+        reason = f"empty or unparseable eval artifact(s): {', '.join(unparseable[:3])}"
+    else:
+        state = "present_but_vacuous"
+        reason = "eval artifact parses but asserts no trigger behaviour"
+    return {"state": state, "reason": reason, "artifacts": artifacts,
+            "positive": pos, "negative": neg}
+
+
+def detect_eval_coverage(skills: list[dict]) -> dict:
+    """{state -> [entry]} for every audited skill — skillify step 5 (BRO-2005).
+
+    The latent counterpart to report 6. Report 6 asks whether the script a skill
+    runs is tested; this asks whether the description that makes the skill fire at
+    all is asserted — in both directions.
+    """
+    out: dict[str, list[dict]] = {s: [] for s in EVAL_STATES}
+    for s in skills:
+        skill_dir = Path(s["path"]).parent
+        info = classify_eval_coverage(skill_dir)
+        out[info["state"]].append({
+            "name": s["name"], "dir": str(skill_dir), "reason": info["reason"],
+            "artifacts": info["artifacts"],
+            "positive": info["positive"], "negative": info["negative"],
+        })
+    for state in out:
+        out[state].sort(key=lambda x: x["name"])
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(prog="bstack skills audit", description="Skill registry audit.")
     ap.add_argument("--roots", action="append", default=[], help="Additional skill root (repeatable).")
@@ -220,6 +421,9 @@ def main() -> int:
     ap.add_argument("--no-logs", action="store_true", help="Skip usage-trace scanning.")
     ap.add_argument("--require-tests", action="store_true",
                     help="Gate: exit 1 if any skill ships deterministic code without tests (skillify step 3, BRO-1411).")
+    ap.add_argument("--require-evals", action="store_true",
+                    help="Gate: exit 1 if any skill ships an evals/ artifact that asserts no two-sided "
+                         "trigger behaviour (skillify step 5, BRO-2005). Skills with NO evals are not gated.")
     ap.add_argument("--json", action="store_true", help="Machine-readable output.")
     args = ap.parse_args()
 
@@ -267,7 +471,18 @@ def main() -> int:
 
     # 6. Untested deterministic code (skillify step 3 — correctness, not hygiene)
     untested = detect_untested(skills)
-    gate_failed = bool(args.require_tests and untested)
+
+    # 7. Trigger-eval coverage (skillify step 5 — the latent half)
+    eval_cov = detect_eval_coverage(skills)
+    vacuous = eval_cov["present_but_vacuous"]
+
+    # The eval gate fires on present_but_vacuous, NOT on none. `none` is the
+    # day-one baseline for nearly the whole roster and an absence is honest;
+    # a vacuous evals/ dir is a standing claim of coverage that isn't there —
+    # exactly the state that let the stack report ~10% coverage with 0
+    # assertions. Same shape as --require-tests, which also exempts the
+    # honest absence (markdown-only skills) and fails the unmet claim.
+    gate_failed = bool(args.require_tests and untested) or bool(args.require_evals and vacuous)
 
     if args.json:
         print(json.dumps({
@@ -280,6 +495,11 @@ def main() -> int:
             "roots": root_counts,
             "untested": untested,
             "require_tests": bool(args.require_tests),
+            "eval_coverage": {
+                "counts": {s: len(eval_cov[s]) for s in EVAL_STATES},
+                **{s: eval_cov[s] for s in EVAL_STATES},
+            },
+            "require_evals": bool(args.require_evals),
         }, indent=2))
         return 1 if gate_failed else 0
 
@@ -320,6 +540,22 @@ def main() -> int:
             print("  (informational — pass --require-tests to gate CI on this)")
     else:
         print("  (none — every skill with deterministic code ships tests)")
+    print()
+    print(f"## Eval coverage  [{len(eval_cov['covered'])} covered / {len(vacuous)} vacuous / "
+          f"{len(eval_cov['none'])} none]")
+    if vacuous:
+        print(f"  present_but_vacuous ({len(vacuous)}) — ships an evals/ artifact that is not two-sided coverage:")
+        for v in vacuous:
+            print(f"    {v['name']}: {v['reason']}")
+    if eval_cov["covered"]:
+        print(f"  covered ({len(eval_cov['covered'])}): "
+              f"{', '.join(c['name'] for c in eval_cov['covered'])}")
+    print(f"  none ({len(eval_cov['none'])}) — no evals/ artifact (honest absence; never gated)")
+    if vacuous:
+        if args.require_evals:
+            print(f"  ⚠ {len(vacuous)} skill(s) claim eval coverage they do not have — --require-evals gate FAILED")
+        else:
+            print("  (informational — pass --require-evals to gate CI on this)")
     print()
     print("## Roots")
     for r, c in sorted(root_counts.items()):
