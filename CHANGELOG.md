@@ -1,5 +1,203 @@
 # Changelog
 
+## 0.38.0 — 2026-07-29
+
+### feat: `bstack skills audit` gains report 7 — eval coverage (BRO-2005)
+
+`bstack skills audit --require-tests` is the only HARD skill gate in the workspace. It fails
+other skills for shipping deterministic code without tests, and until now `grep -n "eval"
+scripts/skill-audit.py` returned nothing — the gate was blind to evals, including its own.
+That asymmetry is closed.
+
+**Report 7 — eval coverage.** Every audited skill is classified into exactly one of four states:
+
+| state | meaning | gated |
+|---|---|---|
+| `none` | no `evals/` dir, or it holds only non-artifact files (`.gitkeep`, `.DS_Store`, a `README`) | no |
+| `no_trigger_eval` | a real, parseable eval artifact that uses no trigger keys — a behavioural, scenario or results suite of another shape | no |
+| `present_but_vacuous` | the artifact *reaches for* the trigger keys and misses: one-sided, empty-valued, self-contradictory, or ungradable | **yes** |
+| `covered` | ≥1 positive AND ≥1 negative trigger assertion over **distinct** cases | no |
+
+Semantics are ported from `skillify_check.py` step 5 in the `broomva/skills` monorepo
+(`TRIGGER_ASSERTION_KEYS` / `_is_trigger_eval`) and **reimplemented rather than imported** —
+bstack stays self-contained, installable standalone, with no cross-repo import path. The lesson
+that check encodes: an EMPTY `evals/` dir used to score "present", which is how the stack could
+report ~10% eval coverage while holding ZERO trigger assertions (BRO-2005 audit: 38/376 skills
+with an eval artifact, 0 with a single `should_trigger` case). Presence is not assertion — grade
+the content.
+
+Both artifact schemas in use classify. Prompt sets carry polarity in the **value**
+(`{"cases": [{"should_trigger": true|false}]}`); resolver evals carry it in the **key**
+(`should_fire: [...]` / `should_not_fire: [...]`). A falsey scalar flips the key's base polarity,
+so `should_trigger: false` is a negative case and `should_not_fire: false` is a positive one.
+Empty values (`should_fire: []`, `should_trigger: ""`) assert nothing — a placeholder is not
+coverage. `.json`, `.jsonl`, `.yaml`, `.yml` and `.toml` are parsed, matching
+`skillify_check.py`'s `_EVAL_DATA_EXTS` exactly: two gates prescribed by one documented workflow
+(skillify steps 5 and 8) must not disagree about what an eval artifact is. JSONL is parsed
+line-delimited and a single malformed line makes the whole file ungradable rather than letting
+the lines that did parse certify the skill. `.toml` needs stdlib `tomllib` (python ≥ 3.11); on an
+older interpreter the artifact degrades to "cannot grade" instead of crashing, and is not gated.
+Other file types inside `evals/` count as an artifact but contribute no assertion.
+
+**The gate may not make deleting real work the compliant move.** Three skills on the roster ship
+substantive suites in the Anthropic behavioural-eval schema (`clerk-setup`: 5 cases / 29
+expectations; `clerk-webhooks`: 4 / 24) and the scenario-eval schema (`governed-autonomy-loop`:
+9 scenarios / 30 assertions, 5 bound to real pytest node ids). They are real evals that are not
+*trigger* evals, and they never claimed to be. Gating them would have meant `rm -rf evals/`
+scoring better than shipping a working suite — an inverted incentive that disqualifies a gate
+regardless of how correct its intent. They classify `no_trigger_eval`: reported in full, with
+their assertion count, and never gated. The operator message no longer accuses a skill of a claim
+it did not make, and says out loud that deleting `evals/` is not a fix.
+
+**`--require-evals` gates on `present_but_vacuous` only.** Against the real roster today that is
+**0** skills — the gate exits 0 on a clean roster and has teeth reserved for a state no skill is
+currently in. `none` is the honest day-one baseline for 370 of 382 skills and an absence misleads
+nobody. What remains gated is the artifact that reaches for `should_trigger`/`should_fire` and
+delivers nothing usable: one-sided, empty-valued, self-contradictory, or ungradable. That is the
+standing *claim* of coverage that isn't there — any tool counting directories reports it as
+covered. Same shape as `--require-tests`, which likewise exempts the honest absence (markdown-only
+skills). Every class stays in the report and in `--json` so absence remains measurable and can be
+ratcheted later.
+
+One-sided eval sets stay in `present_but_vacuous`: a positives-only set cannot detect over-firing,
+and over-firing is the failure a skill *description* actually has.
+
+**Two-sidedness is counted over distinct CASES, not over keys found anywhere in the tree.** A
+single case carrying `should_trigger: true` *and* `should_not_trigger: true` is self-contradictory
+— it counts as neither side and is reported, instead of certifying the skill two-sided by itself.
+Key-polarity keys (`should_fire` / `should_not_fire`) name distinct case sets by construction, so
+the resolver shape is unaffected.
+
+**Only a value that carries a polarity counts, and what carries one depends on the KEY CLASS.**
+Under a *value*-polarity key (`should_trigger`, `should_not_trigger`, `negative_case`) the value
+position holds the polarity, so only a recognised boolean spelling counts: a JSON Schema
+*describing* the eval format has `should_trigger` at a mapping position and zero cases and used to
+score `covered` off its `properties` nodes, and `should_trigger: "<FILL ME>"` in an unfilled
+template is a placeholder. Under a *key*-polarity key (`should_fire`, `should_not_fire`) the value
+position holds **prompts**: a list, a bare non-empty string (`should_fire: "add a permission"`),
+and a non-empty `name -> prompt` map are all real coverage, and the two keys stay distinct case
+sets in every one of those shapes. Rejecting everything but a list there — the first cut of this
+rule — downgraded three real resolver-eval shapes to the gated class. Admitting maps under those
+keys does not reopen the schema hole on that side: a mapping carrying JSON Schema keywords
+(`type`, `items`, `properties`, `$ref`, …) is a type node, not a case set. An empty value of any
+shape still asserts nothing. Artifacts under `evals/results/` are excluded from grading — a
+results dump is the output of a run, and grading it as input lets a stale run certify a case set
+that has since been deleted.
+
+Unparseable and unreadable artifacts **fail closed**. A malformed `prompts.json` classifies as
+`present_but_vacuous`, never as `covered` — an ungradable eval asserts exactly as much as a
+missing one while still being a standing claim. The two are distinguished in the reason string: an
+IO error is reported as an IO error, not as "empty or unparseable".
+
+**...but only when it is the ONLY artifact in `evals/`.** A gradable sibling outranks an ungradable
+one in *both* directions: `covered` wins, and so does `no_trigger_eval`. Ranked the other way, one
+stray 0-byte `todo.json` gated a fully graded 34-assertion behavioural suite as a vacuous *trigger*
+claim whose own reported `trigger_keys` was `0` — the `--json` entry contradicted itself. The stray
+file is still named, appended to the winning class's reason, so precedence does not become a blind
+spot.
+
+**The gated class has two sub-states and the report words them differently.** An entry with
+`trigger_keys > 0` is told to add the missing side. An entry with `trigger_keys == 0` — a lone
+empty, unparseable or unreadable artifact — is told to make the artifact gradable, because "uses
+trigger keys" and "add the missing side" are both false of an entry that reached for nothing. The
+header and the advice branch on the same predicate `--json` exposes, so the report cannot narrate a
+distribution the data denies.
+
+**`evals/.gitkeep` is `none`, not a vacuous claim.** Git cannot store an empty directory, so
+`.gitkeep` is the *only* form the honest absence can take in a tracked skill; grading it as a
+claim put the single reachable "empty `evals/`" state on the failing side of the gate. `.keep`,
+`.DS_Store` and a `README` are treated the same way — `README` matching is **extension-aware**
+(`.md`, `.txt`, or no extension), not a bare name prefix, which had classified a real two-sided
+`evals/README-cases.json` as `none`.
+
+Assertions nested deeper than 40 levels are still not graded, but the auditor now **warns on
+stderr** naming the artifact instead of silently under-counting. The camelCase key set is
+symmetric (`shouldTrigger`/`shouldNotTrigger`/`shouldFire`/`shouldNotFire`/`negativeCase`) and
+pinned by a test, so upstream drift breaks a test rather than a gate.
+
+**Wiring** — `--require-evals` is a second, independent gate: it does not fire on untested code,
+and `--require-tests` does not fire on vacuous evals. Either failing exits 1. `--json` gains
+`eval_coverage` (per-class entries plus a `counts` block) and `require_evals`.
+
+**New tests** — `tests/skill-audit.test.sh` grows from 14 to 74 checks, all hermetic (fake skill
+roots in a tmpdir via `BSTACK_AUDIT_ROOTS` / `BSTACK_DIR`). Every one is mutation-proven: 50
+distinct mutations of `scripts/skill-audit.py` (20 in the first round, 18 in the second, 12 in the
+third) were applied one at a time and each turned at least one check red — classifying an
+empty `evals/` dir as covered, dropping the two-sided
+requirement, failing open on a malformed artifact, regexing raw text instead of walking parsed
+keys (so a `notes` prose blob certifies a skill), treating an empty `should_fire: []` as an
+assertion, ignoring value polarity, dropping `should_not_fire` from the negative-key set, not
+parsing YAML, scanning `evals/` one level deep, unwiring the gate from the exit code, gating on
+`none`, firing the gate without the flag, coupling the two gates, accepting a dict under a trigger
+key, returning a two-sided payload on `OSError`, grading `.gitkeep`, skipping a malformed JSONL
+line, dropping `.jsonl`/`.toml`, grading `evals/results/`, counting a self-contradictory case as
+two-sided, gating `no_trigger_eval`, hiding it from the report, restoring the false accusation
+in the operator message, ranking an ungradable sibling above a graded suite (and above `covered`),
+dropping the stray file from the winning reason, un-branching the gate's header and its advice,
+rejecting prompt strings and prompt maps under a key-polarity key, reading the distinct-set
+property off the value's container instead of the key, dropping the schema-keyword guard, deleting
+`_other_assertion_weight`'s empty-value guard, returning `None` instead of `_UNSUPPORTED` for a
+`.toml` with no `tomllib`, and reverting `README` matching to a bare name prefix. No mutation left
+the suite green.
+
+Five mutations initially came back GREEN and each exposed a check that proved nothing.
+`dict`-in-the-collection-branch was masked because the repro schema put both trigger keys in one
+mapping, where the new distinct-case rule already rejected it — the fixture now splits them across
+`$defs` so the dict guard is what does the work. Skipping a malformed JSONL line was masked
+because the surviving lines were one-sided either way; they are now two-sided, so only failing
+closed keeps the class. And weighting a key-polarity key by `len(value)` made the
+empty-collection guard untestable (`len([]) == 0` tallies identically with or without it) — the
+tally is now pinned at one assertion per asserting key. Same failure mode as the one caught before
+merge in the first round: a vacuous check inside the tool built to catch vacuous checks.
+
+Two more survived into the third round, and both had already been *described* as proven.
+`_other_assertion_weight`'s empty-value guard could be deleted with the suite still green, because
+no fixture put an empty, `null` or whitespace value under a non-trigger assertion key; one now
+does, and the observable is the reported `other_assertions` count, not the class. And the `.toml`
+degrade path was reachable only on an interpreter this repo does not run (`< 3.11`), so no CI run
+ever executed it — it is now pinned by loading the module and setting `tomllib = None` to simulate
+the import failure. A branch nothing exercises is not proven by a claim that it is.
+
+**Known limitations** — stated rather than left implicit, because a gate's blind spots are part of
+its contract. None of these are gate *false positives*; each is a way the gate can under-report.
+
+- **Unparseable extensions are a green path.** Only `.json`, `.jsonl`, `.yaml`, `.yml` and `.toml`
+  are graded. An eval written in any other format — a `.csv` case table, a `.md` prose suite, a
+  `.py` case list — counts as an artifact but contributes no assertion, so it lands in
+  `no_trigger_eval` and passes. This is a deliberate design call, not an oversight: the alternative
+  gates every skill shipping a runner script or an eval README. But it means "write your evals in a
+  format the auditor cannot parse" satisfies `--require-evals`, and the gate cannot distinguish
+  *another shape* from *evaded*. Anyone ratcheting this gate later should close this first.
+- **`evals/results/` is a bare path-component match.** Any directory named exactly `results`
+  anywhere under `evals/` is treated as run output and excluded from grading, so a legitimate case
+  set that happens to live in `evals/results/` is silently ungraded (and its skill reads
+  `no_trigger_eval`).
+- **The trigger-key set now disagrees with `skillify_check.py` in both directions.** bstack grades
+  four camelCase spellings skillify does not (`shouldNotTrigger`, `shouldFire`, `shouldNotFire`,
+  `negativeCase`); skillify counts eval artifacts bstack does not (files matching `*eval*` under
+  `scripts/` and `tests/`, where bstack scopes strictly to `evals/`). The `_EVAL_DATA_EXTS` sets
+  still match exactly. Two gates in one documented workflow drifting apart on *what counts* is a
+  real hazard — the fix is to converge them, which is out of scope here.
+- **`negative_case` has no positive twin.** There is no `positive_case` in the key set, so a suite
+  using that spelling can only ever register its negative side and can never reach `covered` on its
+  own.
+- **Duplicate skill names double-count.** A skill installed under two roots is classified once per
+  installation and appears twice in the per-class lists — visible on the real roster today, where
+  `disambiguate` is listed twice under `covered`.
+- **One JSONL file is one artifact; the same cases split one-per-file are N.** The `len(parsed)`
+  figure in the reason string, and any consumer counting artifacts, therefore report differently
+  for identical case content depending only on how it was packaged.
+- **A prompt string under a key-polarity key cannot be told from a placeholder.** `should_fire:
+  "add a permission"` and `should_fire: "<FILL ME>"` are indistinguishable, so an unfilled resolver
+  template can reach `covered`. The value-polarity side has no such hole (only boolean spellings
+  count there). This is the cost of accepting bare prompt strings at all, which real suites need.
+
+**Migration** — none. Report 7 is informational by default and the exit code is unchanged unless
+`--require-evals` is passed. `--json` consumers that switch on `eval_coverage.counts` see a fourth
+key, `no_trigger_eval`, and each entry gains `trigger_keys`, `contradictory`, `other_assertions`
+and `depth_capped`. The human report's `present_but_vacuous` section is now two indented
+sub-sections under a single count line rather than one flat list; `--json` is the stable surface.
+
 ## 0.37.3 — 2026-07-29
 
 ### fix: the trigger surface claims P1-P20 and never says where to stay quiet (BRO-2031)
