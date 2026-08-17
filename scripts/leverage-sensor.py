@@ -494,6 +494,16 @@ def no_worst_line(record):
     # is an ungraded row wearing a graded label, and must not certify the window.
     graded = [r for r in rows if isinstance(r, dict)
               and r.get("status") in GRADED_ROW_STATUSES and r.get("value") is not None]
+    # "Within target" is a claim about the ROWS, not merely about `worst` being unset.
+    # A record carrying an alert/warn row while `worst` is None is INCONSISTENT -- the
+    # two disagree -- and certifying it would make exactly the false compliance claim
+    # this whole change exists to prevent. Report the contradiction instead of picking
+    # the reassuring side of it.
+    breached = [r for r in graded if r.get("status") in ("alert", "warn")]
+    if breached:
+        return ("Inconsistent record — " + ", ".join(
+            f"{r.get('name', r.get('key'))}={r.get('value')} [{r.get('status')}]" for r in breached)
+            + " but nothing ranked; not certified.")
     if graded:
         return "All graded setpoints within target."
     closure = record.get("closure")
@@ -630,9 +640,11 @@ def main():
                     sp_now = load_setpoints(setpoints_path)
                 except Exception:
                     sp_now = {}
-                # load_setpoints DEGRADES rather than raising: an unreadable or
-                # malformed file returns `metrics: []`.
-                if not sp_now.get("metrics"):
+                # load_setpoints DEGRADES rather than raising: an unreadable file
+                # returns `metrics: []`. But a STRUCTURALLY wrong yet valid YAML policy
+                # (`- id: m6` parses to a LIST) returns a non-mapping, on which .get()
+                # raises -- so the type is checked, not assumed.
+                if not isinstance(sp_now, dict) or not sp_now.get("metrics"):
                     # Policy is unreadable or empty, so NOTHING in the cache can be
                     # certified -- neither its ranked actuator nor its compliance.
                     #
@@ -642,19 +654,24 @@ def main():
                     # for the brief to contradict itself -- most recently a dropped
                     # `worst` beside retained `alert` rows, which read as
                     # "all within target" while the cache held an alert.
-                    print(f"[self-improvement loop] {st.get('sessions_analyzed', '?')} sessions / "
-                          f"{st.get('window_days', '?')}d")
-                    print("⚠ .control/leverage-setpoints.yaml unreadable or empty — "
+                    sessions = st.get("sessions_analyzed", "?") if isinstance(st, dict) else "?"
+                    window = st.get("window_days", "?") if isinstance(st, dict) else "?"
+                    print(f"[self-improvement loop] {sessions} sessions / {window}d")
+                    print("⚠ .control/leverage-setpoints.yaml unreadable, empty or malformed — "
                           "nothing graded, no actuator emitted")
                     return
-                if st.get("metrics"):
-                    try:
-                        st["results"], st["worst"] = evaluate(st["metrics"], sp_now)
-                    except Exception:
-                        # A corrupt cached metric set must not take the brief down, but
-                        # it must not be certified either: drop the whole grading rather
-                        # than render half of it.
-                        st["results"], st["worst"] = [], None
+                # Re-grade UNCONDITIONALLY once policy is readable. Guarding on
+                # `st.get("metrics")` let a cache with an empty metric set ({} is falsy)
+                # keep its stored results and stale `worst`, which is the very leak this
+                # path exists to close. evaluate({}, sp) yields ([], None), which
+                # no_worst_line() reports honestly.
+                try:
+                    st["results"], st["worst"] = evaluate(st.get("metrics") or {}, sp_now)
+                except Exception:
+                    # A corrupt cached metric set must not take the brief down, but it
+                    # must not be certified either: drop the whole grading rather than
+                    # render half of it.
+                    st["results"], st["worst"] = [], None
                 print(render_brief(st))
                 return
         except Exception:

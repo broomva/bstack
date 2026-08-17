@@ -258,7 +258,8 @@ echo "== M. unreadable setpoints must not pass off cached grading as current =="
 # retired -- steering on authority nobody can verify. It must be labelled.
 echo ":::not yaml:::" > "$TMP/.control/leverage-setpoints.yaml"
 STALE="$(python3 "$SENSOR" --workspace "$TMP" --brief --cached --no-store 2>/dev/null)"
-grep -q "unreadable or empty" <<<"$STALE"       && ok "unreadable setpoints are disclosed"          || bad "stale grading passed off as current: $STALE"
+grep -q "self-improvement loop" <<<"$STALE"        && ok "brief was actually produced"                 || bad "no output; absence checks would pass vacuously"
+grep -q "unreadable, empty or malformed" <<<"$STALE"       && ok "unreadable setpoints are disclosed"          || bad "stale grading passed off as current: $STALE"
 # Round-2 blocker: labelling is not enough — a caveat printed beside a live
 # "-> Corrective actuator:" line still steers, so the steering itself must go.
 ! grep -q "Corrective actuator" <<<"$STALE"     && ok "NO actuator emitted without readable policy" || bad "STILL STEERING on unverifiable policy: $STALE"
@@ -291,6 +292,52 @@ print("ok")
 PY2
 )"
 [ "$R" = "ok" ]                     && ok "null/str/junk/valueless rows never certify"  || bad "malformed results certified or crashed: $R"
+
+
+echo "== S. round-4: an inconsistent record is never certified =="
+S_="$(python3 - "$SENSOR" <<'PY2'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("s", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+# alert row present but 'worst' unset: the two disagree; certifying picks the
+# reassuring side of a contradiction.
+print(m.no_worst_line({"results": [{"key": "m6", "name": "m6", "status": "alert", "value": 1}]}))
+PY2
+)"
+! grep -q "within target" <<<"$S_"  && ok "alert row + no worst → NOT certified"       || bad "FALSE COMPLIANCE over an alert row: $S_"
+grep -q "Inconsistent" <<<"$S_"     && ok "the contradiction is named"                 || bad "contradiction hidden: $S_"
+
+echo "== T. round-4: an empty cached metric set cannot retain a stale actuator =="
+T2="$(mktemp -d)"; mkdir -p "$T2/.control"
+cat > "$T2/.control/leverage-setpoints.yaml" <<'YML'
+window_days: 7
+metrics:
+  - {id: m6, name: meta_work_session_ratio, level: L3, direction: lower_is_better, target: 0.5, alert: 0.75, actuator: "REAL POLICY"}
+YML
+python3 - "$T2" <<'PY2'
+import json,sys,datetime
+json.dump({"sessions_analyzed":4,"window_days":7,"measured_at":datetime.datetime.now().isoformat(),
+ "metrics":{},   # EMPTY dict -- falsy, so the old guard skipped the regrade entirely
+ "results":[{"key":"m6_x","name":"m6","level":"L3","value":9,"status":"alert","gap":9,"target":0.5,
+             "alert":0.75,"direction":"lower_is_better","actuator":"STALE ACTUATOR FROM CACHE"}],
+ "worst":{"key":"m6_x","name":"m6","level":"L3","value":9,"target":0.5,"gap":9,
+          "direction":"lower_is_better","status":"alert","actuator":"STALE ACTUATOR FROM CACHE"},
+ "closure":{"closed":True,"sensor_live":True,"reference_authored":True}},
+ open(f"{sys.argv[1]}/.control/leverage-state.json","w"))
+PY2
+EMPTY="$(python3 "$SENSOR" --workspace "$T2" --brief --cached --no-store 2>/dev/null)"
+# POSITIVE assertions FIRST. An absence-only check passes vacuously on empty output --
+# caught when a mutation that killed the process produced no stdout and this section
+# still went green. Every "must not appear" needs a "must appear" beside it.
+grep -q "self-improvement loop" <<<"$EMPTY"       && ok "brief was actually produced"              || bad "no output at all (absence checks below would pass vacuously): $EMPTY"
+grep -q "No setpoint graded" <<<"$EMPTY"          && ok "empty metric set is reported as ungraded" || bad "wrong line: $EMPTY"
+! grep -q "STALE ACTUATOR FROM CACHE" <<<"$EMPTY" && ok "empty metric set drops the stale actuator" || bad "STALE ACTUATOR LEAKED: $EMPTY"
+
+echo "== U. round-4: structurally malformed (but valid) YAML policy must not crash =="
+printf -- "- id: m6\n" > "$T2/.control/leverage-setpoints.yaml"   # valid YAML, a LIST not a mapping
+BADY="$(python3 "$SENSOR" --workspace "$T2" --brief --cached --no-store 2>/dev/null)"; rc=$?
+[ $rc -eq 0 ] && ok "non-mapping policy exits 0 (no crash)"                             || bad "crashed rc=$rc"
+grep -q "unreadable, empty or malformed" <<<"$BADY" && ok "non-mapping policy reports the unified state" || bad "wrong output: $BADY"
+rm -rf "$T2"
 
 
 echo
