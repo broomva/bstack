@@ -258,11 +258,39 @@ echo "== M. unreadable setpoints must not pass off cached grading as current =="
 # retired -- steering on authority nobody can verify. It must be labelled.
 echo ":::not yaml:::" > "$TMP/.control/leverage-setpoints.yaml"
 STALE="$(python3 "$SENSOR" --workspace "$TMP" --brief --cached --no-store 2>/dev/null)"
-grep -q "setpoints unreadable" <<<"$STALE"      && ok "unreadable setpoints are disclosed"        || bad "stale grading passed off as current: $STALE"
-# Round-2 blocker: labelling is not enough. A caveat printed beside a live
-# "-> Corrective actuator:" line still steers; the steering itself must go.
+grep -q "unreadable or empty" <<<"$STALE"       && ok "unreadable setpoints are disclosed"          || bad "stale grading passed off as current: $STALE"
+# Round-2 blocker: labelling is not enough — a caveat printed beside a live
+# "-> Corrective actuator:" line still steers, so the steering itself must go.
 ! grep -q "Corrective actuator" <<<"$STALE"     && ok "NO actuator emitted without readable policy" || bad "STILL STEERING on unverifiable policy: $STALE"
-! grep -q "Worst gap" <<<"$STALE"               && ok "nothing ranked as worst"                   || bad "still ranked: $STALE"
+! grep -q "Worst gap" <<<"$STALE"               && ok "nothing ranked as worst"                     || bad "still ranked: $STALE"
+# Round-3 blocker (self-inflicted): dropping `worst` while KEEPING cached alert rows
+# made no_worst_line() certify "All graded setpoints within target" over an alert.
+! grep -q "within target" <<<"$STALE"           && ok "no compliance claim without readable policy" || bad "FALSE COMPLIANCE over a cached alert: $STALE"
+
+echo "== Q. a '-pending' successor must NAME something, not be a placeholder =="
+# $'...' so a REAL tab / NBSP reaches the probe; a literal backslash-t would carry
+# an alphanumeric 't' and legitimately stand down.
+for s in shadow-pending-. shadow-pending-- $'shadow-pending-\t' $'shadow-pending-\u00a0'; do
+    Q="$(probe "$s")"
+    [ "${Q%%|*}" = "alert" ]        && ok "'$s' → graded (placeholder successor)"     || bad "'$s' stood down on a placeholder: $Q"
+done
+for s in shadow-pending-m7 shadow-pending-0 shadow-pending--m7; do
+    Q="$(probe "$s")"
+    [ "${Q%%|*}" = "shadow" ]       && ok "'$s' → stands down (successor named)"      || bad "'$s' rejected: $Q"
+done
+
+echo "== R. a malformed result set cannot certify anything =="
+R="$(python3 - "$SENSOR" <<'PY2'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("s", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+for rec in ({"results": None}, {"results": "nope"}, {"results": ["junk", 3]},
+            {"results": [{"status": "ok", "value": None}]}):
+    line = m.no_worst_line(dict(rec))
+    assert "within target" not in line, f"CERTIFIED {rec}: {line}"
+print("ok")
+PY2
+)"
+[ "$R" = "ok" ]                     && ok "null/str/junk/valueless rows never certify"  || bad "malformed results certified or crashed: $R"
 
 
 echo

@@ -321,7 +321,10 @@ def setpoint_grading(sp):
         # `shadow-pending-` do not, and standing down on them would drop a shield on
         # a half-written value -- the same silent-drop this rule exists to prevent.
         head, _, successor = qualifier.partition("-")
-        if head == SETPOINT_STATUS_QUALIFIER and successor.strip():
+        # The successor must NAME something: at least one alphanumeric character.
+        # `shadow-pending-.` or `shadow-pending--` name nothing, and standing a
+        # shield down on a placeholder is the failure this rule exists to stop.
+        if head == SETPOINT_STATUS_QUALIFIER and any(c.isalnum() for c in successor):
             return False, None
         return True, (f"setpoint status {raw!r} is malformed "
                       f"(expected {word!r} or '{word}-{SETPOINT_STATUS_QUALIFIER}-<successor>') "
@@ -482,10 +485,19 @@ def no_worst_line(record):
     the graded rows themselves rather than on `closure` also stops a STALE closure
     block -- carried over by the cached path -- from certifying a fresh regrade, and
     stops an ABSENT closure from being read as a dead sensor."""
-    graded = [r for r in record.get("results", []) if r.get("status") in GRADED_ROW_STATUSES]
+    rows = record.get("results")
+    if not isinstance(rows, list):
+        # A record whose result set is missing or the wrong type cannot support ANY
+        # claim, least of all a compliance one.
+        return "No setpoint graded — the result set is missing or unreadable."
+    # A row only counts as graded if it carries a value: `{"status": "ok", "value": None}`
+    # is an ungraded row wearing a graded label, and must not certify the window.
+    graded = [r for r in rows if isinstance(r, dict)
+              and r.get("status") in GRADED_ROW_STATUSES and r.get("value") is not None]
     if graded:
         return "All graded setpoints within target."
-    if record.get("closure", {}).get("sensor_live") is False:
+    closure = record.get("closure")
+    if isinstance(closure, dict) and closure.get("sensor_live") is False:
         return "No setpoint graded — the sensor read no structural events this window."
     return "No setpoint graded — no metric matched a live setpoint this window."
 
@@ -520,9 +532,6 @@ def render_brief(record):
         lines.append(f"⚠ loop NOT closed ({why}) — run `bstack doctor` §23")
     if cl and not cl.get("reference_authored"):
         lines.append("⚠ reference r0 is bstack-default (endogenous) — author + sign .control/leverage-setpoints.yaml")
-    if record.get("stale_grading"):
-        lines.append("⚠ setpoints unreadable — no actuator emitted (a cached one may name a RETIRED setpoint); "
-                     "fix .control/leverage-setpoints.yaml")
     if not worst:
         # STI-1919 + BRO-2168: with no worst gap, "within target" is only true if
         # something was actually graded. no_worst_line() decides on the graded rows.
@@ -619,29 +628,33 @@ def main():
                 # `--brief --cached --no-store`).
                 try:
                     sp_now = load_setpoints(setpoints_path)
-                    # load_setpoints DEGRADES rather than raising: an unreadable or
-                    # malformed file returns `metrics: []`, which would re-grade every
-                    # row to no_setpoint and silently blank the brief. Only re-grade
-                    # against setpoints that actually loaded.
-                    if st.get("metrics") and sp_now.get("metrics"):
-                        st["results"], st["worst"] = evaluate(st["metrics"], sp_now)
-                    else:
-                        # Policy could not be read (load_setpoints DEGRADES to
-                        # `metrics: []` rather than raising). The cache still holds a
-                        # ranked actuator, but nothing can confirm it is still live --
-                        # it may name exactly the setpoint policy has since retired.
-                        #
-                        # DROP it rather than print it with a caveat. A warning beside
-                        # a "→ Corrective actuator:" line asks the reader to discount
-                        # a steering instruction, which is the incantation-instead-of-
-                        # control failure this whole change exists to close. Measured
-                        # values still render; only the steering goes.
-                        st["stale_grading"] = True
-                        st["worst"] = None
                 except Exception:
-                    # Never let the re-grade take the brief down; fall back to the
-                    # stored grading rather than emitting nothing.
-                    pass
+                    sp_now = {}
+                # load_setpoints DEGRADES rather than raising: an unreadable or
+                # malformed file returns `metrics: []`.
+                if not sp_now.get("metrics"):
+                    # Policy is unreadable or empty, so NOTHING in the cache can be
+                    # certified -- neither its ranked actuator nor its compliance.
+                    #
+                    # Emit one unambiguous state instead of a partially-suppressed
+                    # record. Every earlier attempt to keep part of the cache (values
+                    # but not the actuator; rows but not `worst`) produced a fresh way
+                    # for the brief to contradict itself -- most recently a dropped
+                    # `worst` beside retained `alert` rows, which read as
+                    # "all within target" while the cache held an alert.
+                    print(f"[self-improvement loop] {st.get('sessions_analyzed', '?')} sessions / "
+                          f"{st.get('window_days', '?')}d")
+                    print("⚠ .control/leverage-setpoints.yaml unreadable or empty — "
+                          "nothing graded, no actuator emitted")
+                    return
+                if st.get("metrics"):
+                    try:
+                        st["results"], st["worst"] = evaluate(st["metrics"], sp_now)
+                    except Exception:
+                        # A corrupt cached metric set must not take the brief down, but
+                        # it must not be certified either: drop the whole grading rather
+                        # than render half of it.
+                        st["results"], st["worst"] = [], None
                 print(render_brief(st))
                 return
         except Exception:
