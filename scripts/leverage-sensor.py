@@ -285,23 +285,40 @@ def metric_id(key):
 # noisy alarm is recoverable while a silently dropped shield is not.
 GRADED_SETPOINT_STATUSES = frozenset({"live", "active", "graded"})
 SHADOW_SETPOINT_STATUSES = frozenset({"shadow", "retired", "disabled", "deprecated"})
+# The ONLY qualifier a lifecycle word may carry. A stand-down is always "pending"
+# something, so `shadow-pending-m7` is well-formed while `shadow-live`,
+# `shadow-typo` and `retired-nope` are not. Accepting an arbitrary suffix would
+# let `shadow-live` -- which READS like "shadow is live" -- silently drop a
+# shield, the exact fail-safe inversion this design exists to prevent.
+SETPOINT_STATUS_QUALIFIER = "pending"
 
 
 def setpoint_grading(sp):
     """Decide whether one setpoint's value may be graded, ranked and actuated.
 
-    Returns (graded: bool, note: str|None). `note` is non-None only for a
-    status this function does not recognize, which is graded anyway and
-    surfaced so the misconfiguration cannot pass silently."""
+    Returns (graded: bool, note: str|None). A non-None `note` marks a status this
+    function does not recognize: it is graded ANYWAY and reported, because a noisy
+    alarm is recoverable while a silently dropped shield is not.
+
+    Only an ABSENT `status` key is implicitly live. An explicitly empty or null
+    one is malformed, not a shorthand for live, and says so."""
+    if "status" not in sp:
+        return True, None
     raw = sp.get("status")
-    if raw is None:
+    # `-` and `_` are both plausible from a hand-edited YAML file; normalize so the
+    # separator choice cannot decide whether a shield stands.
+    s = str(raw).strip().lower().replace("_", "-") if raw is not None else ""
+    if not s:
+        return True, f"empty setpoint status {raw!r} — graded as live"
+    if s in GRADED_SETPOINT_STATUSES:
         return True, None
-    s = str(raw).strip().lower()
-    if not s or s in GRADED_SETPOINT_STATUSES:
-        return True, None
-    # `shadow-pending-m7` and friends: match the lifecycle word before its qualifier.
-    if s.split("-", 1)[0] in SHADOW_SETPOINT_STATUSES:
-        return False, None
+    word, _, qualifier = s.partition("-")
+    if word in SHADOW_SETPOINT_STATUSES:
+        if not qualifier or qualifier.split("-", 1)[0] == SETPOINT_STATUS_QUALIFIER:
+            return False, None
+        return True, (f"setpoint status {raw!r} has an unrecognized qualifier "
+                      f"(expected '{word}' or '{word}-{SETPOINT_STATUS_QUALIFIER}-<successor>') "
+                      f"— graded as live")
     return True, f"unrecognized setpoint status {raw!r} — graded as live"
 
 
@@ -312,10 +329,14 @@ def evaluate(metrics, setpoints):
         mid = metric_id(key)
         sp = by_id.get(mid, {})
         level = sp.get("level", DEFAULT_LEVELS.get(mid, "L?"))
-        if not sp or val is None:
+        if not sp:
             results.append({"key": key, "value": val, "level": level, "status": "no_setpoint",
                             "name": sp.get("name", mid)})
             continue
+        # Resolved BEFORE the null-value check: a stood-down setpoint must stay
+        # disclosed as stood down even on a blind read, or the one window where the
+        # sensor measured nothing is also the window where the stand-down silently
+        # disappears from the brief.
         graded, status_note = setpoint_grading(sp)
         if not graded:
             # Stood down. Keep target/alert on the row so the reader can see what
@@ -328,12 +349,25 @@ def evaluate(metrics, setpoints):
                 "setpoint_status": sp.get("status"), "name": sp.get("name", mid),
             })
             continue
+        if val is None:
+            row = {"key": key, "value": val, "level": level, "status": "no_setpoint",
+                   "name": sp.get("name", mid)}
+            if status_note:
+                row["status_note"] = status_note
+            results.append(row)
+            continue
         direction = sp.get("direction", "lower_is_better")
         target, alert = sp.get("target"), sp.get("alert")
         if target is None or alert is None:
             # reference slot present but not yet authored (r0 unsigned) — measured, not graded
-            results.append({"key": key, "value": val, "level": level, "status": "unset_target",
-                            "name": sp.get("name", mid), "actuator": sp.get("actuator", "")})
+            row = {"key": key, "value": val, "level": level, "status": "unset_target",
+                   "name": sp.get("name", mid), "actuator": sp.get("actuator", "")}
+            # A malformed status must be reported on EVERY exit, not only the graded
+            # one, or "every unrecognized status is reported" is false for any metric
+            # whose reference is still unauthored.
+            if status_note:
+                row["status_note"] = status_note
+            results.append(row)
             continue
         if direction == "lower_is_better":
             status = "alert" if val >= alert else "warn" if val > target else "ok"
@@ -508,7 +542,15 @@ def render_human(record):
         out.append(f"  [shadow] m6s_meta_work_ship_ratio = {m6s}  "
                    f"(exogenous ship-signal — NON-actuating, calibrating for BRO-1709)")
     worst = record.get("worst")
-    out.append(f"  Focus: {worst['name']} → {worst['actuator']}" if worst else "  All graded setpoints within target.")
+    if worst:
+        out.append(f"  Focus: {worst['name']} → {worst['actuator']}")
+    elif not cl.get("sensor_live"):
+        # Same guard render_brief carries. Without it a blind read prints
+        # "closure: OPEN (sensor_live=False)" and "all within target" together --
+        # a compliance claim about a window in which nothing was measured.
+        out.append("  No setpoint graded — the sensor read no structural events this window.")
+    else:
+        out.append("  All graded setpoints within target.")
     out.extend(f"  {n}" for n in shadow_notes(record))
     return "\n".join(out)
 
@@ -546,6 +588,27 @@ def main():
         try:
             st = json.load(open(state_file))
             if time.time() - datetime.fromisoformat(st["measured_at"]).timestamp() < 86400:
+                # BRO-2168: RE-GRADE the cached metrics against the CURRENT setpoints
+                # before rendering. The cache exists to skip analyze() -- the transcript
+                # scan -- but evaluate() is pure and cheap, and the stored `results` /
+                # `worst` were graded under whatever setpoints were live at write time.
+                # Rendering them verbatim means a setpoint edit does not reach the
+                # SessionStart brief until the cache expires, so standing a setpoint
+                # down leaves its retired actuator steering for up to 24h. This is the
+                # path SessionStart actually uses (knowledge-wakeup-hook.sh:
+                # `--brief --cached --no-store`).
+                try:
+                    sp_now = load_setpoints(setpoints_path)
+                    # load_setpoints DEGRADES rather than raising: an unreadable or
+                    # malformed file returns `metrics: []`, which would re-grade every
+                    # row to no_setpoint and silently blank the brief. Only re-grade
+                    # against setpoints that actually loaded.
+                    if st.get("metrics") and sp_now.get("metrics"):
+                        st["results"], st["worst"] = evaluate(st["metrics"], sp_now)
+                except Exception:
+                    # Never let the re-grade take the brief down; fall back to the
+                    # stored grading rather than emitting nothing.
+                    pass
                 print(render_brief(st))
                 return
         except Exception:

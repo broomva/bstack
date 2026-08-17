@@ -109,6 +109,107 @@ grep -q "meta_work_session_ratio" <<<"$BRIEF"    && ok "brief still names the se
 grep -q "0.96" <<<"$BRIEF"                       && ok "brief still shows the measured value" || bad "value absent from brief"
 ! grep -q "Corrective actuator" <<<"$BRIEF"      && ok "brief emits NO corrective actuator"  || bad "brief still steered: $BRIEF"
 
+echo "== G. a qualified lifecycle word is only honored in the 'pending' form =="
+# P20 round 1 BLOCKER: an earlier prefix match accepted ANY suffix, so `shadow-live`
+# -- which reads like "shadow is live" -- silently dropped the shield with no note.
+# These must GRADE (fail-safe) and REPORT, never stand down.
+for s in shadow-live shadow-typo retired-nope disabled-not-really; do
+    G="$(probe "$s")"
+    [ "${G%%|*}" = "alert" ]        && ok "$s → still graded (shield kept)"          || bad "$s SILENTLY dropped the shield: $G"
+    case "$G" in *"|note|"*) ok "$s → reported";; *) bad "$s dropped silently: $G";; esac
+done
+for s in shadow-pending-m7 shadow_pending_m7 retired-pending-m9; do
+    G="$(probe "$s")"
+    [ "${G%%|*}" = "shadow" ]       && ok "$s → stands down"                          || bad "$s did not stand down: $G"
+done
+
+echo "== H. only an ABSENT status is implicitly live; an empty one is malformed =="
+for s in "" "   "; do
+    H="$(probe "$s")"
+    [ "${H%%|*}" = "alert" ]        && ok "empty status '$s' → graded (fail-safe)"    || bad "empty status ungraded: $H"
+    case "$H" in *"|note|"*) ok "empty status '$s' → reported";; *) bad "empty status silent: $H";; esac
+done
+ABS="$(probe '__ABSENT__')"
+case "$ABS" in *"|no-note|"*) ok "ABSENT status → graded with NO note (the common case)";; *) bad "absent status noisy: $ABS";; esac
+
+echo "== I. a stood-down setpoint stays disclosed even when its value is null =="
+# A blind window is exactly when a stand-down must not quietly vanish.
+I="$(python3 - "$SENSOR" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("s", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+sp = {"id": "m6", "name": "meta_work_session_ratio", "level": "L3", "direction": "lower_is_better",
+      "target": 0.5, "alert": 0.75, "actuator": "freeze", "status": "shadow-pending-m7"}
+r, _ = m.evaluate({"m6_meta_work_session_ratio": None}, {"metrics": [sp]})
+print(r[0]["status"])
+PY
+)"
+[ "$I" = "shadow" ]                 && ok "null value + shadow → still 'shadow'"      || bad "stand-down vanished on a blind read: $I"
+
+echo "== J. a malformed status is reported even when the reference is unauthored =="
+J="$(python3 - "$SENSOR" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("s", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+sp = {"id": "m6", "name": "meta_work_session_ratio", "level": "L3", "status": "wobble"}  # no target/alert
+r, _ = m.evaluate({"m6_meta_work_session_ratio": 0.96}, {"metrics": [sp]})
+print(r[0]["status"], "note" if r[0].get("status_note") else "no-note")
+PY
+)"
+[ "$J" = "unset_target note" ]      && ok "unset_target path still carries the note"  || bad "note lost on unset_target: $J"
+
+echo "== K. render_human does not claim compliance on a blind read =="
+K="$(python3 - "$SENSOR" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("s", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+print(m.render_human({"sessions_analyzed": 3, "window_days": 7, "measured_at": "2026-08-17T00:00:00",
+                      "results": [], "worst": None, "metrics": {},
+                      "closure": {"closed": False, "sensor_live": False}}))
+PY
+)"
+! grep -q "within target" <<<"$K"   && ok "blind read makes no compliance claim"      || bad "blind read claimed compliance: $K"
+grep -q "No setpoint graded" <<<"$K" && ok "blind read says nothing was measured"     || bad "blind read gave no reason: $K"
+
+echo "== L. --cached re-grades against CURRENT setpoints (the SessionStart path) =="
+# P20 round 1 BLOCKER: knowledge-wakeup-hook.sh runs `--brief --cached`. The cached
+# record stores results/worst graded under the setpoints live at WRITE time, so
+# standing a setpoint down left its retired actuator steering for up to 24h. The
+# fixture below is a PRE-FIX cache: m6 stored as a graded L3 alert with its actuator.
+TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
+mkdir -p "$TMP/.control"
+cat > "$TMP/.control/leverage-setpoints.yaml" <<'YML'
+window_days: 7
+metrics:
+  - id: m6
+    name: meta_work_session_ratio
+    level: L3
+    direction: lower_is_better
+    target: 0.50
+    alert: 0.75
+    actuator: "anti-windup: freeze NEW governance/primitive edits"
+    status: shadow-pending-m7
+YML
+python3 - "$TMP" <<'PY'
+import json, sys, datetime
+ws = sys.argv[1]
+rec = {"sessions_analyzed": 26, "window_days": 7,
+       "measured_at": datetime.datetime.now().isoformat(),
+       "metrics": {"m6_meta_work_session_ratio": 0.96},
+       # stale grading, written before the stand-down was honored
+       "results": [{"key": "m6_meta_work_session_ratio", "name": "meta_work_session_ratio",
+                    "level": "L3", "value": 0.96, "target": 0.5, "alert": 0.75,
+                    "direction": "lower_is_better", "status": "alert", "gap": 0.46,
+                    "actuator": "anti-windup: freeze NEW governance/primitive edits"}],
+       "worst": {"key": "m6_meta_work_session_ratio", "name": "meta_work_session_ratio",
+                 "level": "L3", "value": 0.96, "target": 0.5, "gap": 0.46,
+                 "direction": "lower_is_better", "status": "alert",
+                 "actuator": "anti-windup: freeze NEW governance/primitive edits"},
+       "closure": {"closed": True, "sensor_live": True, "reference_authored": True}}
+json.dump(rec, open(f"{ws}/.control/leverage-state.json", "w"))
+PY
+CACHED="$(python3 "$SENSOR" --workspace "$TMP" --brief --cached --no-store 2>/dev/null)"
+! grep -q "freeze NEW governance" <<<"$CACHED" && ok "cached brief no longer emits the retired actuator" || bad "STALE ACTUATOR STILL STEERING: $CACHED"
+! grep -q "Worst gap" <<<"$CACHED"             && ok "cached brief no longer ranks it as worst"          || bad "still ranked worst: $CACHED"
+grep -q "NOT graded" <<<"$CACHED"              && ok "cached brief discloses the stand-down"             || bad "stand-down undisclosed: $CACHED"
+
 echo
 echo "setpoint-shadow-status: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
