@@ -269,6 +269,42 @@ def metric_id(key):
     return key.split("_", 1)[0]
 
 
+# Setpoint lifecycle. A setpoint may be stood down to "shadow" while its
+# replacement calibrates: MEASURED, NOT GRADED. Its value is still computed,
+# still written to leverage-state.json and still rendered, but it can never be
+# ranked, become `worst`, or emit its actuator.
+#
+# Grading a stood-down setpoint anyway is a FALSE SHIELD -- it steers the agent
+# on the authority of a reference the policy file has already retired. m6
+# carried `status: shadow-pending-m7` from 2026-08-16 and kept emitting
+# "freeze NEW governance/primitive edits" as an L3 ALERT, because evaluate()
+# read every setpoint field except this one. (BRO-2168)
+#
+# Absence of `status` means live -- the common case, and the fail-safe
+# direction: an UNRECOGNIZED value keeps grading and reports itself, because a
+# noisy alarm is recoverable while a silently dropped shield is not.
+GRADED_SETPOINT_STATUSES = frozenset({"live", "active", "graded"})
+SHADOW_SETPOINT_STATUSES = frozenset({"shadow", "retired", "disabled", "deprecated"})
+
+
+def setpoint_grading(sp):
+    """Decide whether one setpoint's value may be graded, ranked and actuated.
+
+    Returns (graded: bool, note: str|None). `note` is non-None only for a
+    status this function does not recognize, which is graded anyway and
+    surfaced so the misconfiguration cannot pass silently."""
+    raw = sp.get("status")
+    if raw is None:
+        return True, None
+    s = str(raw).strip().lower()
+    if not s or s in GRADED_SETPOINT_STATUSES:
+        return True, None
+    # `shadow-pending-m7` and friends: match the lifecycle word before its qualifier.
+    if s.split("-", 1)[0] in SHADOW_SETPOINT_STATUSES:
+        return False, None
+    return True, f"unrecognized setpoint status {raw!r} — graded as live"
+
+
 def evaluate(metrics, setpoints):
     by_id = {m["id"]: m for m in setpoints.get("metrics", [])}
     results = []
@@ -279,6 +315,18 @@ def evaluate(metrics, setpoints):
         if not sp or val is None:
             results.append({"key": key, "value": val, "level": level, "status": "no_setpoint",
                             "name": sp.get("name", mid)})
+            continue
+        graded, status_note = setpoint_grading(sp)
+        if not graded:
+            # Stood down. Keep target/alert on the row so the reader can see what
+            # it WOULD have been graded against, but carry no gap and no actuator:
+            # a row with an actuator is a row that steers.
+            results.append({
+                "key": key, "value": val, "level": level, "status": "shadow",
+                "target": sp.get("target"), "alert": sp.get("alert"),
+                "direction": sp.get("direction", "lower_is_better"),
+                "setpoint_status": sp.get("status"), "name": sp.get("name", mid),
+            })
             continue
         direction = sp.get("direction", "lower_is_better")
         target, alert = sp.get("target"), sp.get("alert")
@@ -293,12 +341,15 @@ def evaluate(metrics, setpoints):
         else:
             status = "alert" if val <= alert else "warn" if val < target else "ok"
             gap = round(target - val, 4)
-        results.append({
+        row = {
             "key": key, "value": val, "target": target, "alert": alert, "level": level,
             "direction": direction, "status": status, "gap": gap,
             "actuator": sp.get("actuator", ""), "name": sp.get("name", mid),
-        })
-    order = {"alert": 0, "warn": 1, "ok": 2, "unset_target": 3, "no_setpoint": 4}
+        }
+        if status_note:
+            row["status_note"] = status_note
+        results.append(row)
+    order = {"alert": 0, "warn": 1, "ok": 2, "unset_target": 3, "no_setpoint": 4, "shadow": 5}
     ranked = sorted([r for r in results if r["status"] in ("alert", "warn")],
                     key=lambda r: (order[r["status"]], -(r.get("gap") or 0)))
     return results, (ranked[0] if ranked else None)
@@ -377,6 +428,26 @@ def store(record, state_file, store_file):
         f.write("\n")
 
 
+def shadow_notes(record):
+    """Lines naming every stood-down setpoint and every unrecognized status.
+
+    A shadow setpoint is deliberately ungraded, so it vanishes from the graded
+    output entirely. Vanishing silently is the opposite failure to the one
+    BRO-2168 fixed -- a shield can then be gone for windows without anyone
+    noticing -- so its absence is stated rather than implied."""
+    rows = record.get("results", [])
+    out = []
+    shadowed = [r for r in rows if r.get("status") == "shadow"]
+    if shadowed:
+        out.append("shadow (measured, NOT graded): " + ", ".join(
+            f"{r.get('name', r['key'])} = {r.get('value')} [{r.get('setpoint_status')}]"
+            for r in shadowed))
+    for r in rows:
+        if r.get("status_note"):
+            out.append(f"⚠ {r.get('name', r['key'])}: {r['status_note']}")
+    return out
+
+
 def render_brief(record):
     worst = record.get("worst")
     lines = [f"[self-improvement loop] {record['sessions_analyzed']} sessions / {record['window_days']}d"]
@@ -393,8 +464,9 @@ def render_brief(record):
         lines.append(
             "No setpoint graded — the sensor read no structural events this window."
             if not cl.get("sensor_live")
-            else "All authored setpoints within target."
+            else "All graded setpoints within target."
         )
+        lines.extend(shadow_notes(record))
         return "\n".join(x for x in lines if x)
     sign = "↑" if worst["direction"] == "lower_is_better" else "↓"
     lines.append(f"Worst gap [{worst['status'].upper()}] {worst['name']} ({worst.get('level','L?')}) = "
@@ -404,20 +476,27 @@ def render_brief(record):
               if r.get("status") == "alert" and r["key"] != worst["key"]]
     if others:
         lines.append("Other alerts: " + ", ".join(f"{o['name']}={o['value']}" for o in others))
+    lines.extend(shadow_notes(record))
     return "\n".join(lines)
 
 
 def render_human(record):
     out = [f"Self-improvement loop — {record['sessions_analyzed']} sessions over "
            f"{record['window_days']}d  (measured {record['measured_at']})", ""]
-    mark = {"ok": "ok  ", "warn": "WARN", "alert": "ALRT", "no_setpoint": "----", "unset_target": "r0? "}
+    mark = {"ok": "ok  ", "warn": "WARN", "alert": "ALRT", "no_setpoint": "----",
+            "unset_target": "r0? ", "shadow": "shdw"}
     for lv in ["L0", "L1", "L2", "L3"]:
         rows = [r for r in record["results"] if r.get("level") == lv]
         if not rows:
             continue
         out.append(f"  ── {lv} ──")
         for r in rows:
-            tgt = f"(target {r.get('target')}, alert {r.get('alert')})" if r["status"] not in ("no_setpoint", "unset_target") else ""
+            if r["status"] == "shadow":
+                tgt = f"(would-be target {r.get('target')} — NOT graded: {r.get('setpoint_status')})"
+            elif r["status"] in ("no_setpoint", "unset_target"):
+                tgt = ""
+            else:
+                tgt = f"(target {r.get('target')}, alert {r.get('alert')})"
             out.append(f"  {mark.get(r['status'],'?')} {r.get('name', r['key']):<30} {str(r.get('value')):>8}   {tgt}")
     cl = record.get("closure", {})
     out.append("")
@@ -429,7 +508,8 @@ def render_human(record):
         out.append(f"  [shadow] m6s_meta_work_ship_ratio = {m6s}  "
                    f"(exogenous ship-signal — NON-actuating, calibrating for BRO-1709)")
     worst = record.get("worst")
-    out.append(f"  Focus: {worst['name']} → {worst['actuator']}" if worst else "  All setpoints within target.")
+    out.append(f"  Focus: {worst['name']} → {worst['actuator']}" if worst else "  All graded setpoints within target.")
+    out.extend(f"  {n}" for n in shadow_notes(record))
     return "\n".join(out)
 
 
