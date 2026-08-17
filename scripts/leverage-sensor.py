@@ -304,6 +304,15 @@ def evaluate(metrics, setpoints):
     return results, (ranked[0] if ranked else None)
 
 
+def sensor_is_live(raw):
+    """A sensor that opened session files but extracted zero structural events is
+    blind, not live. Single definition, used both to blind the metrics before
+    grading and to report closure -- so the two can never disagree. (STI-1919)"""
+    return raw.get("sessions_analyzed", 0) > 0 and (
+        raw.get("tool_results", 0) > 0 or raw.get("edits", 0) > 0
+    )
+
+
 def closure_verdict(record, setpoints):
     """Per-RCS-level closure keyed on POSITIVE RAW EVENT COUNTS, not non-null metric
     values. A rate metric returns 0.0 (never None) even when the parser extracted zero
@@ -337,7 +346,7 @@ def closure_verdict(record, setpoints):
         if level_evidence.get(lv, False):
             e["live"] = True
     # a sensor that opened files but extracted zero structural events is blind, not live
-    sensor_live = sessions > 0 and (tool_results > 0 or edits > 0)
+    sensor_live = sensor_is_live(raw)  # STI-1919: one definition, shared with main()
     expected = ["L0", "L1", "L2", "L3"]
     levels_closed = all(levels.get(lv, {}).get("live") for lv in expected)
     authored_by = setpoints.get("authored_by", "unknown")
@@ -379,7 +388,13 @@ def render_brief(record):
     if cl and not cl.get("reference_authored"):
         lines.append("⚠ reference r0 is bstack-default (endogenous) — author + sign .control/leverage-setpoints.yaml")
     if not worst:
-        lines.append("All authored setpoints within target." if worst is None else "")
+        # STI-1919: with no worst gap, "within target" is only true if we measured.
+        # A blind read has no graded values at all and must not report compliance.
+        lines.append(
+            "No setpoint graded — the sensor read no structural events this window."
+            if not cl.get("sensor_live")
+            else "All authored setpoints within target."
+        )
         return "\n".join(x for x in lines if x)
     sign = "↑" if worst["direction"] == "lower_is_better" else "↓"
     lines.append(f"Worst gap [{worst['status'].upper()}] {worst['name']} ({worst.get('level','L?')}) = "
@@ -460,6 +475,16 @@ def main():
     window = args.window if args.window is not None else setpoints.get("window_days", 7)
     kg_read_re = re.compile(setpoints.get("knowledge_paths", DEFAULT_KG_READ), re.IGNORECASE)
     metrics, raw = analyze(glob_pat, window, kg_read_re)
+    # STI-1919: a blind read must not emit a row that reads as a measurement.
+    # With no structural events every metric computes to 0.0 from an empty
+    # numerator -- at or better than every target -- and only closure.sensor_live
+    # says otherwise. Null the graded values instead: a null cannot be compared to
+    # a target, so evaluate() files it as "no_setpoint" and it can never become
+    # `worst`. raw/ keeps the counts, so nothing is lost. This runs BEFORE
+    # merge_ship_shadow because the ship signal is exogenous (BRO-1707) and a
+    # blind transcript read says nothing about it.
+    if not sensor_is_live(raw):
+        metrics = dict.fromkeys(metrics)
     merge_ship_shadow(metrics, raw, workspace)
     results, worst = evaluate(metrics, setpoints)
 
