@@ -210,6 +210,15 @@ CACHED="$(python3 "$SENSOR" --workspace "$TMP" --brief --cached --no-store 2>/de
 ! grep -q "Worst gap" <<<"$CACHED"             && ok "cached brief no longer ranks it as worst"          || bad "still ranked worst: $CACHED"
 grep -q "NOT graded" <<<"$CACHED"              && ok "cached brief discloses the stand-down"             || bad "stand-down undisclosed: $CACHED"
 
+echo "== M. unreadable setpoints must not pass off cached grading as current =="
+# Fallback hole found in round 2 self-check: when the policy file cannot be read the
+# cached path keeps the stored grading, which can name an actuator policy has since
+# retired -- steering on authority nobody can verify. It must be labelled.
+echo ":::not yaml:::" > "$TMP/.control/leverage-setpoints.yaml"
+STALE="$(python3 "$SENSOR" --workspace "$TMP" --brief --cached --no-store 2>/dev/null)"
+grep -q "setpoints unreadable" <<<"$STALE" && ok "unreadable setpoints are disclosed"  || bad "stale grading passed off as current: $STALE"
+
+
 echo
 echo "setpoint-shadow-status: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

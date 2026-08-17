@@ -492,6 +492,8 @@ def render_brief(record):
         lines.append(f"⚠ loop NOT closed ({why}) — run `bstack doctor` §23")
     if cl and not cl.get("reference_authored"):
         lines.append("⚠ reference r0 is bstack-default (endogenous) — author + sign .control/leverage-setpoints.yaml")
+    if record.get("stale_grading"):
+        lines.append("⚠ setpoints unreadable — the grading below is from cache and may name a RETIRED actuator")
     if not worst:
         # STI-1919: with no worst gap, "within target" is only true if we measured.
         # A blind read has no graded values at all and must not report compliance.
@@ -605,6 +607,12 @@ def main():
                     # against setpoints that actually loaded.
                     if st.get("metrics") and sp_now.get("metrics"):
                         st["results"], st["worst"] = evaluate(st["metrics"], sp_now)
+                    elif st.get("worst"):
+                        # Policy could not be read, yet the cache still carries a
+                        # ranked actuator. Emitting it silently is the same failure
+                        # BRO-2168 fixes one layer up: steering on authority nobody
+                        # can currently verify. Say so instead of implying it is current.
+                        st["stale_grading"] = True
                 except Exception:
                     # Never let the re-grade take the brief down; fall back to the
                     # stored grading rather than emitting nothing.
