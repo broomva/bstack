@@ -210,13 +210,59 @@ CACHED="$(python3 "$SENSOR" --workspace "$TMP" --brief --cached --no-store 2>/de
 ! grep -q "Worst gap" <<<"$CACHED"             && ok "cached brief no longer ranks it as worst"          || bad "still ranked worst: $CACHED"
 grep -q "NOT graded" <<<"$CACHED"              && ok "cached brief discloses the stand-down"             || bad "stand-down undisclosed: $CACHED"
 
+echo "== N. a '-pending' qualifier must NAME a successor (round-2 blocker) =="
+# `shadow-pending` / `shadow-pending-` promise a successor and do not deliver one.
+# Standing down on a half-written value is the silent shield-drop this rule prevents.
+for s in shadow-pending shadow-pending- "shadow-pending- " retired-pending; do
+    N="$(probe "$s")"
+    [ "${N%%|*}" = "alert" ]        && ok "'$s' → graded (no successor named)"        || bad "'$s' stood down on a half-written value: $N"
+    case "$N" in *"|note|"*) ok "'$s' → reported";; *) bad "'$s' dropped silently: $N";; esac
+done
+for s in shadow-pending-m7 retired-pending-x; do
+    N="$(probe "$s")"
+    [ "${N%%|*}" = "shadow" ]       && ok "'$s' → stands down (successor named)"      || bad "'$s' rejected: $N"
+done
+
+echo "== O. no compliance claim when NOTHING was graded (round-2 major) =="
+# A cached m6 metric re-graded against setpoints that define only m7 leaves every row
+# ungraded, so `worst` is None -- but the window was never certified. A STALE closure
+# block carried over by the cached path must not certify it either.
+O="$(python3 - "$SENSOR" <<'PY2'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("s", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+sp = {"id": "m7", "name": "other", "level": "L3", "direction": "lower_is_better", "target": 1, "alert": 2}
+results, worst = m.evaluate({"m6_meta_work_session_ratio": 0.96}, {"metrics": [sp]})
+print(m.render_brief({"sessions_analyzed": 9, "window_days": 7, "results": results, "worst": worst,
+                      "closure": {"closed": True, "sensor_live": True, "reference_authored": True}}))
+PY2
+)"
+! grep -q "within target" <<<"$O"   && ok "no false compliance when nothing graded"    || bad "FALSE COMPLIANCE: $O"
+grep -q "no metric matched" <<<"$O" && ok "states WHY nothing was graded"              || bad "no reason given: $O"
+
+echo "== P. absent closure is not read as a dead sensor (round-2 regression) =="
+P_="$(python3 - "$SENSOR" <<'PY2'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("s", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+sp = {"id": "m6", "name": "meta_work_session_ratio", "level": "L3", "direction": "lower_is_better",
+      "target": 0.5, "alert": 0.75, "actuator": "freeze"}
+results, worst = m.evaluate({"m6_meta_work_session_ratio": 0.1}, {"metrics": [sp]})  # healthy
+print(m.render_brief({"sessions_analyzed": 9, "window_days": 7, "results": results, "worst": worst}))
+PY2
+)"
+grep -q "All graded setpoints within target" <<<"$P_" && ok "healthy + absent closure → compliance is stated" || bad "absent closure misread as dead sensor: $P_"
+
+
 echo "== M. unreadable setpoints must not pass off cached grading as current =="
 # Fallback hole found in round 2 self-check: when the policy file cannot be read the
 # cached path keeps the stored grading, which can name an actuator policy has since
 # retired -- steering on authority nobody can verify. It must be labelled.
 echo ":::not yaml:::" > "$TMP/.control/leverage-setpoints.yaml"
 STALE="$(python3 "$SENSOR" --workspace "$TMP" --brief --cached --no-store 2>/dev/null)"
-grep -q "setpoints unreadable" <<<"$STALE" && ok "unreadable setpoints are disclosed"  || bad "stale grading passed off as current: $STALE"
+grep -q "setpoints unreadable" <<<"$STALE"      && ok "unreadable setpoints are disclosed"        || bad "stale grading passed off as current: $STALE"
+# Round-2 blocker: labelling is not enough. A caveat printed beside a live
+# "-> Corrective actuator:" line still steers; the steering itself must go.
+! grep -q "Corrective actuator" <<<"$STALE"     && ok "NO actuator emitted without readable policy" || bad "STILL STEERING on unverifiable policy: $STALE"
+! grep -q "Worst gap" <<<"$STALE"               && ok "nothing ranked as worst"                   || bad "still ranked: $STALE"
 
 
 echo

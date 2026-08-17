@@ -314,10 +314,17 @@ def setpoint_grading(sp):
         return True, None
     word, _, qualifier = s.partition("-")
     if word in SHADOW_SETPOINT_STATUSES:
-        if not qualifier or qualifier.split("-", 1)[0] == SETPOINT_STATUS_QUALIFIER:
+        # A bare lifecycle word is a complete statement and stands the setpoint down.
+        if not qualifier:
             return False, None
-        return True, (f"setpoint status {raw!r} has an unrecognized qualifier "
-                      f"(expected '{word}' or '{word}-{SETPOINT_STATUS_QUALIFIER}-<successor>') "
+        # `-pending` PROMISES a successor, so it must name one. `shadow-pending` and
+        # `shadow-pending-` do not, and standing down on them would drop a shield on
+        # a half-written value -- the same silent-drop this rule exists to prevent.
+        head, _, successor = qualifier.partition("-")
+        if head == SETPOINT_STATUS_QUALIFIER and successor.strip():
+            return False, None
+        return True, (f"setpoint status {raw!r} is malformed "
+                      f"(expected {word!r} or '{word}-{SETPOINT_STATUS_QUALIFIER}-<successor>') "
                       f"— graded as live")
     return True, f"unrecognized setpoint status {raw!r} — graded as live"
 
@@ -462,6 +469,27 @@ def store(record, state_file, store_file):
         f.write("\n")
 
 
+GRADED_ROW_STATUSES = frozenset({"ok", "warn", "alert"})
+
+
+def no_worst_line(record):
+    """The line to print when nothing ranked as `worst`.
+
+    "All within target" is a COMPLIANCE CLAIM, and it is only true when something was
+    actually graded. Three distinct situations previously collapsed into it: a healthy
+    window, a blind sensor, and a metric set that no longer matches any live setpoint
+    (every row lands on no_setpoint/shadow/unset_target, so nothing ranks). Deciding on
+    the graded rows themselves rather than on `closure` also stops a STALE closure
+    block -- carried over by the cached path -- from certifying a fresh regrade, and
+    stops an ABSENT closure from being read as a dead sensor."""
+    graded = [r for r in record.get("results", []) if r.get("status") in GRADED_ROW_STATUSES]
+    if graded:
+        return "All graded setpoints within target."
+    if record.get("closure", {}).get("sensor_live") is False:
+        return "No setpoint graded — the sensor read no structural events this window."
+    return "No setpoint graded — no metric matched a live setpoint this window."
+
+
 def shadow_notes(record):
     """Lines naming every stood-down setpoint and every unrecognized status.
 
@@ -493,15 +521,12 @@ def render_brief(record):
     if cl and not cl.get("reference_authored"):
         lines.append("⚠ reference r0 is bstack-default (endogenous) — author + sign .control/leverage-setpoints.yaml")
     if record.get("stale_grading"):
-        lines.append("⚠ setpoints unreadable — the grading below is from cache and may name a RETIRED actuator")
+        lines.append("⚠ setpoints unreadable — no actuator emitted (a cached one may name a RETIRED setpoint); "
+                     "fix .control/leverage-setpoints.yaml")
     if not worst:
-        # STI-1919: with no worst gap, "within target" is only true if we measured.
-        # A blind read has no graded values at all and must not report compliance.
-        lines.append(
-            "No setpoint graded — the sensor read no structural events this window."
-            if not cl.get("sensor_live")
-            else "All graded setpoints within target."
-        )
+        # STI-1919 + BRO-2168: with no worst gap, "within target" is only true if
+        # something was actually graded. no_worst_line() decides on the graded rows.
+        lines.append(no_worst_line(record))
         lines.extend(shadow_notes(record))
         return "\n".join(x for x in lines if x)
     sign = "↑" if worst["direction"] == "lower_is_better" else "↓"
@@ -544,15 +569,8 @@ def render_human(record):
         out.append(f"  [shadow] m6s_meta_work_ship_ratio = {m6s}  "
                    f"(exogenous ship-signal — NON-actuating, calibrating for BRO-1709)")
     worst = record.get("worst")
-    if worst:
-        out.append(f"  Focus: {worst['name']} → {worst['actuator']}")
-    elif not cl.get("sensor_live"):
-        # Same guard render_brief carries. Without it a blind read prints
-        # "closure: OPEN (sensor_live=False)" and "all within target" together --
-        # a compliance claim about a window in which nothing was measured.
-        out.append("  No setpoint graded — the sensor read no structural events this window.")
-    else:
-        out.append("  All graded setpoints within target.")
+    out.append(f"  Focus: {worst['name']} → {worst['actuator']}" if worst
+               else "  " + no_worst_line(record))
     out.extend(f"  {n}" for n in shadow_notes(record))
     return "\n".join(out)
 
@@ -607,12 +625,19 @@ def main():
                     # against setpoints that actually loaded.
                     if st.get("metrics") and sp_now.get("metrics"):
                         st["results"], st["worst"] = evaluate(st["metrics"], sp_now)
-                    elif st.get("worst"):
-                        # Policy could not be read, yet the cache still carries a
-                        # ranked actuator. Emitting it silently is the same failure
-                        # BRO-2168 fixes one layer up: steering on authority nobody
-                        # can currently verify. Say so instead of implying it is current.
+                    else:
+                        # Policy could not be read (load_setpoints DEGRADES to
+                        # `metrics: []` rather than raising). The cache still holds a
+                        # ranked actuator, but nothing can confirm it is still live --
+                        # it may name exactly the setpoint policy has since retired.
+                        #
+                        # DROP it rather than print it with a caveat. A warning beside
+                        # a "→ Corrective actuator:" line asks the reader to discount
+                        # a steering instruction, which is the incantation-instead-of-
+                        # control failure this whole change exists to close. Measured
+                        # values still render; only the steering goes.
                         st["stale_grading"] = True
+                        st["worst"] = None
                 except Exception:
                     # Never let the re-grade take the brief down; fall back to the
                     # stored grading rather than emitting nothing.
