@@ -9,6 +9,11 @@
 # flip verdict. A condition whose mutant does not flip is decoration.
 set -uo pipefail
 
+# NOTE: this file contains NO literal backticks. Fixture bodies live inside
+# $(fixture ... <<'EOF' ...), and a literal backtick there does not parse under
+# bash 3.2 (the system bash on macOS). Markdown code spans are decoration in these
+# fixtures — the predicate never reads them — so single quotes are used instead.
+
 BSTACK_REPO="$(cd "$(dirname "$0")/.." && pwd)"
 S="$BSTACK_REPO/scripts"
 PASS=0; FAIL=0
@@ -23,8 +28,8 @@ CONT="$S/arc-continuation-hook.sh"
 
 # fixture <name> <text-on-stdin> → path to a one-turn transcript (JSON-safe)
 fixture() {
-  local name="$1"                 # NOTE: separate statements — `local a=$1 b=$TMP/$a` expands
-  local f="$TMP/$name.jsonl"      # $a before assigning it, and `set -u` then aborts the fixture,
+  local name="$1"                 # NOTE: separate statements — 'local a=$1 b=$TMP/$a' expands
+  local f="$TMP/$name.jsonl"      # $a before assigning it, and 'set -u' then aborts the fixture,
                                   # which silently made every "does not block" assertion vacuous.
   python3 -c '
 import json,sys
@@ -51,7 +56,7 @@ CONFORMING_TABLE="$(fixture good_table <<'EOF'
 
 | # | Ask | Unblocks | If you say nothing |
 |---|---|---|---|
-| 1 | **Merge `workspace#403`** — `gh pr merge 403 --squash`. Tests green. | the entry lands | it stays open |
+| 1 | **Merge 'workspace#403'** — 'gh pr merge 403 --squash'. Tests green. | the entry lands | it stays open |
 
 ## ✅ Shipped
 Both PRs open. Neither merge is mine to make; I am blocked on the row above.
@@ -60,7 +65,7 @@ EOF
 CONFORMING_BULLET="$(fixture good_bullet <<'EOF'
 ### ⛔ Blocked on you — 1 item
 
-- **Paste an API key into local env** — `AI_GATEWAY_API_KEY`. That lane is blocked without it.
+- **Paste an API key into local env** — 'AI_GATEWAY_API_KEY'. That lane is blocked without it.
   If you say nothing, I skip it and finish the other three lanes.
 EOF
 )"
@@ -88,7 +93,7 @@ CONFORMING_OPTS="$(fixture good_opts <<'EOF'
 
 | # | Ask | Unblocks | If you say nothing |
 |---|---|---|---|
-| 1 | **Pick one for `bstack#102`.** A — split it *(suggested)*. B — keep reviewing. C — close it. | the fix shipping | I do A |
+| 1 | **Pick one for 'bstack#102'.** A — split it *(suggested)*. B — keep reviewing. C — close it. | the fix shipping | I do A |
 
 Your call on that one; everything else is done.
 EOF
@@ -129,13 +134,13 @@ NO_DEFAULT="$(fixture bad_nodefault <<'EOF'
 
 | # | Ask | Unblocks |
 |---|---|---|
-| 1 | **Merge `workspace#403`** — needs a human. | the entry lands |
+| 1 | **Merge 'workspace#403'** — needs a human. | the entry lands |
 EOF
 )"
 NO_HEADING="$(fixture bad_noheading <<'EOF'
 I am blocked on you for one thing.
 
-- **Merge `workspace#403`** — `gh pr merge 403 --squash`.
+- **Merge 'workspace#403'** — 'gh pr merge 403 --squash'.
   If you say nothing, it stays open.
 EOF
 )"
@@ -222,7 +227,7 @@ def has_ask_block(text):
 CASES = {
   "head":       "- **Merge PR 403** now.\nIf you say nothing, it stays open.",
   "imperative": "## ⛔ Blocked on you\n\n| # | Ask | Default |\n|---|---|---|\n| 1 | Should we ship? | I hold |",
-  "default":    "## ⛔ Blocked on you\n\n- **Merge PR 403** — `gh pr merge 403`.",
+  "default":    "## ⛔ Blocked on you\n\n- **Merge PR 403** — 'gh pr merge 403'.",
 }
 base = build()
 fails = 0

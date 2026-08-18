@@ -90,7 +90,11 @@ IMPERATIVES = {
 }
 
 def _lead_word(cell):
-    c = re.sub(r"[*_`\[\]()#>~]", " ", cell)        # strip markdown emphasis / links
+    # NOTE: the backtick below is written \x60, never literally. This python lives
+    # inside a $()-nested quoted heredoc, where a literal backtick does not parse
+    # under bash 3.2 — the system bash this hook actually runs on. Caught by
+    # tests/bash32-parse-safety; it would have shipped a hook that fails to parse.
+    c = re.sub(r"[*_\x60\[\]()#>~]", " ", cell)        # strip markdown emphasis / links
     c = re.sub(r"^\s*\d+[.)]?\s*", "", c)           # strip leading numbering
     m = re.match(r"\s*([A-Za-z']+)", c)
     return m.group(1).lower() if m else ""
