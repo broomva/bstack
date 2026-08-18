@@ -233,9 +233,11 @@ def build(mutation=None):
     if mutation == "head":
         ns["ASK_HEAD_RE"] = re.compile(r"")          # always matches
     elif mutation == "imperative":
-        ns["_has_imperative_row"] = lambda t: True   # always true
+        ns["_imperative_cells"] = lambda cells: True # always true (both paths)
     elif mutation == "default":
         ns["DEFAULT_RE"] = re.compile(r"")           # always matches
+    elif mutation == "nonempty":
+        ns["_nonempty"] = lambda v: True             # an empty default counts
     # Return the SHIPPING has_ask_block, not a re-declaration of it. Python resolves
     # globals at call time, so overwriting ASK_HEAD_RE / _has_imperative_row /
     # DEFAULT_RE in ns mutates the real function. An earlier version re-declared a
@@ -248,6 +250,7 @@ CASES = {
   "head":       "- **Merge PR 403** now.\nIf you say nothing, it stays open.",
   "imperative": "## ⛔ Blocked on you\n\n| # | Ask | Default |\n|---|---|---|\n| 1 | Should we ship? | I hold |",
   "default":    "## ⛔ Blocked on you\n\n- **Merge PR 403** — 'gh pr merge 403'.",
+  "nonempty":   "## ⛔ Blocked on you\n\n| # | Ask | Default |\n|---|---|---|\n| 1 | **Merge PR 403.** | |",
 }
 base = build()
 fails = 0
@@ -260,7 +263,7 @@ for cond, text in CASES.items():
         print(f"  FAIL {cond}: mutant still rejects — condition is decoration, not a check"); fails += 1
 sys.exit(1 if fails else 0)
 PYMUT
-if [ $? -eq 0 ]; then PASS=$((PASS+3)); else FAIL=$((FAIL+1)); fi
+if [ $? -eq 0 ]; then PASS=$((PASS+4)); else FAIL=$((FAIL+1)); fi
 
 echo "== round-1 cross-model regressions =="
 
@@ -331,6 +334,62 @@ EOF
 "$ARC" set click-sid demo >/dev/null
 blocks click-sid "$CLICKY" && bad "'Click' rejected — allowlist still too narrow" \
                            || ok "'Click' is accepted as an imperative"
+
+echo "== round-2 cross-model regressions =="
+
+# BLOCKER: a NEGATED terminal phrase still tripped the trigger.
+NEGATED="$(fixture negated <<'EOF'
+## Shipped
+
+This workflow no longer requires a human; deployment shipped and all tests pass.
+Nothing here needs you. Merged, pruned, clean.
+EOF
+)"
+"$ARC" set neg-sid demo >/dev/null
+blocks neg-sid "$NEGATED" && bad "negated terminal phrasing still refused a healthy receipt" \
+                          || ok "negated phrasing does NOT trip the gate"
+
+# MAJOR: the imperative was allowed to BE the default.
+IMP_IN_DEFAULT="$(fixture impdefault <<'EOF'
+## ⛔ Blocked on you — 1 item
+
+| # | Ask | If you say nothing |
+|---|---|---|
+| 1 | Should we ship? | Run the current build |
+
+Stopping here, your call.
+EOF
+)"
+"$ARC" set impdef-sid demo >/dev/null
+handbacky impdef-sid "$IMP_IN_DEFAULT" && ok "an imperative in the DEFAULT cell does not make a row answerable" \
+                                       || bad "imperative-as-default slipped through"
+
+# MAJOR: a Default HEADER with an empty cell satisfied the default requirement.
+EMPTY_DEFAULT="$(fixture emptydefault <<'EOF'
+## ⛔ Blocked on you — 1 item
+
+| # | Ask | Default |
+|---|---|---|
+| 1 | **Merge PR 403.** | |
+
+Your call.
+EOF
+)"
+"$ARC" set empty-sid demo >/dev/null
+handbacky empty-sid "$EMPTY_DEFAULT" && ok "an empty default cell is not a default" \
+                                     || bad "empty default cell slipped through"
+
+# MAJOR: handback_count was never reset, so the consecutive cap became a lifetime cap.
+"$ARC" set rst-sid demo >/dev/null
+handbacky rst-sid "$NARRATIVE" >/dev/null            # nudge 1
+cont rst-sid "$HEALTHY" >/dev/null                   # a productive turn resets it
+handbacky rst-sid "$NARRATIVE" && ok "a productive turn resets the handback cap (consecutive, not lifetime)" \
+                               || bad "handback cap never resets — it is a lifetime cap"
+
+# And the counters must stay isolated from each other.
+[ "$("$ARC" get rst-sid reconcile_count)" = "0" ] \
+  && ok "handback blocks do not increment reconcile_count" \
+  || bad "counters still bleed into each other"
 
 echo
 echo "handback-contract: $PASS passed, $FAIL failed"

@@ -70,6 +70,10 @@ COMPLETE_RE = re.compile(
     r"[.!\s]*$", re.I)
 
 # -- handback contract (BRO-2179) ---------------------------------------------
+# NO LITERAL BACKTICKS BELOW. This python is inside a $()-nested quoted heredoc,
+# where bash 3.2 (the system bash) fails to parse one. Write \x60 in regexes and
+# single quotes in prose. tests/bash32-parse-safety is the gate; it has now caught
+# this twice in this file, the second time in the comment explaining the first.
 # Measured over 100 long sessions: 31 ended on a blocker; of those, 13% contained a
 # question mark at all, 6% put it next to the blocker, and 0/31 contained a single
 # imperative addressed to the reader. This predicate refuses a terminal turn that
@@ -84,10 +88,25 @@ BLOCKER_RE = re.compile(
     r"needs? (?:you|your)\b|await(?:ing)? (?:your|you|a human|an? [\w-]+ from you)|"
     r"requires? (?:a )?human|(?:can'?t|cannot|unable to) proceed without|"
     r"escalat\w* to (?:you|the user|the operator))", re.I)
+# "This workflow no longer requires a human" matched 'requires a human' and refused a
+# healthy receipt. A trigger is only a trigger if nothing negates it just before.
+NEGATOR_RE = re.compile(
+    r"\b(no longer|not|never|without|nothing|none of|n't|cannot be|no)\b[^.;:\n]{0,40}$", re.I)
+
+def blocker_stance(text):
+    """True only for a NON-negated terminal-stance phrase."""
+    for m in BLOCKER_RE.finditer(text):
+        if not NEGATOR_RE.search(text[max(0, m.start() - 60):m.start()]):
+            return True
+    return False
 ASK_HEAD_RE = re.compile(
     r"^\s{0,3}#{1,4}[^\n]*?(⛔|blocked on you|what i need from you)", re.I | re.M)
 DEFAULT_RE = re.compile(
     r"if you (?:say|answer|do|reply) nothing|^\|[^\n]*\bdefault\b[^\n]*\|", re.I | re.M)
+# Cell-level twin. DEFAULT_RE is line-anchored (^\|...\|) so it can never match a bare
+# header CELL like "Default" — using it to identify the default column silently
+# returned None for every table, which made even conforming messages unanswerable.
+DEFAULT_COL_RE = re.compile(r"if you (?:say|answer|do|reply) nothing|\bdefault\b", re.I)
 # Generous on purpose: a missed imperative means we do NOT block, which is the safe arm.
 IMPERATIVES = {
     "run", "merge", "approve", "decide", "choose", "pick", "confirm", "paste",
@@ -107,18 +126,71 @@ def _lead_word(cell):
     m = re.match(r"\s*([A-Za-z']+)", c)
     return m.group(1).lower() if m else ""
 
+def _imperative_cells(cells):
+    """Any of these cells leads with an imperative. Single mutation surface for both
+    the table and bullet paths, so a mutation proof covers both."""
+    return any(_lead_word(c) in IMPERATIVES for c in cells)
+
+def _nonempty(value):
+    """A Default COLUMN with an empty cell is not a default. Factored out so the rule
+    has its own mutation proof."""
+    return bool(str(value).strip())
+
 def _has_imperative_row(text):
     for ln in text.splitlines():
         t = ln.strip()
         if t.startswith("|"):
-            for cell in t.strip("|").split("|"):
-                if _lead_word(cell) in IMPERATIVES:
-                    return True
+            if _imperative_cells(t.strip("|").split("|")):
+                return True
         elif re.match(r"^([-*+]|\d+[.)])\s", t):
             body = t[1:] if t[:1] in "-*+" else t
-            if _lead_word(body) in IMPERATIVES:
+            if _imperative_cells([body]):
                 return True
     return False
+
+def _rows(block):
+    out = []
+    for ln in block.splitlines():
+        t = ln.strip()
+        if not t.startswith("|"):
+            continue
+        cells = [c.strip() for c in t.strip("|").split("|")]
+        if all(set(c) <= set("-: ") for c in cells):
+            continue                                  # separator row
+        out.append(cells)
+    return out
+
+def _default_col(header):
+    for i, c in enumerate(header):
+        if DEFAULT_COL_RE.search(c):
+            return i
+    return None
+
+def _answerable(block):
+    """At least one row a person can actually act on.
+
+    Table form: an imperative leads a cell that is NOT the default column, AND that
+    same row's default cell is non-empty. Checking the two independently let
+    '| Should we ship? | Run the current build |' pass on an imperative that was the
+    default, and '| **Merge PR 403.** | |' pass on an empty default. Both were
+    supplied by cross-model review.
+    """
+    rows = _rows(block)
+    if rows:
+        # AUTHORITATIVE when a table exists — no falling through to the looser prose
+        # rule. Falling through re-opened both holes this rule closes, because the
+        # prose rule finds an imperative in ANY cell and matches a Default header
+        # anywhere in the block.
+        header, data = rows[0], rows[1:]
+        dcol = _default_col(header)
+        for r in data:
+            dval = r[dcol] if (dcol is not None and dcol < len(r)) else ""
+            others = [c for i, c in enumerate(r) if i != dcol]
+            if _imperative_cells(others) and _nonempty(dval):
+                return True
+        return False
+    # Bullet / prose form: an imperative bullet plus an explicit silence clause.
+    return _has_imperative_row(block) and bool(DEFAULT_RE.search(block))
 
 def _ask_block(text):
     """The ask-block REGION: the ask heading through to the next heading of the same or
@@ -142,11 +214,11 @@ def _ask_block(text):
     return rest[:nxt.start()] if nxt else rest
 
 def has_ask_block(text):
-    """All three, INSIDE the ask block — any one alone, or anywhere, is trivially gamed."""
+    """A leading ask block containing at least one row a person can act on."""
     block = _ask_block(text)
     if block is None:
         return False
-    return _has_imperative_row(block) and bool(DEFAULT_RE.search(block))
+    return _answerable(block)
 
 def last_assistant(p):
     try:
@@ -231,7 +303,7 @@ elif has_thinking and not text:
     print("SKIP")                            # thinking-only entry → never a no-op block
 elif (not text) or SENTINEL_RE.match(text):
     print("BLOCK")                           # unambiguous no-op → continue the arc
-elif BLOCKER_RE.search(text) and not has_ask_block(text):
+elif blocker_stance(text) and not has_ask_block(text):
     print("HANDBACK")                        # halts on a human, but asks them nothing
 else:
     print("PRODUCTIVE")                      # substantive text = a healthy yield
@@ -242,7 +314,13 @@ case "$VERDICT" in
     PRODUCTIVE)
         # reset the CONSECUTIVE counter only outside a hook-driven continuation chain,
         # so an interleaved trivial tool_use cannot keep a forced loop alive.
-        [ "${STOP_ACTIVE:-0}" = "1" ] || "$ARC_HELPER" reset "$SID" reconcile_count >/dev/null 2>&1 || true
+        # Reset BOTH consecutive counters. handback_count was never reset, so its
+        # "one rewrite nudge" cap silently became a lifetime cap: after one nudge, a
+        # later malformed handback (with productive turns in between) got none.
+        [ "${STOP_ACTIVE:-0}" = "1" ] || {
+            "$ARC_HELPER" reset "$SID" reconcile_count >/dev/null 2>&1 || true
+            "$ARC_HELPER" reset "$SID" handback_count  >/dev/null 2>&1 || true
+        }
         exit 0 ;;
     COMPLETE)
         "$ARC_HELPER" complete "$SID" >/dev/null 2>&1 || true   # auto-release

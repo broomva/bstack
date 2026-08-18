@@ -155,8 +155,12 @@ elif verb == "bump":
     print(with_lock(_b))
 
 elif verb == "reset":
+    # Honour the field argument. It was accepted and ignored — reset always zeroed
+    # reconcile_count — so `reset <sid> handback_count` would have silently reset the
+    # wrong counter, exactly when a second counter was introduced (BRO-2179).
+    field = rest[0] if rest and rest[0] else "reconcile_count"
     def _r(d):
-        d["reconcile_count"] = 0
+        d[field] = 0
         return 0
     print(with_lock(_r))
 
