@@ -40,15 +40,28 @@ print(json.dumps({"type":"assistant","uuid":sys.argv[1],
 }
 # Guard: an empty/absent transcript makes the hook exit 0, which would make every
 # "must NOT block" assertion pass without testing anything. Fail loudly instead.
+# A bad fixture must be LOUD, and the loudness must survive. The first version
+# incremented FAIL inside cont() while cont ran in a pipeline, so the increment
+# died in the subshell and a broken fixture was reported as "did not block" —
+# i.e. as a pass. Emit a sentinel on stdout instead and let the CALLER, which
+# runs in the parent shell, record it.
 cont() {
   if [ -z "${2:-}" ] || [ ! -s "$2" ]; then
-    echo "  FAIL harness: fixture for '$1' is missing or empty ('${2:-}')" >&2
-    FAIL=$((FAIL+1)); return 1
+    echo "HARNESS_ERROR fixture for '$1' is missing or empty ('${2:-}')"
+    return 1
   fi
   echo "{\"session_id\":\"$1\",\"transcript_path\":\"$2\",\"stop_hook_active\":false}" | bash "$CONT"
 }
-blocks()     { cont "$1" "$2" | grep -q '"decision": "block"'; }
-handbacky()  { cont "$1" "$2" | grep -q 'no answerable ask block'; }
+_verdict() {                       # $1=sid $2=path $3=needle → 0 if present
+  local out
+  out="$(cont "$1" "$2")"
+  case "$out" in
+    *HARNESS_ERROR*) bad "harness: $out"; return 1 ;;
+  esac
+  printf '%s' "$out" | grep -q "$3"
+}
+blocks()     { _verdict "$1" "$2" '"decision": "block"'; }
+handbacky()  { _verdict "$1" "$2" 'no answerable ask block'; }
 
 # ── conforming messages (positive arm) ───────────────────────────────────────
 CONFORMING_TABLE="$(fixture good_table <<'EOF'
@@ -155,6 +168,12 @@ EOF
 # ── harness control ──────────────────────────────────────────────────────────
 # Every "must NOT block" assertion below is unfalsifiable unless the harness can
 # produce a block at all. Prove it can, using the pre-existing no-op sentinel.
+echo "== harness self-check: a bad fixture is loud, not silently a pass =="
+case "$(cont bogus-sid /nonexistent/path.jsonl)" in
+  *HARNESS_ERROR*) ok "missing fixture surfaces HARNESS_ERROR (not a silent pass)" ;;
+  *)               bad "missing fixture did NOT surface an error" ;;
+esac
+
 echo "== harness control: the rig can produce a block =="
 SENTINEL="$(fixture ctl_sentinel <<'EOF'
 No response requested.
@@ -206,6 +225,7 @@ python3 - "$S/arc-continuation-hook.sh" <<'PYMUT'
 import re, sys
 src = open(sys.argv[1]).read()
 block = src[src.index("BLOCKER_RE = re.compile("):src.index("# DRAIN by identity")]
+assert "def has_ask_block" in block, "predicate block did not include has_ask_block"
 
 def build(mutation=None):
     ns = {"re": re}
@@ -216,11 +236,11 @@ def build(mutation=None):
         ns["_has_imperative_row"] = lambda t: True   # always true
     elif mutation == "default":
         ns["DEFAULT_RE"] = re.compile(r"")           # always matches
-    # rebind has_ask_block against the mutated namespace
-    exec("""
-def has_ask_block(text):
-    return bool(ASK_HEAD_RE.search(text)) and _has_imperative_row(text) and bool(DEFAULT_RE.search(text))
-""", ns)
+    # Return the SHIPPING has_ask_block, not a re-declaration of it. Python resolves
+    # globals at call time, so overwriting ASK_HEAD_RE / _has_imperative_row /
+    # DEFAULT_RE in ns mutates the real function. An earlier version re-declared a
+    # 3-condition copy here; when the shipping predicate gained region scoping, the
+    # mutation proofs silently began testing a function that no longer existed.
     return ns["has_ask_block"]
 
 # each fixture is missing EXACTLY ONE condition
@@ -241,6 +261,76 @@ for cond, text in CASES.items():
 sys.exit(1 if fails else 0)
 PYMUT
 if [ $? -eq 0 ]; then PASS=$((PASS+3)); else FAIL=$((FAIL+1)); fi
+
+echo "== round-1 cross-model regressions =="
+
+# BLOCKER: BLOCKER_RE matched any blocker-ish word, so a healthy receipt was refused.
+INCIDENTAL="$(fixture incidental <<'EOF'
+## Shipped
+
+Deployment succeeded after CI was blocked briefly. All 412 tests pass, auto-merged,
+worktree pruned, tree clean. Awaiting nothing; the next slice is the codec table.
+EOF
+)"
+"$ARC" set inc-sid demo >/dev/null
+blocks inc-sid "$INCIDENTAL" && bad "incidental 'blocked'/'awaiting' in a healthy receipt was refused" \
+                             || ok "incidental blocker words do NOT trip the gate"
+
+# BLOCKER: the three conditions were checked across the WHOLE message, so an
+# imperative in the receipt plus a stray Default column faked an ask block.
+FAKED="$(fixture faked <<'EOF'
+## What I need from you
+
+| Ticket | Question | Default |
+|---|---|---|
+| ABC-1 | Should we ship? | |
+
+## Receipt
+
+- Run tests: passed.
+
+Stopping here, your call.
+EOF
+)"
+"$ARC" set fake-sid demo >/dev/null
+handbacky fake-sid "$FAKED" && ok "evidence scattered outside the ask block does NOT satisfy it" \
+                            || bad "faked ask block slipped through (conditions not region-scoped)"
+
+# R1 is part of the predicate: the ask block must LEAD.
+NOTFIRST="$(fixture notfirst <<'EOF'
+## What happened
+
+A long narrative about the arc, the review rounds, and the corrections.
+
+## Blocked on you
+
+| # | Ask | If you say nothing |
+|---|---|---|
+| 1 | **Merge PR 403** | it stays open |
+EOF
+)"
+"$ARC" set nf-sid demo >/dev/null
+handbacky nf-sid "$NOTFIRST" && ok "an ask block that does not lead is refused (R1 enforced)" \
+                             || bad "ask block behind a narrative heading was accepted"
+
+# MAJOR: HANDBACK shared reconcile_count with the no-op path, so their caps interfered.
+"$ARC" set ctr-sid demo >/dev/null
+cont ctr-sid "$SENTINEL" >/dev/null            # consume one NO-OP block
+handbacky ctr-sid "$NARRATIVE" && ok "a prior no-op block does not consume the handback budget" \
+                               || bad "counters still shared — caps interfere across reasons"
+
+# MAJOR: the imperative allowlist rejected contract language the skill endorses.
+CLICKY="$(fixture clicky <<'EOF'
+## Blocked on you — 1 item
+
+| # | Ask | If you say nothing |
+|---|---|---|
+| 1 | **Click Approve on the Azure subscription request.** Only the owner can. | I leave it disabled |
+EOF
+)"
+"$ARC" set click-sid demo >/dev/null
+blocks click-sid "$CLICKY" && bad "'Click' rejected — allowlist still too narrow" \
+                           || ok "'Click' is accepted as an imperative"
 
 echo
 echo "handback-contract: $PASS passed, $FAIL failed"

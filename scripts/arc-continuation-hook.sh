@@ -74,10 +74,16 @@ COMPLETE_RE = re.compile(
 # question mark at all, 6% put it next to the blocker, and 0/31 contained a single
 # imperative addressed to the reader. This predicate refuses a terminal turn that
 # halts on a human but does not ASK them anything answerable.
+# Deliberately narrow: only TERMINAL-STANCE phrasing, never an incidental mention.
+# The first draft matched bare "blocked"/"awaiting"/"escalat", so a healthy receipt
+# ("deployment succeeded after CI was blocked briefly") would have been refused —
+# a Stop hook that fights the operator on a good turn. Found by cross-model review.
 BLOCKER_RE = re.compile(
-    r"\b(blocked|blocker|blocking|can'?t proceed|cannot proceed|"
-    r"needs? (?:you|your|human|operator)|awaiting|not mine to (?:make|merge)|"
-    r"your call|stopping here|requires? (?:a )?human|escalat)", re.I)
+    r"(blocked on (?:you|a human|the operator|your)|what i need from you|your call|"
+    r"stopping here|not mine to (?:make|merge)|only you can|"
+    r"needs? (?:you|your)\b|await(?:ing)? (?:your|you|a human|an? [\w-]+ from you)|"
+    r"requires? (?:a )?human|(?:can'?t|cannot|unable to) proceed without|"
+    r"escalat\w* to (?:you|the user|the operator))", re.I)
 ASK_HEAD_RE = re.compile(
     r"^\s{0,3}#{1,4}[^\n]*?(⛔|blocked on you|what i need from you)", re.I | re.M)
 DEFAULT_RE = re.compile(
@@ -87,6 +93,8 @@ IMPERATIVES = {
     "run", "merge", "approve", "decide", "choose", "pick", "confirm", "paste",
     "provide", "grant", "answer", "reply", "set", "publish", "enable", "install",
     "tell", "send", "create", "open", "close", "review", "sign", "add", "remove",
+    "click", "select", "upload", "rotate", "assign", "verify", "check", "unblock",
+    "restore", "delete", "disable", "invite", "authorize", "share", "export",
 }
 
 def _lead_word(cell):
@@ -112,9 +120,33 @@ def _has_imperative_row(text):
                 return True
     return False
 
+def _ask_block(text):
+    """The ask-block REGION: the ask heading through to the next heading of the same or
+    higher level (or EOF), or None.
+
+    Scoping matters. Checking the three conditions across the whole message lets an
+    imperative in the receipt ("Run tests: passed") and a stray "Default" column
+    elsewhere combine to fake an ask block that asks nothing. Cross-model review
+    produced exactly that input. R1 is enforced here too: if any heading precedes the
+    ask heading, the ask is not first, and the whole point was that it leads.
+    """
+    m = ASK_HEAD_RE.search(text)
+    if not m:
+        return None
+    if re.search(r"^\s{0,3}#{1,6}\s", text[:m.start()], re.M):
+        return None                                   # a heading came first
+    hashes = re.match(r"^\s{0,3}(#+)", text[m.start():])
+    level = len(hashes.group(1)) if hashes else 2
+    rest = text[m.end():]
+    nxt = re.search(r"^\s{0,3}#{1,%d}\s" % level, rest, re.M)
+    return rest[:nxt.start()] if nxt else rest
+
 def has_ask_block(text):
-    """All three, because any one alone is trivially gamed."""
-    return bool(ASK_HEAD_RE.search(text)) and _has_imperative_row(text) and bool(DEFAULT_RE.search(text))
+    """All three, INSIDE the ask block — any one alone, or anywhere, is trivially gamed."""
+    block = _ask_block(text)
+    if block is None:
+        return False
+    return _has_imperative_row(block) and bool(DEFAULT_RE.search(block))
 
 def last_assistant(p):
     try:
@@ -216,7 +248,7 @@ case "$VERDICT" in
         "$ARC_HELPER" complete "$SID" >/dev/null 2>&1 || true   # auto-release
         exit 0 ;;
     HANDBACK)
-        [ "$("$ARC_HELPER" try-block "$SID" "$HANDBACK_CONSEC_MAX" "$LIFE_MAX" 2>/dev/null)" = "BLOCK" ] || exit 0
+        [ "$("$ARC_HELPER" try-block "$SID" "$HANDBACK_CONSEC_MAX" "$LIFE_MAX" handback_count 2>/dev/null)" = "BLOCK" ] || exit 0
         HB_REASON="This turn ends the arc on something only the human can resolve, but the message contains no answerable ask block. Before stopping: (1) climb the autonomy ladder - is the answer already on disk, in .control/preauth.yaml, resolvable by a fresh agent, reachable by another lane, or a REVERSIBLE default you should just take and log? (2) if any unblocked lane still exists, run it instead of stopping. (3) only if neither holds, rewrite per the handback skill: a '## Blocked on you' heading FIRST, every row an imperative addressed to the reader with options and a recommendation, each row carrying 'if you say nothing, I do X', plain language, ranked by what it unblocks - then the 9-item receipt underneath."
         python3 - "$HB_REASON" <<'PYHB'
 import sys, json

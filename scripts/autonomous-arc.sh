@@ -21,7 +21,7 @@
 #   bump   <sid> reconcile_count          increment + print the new value
 #   reset  <sid> reconcile_count          set to 0 (called on a productive turn so the
 #                                         consecutive cap bounds CONSECUTIVE stalls)
-#   try-block <sid> <consec_max> <life_max>   atomic runaway guard: prints BLOCK and
+#   try-block <sid> <consec_max> <life_max> [counter]  atomic runaway guard: prints BLOCK and
 #                                         increments reconcile_count + total_blocks iff
 #                                         reconcile_count<consec_max AND total_blocks<life_max;
 #                                         else prints CAP. total_blocks NEVER resets — a
@@ -163,11 +163,17 @@ elif verb == "reset":
 elif verb == "try-block":
     consec_max = int(rest[0]) if rest and rest[0].isdigit() else 2
     life_max = int(rest[1]) if len(rest) > 1 and rest[1].isdigit() else 5
+    # Optional 3rd arg: the CONSECUTIVE counter to use. Distinct block reasons must not
+    # share one counter, or their caps silently interfere — a prior no-op block would
+    # consume the handback budget, and a handback followed by a no-op could block twice
+    # (BRO-2179, found by cross-model review). total_blocks stays shared on purpose: it
+    # is the lifetime runaway backstop across ALL reasons.
+    counter = rest[2] if len(rest) > 2 and rest[2] else "reconcile_count"
     def _tb(d):
-        rc = int(d.get("reconcile_count", 0))
+        rc = int(d.get(counter, 0))
         tb = int(d.get("total_blocks", 0))
         if rc < consec_max and tb < life_max:
-            d["reconcile_count"] = rc + 1
+            d[counter] = rc + 1
             d["total_blocks"] = tb + 1
             d["last_reconcile"] = now_iso()
             return "BLOCK"
