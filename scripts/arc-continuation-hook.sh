@@ -74,10 +74,11 @@ COMPLETE_RE = re.compile(
 # where bash 3.2 (the system bash) fails to parse one. Write \x60 in regexes and
 # single quotes in prose. tests/bash32-parse-safety is the gate; it has now caught
 # this twice in this file, the second time in the comment explaining the first.
-# Measured over 100 long sessions: 31 ended on a blocker; of those, 13% contained a
-# question mark at all, 6% put it next to the blocker, and 0/31 contained a single
-# imperative addressed to the reader. This predicate refuses a terminal turn that
-# halts on a human but does not ASK them anything answerable.
+# Measured over 100 long sessions: 18 HALTED THE ARC ON A HUMAN (terminal-stance
+# phrasing) and not one of the 18 carried an ask block a person could act on. A
+# broader regex flags 31, but 13 of those merely MENTION being blocked ("the
+# pre-commit hook blocked it") and are healthy receipts. This predicate refuses a
+# terminal turn that halts on a human but does not ASK them anything answerable.
 # Deliberately narrow: only TERMINAL-STANCE phrasing, never an incidental mention.
 # The first draft matched bare "blocked"/"awaiting"/"escalat", so a healthy receipt
 # ("deployment succeeded after CI was blocked briefly") would have been refused —
@@ -88,15 +89,27 @@ BLOCKER_RE = re.compile(
     r"needs? (?:you|your)\b|await(?:ing)? (?:your|you|a human|an? [\w-]+ from you)|"
     r"requires? (?:a )?human|(?:can'?t|cannot|unable to) proceed without|"
     r"escalat\w* to (?:you|the user|the operator))", re.I)
-# "This workflow no longer requires a human" matched 'requires a human' and refused a
+# "This workflow no longer requires a human" matched requires a human and refused a
 # healthy receipt. A trigger is only a trigger if nothing negates it just before.
+# \bnt\b could never fire: in "doesnt" the n follows a word character, so the
+# leading \b fails and every contraction slipped through. Written as an explicit
+# alternation with no leading boundary.
 NEGATOR_RE = re.compile(
-    r"\b(no longer|not|never|without|nothing|none of|n't|cannot be|no)\b[^.;:\n]{0,40}$", re.I)
+    r"(\bno longer\b|\bnot\b|\bnever\b|\bwithout\b|\bnothing\b|\bnone of\b|"
+    r"n['\u2019]t\b|\bcannot\b|\bno\b)[^.;:\n]{0,40}$", re.I)
+
+FENCE_RE = re.compile(r"^\s{0,3}(\x60{3}|~~~).*?^\s{0,3}\1", re.M | re.S)   # \x60 = backtick; never literal (bash 3.2)
 
 def blocker_stance(text):
-    """True only for a NON-negated terminal-stance phrase."""
-    for m in BLOCKER_RE.finditer(text):
-        if not NEGATOR_RE.search(text[max(0, m.start() - 60):m.start()]):
+    """True only for a NON-negated terminal-stance phrase outside a code fence.
+
+    Fenced content is stripped first: a healthy message that QUOTES a bad terminal
+    message (a template, a worked example, a review finding) would otherwise trip
+    the trigger on the quotation. Self-found while probing, not reported.
+    """
+    body = FENCE_RE.sub(" ", text)
+    for m in BLOCKER_RE.finditer(body):
+        if not NEGATOR_RE.search(body[max(0, m.start() - 60):m.start()]):
             return True
     return False
 ASK_HEAD_RE = re.compile(
@@ -148,17 +161,27 @@ def _has_imperative_row(text):
                 return True
     return False
 
-def _rows(block):
-    out = []
+def _tables(block):
+    """Every markdown table in the block, each as its own [header, *rows].
+
+    Flattening them into one list let a second table's rows be read against the FIRST
+    table's header and default column, so 'Ask | Default' followed by an unrelated
+    'Check | Status' table could fake an answerable row.
+    """
+    tables, cur = [], []
     for ln in block.splitlines():
         t = ln.strip()
         if not t.startswith("|"):
+            if cur:
+                tables.append(cur); cur = []
             continue
         cells = [c.strip() for c in t.strip("|").split("|")]
         if all(set(c) <= set("-: ") for c in cells):
             continue                                  # separator row
-        out.append(cells)
-    return out
+        cur.append(cells)
+    if cur:
+        tables.append(cur)
+    return tables
 
 def _default_col(header):
     for i, c in enumerate(header):
@@ -175,19 +198,20 @@ def _answerable(block):
     default, and '| **Merge PR 403.** | |' pass on an empty default. Both were
     supplied by cross-model review.
     """
-    rows = _rows(block)
-    if rows:
+    tables = _tables(block)
+    if tables:
         # AUTHORITATIVE when a table exists — no falling through to the looser prose
         # rule. Falling through re-opened both holes this rule closes, because the
         # prose rule finds an imperative in ANY cell and matches a Default header
-        # anywhere in the block.
-        header, data = rows[0], rows[1:]
-        dcol = _default_col(header)
-        for r in data:
-            dval = r[dcol] if (dcol is not None and dcol < len(r)) else ""
-            others = [c for i, c in enumerate(r) if i != dcol]
-            if _imperative_cells(others) and _nonempty(dval):
-                return True
+        # anywhere in the block. Each table is judged against its OWN header.
+        for tbl in tables:
+            header, data = tbl[0], tbl[1:]
+            dcol = _default_col(header)
+            for r in data:
+                dval = r[dcol] if (dcol is not None and dcol < len(r)) else ""
+                others = [c for i, c in enumerate(r) if i != dcol]
+                if _imperative_cells(others) and _nonempty(dval):
+                    return True
         return False
     # Bullet / prose form: an imperative bullet plus an explicit silence clause.
     return _has_imperative_row(block) and bool(DEFAULT_RE.search(block))

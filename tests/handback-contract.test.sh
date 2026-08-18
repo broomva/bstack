@@ -9,7 +9,8 @@
 # flip verdict. A condition whose mutant does not flip is decoration.
 set -uo pipefail
 
-# NOTE: this file contains NO literal backticks. Fixture bodies live inside
+# NOTE: this file contains NO literal backticks, and no apostrophe inside a
+# $()-nested heredoc — bash 3.2 fails to parse either one. Fixture bodies live inside
 # $(fixture ... <<'EOF' ...), and a literal backtick there does not parse under
 # bash 3.2 (the system bash on macOS). Markdown code spans are decoration in these
 # fixtures — the predicate never reads them — so single quotes are used instead.
@@ -45,6 +46,22 @@ print(json.dumps({"type":"assistant","uuid":sys.argv[1],
 # died in the subshell and a broken fixture was reported as "did not block" —
 # i.e. as a pass. Emit a sentinel on stdout instead and let the CALLER, which
 # runs in the parent shell, record it.
+# Build a fixture from a file instead of a $()-nested heredoc. bash 3.2 breaks on an
+# APOSTROPHE inside $( ... <<'EOF' ... EOF ) exactly as it does on a backtick, and the
+# contraction case below needs a real apostrophe — it IS the thing under test. A
+# top-level `cat > file <<EOF` is not nested, so it parses.
+fixture_file() {
+  local name="$1"
+  local src="$2"
+  local f="$TMP/$name.jsonl"
+  python3 -c '
+import json,sys
+print(json.dumps({"type":"assistant","uuid":sys.argv[1],
+  "message":{"role":"assistant","content":[{"type":"text","text":open(sys.argv[2]).read()}]}}))' \
+    "$name" "$src" > "$f"
+  printf '%s' "$f"
+}
+
 cont() {
   if [ -z "${2:-}" ] || [ ! -s "$2" ]; then
     echo "HARNESS_ERROR fixture for '$1' is missing or empty ('${2:-}')"
@@ -390,6 +407,67 @@ handbacky rst-sid "$NARRATIVE" && ok "a productive turn resets the handback cap 
 [ "$("$ARC" get rst-sid reconcile_count)" = "0" ] \
   && ok "handback blocks do not increment reconcile_count" \
   || bad "counters still bleed into each other"
+
+# Self-found while probing: a healthy message QUOTING a bad terminal message (a
+# template, a worked example, a review finding) tripped the trigger on the quote.
+FENCED="$(fixture fenced <<'EOF'
+## Shipped
+
+Added the handback template. The bad shape it replaces looks like this:
+
+~~~
+Stopping here, your call. Blocked on you for the merge.
+~~~
+
+All 412 tests pass, auto-merged, tree clean.
+EOF
+)"
+"$ARC" set fence-sid demo >/dev/null
+blocks fence-sid "$FENCED" && bad "a quoted bad message inside a code fence tripped the gate" \
+                           || ok "fenced quotations do not trip the trigger"
+
+echo "== round-3 cross-model regressions =="
+
+# BLOCKER: the contraction alternative could never match, because in a word like
+# doesnt the n follows a word character and the leading word-boundary fails.
+cat > "$TMP/contraction.txt" <<'EOF'
+## Shipped
+
+This workflow doesn't require a human; deployment shipped and all tests pass.
+Merged, pruned, clean.
+EOF
+CONTRACTION="$(fixture_file contraction "$TMP/contraction.txt")"
+"$ARC" set contr-sid demo >/dev/null
+blocks contr-sid "$CONTRACTION" && bad "a contraction negation still force-blocked a healthy receipt" \
+                                || ok "contraction negations are recognised"
+
+# MAJOR: all tables in the region were flattened, so a second table's rows were read
+# against the FIRST table's header and default column.
+TWO_TABLES="$(fixture twotables <<'EOF'
+## Blocked on you — 1 item
+
+| # | Ask | Default |
+|---|---|---|
+| 1 | Should we ship? | |
+
+| Check | Status |
+|---|---|
+| Merge gate | green |
+
+Stopping here, your call.
+EOF
+)"
+"$ARC" set two-sid demo >/dev/null
+handbacky two-sid "$TWO_TABLES" && ok "a second table cannot supply the first table's missing default" \
+                                || bad "cross-table row leakage still fakes an answerable ask"
+
+# MAJOR: reset accepted any field, including the lifetime runaway ceiling.
+"$ARC" set rs-sid demo >/dev/null
+"$ARC" try-block rs-sid 1 5 handback_count >/dev/null
+"$ARC" reset rs-sid total_blocks >/dev/null 2>&1
+[ "$("$ARC" get rs-sid total_blocks)" = "1" ] \
+  && ok "reset refuses total_blocks (the lifetime ceiling holds)" \
+  || bad "total_blocks was reset — the runaway backstop can be cleared"
 
 echo
 echo "handback-contract: $PASS passed, $FAIL failed"

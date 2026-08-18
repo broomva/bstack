@@ -158,7 +158,14 @@ elif verb == "reset":
     # Honour the field argument. It was accepted and ignored — reset always zeroed
     # reconcile_count — so `reset <sid> handback_count` would have silently reset the
     # wrong counter, exactly when a second counter was introduced (BRO-2179).
+    # WHITELIST. `reset <sid> total_blocks` would defeat the lifetime runaway ceiling,
+    # which exists precisely so that no reason and no caller can clear it.
+    RESETTABLE = ("reconcile_count", "handback_count")
     field = rest[0] if rest and rest[0] else "reconcile_count"
+    if field not in RESETTABLE:
+        print(f"autonomous-arc: refusing to reset {field!r}; "
+              f"resettable counters are {list(RESETTABLE)}", file=sys.stderr)
+        sys.exit(2)
     def _r(d):
         d[field] = 0
         return 0
