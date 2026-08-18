@@ -25,6 +25,11 @@ ARC_HELPER="$SELF_DIR/autonomous-arc.sh"
 INPUT="$(cat 2>/dev/null || echo '{}')"
 CONSEC_MAX=2
 LIFE_MAX=5
+# HANDBACK (BRO-2179) is a broader trigger than the two no-op sentinels, so it gets
+# its own, tighter consecutive cap: one rewrite nudge, never a loop. Its asymmetry is
+# the same as the rest of this hook — a false accept costs nothing (status quo), a
+# false block fights the user — so the ask-block predicate is deliberately generous.
+HANDBACK_CONSEC_MAX=1
 
 command -v python3 >/dev/null 2>&1 || exit 0
 [ -x "$ARC_HELPER" ] || exit 0
@@ -63,6 +68,49 @@ COMPLETE_RE = re.compile(
     r"all milestones?\b.{0,40}?\b(shipped|done|complete)|milestones? complete|"
     r"task complete|all done|everything(?:'s| is)?\s+(?:shipped|done|merged|complete))"
     r"[.!\s]*$", re.I)
+
+# -- handback contract (BRO-2179) ---------------------------------------------
+# Measured over 100 long sessions: 31 ended on a blocker; of those, 13% contained a
+# question mark at all, 6% put it next to the blocker, and 0/31 contained a single
+# imperative addressed to the reader. This predicate refuses a terminal turn that
+# halts on a human but does not ASK them anything answerable.
+BLOCKER_RE = re.compile(
+    r"\b(blocked|blocker|blocking|can'?t proceed|cannot proceed|"
+    r"needs? (?:you|your|human|operator)|awaiting|not mine to (?:make|merge)|"
+    r"your call|stopping here|requires? (?:a )?human|escalat)", re.I)
+ASK_HEAD_RE = re.compile(
+    r"^\s{0,3}#{1,4}[^\n]*?(⛔|blocked on you|what i need from you)", re.I | re.M)
+DEFAULT_RE = re.compile(
+    r"if you (?:say|answer|do|reply) nothing|^\|[^\n]*\bdefault\b[^\n]*\|", re.I | re.M)
+# Generous on purpose: a missed imperative means we do NOT block, which is the safe arm.
+IMPERATIVES = {
+    "run", "merge", "approve", "decide", "choose", "pick", "confirm", "paste",
+    "provide", "grant", "answer", "reply", "set", "publish", "enable", "install",
+    "tell", "send", "create", "open", "close", "review", "sign", "add", "remove",
+}
+
+def _lead_word(cell):
+    c = re.sub(r"[*_`\[\]()#>~]", " ", cell)        # strip markdown emphasis / links
+    c = re.sub(r"^\s*\d+[.)]?\s*", "", c)           # strip leading numbering
+    m = re.match(r"\s*([A-Za-z']+)", c)
+    return m.group(1).lower() if m else ""
+
+def _has_imperative_row(text):
+    for ln in text.splitlines():
+        t = ln.strip()
+        if t.startswith("|"):
+            for cell in t.strip("|").split("|"):
+                if _lead_word(cell) in IMPERATIVES:
+                    return True
+        elif re.match(r"^([-*+]|\d+[.)])\s", t):
+            body = t[1:] if t[:1] in "-*+" else t
+            if _lead_word(body) in IMPERATIVES:
+                return True
+    return False
+
+def has_ask_block(text):
+    """All three, because any one alone is trivially gamed."""
+    return bool(ASK_HEAD_RE.search(text)) and _has_imperative_row(text) and bool(DEFAULT_RE.search(text))
 
 def last_assistant(p):
     try:
@@ -147,6 +195,8 @@ elif has_thinking and not text:
     print("SKIP")                            # thinking-only entry → never a no-op block
 elif (not text) or SENTINEL_RE.match(text):
     print("BLOCK")                           # unambiguous no-op → continue the arc
+elif BLOCKER_RE.search(text) and not has_ask_block(text):
+    print("HANDBACK")                        # halts on a human, but asks them nothing
 else:
     print("PRODUCTIVE")                      # substantive text = a healthy yield
 PY
@@ -160,6 +210,14 @@ case "$VERDICT" in
         exit 0 ;;
     COMPLETE)
         "$ARC_HELPER" complete "$SID" >/dev/null 2>&1 || true   # auto-release
+        exit 0 ;;
+    HANDBACK)
+        [ "$("$ARC_HELPER" try-block "$SID" "$HANDBACK_CONSEC_MAX" "$LIFE_MAX" 2>/dev/null)" = "BLOCK" ] || exit 0
+        HB_REASON="This turn ends the arc on something only the human can resolve, but the message contains no answerable ask block. Before stopping: (1) climb the autonomy ladder - is the answer already on disk, in .control/preauth.yaml, resolvable by a fresh agent, reachable by another lane, or a REVERSIBLE default you should just take and log? (2) if any unblocked lane still exists, run it instead of stopping. (3) only if neither holds, rewrite per the handback skill: a '## Blocked on you' heading FIRST, every row an imperative addressed to the reader with options and a recommendation, each row carrying 'if you say nothing, I do X', plain language, ranked by what it unblocks - then the 9-item receipt underneath."
+        python3 - "$HB_REASON" <<'PYHB'
+import sys, json
+print(json.dumps({"decision": "block", "reason": sys.argv[1]}))
+PYHB
         exit 0 ;;
     BLOCK)
         [ "$("$ARC_HELPER" try-block "$SID" "$CONSEC_MAX" "$LIFE_MAX" 2>/dev/null)" = "BLOCK" ] || exit 0
