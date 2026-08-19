@@ -112,6 +112,7 @@ DEFAULT_LEVELS = {
 }
 
 
+MAX_WARNING_CHARS = 200
 DEGRADED_SETPOINTS = {"window_days": 7, "metrics": []}
 
 
@@ -124,6 +125,10 @@ def _warn(bucket, msg):
     was silently altered. Degradations must reach the SAME channel as the grading they
     affect. (BRO-2168)"""
     print(f"[leverage-sensor] WARN {msg}", file=sys.stderr)
+    # Byte-cap: the message embeds the OFFENDING VALUE, so `window_days: "<100KB string>"`
+    # produced a 100KB warning. Capping the warning COUNT alone did not stop the flood.
+    if len(msg) > MAX_WARNING_CHARS:
+        msg = msg[:MAX_WARNING_CHARS] + f"… (+{len(msg) - MAX_WARNING_CHARS} chars)"
     bucket.append(msg)
 
 
@@ -211,8 +216,12 @@ def load_setpoints(path):
         with open(path) as f:
             return coerce_setpoints(yaml.safe_load(f), path)
     except Exception as e:
-        print(f"[leverage-sensor] WARN could not load setpoints ({path}): {e}", file=sys.stderr)
-        return dict(DEGRADED_SETPOINTS)
+        out = dict(DEGRADED_SETPOINTS)
+        # Route through _warn so an unreadable file reaches the BRIEF too, not only the
+        # stderr the SessionStart hook discards.
+        out["_warnings"] = []
+        _warn(out["_warnings"], f"could not load setpoints ({path}): {e}")
+        return out
 
 
 def iter_lines(path):
@@ -887,12 +896,19 @@ def main():
                     print(f"[self-improvement loop] {sessions} sessions / {window}d")
                     print("⚠ .control/leverage-setpoints.yaml unreadable, empty or malformed — "
                           "nothing graded, no actuator emitted")
+                    for w in (sp_now.get("_warnings") if isinstance(sp_now, dict) else None) or []:
+                        print(f"⚠ policy degraded: {w}")
                     return
                 # Re-grade UNCONDITIONALLY once policy is readable. Guarding on
                 # `st.get("metrics")` let a cache with an empty metric set ({} is falsy)
                 # keep its stored results and stale `worst`, which is the very leak this
                 # path exists to close. evaluate({}, sp) yields ([], None), which
                 # no_worst_line() reports honestly.
+                # Refresh the degradations alongside the grading. Re-grading against
+                # CURRENT policy while rendering the CACHED warnings showed stale ones and
+                # hid new ones: a duplicate or mistyped metric added since the cache was
+                # written stayed invisible behind ordinary-looking grading.
+                st["policy_warnings"] = sp_now.get("_warnings") or []
                 try:
                     st["results"], st["worst"] = evaluate(st.get("metrics") or {}, sp_now)
                 except Exception:

@@ -727,6 +727,17 @@ grep -q "knowledge_paths" <<<"$RXO"   && ok "the brief names the offending field
 printf 'window_days: 7\nknowledge_paths: "research/entities"\nmetrics:\n  - id: m4\n    name: m4\n    level: L0\n    direction: lower_is_better\n    target: 0.5\n    alert: 0.75\n    actuator: A\n' > "$AF_T/.control/leverage-setpoints.yaml"
 RXC="$(python3 "$SENSOR" --workspace "$AF_T" --brief --no-store 2>/dev/null)"
 ! grep -q "policy degraded" <<<"$RXC"  && ok "a clean policy reports NO degradation (polarity)" || bad "false degradation: $RXC"
+# Round-12 MINOR: the arms above prove a warning and non-empty output, but ANY valid
+# replacement regex would satisfy them. Prove the DEFAULT pattern is the one installed.
+RXD="$(python3 - "$SENSOR" <<'PY2'
+import importlib.util, sys, re
+spec = importlib.util.spec_from_file_location("s", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+# the default must match a knowledge path and not an unrelated one
+d = re.compile(m.DEFAULT_KG_READ, re.IGNORECASE)
+print("ok" if d.search("research/entities/tool/x.md") and not d.search("src/main.rs") else "BAD default pattern")
+PY2
+)"
+[ "$RXD" = "ok" ]                     && ok "DEFAULT_KG_READ is a real knowledge-path pattern" || bad "$RXD"
 
 echo "== AH. round-11: machine-mode exit semantics are not swallowed =="
 # The round-10 "floor" turned every failure into exit 0, which inverted the --closure
@@ -737,6 +748,45 @@ python3 "$SENSOR" --workspace "$AF_T" --closure --no-store >/dev/null 2>&1
 JOUT="$(python3 "$SENSOR" --workspace "$AF_T" --json --no-store 2>/dev/null)"
 python3 -c "import json,sys; json.loads(sys.stdin.read())" <<<"$JOUT" 2>/dev/null \
                                       && ok "--json still emits parseable JSON"            || bad "--json broke its contract"
+# The two arms above use SUCCESSFUL invocations, so they cannot detect a blanket
+# exception guard -- restoring it left them green. These exercise a genuinely FAILING
+# path: an unwritable .control makes store() raise, which is exactly what the reverted
+# guard converted into exit 0 (inverting the CI gate) and into prose on a JSON stdout.
+AH_U="$(mktemp -d)"; mkdir -p "$AH_U/.control"
+printf 'metrics: []\n' > "$AH_U/.control/leverage-setpoints.yaml"; chmod 500 "$AH_U/.control"
+python3 "$SENSOR" --workspace "$AH_U" --closure >/dev/null 2>&1
+[ $? -ne 0 ]                          && ok "a FAILING --closure run does not report success" || bad "internal failure reported as success"
+python3 "$SENSOR" --workspace "$AH_U" --json >/dev/null 2>&1
+[ $? -ne 0 ]                          && ok "a FAILING --json run does not report success"    || bad "internal failure reported as success"
+AH_OUT="$(python3 "$SENSOR" --workspace "$AH_U" --json 2>/dev/null)"
+[ -z "$AH_OUT" ] || python3 -c "import json,sys; json.loads(sys.stdin.read())" <<<"$AH_OUT" 2>/dev/null \
+                                      && ok "a failing --json prints nothing or JSON, never prose" || bad "non-JSON on a JSON contract: $AH_OUT"
+chmod 700 "$AH_U/.control"; rm -rf "$AH_U"
+
+echo "== AI. round-12: policy degradations are current, capped, and complete =="
+AI_T="$(mktemp -d)"; mkdir -p "$AI_T/.control"
+printf 'metrics:\n  - id: m4\n    name: m4\n    level: L0\n    direction: lower_is_better\n    target: 0.5\n    alert: 0.75\n    actuator: A\n' > "$AI_T/.control/leverage-setpoints.yaml"
+python3 - "$AI_T" <<'PY2'
+import json,sys,datetime
+json.dump({"sessions_analyzed":5,"window_days":7,"measured_at":datetime.datetime.now().isoformat(),
+ "metrics":{"m4_x":0.1},"results":[],"worst":None,"policy_warnings":["STALE WARNING FROM CACHE"],
+ "closure":{"closed":True,"sensor_live":True,"reference_authored":True}},
+ open(f"{sys.argv[1]}/.control/leverage-state.json","w"))
+PY2
+AI1="$(python3 "$SENSOR" --workspace "$AI_T" --brief --cached --no-store 2>/dev/null)"
+! grep -q "STALE WARNING" <<<"$AI1"   && ok "a cached brief drops warnings the current policy no longer has" || bad "stale warning shown: $AI1"
+printf 'metrics:\n  - id: m4\n    target: 0.5\n    alert: 0.75\n  - id: m4\n    target: 9\n' > "$AI_T/.control/leverage-setpoints.yaml"
+AI2="$(python3 "$SENSOR" --workspace "$AI_T" --brief --cached --no-store 2>/dev/null)"
+grep -q "duplicates id" <<<"$AI2"     && ok "a cached brief SHOWS a degradation added since the cache"       || bad "new degradation hidden: $AI2"
+# cap: the warning embeds the offending value, so a huge value made a huge warning
+python3 -c "import sys; open(sys.argv[1],'w').write('window_days: \"' + 'A'*100000 + '\"\nmetrics: []\n')" "$AI_T/.control/leverage-setpoints.yaml"
+AI3="$(python3 "$SENSOR" --workspace "$AI_T" --brief --no-store 2>/dev/null)"
+[ "${#AI3}" -lt 2000 ]                && ok "a 100KB field value cannot flood the brief (${#AI3}b)"          || bad "brief flooded: ${#AI3} bytes"
+# an unreadable file must still be disclosed in the brief, not only on discarded stderr
+rm -f "$AI_T/.control/leverage-setpoints.yaml"; mkdir -p "$AI_T/.control/leverage-setpoints.yaml"
+AI4="$(python3 "$SENSOR" --workspace "$AI_T" --brief --no-store 2>/dev/null)"
+grep -q "policy degraded" <<<"$AI4"   && ok "an unreadable setpoints file is disclosed in the brief"         || bad "load failure invisible: $AI4"
+rm -rf "$AI_T"
 rm -rf "$AF_T"
 # POLARITY: a VALID policy must still grade and still steer through the same path.
 cat > "$AE_T/.control/leverage-setpoints.yaml" <<'YML'
