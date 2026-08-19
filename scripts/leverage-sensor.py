@@ -287,6 +287,33 @@ def is_gradeable(val):
     return math.isfinite(f)
 
 
+DIRECTIONS = ("lower_is_better", "higher_is_better")
+
+
+def normalize_direction(raw):
+    """Resolve a setpoint's `direction`, or refuse it.
+
+    The old code was `if direction == "lower_is_better": ... else: <higher branch>`,
+    so ANY unrecognized value -- `lower-is-better` with hyphens, a typo, a None from a
+    partially-written setpoint -- silently selected the OPPOSITE polarity and inverted
+    every comparison for that metric. A breach then reads as healthy. That is the same
+    defect as the `status:` field this change exists to fix: an unrecognized enum value
+    quietly taking a branch instead of being refused.
+
+    Absent means `lower_is_better` (the historical default). `-`/space normalize to `_`,
+    matching the setpoint-status rule, so a separator choice cannot flip a polarity.
+    Anything still unrecognized returns None and the caller falls closed.
+
+    Returns (direction|None, note|None)."""
+    if raw is None:
+        return DIRECTIONS[0], None
+    d = str(raw).strip().lower().replace("-", "_").replace(" ", "_")
+    if d in DIRECTIONS:
+        return d, None
+    return None, (f"setpoint direction {raw!r} is not one of {DIRECTIONS} "
+                  "— not graded (an unrecognized direction would invert the comparison)")
+
+
 def metric_id(key):
     return key.split("_", 1)[0]
 
@@ -388,7 +415,9 @@ def evaluate(metrics, setpoints):
                 row["status_note"] = status_note
             results.append(row)
             continue
-        direction = sp.get("direction", "lower_is_better")
+        direction, direction_note = normalize_direction(sp.get("direction"))
+        if direction_note and not status_note:
+            status_note = direction_note
         target, alert = sp.get("target"), sp.get("alert")
         # A threshold that is not a real finite number cannot decide anything. PyYAML
         # accepts `target: .nan`, and because EVERY comparison with NaN is False the
@@ -399,7 +428,7 @@ def evaluate(metrics, setpoints):
             target = None
         if alert is not None and not is_gradeable(alert):
             alert = None
-        if target is None or alert is None:
+        if direction is None or target is None or alert is None:
             # reference slot present but not yet authored (r0 unsigned) — measured, not graded
             row = {"key": key, "value": val, "level": level, "status": "unset_target",
                    "name": sp.get("name", mid), "actuator": sp.get("actuator", "")}
@@ -408,14 +437,25 @@ def evaluate(metrics, setpoints):
             # whose reference is still unauthored.
             if status_note:
                 row["status_note"] = status_note
+            elif sp.get("target") is not None and target is None:
+                row["status_note"] = (f"setpoint target {sp.get('target')!r} is not a finite "
+                                      "number — not graded")
+            elif sp.get("alert") is not None and alert is None:
+                row["status_note"] = (f"setpoint alert {sp.get('alert')!r} is not a finite "
+                                      "number — not graded")
             results.append(row)
             continue
+        # Every accepted operand is normalized to float before comparison. is_gradeable()
+        # admits anything float() accepts (Decimal, NumPy scalars), and mixing those with
+        # a float threshold raises in `round(val - target, 4)` -- declaring a type
+        # gradeable without making it comparable is a claim the code does not honour.
+        val_n, target_n, alert_n = float(val), float(target), float(alert)
         if direction == "lower_is_better":
-            status = "alert" if val >= alert else "warn" if val > target else "ok"
-            gap = round(val - target, 4)
+            status = "alert" if val_n >= alert_n else "warn" if val_n > target_n else "ok"
+            gap = round(val_n - target_n, 4)
         else:
-            status = "alert" if val <= alert else "warn" if val < target else "ok"
-            gap = round(target - val, 4)
+            status = "alert" if val_n <= alert_n else "warn" if val_n < target_n else "ok"
+            gap = round(target_n - val_n, 4)
         row = {
             "key": key, "value": val, "target": target, "alert": alert, "level": level,
             "direction": direction, "status": status, "gap": gap,

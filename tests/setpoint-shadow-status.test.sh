@@ -440,6 +440,73 @@ PY2
 [ "$Z" = "ok" ]                     && ok "Decimal/int/float ok; bool/str/NaN/huge refused without raising" || bad "$Z"
 
 
+echo "== AA. round-7: an unrecognized DIRECTION must not invert the comparison =="
+# `if direction == "lower_is_better": ... else: <higher branch>` made every
+# unrecognized value select the OPPOSITE polarity, so a breach read as healthy.
+# Same defect as the status: field this change exists to fix.
+AA="$(python3 - "$SENSOR" <<'PY2'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("s", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+def probe(d):
+    sp={"id":"m6","name":"m6","level":"L3","target":0.5,"alert":0.75,"actuator":"A"}
+    if d is not False: sp["direction"]=d
+    r,w=m.evaluate({"m6_x":0.9},{"metrics":[sp]}); return r[0]["status"], w is not None, r[0].get("status_note")
+bad=[]
+# separator/case variants of lower_is_better must all ALERT on 0.9
+for d in ("lower_is_better","lower-is-better","LOWER IS BETTER","Lower_Is_Better",None,False):
+    st,w,_ = probe(d)
+    if st!="alert" or not w: bad.append((d,st,w))
+# genuinely unknown must fail CLOSED, never silently flip to the higher branch
+for d in ("nonsense","lowerish","","higher-is-worse",0,[]):
+    st,w,n = probe(d)
+    if st!="unset_target" or w or not n: bad.append((d,st,w,n))
+# polarity: a real higher_is_better setpoint must still grade the OTHER way
+sp={"id":"m5","name":"m5","level":"L2","direction":"higher_is_better","target":0.4,"alert":0.1,"actuator":"A"}
+r,w=m.evaluate({"m5_x":0.05},{"metrics":[sp]})
+if r[0]["status"]!="alert" or not w: bad.append(("higher_is_better polarity",r[0]["status"],bool(w)))
+print("ok" if not bad else f"BAD {bad}")
+PY2
+)"
+[ "$AA" = "ok" ]                    && ok "direction variants normalize; unknown fails closed with a reason" || bad "$AA"
+
+echo "== AB. round-7: an accepted numeric type must be COMPARABLE, not just accepted =="
+# Declaring Decimal gradeable without normalizing operands made evaluate() raise in
+# round(val - target, 4) -- a claim the code did not honour.
+AB="$(python3 - "$SENSOR" <<'PY2'
+import importlib.util, sys, decimal, fractions
+spec = importlib.util.spec_from_file_location("s", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+sp={"id":"m6","name":"m6","level":"L3","direction":"lower_is_better","target":0.5,"alert":0.75,"actuator":"A"}
+bad=[]
+for v,want in ((decimal.Decimal("0.9"),"alert"), (decimal.Decimal("0.4"),"ok"),
+               (fractions.Fraction(9,10),"alert"), (1,"alert"), (0.4,"ok")):
+    if not m.is_gradeable(v): bad.append((v,"declared ungradeable")); continue
+    try:
+        r,_=m.evaluate({"m6_x":v},{"metrics":[sp]})
+        if r[0]["status"]!=want: bad.append((v,r[0]["status"],"wanted",want))
+    except Exception as e: bad.append((v,f"RAISED {type(e).__name__}"))
+# thresholds may be Decimal too
+try:
+    r,_=m.evaluate({"m6_x":0.9},{"metrics":[dict(sp,target=decimal.Decimal("0.5"),alert=decimal.Decimal("0.75"))]})
+    if r[0]["status"]!="alert": bad.append(("decimal thresholds",r[0]["status"]))
+except Exception as e: bad.append(("decimal thresholds",f"RAISED {type(e).__name__}"))
+print("ok" if not bad else f"BAD {bad}")
+PY2
+)"
+[ "$AB" = "ok" ]                    && ok "every gradeable type actually compares, values and thresholds" || bad "$AB"
+
+echo "== AC. round-7: a malformed threshold names ITSELF, not 'nothing matched' =="
+AC="$(python3 - "$SENSOR" <<'PY2'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("s", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+sp={"id":"m6","name":"m6","level":"L3","direction":"lower_is_better","target":float("nan"),"alert":0.75,"actuator":"A"}
+r,_=m.evaluate({"m6_x":0.9},{"metrics":[sp]})
+n=r[0].get("status_note") or ""
+print("ok" if "not a finite number" in n else f"BAD note={n!r}")
+PY2
+)"
+[ "$AC" = "ok" ]                    && ok "malformed threshold reports why it was dropped"  || bad "$AC"
+
+
 echo
 echo "setpoint-shadow-status: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
