@@ -55,14 +55,25 @@ cont "$SID" "$(fixture noop 0 'No response requested.')" | grep -q '"decision": 
 "$ARC" set "$SID" demo >/dev/null
 cont "$SID" "$(fixture empty 0 '')" | grep -q '"decision": "block"' && ok "empty terminal → block" || bad "empty terminal missed"
 # these must NOT block — accepted false negatives + substantive turns (P20 r2 fixes)
-for t in "wrap|No response requested. Stopping here and awaiting input." \
-         "mention|Here is my review of the No response requested sentinel handling." \
+for t in "mention|Here is my review of the No response requested sentinel handling." \
          "ack|Acknowledged." "ok|Okay." "gotit|Got it." "doneword|Done." \
          "subst|Here is the full analysis with a recommendation."; do
   name="${t%%|*}"; txt="${t#*|}"
   "$ARC" set "$SID" demo >/dev/null
   [ -z "$(cont "$SID" "$(fixture "$name" 0 "$txt")")" ] && ok "'$txt' → silent (not force-continued)" || bad "'$txt' wrongly blocked"
 done
+# The sentinel-WRAP case moved out of the silence loop when BRO-2179 landed. It is
+# still not a no-op BLOCK — the sentinel regex stays whole-message anchored, which is
+# the invariant this section exists to protect — but "Stopping here and awaiting
+# input" now trips the HANDBACK verdict instead: it ends the arc on the human and
+# asks them nothing answerable, which is exactly the defect the handback contract
+# refuses. Different rule, different counter (HANDBACK_CONSEC_MAX=1, one nudge).
+"$ARC" set "$SID" demo >/dev/null
+cont "$SID" "$(fixture wrap 0 'No response requested. Stopping here and awaiting input.')" \
+  | grep -q 'no answerable ask block' \
+  && ok "sentinel-wrap → HANDBACK (not the no-op path; anchoring invariant intact)" \
+  || bad "sentinel-wrap did not produce the handback verdict"
+
 "$ARC" set "$SID" demo >/dev/null
 [ -z "$(cont "$SID" "$(fixture tool 1 '')")" ] && ok "tool-use turn → silent (productive)" || bad "tool-use blocked"
 "$ARC" complete "$SID" >/dev/null

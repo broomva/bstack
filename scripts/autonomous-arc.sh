@@ -21,7 +21,7 @@
 #   bump   <sid> reconcile_count          increment + print the new value
 #   reset  <sid> reconcile_count          set to 0 (called on a productive turn so the
 #                                         consecutive cap bounds CONSECUTIVE stalls)
-#   try-block <sid> <consec_max> <life_max>   atomic runaway guard: prints BLOCK and
+#   try-block <sid> <consec_max> <life_max> [counter]  atomic runaway guard: prints BLOCK and
 #                                         increments reconcile_count + total_blocks iff
 #                                         reconcile_count<consec_max AND total_blocks<life_max;
 #                                         else prints CAP. total_blocks NEVER resets — a
@@ -155,19 +155,36 @@ elif verb == "bump":
     print(with_lock(_b))
 
 elif verb == "reset":
+    # Honour the field argument. It was accepted and ignored — reset always zeroed
+    # reconcile_count — so `reset <sid> handback_count` would have silently reset the
+    # wrong counter, exactly when a second counter was introduced (BRO-2179).
+    # WHITELIST. `reset <sid> total_blocks` would defeat the lifetime runaway ceiling,
+    # which exists precisely so that no reason and no caller can clear it.
+    RESETTABLE = ("reconcile_count", "handback_count")
+    field = rest[0] if rest and rest[0] else "reconcile_count"
+    if field not in RESETTABLE:
+        print(f"autonomous-arc: refusing to reset {field!r}; "
+              f"resettable counters are {list(RESETTABLE)}", file=sys.stderr)
+        sys.exit(2)
     def _r(d):
-        d["reconcile_count"] = 0
+        d[field] = 0
         return 0
     print(with_lock(_r))
 
 elif verb == "try-block":
     consec_max = int(rest[0]) if rest and rest[0].isdigit() else 2
     life_max = int(rest[1]) if len(rest) > 1 and rest[1].isdigit() else 5
+    # Optional 3rd arg: the CONSECUTIVE counter to use. Distinct block reasons must not
+    # share one counter, or their caps silently interfere — a prior no-op block would
+    # consume the handback budget, and a handback followed by a no-op could block twice
+    # (BRO-2179, found by cross-model review). total_blocks stays shared on purpose: it
+    # is the lifetime runaway backstop across ALL reasons.
+    counter = rest[2] if len(rest) > 2 and rest[2] else "reconcile_count"
     def _tb(d):
-        rc = int(d.get("reconcile_count", 0))
+        rc = int(d.get(counter, 0))
         tb = int(d.get("total_blocks", 0))
         if rc < consec_max and tb < life_max:
-            d["reconcile_count"] = rc + 1
+            d[counter] = rc + 1
             d["total_blocks"] = tb + 1
             d["last_reconcile"] = now_iso()
             return "BLOCK"
