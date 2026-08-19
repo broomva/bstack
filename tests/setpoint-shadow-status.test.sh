@@ -738,6 +738,28 @@ print("ok" if d.search("research/entities/tool/x.md") and not d.search("src/main
 PY2
 )"
 [ "$RXD" = "ok" ]                     && ok "DEFAULT_KG_READ is a real knowledge-path pattern" || bad "$RXD"
+# Compiling the constant proves its VALUE, not that the fallback INSTALLS it. Drive the
+# real m5 detector through --transcripts with a broken knowledge_paths: if the default
+# is genuinely in force, a Read of research/entities still registers as a kg load.
+RXT="$(mktemp -d)"
+# A tool_result line is required: sensor_is_live() nulls every metric in a window with
+# no structural events, so a transcript of pure tool_use reads as a BLIND sensor and m5
+# comes back None rather than 0.0 or 1.0.
+{
+printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"research/entities/tool/x.md"}}]}}'
+  printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","content":"ok"}]}}' 
+} > "$RXT/s.jsonl"
+printf 'knowledge_paths: "["\nmetrics:\n  - id: m5\n    name: kg\n    level: L2\n    direction: higher_is_better\n    target: 0.4\n    alert: 0.1\n    actuator: A\n' > "$AF_T/.control/leverage-setpoints.yaml"
+RXV="$(python3 "$SENSOR" --workspace "$AF_T" --transcripts "$RXT/*.jsonl" --json --no-store 2>/dev/null \
+       | python3 -c "import json,sys; print(json.load(sys.stdin)['metrics'].get('m5_kg_load_rate'))" 2>/dev/null)"
+[ "$RXV" = "1.0" ]                    && ok "the invalid-regex fallback actually USES the default (m5=$RXV)" || bad "fallback not using DEFAULT_KG_READ: m5=$RXV"
+# POLARITY: a VALID pattern that does not match must yield 0.0, or the arm above would
+# pass for any regex at all.
+printf 'knowledge_paths: "zzz_no_match_zzz"\nmetrics:\n  - id: m5\n    name: kg\n    level: L2\n    direction: higher_is_better\n    target: 0.4\n    alert: 0.1\n    actuator: A\n' > "$AF_T/.control/leverage-setpoints.yaml"
+RXW="$(python3 "$SENSOR" --workspace "$AF_T" --transcripts "$RXT/*.jsonl" --json --no-store 2>/dev/null \
+       | python3 -c "import json,sys; print(json.load(sys.stdin)['metrics'].get('m5_kg_load_rate'))" 2>/dev/null)"
+[ "$RXW" = "0.0" ]                    && ok "a VALID non-matching pattern is honoured (m5=$RXW, polarity)"    || bad "config ignored: m5=$RXW"
+rm -rf "$RXT"
 
 echo "== AH. round-11: machine-mode exit semantics are not swallowed =="
 # The round-10 "floor" turned every failure into exit 0, which inverted the --closure
@@ -782,6 +804,10 @@ grep -q "duplicates id" <<<"$AI2"     && ok "a cached brief SHOWS a degradation 
 python3 -c "import sys; open(sys.argv[1],'w').write('window_days: \"' + 'A'*100000 + '\"\nmetrics: []\n')" "$AI_T/.control/leverage-setpoints.yaml"
 AI3="$(python3 "$SENSOR" --workspace "$AI_T" --brief --no-store 2>/dev/null)"
 [ "${#AI3}" -lt 2000 ]                && ok "a 100KB field value cannot flood the brief (${#AI3}b)"          || bad "brief flooded: ${#AI3} bytes"
+# Discarding stderr hid a reachable defect: the cap was applied on the way into the
+# bucket but AFTER the stderr print, so the terminal still got the whole 100KB value.
+AI3E="$(python3 "$SENSOR" --workspace "$AI_T" --brief --no-store 2>&1 >/dev/null)"
+[ "${#AI3E}" -lt 2000 ]               && ok "…and cannot flood STDERR either (${#AI3E}b)"                    || bad "stderr flooded: ${#AI3E} bytes"
 # an unreadable file must still be disclosed in the brief, not only on discarded stderr
 rm -f "$AI_T/.control/leverage-setpoints.yaml"; mkdir -p "$AI_T/.control/leverage-setpoints.yaml"
 AI4="$(python3 "$SENSOR" --workspace "$AI_T" --brief --no-store 2>/dev/null)"

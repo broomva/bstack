@@ -124,11 +124,13 @@ def _warn(bucket, msg):
     and the brief then presents ordinary-looking grading computed from a policy that
     was silently altered. Degradations must reach the SAME channel as the grading they
     affect. (BRO-2168)"""
-    print(f"[leverage-sensor] WARN {msg}", file=sys.stderr)
-    # Byte-cap: the message embeds the OFFENDING VALUE, so `window_days: "<100KB string>"`
-    # produced a 100KB warning. Capping the warning COUNT alone did not stop the flood.
+    # Byte-cap BEFORE emitting anywhere. The message embeds the OFFENDING VALUE, so
+    # `window_days: "<100KB string>"` produces a 100KB message; truncating only on the
+    # way into the bucket still dumped the full value to stderr (100,024 chars measured).
+    # Capping the warning COUNT never addressed this at all.
     if len(msg) > MAX_WARNING_CHARS:
         msg = msg[:MAX_WARNING_CHARS] + f"… (+{len(msg) - MAX_WARNING_CHARS} chars)"
+    print(f"[leverage-sensor] WARN {msg}", file=sys.stderr)
     bucket.append(msg)
 
 
