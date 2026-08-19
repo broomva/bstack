@@ -507,6 +507,39 @@ PY2
 [ "$AC" = "ok" ]                    && ok "malformed threshold reports why it was dropped"  || bad "$AC"
 
 
+echo "== AD. sibling-field audit: no row may vanish from the human render =="
+# Found by asking the question that had already produced two blockers -- which OTHER
+# field is an enum where an unrecognized value silently picks an outcome? `level` was
+# one: render_human iterated a fixed L0..L3 list, so a row at L4, a lowercase l3, or
+# the "L?" that DEFAULT_LEVELS assigns an unknown metric id rendered NOWHERE. Alerts
+# included. Disappearance instead of inversion, same shape.
+AD="$(python3 - "$SENSOR" <<'PY2'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("s", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+rows = [{"key":"a","name":"KNOWN_L3","level":"L3","value":0.9,"status":"alert","target":0.5,"alert":0.75,"gap":0.4,"direction":"lower_is_better","actuator":"A"},
+        {"key":"b","name":"GHOST_L4","level":"L4","value":9,"status":"alert","target":1,"alert":2,"gap":8,"direction":"lower_is_better","actuator":"B"},
+        {"key":"c","name":"GHOST_lower","level":"l3","value":9,"status":"alert","target":1,"alert":2,"gap":8,"direction":"lower_is_better","actuator":"C"},
+        {"key":"d","name":"GHOST_unknown","level":"L?","value":9,"status":"alert","target":1,"alert":2,"gap":8,"direction":"lower_is_better","actuator":"D"},
+        {"key":"e","name":"GHOST_none","value":9,"status":"alert","target":1,"alert":2,"gap":8,"direction":"lower_is_better","actuator":"E"}]
+# worst=None so no "Focus:" line, which would legitimately name a row a second time
+# and make the duplicate check fire on its own fixture.
+out = m.render_human({"sessions_analyzed":3,"window_days":7,"measured_at":"x","results":rows,
+                      "worst":None,"metrics":{},"closure":{"closed":True,"sensor_live":True,"reference_authored":True}})
+# Count only the TABLE lines. The summary legitimately names rows again -- the
+# "Focus:" line names `worst`, and the round-4 "Inconsistent record" line names every
+# alert row when nothing ranked. Counting the whole output made this fixture flag its
+# own correct behaviour as a duplicate.
+table = [ln for ln in out.splitlines() if ln.startswith(("  ALRT", "  WARN", "  ok  ",
+                                                         "  ----", "  r0? ", "  shdw"))]
+missing = [r["name"] for r in rows if not any(r["name"] in ln for ln in table)]
+dupes = [r["name"] for r in rows
+         if sum(1 for ln in table if r["name"] in ln) > 1]
+print("ok" if not missing and not dupes else f"missing={missing} dupes={dupes}")
+PY2
+)"
+[ "$AD" = "ok" ]                    && ok "every row renders exactly once, whatever its level" || bad "$AD"
+
+
 echo
 echo "setpoint-shadow-status: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

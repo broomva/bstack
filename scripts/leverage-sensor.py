@@ -664,11 +664,26 @@ def render_human(record):
            f"{record.get('window_days', '?')}d  (measured {record.get('measured_at', '?')})", ""]
     mark = {"ok": "ok  ", "warn": "WARN", "alert": "ALRT", "no_setpoint": "----",
             "unset_target": "r0? ", "shadow": "shdw"}
-    for lv in ["L0", "L1", "L2", "L3"]:
-        rows = [r for r in (record.get("results") or [])
-                if isinstance(r, dict) and r.get("level") == lv]
+    # Group by RCS level, then sweep everything left over. Iterating a fixed
+    # ["L0".."L3"] list DROPPED any row whose level was anything else -- `L4`, a
+    # lowercase `l3`, or the `L?` that `DEFAULT_LEVELS.get(mid, "L?")` assigns to a
+    # metric id it does not know. Those rows rendered NOWHERE, alerts included. Same
+    # shape as the `status` and `direction` defects: an unrecognized enum value
+    # silently choosing an outcome. Here the outcome was disappearance.
+    all_rows = [r for r in (record.get("results") or []) if isinstance(r, dict)]
+    known = ["L0", "L1", "L2", "L3"]
+    seen = set()
+    for lv in known + ["other"]:
+        if lv == "other":
+            rows = [r for r in all_rows if id(r) not in seen]
+            label = "L? / unrecognized level"
+        else:
+            rows = [r for r in all_rows if r.get("level") == lv]
+            label = lv
+        seen.update(id(r) for r in rows)
         if not rows:
             continue
+        lv = label
         out.append(f"  ── {lv} ──")
         for r in rows:
             if r["status"] == "shadow":
