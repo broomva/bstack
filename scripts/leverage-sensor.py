@@ -196,13 +196,12 @@ def coerce_setpoints(raw, path="<setpoints>"):
             _warn(warnings, f"setpoints.metrics[{i}] duplicates id {mid!r} — later entry skipped")
             continue
         seen.add(mid)
-        # Bound EVERY string in the entry, here at the boundary. Clipping `actuator` and
-        # `name` at the graded row left `level`, a shadow row's `name`, the status and
-        # direction notes, and an unset_target `actuator` all able to carry 100KB into
-        # the brief and the state file. Six sites is not a bound; one is. Anything added
-        # downstream later inherits this automatically.
-        entry = {k: (_clip(v, MAX_ACTUATOR_CHARS) if isinstance(v, str) else v)
-                 for k, v in m.items()}
+        # Values are kept VERBATIM here. Bounding belongs at render/store, not at
+        # coercion: clipping `status` truncated `shadow-pending-m7` into an unrecognized
+        # value that then graded live (breaking this change's own reason for existing),
+        # and clipping `knowledge_paths` silently rewrote an operational regex. A bound
+        # that changes a DECISION is not a bound, it is a bug.
+        entry = dict(m)
         entry["id"] = mid
         # `level` and `name` are used as a dict key and in f-strings respectively; a
         # list value makes the first raise `unhashable type`. Coerce to str rather than
@@ -233,9 +232,6 @@ def coerce_setpoints(raw, path="<setpoints>"):
         _warn(warnings, f"setpoints.knowledge_paths is a {type(kp).__name__}, expected a "
                         "regex string — using the default")
         out.pop("knowledge_paths")
-    for k, v in list(out.items()):
-        if k != "metrics" and isinstance(v, str):
-            out[k] = _clip(v, MAX_ACTUATOR_CHARS)
     out["_warnings"] = warnings
     return out
 
@@ -442,8 +438,9 @@ def normalize_direction(raw):
     d = str(raw).strip().lower().replace("-", "_").replace(" ", "_")
     if d in DIRECTIONS:
         return d, None
-    return None, (f"setpoint direction {raw!r} is not one of {DIRECTIONS} "
-                  "— not graded (an unrecognized direction would invert the comparison)")
+    return None, _clip(f"setpoint direction {raw!r} is not one of {DIRECTIONS} "
+                       "— not graded (an unrecognized direction would invert the comparison)",
+                       MAX_WARNING_CHARS)
 
 
 def metric_id(key):
@@ -507,10 +504,10 @@ def setpoint_grading(sp):
         # shield down on a placeholder is the failure this rule exists to stop.
         if head == SETPOINT_STATUS_QUALIFIER and any(c.isalnum() for c in successor):
             return False, None
-        return True, (f"setpoint status {raw!r} is malformed "
+        return True, _clip(f"setpoint status {raw!r} is malformed "
                       f"(expected {word!r} or '{word}-{SETPOINT_STATUS_QUALIFIER}-<successor>') "
-                      f"— graded as live")
-    return True, f"unrecognized setpoint status {raw!r} — graded as live"
+                      f"— graded as live", MAX_WARNING_CHARS)
+    return True, _clip(f"unrecognized setpoint status {raw!r} — graded as live", MAX_WARNING_CHARS)
 
 
 def evaluate(metrics, setpoints):
@@ -539,15 +536,17 @@ def evaluate(metrics, setpoints):
             # it WOULD have been graded against, but carry no gap and no actuator:
             # a row with an actuator is a row that steers.
             results.append({
-                "key": key, "value": val, "level": level, "status": "shadow",
+                "key": key, "value": val, "level": _clip(level, MAX_ACTUATOR_CHARS),
+                "status": "shadow",
                 "target": sp.get("target"), "alert": sp.get("alert"),
                 "direction": sp.get("direction", "lower_is_better"),
-                "setpoint_status": sp.get("status"), "name": sp.get("name", mid),
+                "setpoint_status": _clip(sp.get("status"), MAX_ACTUATOR_CHARS),
+                "name": _clip(sp.get("name", mid), MAX_ACTUATOR_CHARS),
             })
             continue
         if not is_gradeable(val):
-            row = {"key": key, "value": val, "level": level, "status": "no_setpoint",
-                   "name": sp.get("name", mid)}
+            row = {"key": key, "value": val, "level": _clip(level, MAX_ACTUATOR_CHARS),
+                   "status": "no_setpoint", "name": _clip(sp.get("name", mid), MAX_ACTUATOR_CHARS)}
             if status_note:
                 row["status_note"] = status_note
             results.append(row)
@@ -567,19 +566,21 @@ def evaluate(metrics, setpoints):
             alert = None
         if direction is None or target is None or alert is None:
             # reference slot present but not yet authored (r0 unsigned) — measured, not graded
-            row = {"key": key, "value": val, "level": level, "status": "unset_target",
-                   "name": sp.get("name", mid), "actuator": sp.get("actuator", "")}
+            row = {"key": key, "value": val, "level": _clip(level, MAX_ACTUATOR_CHARS),
+                   "status": "unset_target",
+                   "name": _clip(sp.get("name", mid), MAX_ACTUATOR_CHARS),
+                   "actuator": _clip(sp.get("actuator", ""), MAX_ACTUATOR_CHARS)}
             # A malformed status must be reported on EVERY exit, not only the graded
             # one, or "every unrecognized status is reported" is false for any metric
             # whose reference is still unauthored.
             if status_note:
                 row["status_note"] = status_note
             elif sp.get("target") is not None and target is None:
-                row["status_note"] = (f"setpoint target {sp.get('target')!r} is not a finite "
-                                      "number — not graded")
+                row["status_note"] = _clip(f"setpoint target {sp.get('target')!r} is not a "
+                                           "finite number — not graded", MAX_WARNING_CHARS)
             elif sp.get("alert") is not None and alert is None:
-                row["status_note"] = (f"setpoint alert {sp.get('alert')!r} is not a finite "
-                                      "number — not graded")
+                row["status_note"] = _clip(f"setpoint alert {sp.get('alert')!r} is not a "
+                                           "finite number — not graded", MAX_WARNING_CHARS)
             results.append(row)
             continue
         # Every accepted operand is normalized to float before comparison. is_gradeable()
@@ -604,6 +605,7 @@ def evaluate(metrics, setpoints):
             "actuator": _clip(sp.get("actuator", ""), MAX_ACTUATOR_CHARS),
             "name": _clip(sp.get("name", mid), MAX_ACTUATOR_CHARS),
         }
+        row["level"] = _clip(level, MAX_ACTUATOR_CHARS)
         if status_note:
             row["status_note"] = status_note
         results.append(row)
@@ -658,7 +660,7 @@ def closure_verdict(record, setpoints):
     sensor_live = sensor_is_live(raw)  # STI-1919: one definition, shared with main()
     expected = ["L0", "L1", "L2", "L3"]
     levels_closed = all(levels.get(lv, {}).get("live") for lv in expected)
-    authored_by = setpoints.get("authored_by", "unknown")
+    authored_by = _clip(setpoints.get("authored_by", "unknown"), MAX_ACTUATOR_CHARS)
     reference_authored = authored_by not in ("bstack-default", "unknown", "", None)
     closed = bool(sensor_live and levels_closed)
     return {

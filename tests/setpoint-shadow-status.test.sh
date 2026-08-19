@@ -952,6 +952,58 @@ grep -q "fewer-permission-prompts" <<<"$AK_P"      && ok "an ordinary actuator s
 rm -rf "$AK_T"
 
 
+echo "== AL. round-16: bounding output must never change a DECISION =="
+# Clipping at the coercion boundary corrupted the very fields this change exists to
+# read: a padded `shadow-pending-m7` truncated into an unrecognized status and graded
+# LIVE again, and `knowledge_paths` — an operational regex, not display text — was
+# silently rewritten. A bound that changes a decision is a bug, not a bound.
+AL="$(python3 - "$SENSOR" <<'PY2'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("s", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+bad = []
+pad = " " * 100000
+# a padded stand-down must STILL stand down
+g, _ = m.setpoint_grading({"status": "shadow-pending-m7" + pad})
+if g: bad.append("padded shadow status graded LIVE")
+# a padded direction must still normalize, not fall closed
+d, _ = m.normalize_direction("lower_is_better" + pad)
+if d != "lower_is_better": bad.append(f"padded direction -> {d}")
+# and a padded VALID direction must still grade the metric it governs
+r, w = m.evaluate({"m6_x": 0.9}, {"metrics": [{"id": "m6", "name": "m6", "level": "L3",
+    "direction": "lower_is_better" + pad, "target": 0.5, "alert": 0.75, "actuator": "A"}]})
+if r[0]["status"] != "alert": bad.append(f"padded direction broke grading -> {r[0]['status']}")
+print("ok" if not bad else f"BAD {bad}")
+PY2
+)"
+[ "$AL" = "ok" ]                     && ok "padded status/direction keep their meaning"          || bad "$AL"
+
+# a LONG but VALID knowledge_paths regex must be used verbatim, not truncated
+AL_T="$(mktemp -d)"; mkdir -p "$AL_T/.control"; AL_X="$(mktemp -d)"
+{
+  printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"research/entities/tool/x.md"}}]}}'
+  printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","content":"ok"}]}}'
+} > "$AL_X/s.jsonl"
+python3 -c "
+import sys
+rx='(' + '|'.join('p%03d'%i for i in range(80)) + '|research/entities)'
+open(sys.argv[1],'w').write('knowledge_paths: \"' + rx + '\"\nmetrics:\n  - id: m5\n    name: kg\n    level: L2\n    direction: higher_is_better\n    target: 0.4\n    alert: 0.1\n    actuator: A\n')" "$AL_T/.control/leverage-setpoints.yaml"
+AL_M="$(python3 "$SENSOR" --workspace "$AL_T" --transcripts "$AL_X/*.jsonl" --json --no-store 2>/dev/null \
+        | python3 -c "import json,sys; print(json.load(sys.stdin)['metrics'].get('m5_kg_load_rate'))" 2>/dev/null)"
+[ "$AL_M" = "1.0" ]                  && ok "a 400-char VALID regex is honoured, not truncated (m5=$AL_M)" || bad "regex mutated: m5=$AL_M"
+
+echo "== AM. round-16: the unset_target actuator is bounded where it is STORED =="
+# AK checked brief/stderr/closure, none of which render an unset_target actuator, so
+# removing its clip left AK green. The state file is the channel it actually reaches.
+python3 -c "import sys; open(sys.argv[1],'w').write('metrics:\n  - id: m4\n    name: m4\n    level: L0\n    actuator: \"' + 'A'*100000 + '\"\n')" "$AL_T/.control/leverage-setpoints.yaml"
+rm -f "$AL_T/.control/leverage-state.json"
+python3 "$SENSOR" --workspace "$AL_T" --transcripts "$AL_X/*.jsonl" --brief >/dev/null 2>&1
+[ -s "$AL_T/.control/leverage-state.json" ] && ok "state written (unset_target case)"          || bad "no state file — bound vacuous"
+grep -q '"status": "unset_target"' "$AL_T/.control/leverage-state.json" && ok "the row really is unset_target" || bad "wrong row shape — bound vacuous"
+AM_S=$(wc -c < "$AL_T/.control/leverage-state.json")
+[ "$AM_S" -gt 100 ] && [ "$AM_S" -lt 20000 ] && ok "an unset_target actuator cannot flood state (${AM_S}b)" || bad "state size: ${AM_S}b"
+rm -rf "$AL_T" "$AL_X"
+
+
 echo
 echo "setpoint-shadow-status: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
