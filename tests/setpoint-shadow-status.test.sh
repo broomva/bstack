@@ -340,6 +340,66 @@ grep -q "unreadable, empty or malformed" <<<"$BADY" && ok "non-mapping policy re
 rm -rf "$T2"
 
 
+echo "== V. round-5: a BREACH CLAIM counts even without a value =="
+# Requiring value-is-not-None on the breach filter is how
+# [{status:ok,value:0},{status:alert,value:None}] certified: the alert row was
+# filtered out for lacking a number and the ok row carried the claim.
+V="$(python3 - "$SENSOR" <<'PY2'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("s", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+print(m.no_worst_line({"results": [{"status": "ok", "value": 0}, {"status": "alert", "value": None}]}))
+PY2
+)"
+! grep -q "within target" <<<"$V"   && ok "valueless alert row blocks certification"   || bad "FALSE COMPLIANCE: $V"
+grep -q "Inconsistent" <<<"$V"      && ok "the contradiction is named"                 || bad "not named: $V"
+
+echo "== W. round-5: only a real finite number may be graded =="
+# bool is an int in Python, so False grades ok against every lower-is-better target;
+# NaN does the same because every comparison with NaN is False. Both certify a
+# window nobody measured.
+W="$(python3 - "$SENSOR" <<'PY2'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("s", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+sp = {"id":"m6","name":"m6","level":"L3","direction":"lower_is_better","target":0.5,"alert":0.75,"actuator":"A"}
+bad = []
+for v in (False, True, float("nan"), float("inf"), float("-inf"), "0.4", None, [], {}):
+    r,_ = m.evaluate({"m6_x": v}, {"metrics":[sp]})
+    if r[0]["status"] != "no_setpoint": bad.append((v, r[0]["status"]))
+# polarity: a real number MUST still grade, or this passes by refusing everything
+r,_ = m.evaluate({"m6_x": 0.9}, {"metrics":[sp]})
+if r[0]["status"] != "alert": bad.append((0.9, r[0]["status"]))
+r,_ = m.evaluate({"m6_x": 0.4}, {"metrics":[sp]})
+if r[0]["status"] != "ok": bad.append((0.4, r[0]["status"]))
+print("ok" if not bad else f"MISGRADED {bad}")
+PY2
+)"
+[ "$W" = "ok" ]                     && ok "bool/NaN/inf/str/None ungraded; real numbers still graded" || bad "$W"
+
+echo "== X. round-5: renderers never raise on a malformed record =="
+X="$(python3 - "$SENSOR" <<'PY2'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("s", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+bad = [{"closure":"bad"}, {"results":None}, {"results":"str"}, {"results":[None,3,"x"]},
+       {"worst":{"status":"alert"}}, {"worst":"nope"}, {}, {"closure":{"levels":"junk"}},
+       {"metrics":"junk"}, {"closure":{"closed":False,"levels":{"L0":"nd"}}}]
+fails = []
+for rec in bad:
+    for fn in ("render_brief","render_human","no_worst_line","shadow_notes"):
+        try: getattr(m, fn)(dict(rec))
+        except Exception as e: fails.append((fn, rec, type(e).__name__))
+# polarity: a WELL-FORMED record must still render its actuator, or "never raises"
+# could be satisfied by a function that returns nothing useful.
+sp = {"id":"m6","name":"m6","level":"L3","direction":"lower_is_better","target":0.5,"alert":0.75,"actuator":"REAL ACTUATOR"}
+res, worst = m.evaluate({"m6_x": 0.9}, {"metrics":[sp]})
+brief = m.render_brief({"sessions_analyzed":3,"window_days":7,"results":res,"worst":worst,
+                        "closure":{"closed":True,"sensor_live":True,"reference_authored":True}})
+if "REAL ACTUATOR" not in brief: fails.append(("render_brief", "well-formed", "actuator missing"))
+print("ok" if not fails else f"FAILURES {fails[:3]}")
+PY2
+)"
+[ "$X" = "ok" ]                     && ok "40 hostile inputs render without raising; well-formed still steers" || bad "$X"
+
+
 echo
 echo "setpoint-shadow-status: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

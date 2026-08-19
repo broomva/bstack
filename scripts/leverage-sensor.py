@@ -28,6 +28,7 @@ Usage:
 import argparse
 import glob
 import json
+import math
 import os
 import re
 import subprocess
@@ -265,6 +266,20 @@ def merge_ship_shadow(metrics, raw, workspace, max_age_sec=172800):
         pass
 
 
+def is_gradeable(val):
+    """Whether a metric value may be compared to a target at all.
+
+    A bool is an int in Python, so `False` sails through a numeric check and then
+    grades `ok` against every lower-is-better target (False >= alert is False,
+    False > target is False). NaN does the same, because EVERY comparison with NaN
+    is False -- it looks like the healthiest possible reading. Both then certify a
+    window nobody measured. Rejecting them here keeps the falsehood out of the
+    grading path rather than hunting it in the renderers. (BRO-2168)"""
+    return (isinstance(val, (int, float))
+            and not isinstance(val, bool)
+            and math.isfinite(val))
+
+
 def metric_id(key):
     return key.split("_", 1)[0]
 
@@ -359,7 +374,7 @@ def evaluate(metrics, setpoints):
                 "setpoint_status": sp.get("status"), "name": sp.get("name", mid),
             })
             continue
-        if val is None:
+        if not is_gradeable(val):
             row = {"key": key, "value": val, "level": level, "status": "no_setpoint",
                    "name": sp.get("name", mid)}
             if status_note:
@@ -492,14 +507,17 @@ def no_worst_line(record):
         return "No setpoint graded — the result set is missing or unreadable."
     # A row only counts as graded if it carries a value: `{"status": "ok", "value": None}`
     # is an ungraded row wearing a graded label, and must not certify the window.
+    # A BREACH CLAIM COUNTS EVEN WITHOUT A VALUE. Requiring `value is not None` on
+    # this filter is how `[{"status":"ok","value":0},{"status":"alert","value":None}]`
+    # certified: the alert row was filtered out for lacking a value and the ok row
+    # carried the claim. A row saying "alert" is asserting a breach; whether it also
+    # carries a number is irrelevant to whether we may say "within target".
+    breached = [r for r in rows if isinstance(r, dict)
+                and r.get("status") in ("alert", "warn")]
+    # Certifying, by contrast, DOES require a value: `{"status":"ok","value":None}`
+    # is an ungraded row wearing a graded label.
     graded = [r for r in rows if isinstance(r, dict)
               and r.get("status") in GRADED_ROW_STATUSES and r.get("value") is not None]
-    # "Within target" is a claim about the ROWS, not merely about `worst` being unset.
-    # A record carrying an alert/warn row while `worst` is None is INCONSISTENT -- the
-    # two disagree -- and certifying it would make exactly the false compliance claim
-    # this whole change exists to prevent. Report the contradiction instead of picking
-    # the reassuring side of it.
-    breached = [r for r in graded if r.get("status") in ("alert", "warn")]
     if breached:
         return ("Inconsistent record — " + ", ".join(
             f"{r.get('name', r.get('key'))}={r.get('value')} [{r.get('status')}]" for r in breached)
@@ -519,26 +537,40 @@ def shadow_notes(record):
     output entirely. Vanishing silently is the opposite failure to the one
     BRO-2168 fixed -- a shield can then be gone for windows without anyone
     noticing -- so its absence is stated rather than implied."""
-    rows = record.get("results", [])
+    rows = record.get("results")
+    if not isinstance(rows, list):
+        return []
     out = []
-    shadowed = [r for r in rows if r.get("status") == "shadow"]
+    shadowed = [r for r in rows if isinstance(r, dict) and r.get("status") == "shadow"]
     if shadowed:
         out.append("shadow (measured, NOT graded): " + ", ".join(
             f"{r.get('name', r['key'])} = {r.get('value')} [{r.get('setpoint_status')}]"
             for r in shadowed))
     for r in rows:
-        if r.get("status_note"):
+        if isinstance(r, dict) and r.get("status_note"):
             out.append(f"⚠ {r.get('name', r['key'])}: {r['status_note']}")
     return out
 
 
 def render_brief(record):
+    # This renders into the agent's SessionStart context, so a malformed record must
+    # degrade to a truthful line rather than raise. `closure` has been observed as a
+    # string, `worst` without its `actuator`/`gap`, and `sessions_analyzed` absent --
+    # each of which raised here before. A crashed brief is silently swallowed by the
+    # hook (`|| true`), which is the worst outcome: no signal AND no error. (BRO-2168)
     worst = record.get("worst")
-    lines = [f"[self-improvement loop] {record['sessions_analyzed']} sessions / {record['window_days']}d"]
-    cl = record.get("closure", {})
+    if not isinstance(worst, dict):
+        worst = None
+    lines = [f"[self-improvement loop] {record.get('sessions_analyzed', '?')} sessions / "
+             f"{record.get('window_days', '?')}d"]
+    cl = record.get("closure")
+    if not isinstance(cl, dict):
+        cl = {}
     if cl and not cl.get("closed"):
         why = "sensor dead" if not cl.get("sensor_live") else \
-              "levels not all live: " + ",".join(k for k, v in cl.get("levels", {}).items() if not v.get("live"))
+              "levels not all live: " + ",".join(
+                  str(k) for k, v in (cl.get("levels") or {}).items()
+                  if not (isinstance(v, dict) and v.get("live")))
         lines.append(f"⚠ loop NOT closed ({why}) — run `bstack doctor` §23")
     if cl and not cl.get("reference_authored"):
         lines.append("⚠ reference r0 is bstack-default (endogenous) — author + sign .control/leverage-setpoints.yaml")
@@ -548,12 +580,22 @@ def render_brief(record):
         lines.append(no_worst_line(record))
         lines.extend(shadow_notes(record))
         return "\n".join(x for x in lines if x)
-    sign = "↑" if worst["direction"] == "lower_is_better" else "↓"
-    lines.append(f"Worst gap [{worst['status'].upper()}] {worst['name']} ({worst.get('level','L?')}) = "
-                 f"{worst['value']} (target {worst['target']}, {sign} off by {abs(worst['gap'])}).")
-    lines.append(f"→ Corrective actuator: {worst['actuator']}")
-    others = [r for r in record["results"]
-              if r.get("status") == "alert" and r["key"] != worst["key"]]
+    sign = "↑" if worst.get("direction") == "lower_is_better" else "↓"
+    gap = worst.get("gap")
+    gap_txt = f", {sign} off by {abs(gap)}" if isinstance(gap, (int, float)) and not isinstance(gap, bool) else ""
+    lines.append(f"Worst gap [{str(worst.get('status', '?')).upper()}] "
+                 f"{worst.get('name', worst.get('key', '?'))} ({worst.get('level', 'L?')}) = "
+                 f"{worst.get('value')} (target {worst.get('target')}{gap_txt}).")
+    actuator = worst.get("actuator")
+    if actuator:
+        lines.append(f"→ Corrective actuator: {actuator}")
+    else:
+        # No actuator means nothing to DO about the worst gap. Say so; an omitted line
+        # reads as "nothing was wrong".
+        lines.append("→ No corrective actuator declared for this setpoint.")
+    others = [r for r in (record.get("results") or [])
+              if isinstance(r, dict) and r.get("status") == "alert"
+              and r.get("key") != worst.get("key")]
     if others:
         lines.append("Other alerts: " + ", ".join(f"{o['name']}={o['value']}" for o in others))
     lines.extend(shadow_notes(record))
@@ -561,12 +603,14 @@ def render_brief(record):
 
 
 def render_human(record):
-    out = [f"Self-improvement loop — {record['sessions_analyzed']} sessions over "
-           f"{record['window_days']}d  (measured {record['measured_at']})", ""]
+    # Same tolerance contract as render_brief: degrade to a truthful line, never raise.
+    out = [f"Self-improvement loop — {record.get('sessions_analyzed', '?')} sessions over "
+           f"{record.get('window_days', '?')}d  (measured {record.get('measured_at', '?')})", ""]
     mark = {"ok": "ok  ", "warn": "WARN", "alert": "ALRT", "no_setpoint": "----",
             "unset_target": "r0? ", "shadow": "shdw"}
     for lv in ["L0", "L1", "L2", "L3"]:
-        rows = [r for r in record["results"] if r.get("level") == lv]
+        rows = [r for r in (record.get("results") or [])
+                if isinstance(r, dict) and r.get("level") == lv]
         if not rows:
             continue
         out.append(f"  ── {lv} ──")
@@ -578,17 +622,22 @@ def render_human(record):
             else:
                 tgt = f"(target {r.get('target')}, alert {r.get('alert')})"
             out.append(f"  {mark.get(r['status'],'?')} {r.get('name', r['key']):<30} {str(r.get('value')):>8}   {tgt}")
-    cl = record.get("closure", {})
+    cl = record.get("closure")
+    if not isinstance(cl, dict):
+        cl = {}
     out.append("")
     out.append(f"  closure: {'CLOSED' if cl.get('closed') else 'OPEN'}  "
                f"(sensor_live={cl.get('sensor_live')}, levels_closed={cl.get('levels_closed')}, "
                f"reference_authored={cl.get('reference_authored')})")
-    m6s = record.get("metrics", {}).get("m6s_meta_work_ship_ratio")
+    metrics = record.get("metrics")
+    m6s = metrics.get("m6s_meta_work_ship_ratio") if isinstance(metrics, dict) else None
     if m6s is not None:
         out.append(f"  [shadow] m6s_meta_work_ship_ratio = {m6s}  "
                    f"(exogenous ship-signal — NON-actuating, calibrating for BRO-1709)")
     worst = record.get("worst")
-    out.append(f"  Focus: {worst['name']} → {worst['actuator']}" if worst
+    worst = worst if isinstance(worst, dict) else None
+    out.append(f"  Focus: {worst.get('name', worst.get('key', '?'))} → "
+               f"{worst.get('actuator') or '(no actuator declared)'}" if worst
                else "  " + no_worst_line(record))
     out.extend(f"  {n}" for n in shadow_notes(record))
     return "\n".join(out)
