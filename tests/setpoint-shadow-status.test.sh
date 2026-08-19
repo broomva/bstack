@@ -716,18 +716,27 @@ RX="$(python3 "$SENSOR" --workspace "$AF_T" --brief --no-store 2>/dev/null)"; rc
 [ $rc -eq 0 ] && [ -n "$RX" ]        && ok "invalid knowledge_paths regex does not crash"  || bad "rc=$rc out=[$RX]"
 RXE="$(python3 "$SENSOR" --workspace "$AF_T" --brief --no-store 2>&1 >/dev/null)"
 grep -q "not a valid regex" <<<"$RXE" && ok "invalid regex is reported, not swallowed"      || bad "silent fallback: $RXE"
-# The floor: ANY unexpected failure must still emit a stated failure and exit 0, or the
-# hook's `|| true` turns it into no brief AND no error.
-FLOOR="$(python3 - "$SENSOR" <<'PY2'
-import importlib.util, sys
-spec = importlib.util.spec_from_file_location("s", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-m.main = lambda: (_ for _ in ()).throw(RuntimeError("synthetic boom"))
-try: m._main_guarded()
-except SystemExit as e: print(f"EXIT={e.code}", file=sys.stderr)
-PY2
-)"
-grep -q "sensor failed" <<<"$FLOOR"   && ok "an unexpected failure still emits a stated failure" || bad "silent crash: [$FLOOR]"
-grep -q "no actuator emitted" <<<"$FLOOR" && ok "and explicitly emits no actuator"                || bad "no disclaimer: [$FLOOR]"
+# Round-11 MAJOR: the hook runs with 2>/dev/null, so a stderr-only warning let an
+# altered policy present ordinary-looking grading. The degradation must reach the SAME
+# channel as the grading it affects.
+RXO="$(python3 "$SENSOR" --workspace "$AF_T" --brief --no-store 2>/dev/null)"
+grep -q "policy degraded" <<<"$RXO"   && ok "degradation is visible with stderr DISCARDED" || bad "invisible to the hook: $RXO"
+# and it must name the offending field, not just say something went wrong
+grep -q "knowledge_paths" <<<"$RXO"   && ok "the brief names the offending field"          || bad "unnamed: $RXO"
+# POLARITY: a clean policy must emit NO degradation line, or the check is a constant
+printf 'window_days: 7\nknowledge_paths: "research/entities"\nmetrics:\n  - id: m4\n    name: m4\n    level: L0\n    direction: lower_is_better\n    target: 0.5\n    alert: 0.75\n    actuator: A\n' > "$AF_T/.control/leverage-setpoints.yaml"
+RXC="$(python3 "$SENSOR" --workspace "$AF_T" --brief --no-store 2>/dev/null)"
+! grep -q "policy degraded" <<<"$RXC"  && ok "a clean policy reports NO degradation (polarity)" || bad "false degradation: $RXC"
+
+echo "== AH. round-11: machine-mode exit semantics are not swallowed =="
+# The round-10 "floor" turned every failure into exit 0, which inverted the --closure
+# CI gate and made --json emit non-JSON on stdout. It was reverted; this pins it.
+printf 'metrics: []\n' > "$AF_T/.control/leverage-setpoints.yaml"
+python3 "$SENSOR" --workspace "$AF_T" --closure --no-store >/dev/null 2>&1
+[ $? -eq 1 ]                          && ok "--closure on an OPEN loop still exits 1"      || bad "--closure exit inverted"
+JOUT="$(python3 "$SENSOR" --workspace "$AF_T" --json --no-store 2>/dev/null)"
+python3 -c "import json,sys; json.loads(sys.stdin.read())" <<<"$JOUT" 2>/dev/null \
+                                      && ok "--json still emits parseable JSON"            || bad "--json broke its contract"
 rm -rf "$AF_T"
 # POLARITY: a VALID policy must still grade and still steer through the same path.
 cat > "$AE_T/.control/leverage-setpoints.yaml" <<'YML'

@@ -33,7 +33,6 @@ import os
 import re
 import subprocess
 import sys
-import traceback
 import time
 from datetime import datetime, timezone
 
@@ -116,6 +115,18 @@ DEFAULT_LEVELS = {
 DEGRADED_SETPOINTS = {"window_days": 7, "metrics": []}
 
 
+def _warn(bucket, msg):
+    """Record a policy degradation AND print it.
+
+    stderr alone is not enough: knowledge-wakeup-hook.sh runs the sensor as
+    `... --brief --cached --no-store 2>/dev/null`, so every warning here is discarded
+    and the brief then presents ordinary-looking grading computed from a policy that
+    was silently altered. Degradations must reach the SAME channel as the grading they
+    affect. (BRO-2168)"""
+    print(f"[leverage-sensor] WARN {msg}", file=sys.stderr)
+    bucket.append(msg)
+
+
 def coerce_setpoints(raw, path="<setpoints>"):
     """Normalize whatever YAML produced into the shape the rest of the file assumes.
 
@@ -131,32 +142,33 @@ def coerce_setpoints(raw, path="<setpoints>"):
 
     A malformed ENTRY is dropped with a warning while the rest of the policy stands,
     because one bad row should not disarm every other setpoint."""
+    warnings = []
     if not isinstance(raw, dict):
-        print(f"[leverage-sensor] WARN setpoints ({path}) is a {type(raw).__name__}, "
-              "expected a mapping — treating as empty", file=sys.stderr)
-        return dict(DEGRADED_SETPOINTS)
+        out = dict(DEGRADED_SETPOINTS)
+        _warn(warnings, f"setpoints ({path}) is a {type(raw).__name__}, expected a mapping "
+                        "— treating as empty")
+        out["_warnings"] = warnings
+        return out
     metrics = raw.get("metrics")
     if metrics is None:
         metrics = []
     elif not isinstance(metrics, list):
-        print(f"[leverage-sensor] WARN setpoints.metrics is a {type(metrics).__name__}, "
-              "expected a list — treating as empty", file=sys.stderr)
+        _warn(warnings, f"setpoints.metrics is a {type(metrics).__name__}, expected a list "
+                        "— treating as empty")
         metrics = []
     clean, seen = [], set()
     for i, m in enumerate(metrics):
         if not isinstance(m, dict):
-            print(f"[leverage-sensor] WARN setpoints.metrics[{i}] is a "
-                  f"{type(m).__name__}, expected a mapping — skipped", file=sys.stderr)
+            _warn(warnings, f"setpoints.metrics[{i}] is a {type(m).__name__}, expected a "
+                            "mapping — skipped")
             continue
         mid = m.get("id")
         if not isinstance(mid, str) or not mid.strip():
-            print(f"[leverage-sensor] WARN setpoints.metrics[{i}] has no usable `id` "
-                  "— skipped", file=sys.stderr)
+            _warn(warnings, f"setpoints.metrics[{i}] has no usable id — skipped")
             continue
         mid = mid.strip()
         if mid in seen:
-            print(f"[leverage-sensor] WARN setpoints.metrics[{i}] duplicates id "
-                  f"{mid!r} — later entry skipped", file=sys.stderr)
+            _warn(warnings, f"setpoints.metrics[{i}] duplicates id {mid!r} — later entry skipped")
             continue
         seen.add(mid)
         entry = dict(m, id=mid)
@@ -168,9 +180,8 @@ def coerce_setpoints(raw, path="<setpoints>"):
                 if entry[field] is None:
                     del entry[field]
                 else:
-                    print(f"[leverage-sensor] WARN setpoints.metrics[{i}].{field} is a "
-                          f"{type(entry[field]).__name__}, expected a string — coerced",
-                          file=sys.stderr)
+                    _warn(warnings, f"setpoints.metrics[{i}].{field} is a "
+                                    f"{type(entry[field]).__name__}, expected a string — coerced")
                     entry[field] = str(entry[field])
         clean.append(entry)
     out = dict(raw)
@@ -182,15 +193,15 @@ def coerce_setpoints(raw, path="<setpoints>"):
         ok = (isinstance(wd, (int, float)) and not isinstance(wd, bool)
               and math.isfinite(wd) and wd > 0)
         if not ok:
-            print(f"[leverage-sensor] WARN setpoints.window_days {wd!r} is not a positive "
-                  f"number — using {DEGRADED_SETPOINTS['window_days']}", file=sys.stderr)
+            _warn(warnings, f"setpoints.window_days {wd!r} is not a positive number "
+                            f"— using {DEGRADED_SETPOINTS['window_days']}")
             out["window_days"] = DEGRADED_SETPOINTS["window_days"]
     kp = out.get("knowledge_paths")
     if kp is not None and not isinstance(kp, str):
-        print(f"[leverage-sensor] WARN setpoints.knowledge_paths is a "
-              f"{type(kp).__name__}, expected a regex string — using the default",
-              file=sys.stderr)
+        _warn(warnings, f"setpoints.knowledge_paths is a {type(kp).__name__}, expected a "
+                        "regex string — using the default")
         out.pop("knowledge_paths")
+    out["_warnings"] = warnings
     return out
 
 
@@ -717,6 +728,16 @@ def render_brief(record):
         lines.append(f"⚠ loop NOT closed ({why}) — run `bstack doctor` §23")
     if cl and not cl.get("reference_authored"):
         lines.append("⚠ reference r0 is bstack-default (endogenous) — author + sign .control/leverage-setpoints.yaml")
+    # Policy degradations belong in the SAME channel as the grading they affect. The
+    # SessionStart hook runs with 2>/dev/null, so a stderr-only warning let an altered
+    # policy present ordinary-looking grading. Capped so a badly broken file cannot
+    # crowd out the brief itself.
+    pw = record.get("policy_warnings")
+    if isinstance(pw, list) and pw:
+        for w in pw[:3]:
+            lines.append(f"⚠ policy degraded: {w}")
+        if len(pw) > 3:
+            lines.append(f"⚠ policy degraded: … and {len(pw) - 3} more (see stderr)")
     if not worst:
         # STI-1919 + BRO-2168: with no worst gap, "within target" is only true if
         # something was actually graded. no_worst_line() decides on the graded rows.
@@ -892,8 +913,9 @@ def main():
     except re.error as e:
         # `knowledge_paths: "["` is a perfectly good string and a broken regex. Type
         # validation cannot see this; only compiling it can.
-        print(f"[leverage-sensor] WARN setpoints.knowledge_paths {kg_pat!r} is not a "
-              f"valid regex ({e}) — using the default", file=sys.stderr)
+        _warn(setpoints.setdefault("_warnings", []),
+              f"setpoints.knowledge_paths {kg_pat!r} is not a valid regex ({e}) "
+              "— using the default")
         kg_read_re = re.compile(DEFAULT_KG_READ, re.IGNORECASE)
     metrics, raw = analyze(glob_pat, window, kg_read_re)
     # STI-1919: a blind read must not emit a row that reads as a measurement.
@@ -908,12 +930,13 @@ def main():
         metrics = dict.fromkeys(metrics)
     merge_ship_shadow(metrics, raw, workspace)
     results, worst = evaluate(metrics, setpoints)
+    policy_warnings = setpoints.get("_warnings") or []
 
     record = {
         "measured_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "workspace": workspace, "window_days": window,
         "sessions_analyzed": raw["sessions_analyzed"],
-        "metrics": metrics, "raw": raw, "results": results, "worst": worst,
+        "metrics": metrics, "raw": raw, "policy_warnings": policy_warnings, "results": results, "worst": worst,
     }
     record["closure"] = closure_verdict(record, setpoints)
 
@@ -932,32 +955,6 @@ def main():
         print(render_human(record))
 
 
-def _main_guarded():
-    """Run main(), and never let an unexpected failure be SILENT.
-
-    Ten review rounds each surfaced one more "malformed field X crashes the sensor",
-    and that space is unbounded: any hand-edited YAML value can be wrong in a new way.
-    Enumerating them one at a time cannot terminate. The property actually wanted is
-    narrower and checkable: THE SENSOR ALWAYS EMITS EITHER A BRIEF OR A STATED FAILURE.
-    The SessionStart hook invokes this with `|| true`, so an uncaught exception means
-    no brief AND no error — the self-improvement loop quietly stops reporting on
-    itself, which is the failure this whole change exists to prevent.
-
-    Specific validation stays where it is: it produces BETTER diagnostics and keeps
-    working input working. This is the floor under it, not a replacement.
-
-    SystemExit passes through untouched — `--closure` uses it to signal CI."""
-    try:
-        main()
-    except SystemExit:
-        raise
-    except Exception as e:
-        print(f"[self-improvement loop] sensor failed: {type(e).__name__}: {e}")
-        print("⚠ nothing graded, no actuator emitted — check .control/leverage-setpoints.yaml "
-              "and .control/leverage-state.json")
-        traceback.print_exc(file=sys.stderr)
-        sys.exit(0)
-
 
 if __name__ == "__main__":
-    _main_guarded()
+    main()
