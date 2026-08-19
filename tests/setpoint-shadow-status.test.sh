@@ -400,6 +400,46 @@ PY2
 [ "$X" = "ok" ]                     && ok "40 hostile inputs render without raising; well-formed still steers" || bad "$X"
 
 
+echo "== Y. round-6: a non-finite THRESHOLD must fail closed, not certify =="
+# PyYAML accepts `target: .nan`. Every comparison with NaN is False, so the metric
+# grades ok and the window certifies -- the same falsehood as a NaN metric, entering
+# from the policy side. Validating the measurement was only half of it.
+Y="$(python3 - "$SENSOR" <<'PY2'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("s", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+bad = []
+for tgt, alr in ((float("nan"), float("nan")), (float("nan"), 0.75), (0.5, float("nan")),
+                 (float("inf"), 0.75), ("0.5", 0.75), (True, 0.75)):
+    r, w = m.evaluate({"m6_x": 0.9}, {"metrics": [{"id":"m6","name":"m6","level":"L3",
+        "direction":"lower_is_better","target":tgt,"alert":alr,"actuator":"A"}]})
+    line = m.render_brief({"sessions_analyzed":1,"window_days":7,"results":r,"worst":w,
+        "closure":{"closed":True,"sensor_live":True,"reference_authored":True}})
+    if r[0]["status"] != "unset_target" or w is not None or "within target" in line:
+        bad.append((tgt, alr, r[0]["status"], w is not None))
+# polarity: real thresholds must STILL grade and still steer
+r, w = m.evaluate({"m6_x": 0.9}, {"metrics": [{"id":"m6","name":"m6","level":"L3",
+    "direction":"lower_is_better","target":0.5,"alert":0.75,"actuator":"REAL"}]})
+if r[0]["status"] != "alert" or not w: bad.append(("real", "real", r[0]["status"], bool(w)))
+print("ok" if not bad else f"BAD {bad}")
+PY2
+)"
+[ "$Y" = "ok" ]                     && ok "non-finite thresholds fail closed; real ones still grade" || bad "$Y"
+
+echo "== Z. round-6: is_gradeable converts rather than type-matches =="
+Z="$(python3 - "$SENSOR" <<'PY2'
+import importlib.util, sys, decimal
+spec = importlib.util.spec_from_file_location("s", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+want_true  = [0.4, 1, 0, -0.0, 10**30, decimal.Decimal("0.4")]
+want_false = [True, False, float("nan"), float("inf"), float("-inf"), "0.4", b"0.4",
+              None, [], {}, 10**10000]   # 10**10000 must be REFUSED, not raise
+bad  = [(v, "expected gradeable")     for v in want_true  if not m.is_gradeable(v)]
+bad += [(repr(v)[:12], "expected refused") for v in want_false if m.is_gradeable(v)]
+print("ok" if not bad else f"BAD {bad}")
+PY2
+)"
+[ "$Z" = "ok" ]                     && ok "Decimal/int/float ok; bool/str/NaN/huge refused without raising" || bad "$Z"
+
+
 echo
 echo "setpoint-shadow-status: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

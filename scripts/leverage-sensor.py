@@ -275,9 +275,16 @@ def is_gradeable(val):
     is False -- it looks like the healthiest possible reading. Both then certify a
     window nobody measured. Rejecting them here keeps the falsehood out of the
     grading path rather than hunting it in the renderers. (BRO-2168)"""
-    return (isinstance(val, (int, float))
-            and not isinstance(val, bool)
-            and math.isfinite(val))
+    if isinstance(val, (bool, str, bytes)):
+        # bool first: it is an int subclass. str/bytes would otherwise be CONVERTED by
+        # float() below, which would silently grade the string "0.4".
+        return False
+    try:
+        f = float(val)
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError is real: float(10**10000) raises rather than returning inf.
+        return False
+    return math.isfinite(f)
 
 
 def metric_id(key):
@@ -383,6 +390,15 @@ def evaluate(metrics, setpoints):
             continue
         direction = sp.get("direction", "lower_is_better")
         target, alert = sp.get("target"), sp.get("alert")
+        # A threshold that is not a real finite number cannot decide anything. PyYAML
+        # accepts `target: .nan`, and because EVERY comparison with NaN is False the
+        # metric would grade `ok` and certify the window -- the same falsehood as a
+        # NaN metric, entering from the policy side instead of the measurement side.
+        # Fail closed to the existing "measured, not graded" state.
+        if target is not None and not is_gradeable(target):
+            target = None
+        if alert is not None and not is_gradeable(alert):
+            alert = None
         if target is None or alert is None:
             # reference slot present but not yet authored (r0 unsigned) — measured, not graded
             row = {"key": key, "value": val, "level": level, "status": "unset_target",
@@ -517,7 +533,7 @@ def no_worst_line(record):
     # Certifying, by contrast, DOES require a value: `{"status":"ok","value":None}`
     # is an ungraded row wearing a graded label.
     graded = [r for r in rows if isinstance(r, dict)
-              and r.get("status") in GRADED_ROW_STATUSES and r.get("value") is not None]
+              and r.get("status") in GRADED_ROW_STATUSES and is_gradeable(r.get("value"))]
     if breached:
         return ("Inconsistent record — " + ", ".join(
             f"{r.get('name', r.get('key'))}={r.get('value')} [{r.get('status')}]" for r in breached)
@@ -569,7 +585,7 @@ def render_brief(record):
     if cl and not cl.get("closed"):
         why = "sensor dead" if not cl.get("sensor_live") else \
               "levels not all live: " + ",".join(
-                  str(k) for k, v in (cl.get("levels") or {}).items()
+                  str(k) for k, v in (cl.get("levels") if isinstance(cl.get("levels"), dict) else {}).items()
                   if not (isinstance(v, dict) and v.get("live")))
         lines.append(f"⚠ loop NOT closed ({why}) — run `bstack doctor` §23")
     if cl and not cl.get("reference_authored"):
