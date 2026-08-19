@@ -112,8 +112,16 @@ DEFAULT_LEVELS = {
 }
 
 
-MAX_WARNING_CHARS = 200
+MAX_WARNING_CHARS = 200      # per message
+MAX_WARNINGS = 20            # total, per run
+MAX_ACTUATOR_CHARS = 300     # a policy string rendered into the brief and stored
 DEGRADED_SETPOINTS = {"window_days": 7, "metrics": []}
+
+
+def _clip(text, limit):
+    """Bound a policy-authored string that will be rendered or stored."""
+    t = str(text)
+    return t if len(t) <= limit else t[:limit] + f"… (+{len(t) - limit} chars)"
 
 
 def _warn(bucket, msg):
@@ -130,6 +138,16 @@ def _warn(bucket, msg):
     # Capping the warning COUNT never addressed this at all.
     if len(msg) > MAX_WARNING_CHARS:
         msg = msg[:MAX_WARNING_CHARS] + f"… (+{len(msg) - MAX_WARNING_CHARS} chars)"
+    # TOTAL cap as well as a per-message one. `metrics: [null, null, …]` with 10,000 rows
+    # produced one warning each: ~909KB of stderr and a ~759KB stored record, every
+    # message individually within the per-message cap. Bounding one axis does not bound
+    # the product of two.
+    if len(bucket) >= MAX_WARNINGS:
+        if len(bucket) == MAX_WARNINGS:
+            over = f"further policy warnings suppressed (>{MAX_WARNINGS} this run)"
+            print(f"[leverage-sensor] WARN {over}", file=sys.stderr)
+            bucket.append(over)
+        return
     print(f"[leverage-sensor] WARN {msg}", file=sys.stderr)
     bucket.append(msg)
 
@@ -568,7 +586,13 @@ def evaluate(metrics, setpoints):
         row = {
             "key": key, "value": val, "target": target, "alert": alert, "level": level,
             "direction": direction, "status": status, "gap": gap,
-            "actuator": sp.get("actuator", ""), "name": sp.get("name", mid),
+            # `actuator` and `name` come from the policy file and are BOTH rendered into
+            # the SessionStart brief and serialized into leverage-state.json. A 100KB
+            # actuator on an otherwise valid setpoint produced a 100KB brief and a 200KB
+            # record. Bound them here, at the one place the row is built, so every
+            # consumer inherits the bound.
+            "actuator": _clip(sp.get("actuator", ""), MAX_ACTUATOR_CHARS),
+            "name": _clip(sp.get("name", mid), MAX_ACTUATOR_CHARS),
         }
         if status_note:
             row["status_note"] = status_note
@@ -748,7 +772,9 @@ def render_brief(record):
         for w in pw[:3]:
             lines.append(f"⚠ policy degraded: {w}")
         if len(pw) > 3:
-            lines.append(f"⚠ policy degraded: … and {len(pw) - 3} more (see stderr)")
+            # Do NOT say "see stderr": stderr is capped too, so past MAX_WARNINGS the
+            # rest exist nowhere. Disclose that they were dropped, not where to find them.
+            lines.append(f"⚠ policy degraded: … and {len(pw) - 3} more not shown")
     if not worst:
         # STI-1919 + BRO-2168: with no worst gap, "within target" is only true if
         # something was actually graded. no_worst_line() decides on the graded rows.

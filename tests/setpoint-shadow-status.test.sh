@@ -832,6 +832,62 @@ grep -q "REAL ACTUATOR" <<<"$VALID" && ok "a VALID policy still grades and steer
 rm -rf "$AE_T"
 
 
+echo "== AJ. round-14: no channel may be flooded by policy content =="
+# Three distinct unbounded-output defects reached the brief across rounds 12-14: a huge
+# field value, 10k warnings each individually within the per-message cap, and a huge
+# actuator on an otherwise VALID setpoint. Bound every channel the policy can reach:
+# stdout, stderr, and the stored state record.
+AJ_T="$(mktemp -d)"; mkdir -p "$AJ_T/.control"
+python3 -c "import sys; open(sys.argv[1],'w').write('metrics:\n' + '  - null\n'*10000)" "$AJ_T/.control/leverage-setpoints.yaml"
+AJ_O="$(python3 "$SENSOR" --workspace "$AJ_T" --brief --no-store 2>/dev/null)"
+AJ_E="$(python3 "$SENSOR" --workspace "$AJ_T" --brief --no-store 2>&1 >/dev/null)"
+[ "${#AJ_O}" -lt 4000 ]  && ok "10k malformed rows: stdout bounded (${#AJ_O}b)"   || bad "stdout flooded: ${#AJ_O}b"
+[ "${#AJ_E}" -lt 8000 ]  && ok "10k malformed rows: stderr bounded (${#AJ_E}b)"   || bad "stderr flooded: ${#AJ_E}b"
+grep -qE "more not shown" <<<"$AJ_O" && ok "the brief DISCLOSES that warnings were dropped" || bad "silent truncation: $AJ_O"
+! grep -q "see stderr" <<<"$AJ_O"    && ok "…and does not point at stderr, which is capped too"  || bad "false pointer: $AJ_O"
+# the stored record is a third channel
+python3 "$SENSOR" --workspace "$AJ_T" --brief >/dev/null 2>&1
+AJ_S=$(wc -c < "$AJ_T/.control/leverage-state.json" 2>/dev/null || echo 0)
+[ "$AJ_S" -lt 20000 ]    && ok "10k malformed rows: stored record bounded (${AJ_S}b)" || bad "state file flooded: ${AJ_S}b"
+
+# a VALID setpoint with a huge actuator — nothing malformed, so no warning path involved
+python3 -c "import sys; open(sys.argv[1],'w').write('metrics:\n  - id: m4\n    name: m4\n    level: L0\n    direction: lower_is_better\n    target: 0.5\n    alert: 0.75\n    actuator: \"' + 'A'*100000 + '\"\n')" "$AJ_T/.control/leverage-setpoints.yaml"
+# The setpoint must actually BREACH, or its actuator is never rendered and this whole
+# section passes on a blind sensor. Seed a cached state whose value trips the alert.
+python3 - "$AJ_T" <<'PY2'
+import json,sys,datetime
+json.dump({"sessions_analyzed":5,"window_days":7,"measured_at":datetime.datetime.now().isoformat(),
+ "metrics":{"m4_x":4.6},"results":[],"worst":None,
+ "closure":{"closed":True,"sensor_live":True,"reference_authored":True}},
+ open(f"{sys.argv[1]}/.control/leverage-state.json","w"))
+PY2
+AJ_A="$(python3 "$SENSOR" --workspace "$AJ_T" --brief --cached --no-store 2>/dev/null)"
+grep -q "Corrective actuator" <<<"$AJ_A" && ok "the huge-actuator setpoint really is ranked (fixture is live)" || bad "fixture never rendered an actuator: $AJ_A"
+[ "${#AJ_A}" -lt 4000 ]  && ok "a 100KB actuator cannot flood the brief (${#AJ_A}b)"  || bad "actuator flooded brief: ${#AJ_A}b"
+python3 "$SENSOR" --workspace "$AJ_T" --brief >/dev/null 2>&1
+AJ_S2=$(wc -c < "$AJ_T/.control/leverage-state.json" 2>/dev/null || echo 0)
+[ "$AJ_S2" -lt 20000 ]   && ok "a 100KB actuator cannot flood the state file (${AJ_S2}b)" || bad "state flooded: ${AJ_S2}b"
+
+# POLARITY: an ORDINARY actuator must survive INTACT. Clipping everything would satisfy
+# every bound above while destroying the one string the brief exists to deliver.
+cat > "$AJ_T/.control/leverage-setpoints.yaml" <<'YML'
+metrics:
+  - {id: m4, name: permission_bypass_per_session, level: L0, direction: lower_is_better, target: 0.5, alert: 0.75, actuator: "populate .claude/settings.json permissions.allow via fewer-permission-prompts"}
+YML
+rm -f "$AJ_T/.control/leverage-state.json"
+python3 - "$AJ_T" <<'PY2'
+import json,sys,datetime
+json.dump({"sessions_analyzed":5,"window_days":7,"measured_at":datetime.datetime.now().isoformat(),
+ "metrics":{"m4_permission_bypass_per_session":4.6},"results":[],"worst":None,
+ "closure":{"closed":True,"sensor_live":True,"reference_authored":True}},
+ open(f"{sys.argv[1]}/.control/leverage-state.json","w"))
+PY2
+AJ_P="$(python3 "$SENSOR" --workspace "$AJ_T" --brief --cached --no-store 2>/dev/null)"
+grep -q "populate .claude/settings.json permissions.allow via fewer-permission-prompts" <<<"$AJ_P" \
+                         && ok "an ordinary actuator survives INTACT (polarity)"          || bad "clipped a normal actuator: $AJ_P"
+rm -rf "$AJ_T"
+
+
 echo
 echo "setpoint-shadow-status: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
