@@ -540,6 +540,58 @@ PY2
 [ "$AD" = "ok" ]                    && ok "every row renders exactly once, whatever its level" || bad "$AD"
 
 
+echo "== AE. round-8: structurally invalid policy must not crash the sensor =="
+# All of these are VALID YAML from a hand-edited file, and each reached
+# {m["id"]: m for m in setpoints["metrics"]} and raised. The SessionStart hook
+# swallows failure with || true, so a crash means no brief AND no error. Round 4
+# refused a non-mapping policy on the CACHED path only -- a one-site fix for a
+# two-site defect; the ordinary CLI still crashed.
+AE_T="$(mktemp -d)"; mkdir -p "$AE_T/.control"
+AE_FAIL=0
+while IFS= read -r doc; do
+    [ -z "$doc" ] && continue
+    printf '%b\n' "$doc" > "$AE_T/.control/leverage-setpoints.yaml"
+    for mode in "--brief" "--brief --cached" ""; do
+        out="$(python3 "$SENSOR" --workspace "$AE_T" $mode --no-store 2>/dev/null)"; rc=$?
+        if [ $rc -ne 0 ]; then bad "crash rc=$rc on [$doc] mode[$mode]"; AE_FAIL=1
+        elif [ -z "$out" ]; then bad "empty output on [$doc] mode[$mode]"; AE_FAIL=1; fi
+    done
+done <<'DOCS'
+- id: m6
+metrics: [oops]
+metrics:\n  - name: no_id\n    target: 0.5
+just a string
+metrics: notalist
+metrics:\n  - id: m6\n    target: 0.5\n    alert: 0.75\n  - id: m6\n    target: 9
+DOCS
+[ "$AE_FAIL" = "0" ] && ok "6 malformed policy documents x 3 modes: no crash, no silence" || true
+# A DROPPED setpoint is a disarmed shield, so the drop must be reported, not silent.
+# Without this, the id-drop guard is indistinguishable from evaluate()'s own defensive
+# filter -- reverting it left the suite green, which is how the gap was found.
+printf 'metrics:\n  - name: no_id\n    target: 0.5\n  - id: m6\n    target: 0.5\n    alert: 0.75\n' > "$AE_T/.control/leverage-setpoints.yaml"
+AE_ERR="$(python3 "$SENSOR" --workspace "$AE_T" --brief --no-store 2>&1 >/dev/null)"
+grep -q "no usable" <<<"$AE_ERR"      && ok "a setpoint dropped for a missing id says so on stderr" || bad "silently disarmed: $AE_ERR"
+printf 'metrics: [oops]\n' > "$AE_T/.control/leverage-setpoints.yaml"
+AE_ERR2="$(python3 "$SENSOR" --workspace "$AE_T" --brief --no-store 2>&1 >/dev/null)"
+grep -q "expected a mapping" <<<"$AE_ERR2" && ok "a non-mapping metric entry says so on stderr" || bad "silently dropped: $AE_ERR2"
+# POLARITY: a VALID policy must still grade and still steer through the same path.
+cat > "$AE_T/.control/leverage-setpoints.yaml" <<'YML'
+window_days: 7
+metrics:
+  - {id: m4, name: permission_bypass_per_session, level: L0, direction: lower_is_better, target: 0.5, alert: 0.75, actuator: "REAL ACTUATOR"}
+YML
+python3 - "$AE_T" <<'PY2'
+import json,sys,datetime
+json.dump({"sessions_analyzed":5,"window_days":7,"measured_at":datetime.datetime.now().isoformat(),
+ "metrics":{"m4_permission_bypass_per_session":4.6},"results":[],"worst":None,
+ "closure":{"closed":True,"sensor_live":True,"reference_authored":True}},
+ open(f"{sys.argv[1]}/.control/leverage-state.json","w"))
+PY2
+VALID="$(python3 "$SENSOR" --workspace "$AE_T" --brief --cached --no-store 2>/dev/null)"
+grep -q "REAL ACTUATOR" <<<"$VALID" && ok "a VALID policy still grades and steers (polarity)" || bad "valid policy stopped steering: $VALID"
+rm -rf "$AE_T"
+
+
 echo
 echo "setpoint-shadow-status: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

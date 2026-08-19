@@ -112,14 +112,66 @@ DEFAULT_LEVELS = {
 }
 
 
+DEGRADED_SETPOINTS = {"window_days": 7, "metrics": []}
+
+
+def coerce_setpoints(raw, path="<setpoints>"):
+    """Normalize whatever YAML produced into the shape the rest of the file assumes.
+
+    `yaml.safe_load` returns whatever the document says, and the document is
+    hand-edited: a root list (`- id: m6`), a scalar, `metrics: [oops]`, or a metric
+    entry with no `id` are all VALID YAML. Each one used to reach
+    `{m["id"]: m for m in setpoints.get("metrics", [])}` and raise, which the
+    SessionStart hook then swallows via `|| true` -- no brief, no error, no signal.
+
+    Structural validity is checked ONCE here, on the only path that reads the file,
+    rather than at each consumer. The cached path already refused a non-mapping policy
+    (round 4); doing it only there was a one-site fix for a two-site defect.
+
+    A malformed ENTRY is dropped with a warning while the rest of the policy stands,
+    because one bad row should not disarm every other setpoint."""
+    if not isinstance(raw, dict):
+        print(f"[leverage-sensor] WARN setpoints ({path}) is a {type(raw).__name__}, "
+              "expected a mapping — treating as empty", file=sys.stderr)
+        return dict(DEGRADED_SETPOINTS)
+    metrics = raw.get("metrics")
+    if metrics is None:
+        metrics = []
+    elif not isinstance(metrics, list):
+        print(f"[leverage-sensor] WARN setpoints.metrics is a {type(metrics).__name__}, "
+              "expected a list — treating as empty", file=sys.stderr)
+        metrics = []
+    clean, seen = [], set()
+    for i, m in enumerate(metrics):
+        if not isinstance(m, dict):
+            print(f"[leverage-sensor] WARN setpoints.metrics[{i}] is a "
+                  f"{type(m).__name__}, expected a mapping — skipped", file=sys.stderr)
+            continue
+        mid = m.get("id")
+        if not isinstance(mid, str) or not mid.strip():
+            print(f"[leverage-sensor] WARN setpoints.metrics[{i}] has no usable `id` "
+                  "— skipped", file=sys.stderr)
+            continue
+        mid = mid.strip()
+        if mid in seen:
+            print(f"[leverage-sensor] WARN setpoints.metrics[{i}] duplicates id "
+                  f"{mid!r} — later entry skipped", file=sys.stderr)
+            continue
+        seen.add(mid)
+        clean.append(dict(m, id=mid))
+    out = dict(raw)
+    out["metrics"] = clean
+    return out
+
+
 def load_setpoints(path):
     try:
         import yaml
         with open(path) as f:
-            return yaml.safe_load(f) or {}
+            return coerce_setpoints(yaml.safe_load(f), path)
     except Exception as e:
         print(f"[leverage-sensor] WARN could not load setpoints ({path}): {e}", file=sys.stderr)
-        return {"window_days": 7, "metrics": []}
+        return dict(DEGRADED_SETPOINTS)
 
 
 def iter_lines(path):
@@ -382,7 +434,12 @@ def setpoint_grading(sp):
 
 
 def evaluate(metrics, setpoints):
-    by_id = {m["id"]: m for m in setpoints.get("metrics", [])}
+    # Tolerant of a raw, un-coerced policy: evaluate() is called directly as well as
+    # through load_setpoints(), and a caller that skips the coercion must not crash.
+    sp_list = setpoints.get("metrics") if isinstance(setpoints, dict) else None
+    by_id = {m["id"]: m for m in sp_list
+             if isinstance(m, dict) and isinstance(m.get("id"), str)} if isinstance(sp_list, list) else {}
+    metrics = metrics if isinstance(metrics, dict) else {}
     results = []
     for key, val in metrics.items():
         mid = metric_id(key)
