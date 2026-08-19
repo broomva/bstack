@@ -196,7 +196,14 @@ def coerce_setpoints(raw, path="<setpoints>"):
             _warn(warnings, f"setpoints.metrics[{i}] duplicates id {mid!r} — later entry skipped")
             continue
         seen.add(mid)
-        entry = dict(m, id=mid)
+        # Bound EVERY string in the entry, here at the boundary. Clipping `actuator` and
+        # `name` at the graded row left `level`, a shadow row's `name`, the status and
+        # direction notes, and an unset_target `actuator` all able to carry 100KB into
+        # the brief and the state file. Six sites is not a bound; one is. Anything added
+        # downstream later inherits this automatically.
+        entry = {k: (_clip(v, MAX_ACTUATOR_CHARS) if isinstance(v, str) else v)
+                 for k, v in m.items()}
+        entry["id"] = mid
         # `level` and `name` are used as a dict key and in f-strings respectively; a
         # list value makes the first raise `unhashable type`. Coerce to str rather than
         # drop the setpoint -- a mistyped label should not disarm a live threshold.
@@ -226,6 +233,9 @@ def coerce_setpoints(raw, path="<setpoints>"):
         _warn(warnings, f"setpoints.knowledge_paths is a {type(kp).__name__}, expected a "
                         "regex string — using the default")
         out.pop("knowledge_paths")
+    for k, v in list(out.items()):
+        if k != "metrics" and isinstance(v, str):
+            out[k] = _clip(v, MAX_ACTUATOR_CHARS)
     out["_warnings"] = warnings
     return out
 

@@ -838,6 +838,11 @@ echo "== AJ. round-14: no channel may be flooded by policy content =="
 # actuator on an otherwise VALID setpoint. Bound every channel the policy can reach:
 # stdout, stderr, and the stored state record.
 AJ_T="$(mktemp -d)"; mkdir -p "$AJ_T/.control"
+AJ_TX="$(mktemp -d)"
+{
+  printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"dangerouslyDisableSandbox":true}}]}}'
+  printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","content":"ok"}]}}'
+} > "$AJ_TX/s.jsonl"
 python3 -c "import sys; open(sys.argv[1],'w').write('metrics:\n' + '  - null\n'*10000)" "$AJ_T/.control/leverage-setpoints.yaml"
 AJ_O="$(python3 "$SENSOR" --workspace "$AJ_T" --brief --no-store 2>/dev/null)"
 AJ_E="$(python3 "$SENSOR" --workspace "$AJ_T" --brief --no-store 2>&1 >/dev/null)"
@@ -847,8 +852,11 @@ grep -qE "more not shown" <<<"$AJ_O" && ok "the brief DISCLOSES that warnings we
 ! grep -q "see stderr" <<<"$AJ_O"    && ok "…and does not point at stderr, which is capped too"  || bad "false pointer: $AJ_O"
 # the stored record is a third channel
 python3 "$SENSOR" --workspace "$AJ_T" --brief >/dev/null 2>&1
+# A MISSING state file measures 0 and satisfies every upper bound, so a broken or
+# skipped store would pass. Require it to exist and be non-trivial first.
+[ -s "$AJ_T/.control/leverage-state.json" ] && ok "the state file was actually written" || bad "no state file — the size bound below would pass vacuously"
 AJ_S=$(wc -c < "$AJ_T/.control/leverage-state.json" 2>/dev/null || echo 0)
-[ "$AJ_S" -lt 20000 ]    && ok "10k malformed rows: stored record bounded (${AJ_S}b)" || bad "state file flooded: ${AJ_S}b"
+[ "$AJ_S" -gt 100 ] && [ "$AJ_S" -lt 20000 ] && ok "10k malformed rows: stored record bounded (${AJ_S}b)" || bad "state size out of range: ${AJ_S}b"
 
 # a VALID setpoint with a huge actuator — nothing malformed, so no warning path involved
 python3 -c "import sys; open(sys.argv[1],'w').write('metrics:\n  - id: m4\n    name: m4\n    level: L0\n    direction: lower_is_better\n    target: 0.5\n    alert: 0.75\n    actuator: \"' + 'A'*100000 + '\"\n')" "$AJ_T/.control/leverage-setpoints.yaml"
@@ -864,9 +872,15 @@ PY2
 AJ_A="$(python3 "$SENSOR" --workspace "$AJ_T" --brief --cached --no-store 2>/dev/null)"
 grep -q "Corrective actuator" <<<"$AJ_A" && ok "the huge-actuator setpoint really is ranked (fixture is live)" || bad "fixture never rendered an actuator: $AJ_A"
 [ "${#AJ_A}" -lt 4000 ]  && ok "a 100KB actuator cannot flood the brief (${#AJ_A}b)"  || bad "actuator flooded brief: ${#AJ_A}b"
-python3 "$SENSOR" --workspace "$AJ_T" --brief >/dev/null 2>&1
+rm -f "$AJ_T/.control/leverage-state.json"
+python3 "$SENSOR" --workspace "$AJ_T" --brief --transcripts "$AJ_TX/*.jsonl" >/dev/null 2>&1
+# Same trap: without transcripts the metric is nulled, the setpoint never ranks, and its
+# actuator never enters the record — so removing the clip left this green. Drive a live
+# transcript AND require the actuator to be present in the stored record.
+[ -s "$AJ_T/.control/leverage-state.json" ] && ok "the state file was actually written (actuator case)" || bad "no state file — bound would pass vacuously"
+grep -q '"actuator"' "$AJ_T/.control/leverage-state.json" 2>/dev/null && ok "the stored record really carries an actuator" || bad "no actuator in state — bound is vacuous"
 AJ_S2=$(wc -c < "$AJ_T/.control/leverage-state.json" 2>/dev/null || echo 0)
-[ "$AJ_S2" -lt 20000 ]   && ok "a 100KB actuator cannot flood the state file (${AJ_S2}b)" || bad "state flooded: ${AJ_S2}b"
+[ "$AJ_S2" -gt 100 ] && [ "$AJ_S2" -lt 20000 ] && ok "a 100KB actuator cannot flood the state file (${AJ_S2}b)" || bad "state size out of range: ${AJ_S2}b"
 
 # POLARITY: an ORDINARY actuator must survive INTACT. Clipping everything would satisfy
 # every bound above while destroying the one string the brief exists to deliver.
@@ -885,7 +899,57 @@ PY2
 AJ_P="$(python3 "$SENSOR" --workspace "$AJ_T" --brief --cached --no-store 2>/dev/null)"
 grep -q "populate .claude/settings.json permissions.allow via fewer-permission-prompts" <<<"$AJ_P" \
                          && ok "an ordinary actuator survives INTACT (polarity)"          || bad "clipped a normal actuator: $AJ_P"
-rm -rf "$AJ_T"
+rm -rf "$AJ_T" "$AJ_TX"
+
+
+echo "== AK. round-15: EVERY policy string is bounded, not just the ones named =="
+# Clipping actuator+name at the graded row left level, a shadow row's name, the status
+# and direction notes, an unset_target actuator, and authored_by all able to carry 100KB
+# into the brief and the state file. Six sites is not a bound; the boundary is.
+AK_T="$(mktemp -d)"; mkdir -p "$AK_T/.control"
+python3 - "$AK_T" <<'PY2'
+import json,sys,datetime
+json.dump({"sessions_analyzed":5,"window_days":7,"measured_at":datetime.datetime.now().isoformat(),
+ "metrics":{"m4_x":4.6},"results":[],"worst":None,
+ "closure":{"closed":True,"sensor_live":True,"reference_authored":True}},
+ open(f"{sys.argv[1]}/.control/leverage-state.json","w"))
+PY2
+AK_FAIL=0
+for spec in "level|    target: 0.5#    alert: 0.75#    actuator: A" \
+            "name|    status: shadow" \
+            "status|    target: 0.5#    alert: 0.75" \
+            "direction|    target: 0.5#    alert: 0.75" \
+            "actuator|" \
+            "authored_by|    target: 0.5#    alert: 0.75"; do
+    fld="${spec%%|*}"; extra="${spec#*|}"
+    python3 - "$AK_T/.control/leverage-setpoints.yaml" "$fld" "$extra" <<'PY2'
+import sys
+f, fld, extra = sys.argv[1], sys.argv[2], sys.argv[3]
+big = "A" * 100000
+top = f'authored_by: "{big}"\n' if fld == "authored_by" else 'authored_by: "me"\n'
+body = "" if fld == "authored_by" else f'    {fld}: "{big}"\n'
+open(f, "w").write(top + "metrics:\n  - id: m4\n" + body + extra.replace("#", "\n") + "\n")
+PY2
+    OUT="$(python3 "$SENSOR" --workspace "$AK_T" --brief --cached --no-store 2>/dev/null)"
+    ERR="$(python3 "$SENSOR" --workspace "$AK_T" --brief --cached --no-store 2>&1 >/dev/null)"
+    # --closure is a THIRD channel, and it is the only one `authored_by` reaches; a
+    # brief-and-stderr check left that field's clip unbound.
+    CLO="$(python3 "$SENSOR" --workspace "$AK_T" --closure --no-store 2>/dev/null)"
+    if [ "${#OUT}" -ge 4000 ] || [ "${#ERR}" -ge 8000 ] || [ "${#CLO}" -ge 4000 ]; then
+        bad "field '$fld' floods: stdout=${#OUT}b stderr=${#ERR}b closure=${#CLO}b"; AK_FAIL=1
+    fi
+done
+[ "$AK_FAIL" = "0" ] && ok "6 policy fields x 100KB each: brief and stderr stay bounded" || true
+# POLARITY: ordinary values of those same fields must survive intact.
+cat > "$AK_T/.control/leverage-setpoints.yaml" <<'YML'
+authored_by: carlos
+metrics:
+  - {id: m4, name: permission_bypass_per_session, level: L0, direction: lower_is_better, target: 0.5, alert: 0.75, actuator: "populate .claude/settings.json permissions.allow via fewer-permission-prompts"}
+YML
+AK_P="$(python3 "$SENSOR" --workspace "$AK_T" --brief --cached --no-store 2>/dev/null)"
+grep -q "permission_bypass_per_session" <<<"$AK_P" && ok "an ordinary name survives (polarity)"     || bad "clipped a normal name: $AK_P"
+grep -q "fewer-permission-prompts" <<<"$AK_P"      && ok "an ordinary actuator survives (polarity)" || bad "clipped a normal actuator: $AK_P"
+rm -rf "$AK_T"
 
 
 echo
