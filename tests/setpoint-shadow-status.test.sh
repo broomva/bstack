@@ -57,6 +57,38 @@ print("|".join([
 PY
 }
 
+# run_policy_docs <workdir> <label> — reads '%%'-separated YAML documents on stdin,
+# writes each to <workdir>/.control/leverage-setpoints.yaml, and asserts the sensor
+# neither crashes nor goes silent in each output mode.
+#
+# The previous version read with `while IFS= read -r doc`, which splits a MULTI-LINE
+# document into separate one-line documents -- `metrics:` on its own is harmless, so
+# every multi-line case passed vacuously. Found when a mutation that genuinely breaks
+# `level: [L0]` left the section green.
+run_policy_docs() {
+    local wd="$1" label="$2" doc="" failed=0 n=0
+    _check_doc() {
+        [ -z "$1" ] && return 0
+        n=$((n+1))
+        printf '%s\n' "$1" > "$wd/.control/leverage-setpoints.yaml"
+        local mode out rc
+        for mode in "--brief" ""; do
+            out="$(python3 "$SENSOR" --workspace "$wd" $mode --no-store 2>/dev/null)"; rc=$?
+            if [ $rc -ne 0 ]; then bad "$label: crash rc=$rc on doc #$n mode[$mode]"; failed=1
+            elif [ -z "$out" ]; then bad "$label: empty output on doc #$n mode[$mode]"; failed=1; fi
+        done
+    }
+    while IFS= read -r line; do
+        if [ "$line" = "%%" ]; then _check_doc "$doc"; doc=""; else
+            [ -z "$doc" ] && doc="$line" || doc="$doc
+$line"
+        fi
+    done
+    _check_doc "$doc"
+    [ "$failed" = "0" ] && ok "$label: $n documents x 2 modes, no crash and no silence"
+    return 0
+}
+
 echo "== A. a stood-down setpoint is measured, never graded, never steers =="
 A="$(probe 'shadow-pending-m7')"
 [ "${A%%|*}" = "shadow" ]           && ok "status is 'shadow' (was 'alert')"        || bad "status: $A"
@@ -547,24 +579,26 @@ echo "== AE. round-8: structurally invalid policy must not crash the sensor =="
 # refused a non-mapping policy on the CACHED path only -- a one-site fix for a
 # two-site defect; the ordinary CLI still crashed.
 AE_T="$(mktemp -d)"; mkdir -p "$AE_T/.control"
-AE_FAIL=0
-while IFS= read -r doc; do
-    [ -z "$doc" ] && continue
-    printf '%b\n' "$doc" > "$AE_T/.control/leverage-setpoints.yaml"
-    for mode in "--brief" "--brief --cached" ""; do
-        out="$(python3 "$SENSOR" --workspace "$AE_T" $mode --no-store 2>/dev/null)"; rc=$?
-        if [ $rc -ne 0 ]; then bad "crash rc=$rc on [$doc] mode[$mode]"; AE_FAIL=1
-        elif [ -z "$out" ]; then bad "empty output on [$doc] mode[$mode]"; AE_FAIL=1; fi
-    done
-done <<'DOCS'
+run_policy_docs "$AE_T" "malformed policy" <<'DOCS'
 - id: m6
+%%
 metrics: [oops]
-metrics:\n  - name: no_id\n    target: 0.5
+%%
+metrics:
+  - name: no_id
+    target: 0.5
+%%
 just a string
+%%
 metrics: notalist
-metrics:\n  - id: m6\n    target: 0.5\n    alert: 0.75\n  - id: m6\n    target: 9
+%%
+metrics:
+  - id: m6
+    target: 0.5
+    alert: 0.75
+  - id: m6
+    target: 9
 DOCS
-[ "$AE_FAIL" = "0" ] && ok "6 malformed policy documents x 3 modes: no crash, no silence" || true
 # A DROPPED setpoint is a disarmed shield, so the drop must be reported, not silent.
 # Without this, the id-drop guard is indistinguishable from evaluate()'s own defensive
 # filter -- reverting it left the suite green, which is how the gap was found.
@@ -574,6 +608,90 @@ grep -q "no usable" <<<"$AE_ERR"      && ok "a setpoint dropped for a missing id
 printf 'metrics: [oops]\n' > "$AE_T/.control/leverage-setpoints.yaml"
 AE_ERR2="$(python3 "$SENSOR" --workspace "$AE_T" --brief --no-store 2>&1 >/dev/null)"
 grep -q "expected a mapping" <<<"$AE_ERR2" && ok "a non-mapping metric entry says so on stderr" || bad "silently dropped: $AE_ERR2"
+# Round-9 MINOR: AE did not bind the duplicate-id guard -- deleting it left AE green.
+printf 'metrics:\n  - id: m6\n    target: 0.5\n    alert: 0.75\n  - id: m6\n    target: 9\n' > "$AE_T/.control/leverage-setpoints.yaml"
+AE_DUP="$(python3 "$SENSOR" --workspace "$AE_T" --brief --no-store 2>&1 >/dev/null)"
+grep -q "duplicates id" <<<"$AE_DUP" && ok "a duplicate setpoint id is reported"   || bad "duplicate id silently accepted: $AE_DUP"
+
+echo "== AE2. evaluate() is tolerant on its OWN, not only behind the loader =="
+# evaluate() is called directly (these tests do it, and any future consumer may).
+# Its defensive filter was unbound: removing it left the suite green because
+# coerce_setpoints() also catches the same input on the CLI path. Redundancy is fine;
+# UNTESTED redundancy is indistinguishable from dead code.
+AE2="$(python3 - "$SENSOR" <<'PY2'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("s", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+raw = [None, "str", 42, {"metrics": "notalist"}, {"metrics": ["oops", 3, None]},
+       {"metrics": [{"name": "no_id"}]}, {"metrics": [{"id": 7}]}, {}]
+bad = []
+for sp in raw:
+    try:
+        res, worst = m.evaluate({"m6_x": 0.9}, sp)
+        if worst is not None: bad.append((sp, "ranked something from junk policy"))
+    except Exception as e:
+        bad.append((str(sp)[:28], f"RAISED {type(e).__name__}"))
+# metrics arg may be junk too
+for met in (None, "str", 42, []):
+    try: m.evaluate(met, {"metrics": []})
+    except Exception as e: bad.append((str(met)[:12], f"metrics arg RAISED {type(e).__name__}"))
+# POLARITY: a well-formed call must still rank, or tolerance could mean "never grades"
+res, worst = m.evaluate({"m6_x": 0.9}, {"metrics": [{"id": "m6", "name": "m6", "level": "L3",
+    "direction": "lower_is_better", "target": 0.5, "alert": 0.75, "actuator": "A"}]})
+if not worst: bad.append(("well-formed", "did not rank"))
+print("ok" if not bad else f"BAD {bad[:3]}")
+PY2
+)"
+[ "$AE2" = "ok" ]                   && ok "evaluate() tolerates junk policy and junk metrics unaided" || bad "$AE2"
+
+echo "== AF. round-9: mistyped top-level and per-entry fields must not crash =="
+# These reach arithmetic (window_days), re.compile (knowledge_paths) and a dict key
+# (level) far from the file that caused them.
+AF_T="$(mktemp -d)"; mkdir -p "$AF_T/.control"
+run_policy_docs "$AF_T" "mistyped fields" <<'DOCS'
+window_days: []
+metrics: []
+%%
+window_days: abc
+metrics: []
+%%
+window_days: -5
+metrics: []
+%%
+window_days: .nan
+metrics: []
+%%
+knowledge_paths: []
+metrics: []
+%%
+metrics:
+  - id: m6
+    level: [L0]
+    target: 0.5
+    alert: 0.75
+%%
+metrics:
+  - id: m6
+    name: [oops]
+    target: 0.5
+    alert: 0.75
+DOCS
+# POLARITY: a valid policy with all these fields set correctly must still steer.
+cat > "$AF_T/.control/leverage-setpoints.yaml" <<'YML'
+window_days: 7
+knowledge_paths: "research/entities"
+metrics:
+  - {id: m4, name: permission_bypass_per_session, level: L0, direction: lower_is_better, target: 0.5, alert: 0.75, actuator: "AF ACTUATOR"}
+YML
+python3 - "$AF_T" <<'PY2'
+import json,sys,datetime
+json.dump({"sessions_analyzed":5,"window_days":7,"measured_at":datetime.datetime.now().isoformat(),
+ "metrics":{"m4_permission_bypass_per_session":4.6},"results":[],"worst":None,
+ "closure":{"closed":True,"sensor_live":True,"reference_authored":True}},
+ open(f"{sys.argv[1]}/.control/leverage-state.json","w"))
+PY2
+AF_OK="$(python3 "$SENSOR" --workspace "$AF_T" --brief --cached --no-store 2>/dev/null)"
+grep -q "AF ACTUATOR" <<<"$AF_OK" && ok "well-typed policy still grades and steers (polarity)" || bad "stopped steering: $AF_OK"
+rm -rf "$AF_T"
 # POLARITY: a VALID policy must still grade and still steer through the same path.
 cat > "$AE_T/.control/leverage-setpoints.yaml" <<'YML'
 window_days: 7

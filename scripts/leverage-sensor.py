@@ -158,9 +158,38 @@ def coerce_setpoints(raw, path="<setpoints>"):
                   f"{mid!r} — later entry skipped", file=sys.stderr)
             continue
         seen.add(mid)
-        clean.append(dict(m, id=mid))
+        entry = dict(m, id=mid)
+        # `level` and `name` are used as a dict key and in f-strings respectively; a
+        # list value makes the first raise `unhashable type`. Coerce to str rather than
+        # drop the setpoint -- a mistyped label should not disarm a live threshold.
+        for field in ("level", "name"):
+            if field in entry and not isinstance(entry[field], str):
+                if entry[field] is None:
+                    del entry[field]
+                else:
+                    print(f"[leverage-sensor] WARN setpoints.metrics[{i}].{field} is a "
+                          f"{type(entry[field]).__name__}, expected a string — coerced",
+                          file=sys.stderr)
+                    entry[field] = str(entry[field])
+        clean.append(entry)
     out = dict(raw)
     out["metrics"] = clean
+    # Top-level scalars are read straight into arithmetic and into re.compile, so a
+    # list or a string here raises far from the file that caused it.
+    wd = out.get("window_days")
+    if wd is not None:
+        ok = (isinstance(wd, (int, float)) and not isinstance(wd, bool)
+              and math.isfinite(wd) and wd > 0)
+        if not ok:
+            print(f"[leverage-sensor] WARN setpoints.window_days {wd!r} is not a positive "
+                  f"number — using {DEGRADED_SETPOINTS['window_days']}", file=sys.stderr)
+            out["window_days"] = DEGRADED_SETPOINTS["window_days"]
+    kp = out.get("knowledge_paths")
+    if kp is not None and not isinstance(kp, str):
+        print(f"[leverage-sensor] WARN setpoints.knowledge_paths is a "
+              f"{type(kp).__name__}, expected a regex string — using the default",
+              file=sys.stderr)
+        out.pop("knowledge_paths")
     return out
 
 
