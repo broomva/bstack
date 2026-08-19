@@ -70,7 +70,12 @@ run_policy_docs() {
     _check_doc() {
         [ -z "$1" ] && return 0
         n=$((n+1))
-        printf '%s\n' "$1" > "$wd/.control/leverage-setpoints.yaml"
+        if ! printf '%s\n' "$1" > "$wd/.control/leverage-setpoints.yaml"; then
+            bad "$label: could not write policy for doc #$n (every check below would pass vacuously)"
+            failed=1; return 0
+        fi
+        [ -s "$wd/.control/leverage-setpoints.yaml" ] || {
+            bad "$label: wrote an EMPTY policy for doc #$n"; failed=1; return 0; }
         local mode out rc
         for mode in "--brief" ""; do
             out="$(python3 "$SENSOR" --workspace "$wd" $mode --no-store 2>/dev/null)"; rc=$?
@@ -691,6 +696,38 @@ json.dump({"sessions_analyzed":5,"window_days":7,"measured_at":datetime.datetime
 PY2
 AF_OK="$(python3 "$SENSOR" --workspace "$AF_T" --brief --cached --no-store 2>/dev/null)"
 grep -q "AF ACTUATOR" <<<"$AF_OK" && ok "well-typed policy still grades and steers (polarity)" || bad "stopped steering: $AF_OK"
+# Round-10: AF asserted only non-crash for these, so ACCEPTING them would still pass —
+# a test that cannot fail. `-5` never crashed; it silently moved the cutoff into the
+# future so no transcripts matched. Assert the REFUSAL, not merely the survival.
+for wd in "-5" ".nan" "[]" "abc" "0"; do
+    printf 'window_days: %s\nmetrics: []\n' "$wd" > "$AF_T/.control/leverage-setpoints.yaml"
+    ERR="$(python3 "$SENSOR" --workspace "$AF_T" --brief --no-store 2>&1 >/dev/null)"
+    grep -q "window_days" <<<"$ERR" && ok "window_days: $wd is refused and reported" || bad "window_days: $wd silently accepted: $ERR"
+done
+# POLARITY: a VALID window must NOT be reported
+printf 'window_days: 7\nmetrics: []\n' > "$AF_T/.control/leverage-setpoints.yaml"
+ERR_OK="$(python3 "$SENSOR" --workspace "$AF_T" --brief --no-store 2>&1 >/dev/null)"
+! grep -q "window_days" <<<"$ERR_OK" && ok "a valid window_days is NOT reported (polarity)" || bad "valid window flagged: $ERR_OK"
+
+echo "== AG. round-10: an invalid REGEX, and the never-silent floor =="
+# A syntactically fine string can still be a broken regex; only compiling reveals it.
+printf 'knowledge_paths: "["\nmetrics: []\n' > "$AF_T/.control/leverage-setpoints.yaml"
+RX="$(python3 "$SENSOR" --workspace "$AF_T" --brief --no-store 2>/dev/null)"; rc=$?
+[ $rc -eq 0 ] && [ -n "$RX" ]        && ok "invalid knowledge_paths regex does not crash"  || bad "rc=$rc out=[$RX]"
+RXE="$(python3 "$SENSOR" --workspace "$AF_T" --brief --no-store 2>&1 >/dev/null)"
+grep -q "not a valid regex" <<<"$RXE" && ok "invalid regex is reported, not swallowed"      || bad "silent fallback: $RXE"
+# The floor: ANY unexpected failure must still emit a stated failure and exit 0, or the
+# hook's `|| true` turns it into no brief AND no error.
+FLOOR="$(python3 - "$SENSOR" <<'PY2'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("s", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+m.main = lambda: (_ for _ in ()).throw(RuntimeError("synthetic boom"))
+try: m._main_guarded()
+except SystemExit as e: print(f"EXIT={e.code}", file=sys.stderr)
+PY2
+)"
+grep -q "sensor failed" <<<"$FLOOR"   && ok "an unexpected failure still emits a stated failure" || bad "silent crash: [$FLOOR]"
+grep -q "no actuator emitted" <<<"$FLOOR" && ok "and explicitly emits no actuator"                || bad "no disclaimer: [$FLOOR]"
 rm -rf "$AF_T"
 # POLARITY: a VALID policy must still grade and still steer through the same path.
 cat > "$AE_T/.control/leverage-setpoints.yaml" <<'YML'

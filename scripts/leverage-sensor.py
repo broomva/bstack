@@ -33,6 +33,7 @@ import os
 import re
 import subprocess
 import sys
+import traceback
 import time
 from datetime import datetime, timezone
 
@@ -885,7 +886,15 @@ def main():
 
     setpoints = load_setpoints(setpoints_path)
     window = args.window if args.window is not None else setpoints.get("window_days", 7)
-    kg_read_re = re.compile(setpoints.get("knowledge_paths", DEFAULT_KG_READ), re.IGNORECASE)
+    kg_pat = setpoints.get("knowledge_paths", DEFAULT_KG_READ)
+    try:
+        kg_read_re = re.compile(kg_pat, re.IGNORECASE)
+    except re.error as e:
+        # `knowledge_paths: "["` is a perfectly good string and a broken regex. Type
+        # validation cannot see this; only compiling it can.
+        print(f"[leverage-sensor] WARN setpoints.knowledge_paths {kg_pat!r} is not a "
+              f"valid regex ({e}) — using the default", file=sys.stderr)
+        kg_read_re = re.compile(DEFAULT_KG_READ, re.IGNORECASE)
     metrics, raw = analyze(glob_pat, window, kg_read_re)
     # STI-1919: a blind read must not emit a row that reads as a measurement.
     # With no structural events every metric computes to 0.0 from an empty
@@ -923,5 +932,32 @@ def main():
         print(render_human(record))
 
 
+def _main_guarded():
+    """Run main(), and never let an unexpected failure be SILENT.
+
+    Ten review rounds each surfaced one more "malformed field X crashes the sensor",
+    and that space is unbounded: any hand-edited YAML value can be wrong in a new way.
+    Enumerating them one at a time cannot terminate. The property actually wanted is
+    narrower and checkable: THE SENSOR ALWAYS EMITS EITHER A BRIEF OR A STATED FAILURE.
+    The SessionStart hook invokes this with `|| true`, so an uncaught exception means
+    no brief AND no error — the self-improvement loop quietly stops reporting on
+    itself, which is the failure this whole change exists to prevent.
+
+    Specific validation stays where it is: it produces BETTER diagnostics and keeps
+    working input working. This is the floor under it, not a replacement.
+
+    SystemExit passes through untouched — `--closure` uses it to signal CI."""
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception as e:
+        print(f"[self-improvement loop] sensor failed: {type(e).__name__}: {e}")
+        print("⚠ nothing graded, no actuator emitted — check .control/leverage-setpoints.yaml "
+              "and .control/leverage-state.json")
+        traceback.print_exc(file=sys.stderr)
+        sys.exit(0)
+
+
 if __name__ == "__main__":
-    main()
+    _main_guarded()
