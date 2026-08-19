@@ -526,7 +526,7 @@ rows = [{"key":"a","name":"KNOWN_L3","level":"L3","value":0.9,"status":"alert","
 out = m.render_human({"sessions_analyzed":3,"window_days":7,"measured_at":"x","results":rows,
                       "worst":None,"metrics":{},"closure":{"closed":True,"sensor_live":True,"reference_authored":True}})
 # Count only the TABLE lines. The summary legitimately names rows again -- the
-# "Focus:" line names `worst`, and the round-4 "Inconsistent record" line names every
+# "Focus:" line names 'worst', and the round-4 "Inconsistent record" line names every
 # alert row when nothing ranked. Counting the whole output made this fixture flag its
 # own correct behaviour as a duplicate.
 table = [ln for ln in out.splitlines() if ln.startswith(("  ALRT", "  WARN", "  ok  ",
