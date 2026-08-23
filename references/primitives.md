@@ -448,14 +448,14 @@ Decision logic:
 | **B** Cross-context same-model | Fresh `Agent` subagent under devil's-advocate brief | Always available |
 | **C** Composed existing skills | `superpowers:constructive-dissent`, `devils-advocate`, `pr-review-toolkit:*` (×5), `critique`, `premortem`, `plan-*-review` | Always — the toolkit P20 makes mandatory |
 
-Scoring: anti-slop ≥ 7/10 to pass; max 3 fix rounds; verdict logged in PR comments + Linear ticket. Implementation: `broomva/cross-review` skill.
+Scoring: anti-slop ≥ 7/10 to pass; round budget is dynamic — 3 free rounds, 4–7 each earned by a continuation verdict, ≥8 human, stops absorbing; verdict + round ledger logged in PR comments + Linear ticket. Implementation: `broomva/cross-review` skill.
 
 **Invariant**: substantive PRs (>200 LOC OR public API change OR multi-file OR governance-class) cannot merge without cross-model adversarial verdict ≥ 7/10. Self-review by the writing model is forbidden as the *sole* verdict. The gate fires *before* P4 auto-merge — not after merge as code review.
 
 ### P20 Reflexive Trigger Rule (binding on every agent)
 
 1. **Before pushing substantive PRs** — fire the gate (Strata A if Codex, else B+C). Score + verdict precede push.
-2. **When verdict < 7** — fix → rescore. Max 3 rounds. Round 3 failure → escalate to user.
+2. **When verdict < 7** — fix → rescore, then record the round and ask `cross-review round budget`. Rounds 1–3 are free; 4–7 are earned by a continuation review of the DECISION TO CONTINUE against a standing STOP default; ≥8 escalates to a human. Stops are absorbing.
 3. **When the writer is the only model in the loop** — STOP. Strata B at minimum is mandatory.
 4. **When tempted to skip P20 because "small PR"** — threshold is *substantive* (>200 LOC OR public API OR multi-file OR governance). Trivial PRs (typo fix, single-file doc) exempt; everything else fires.
 5. **Composition** — P20 sits between P11 (validation) and P4 (auto-merge); does not replace either. PR-comment loop (autonomous Step 17) is downstream of P20.
