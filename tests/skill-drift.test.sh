@@ -24,6 +24,7 @@
 #   7. uncommitted changes in the checkout are surfaced
 #   8. the check never exits non-zero — it is advisory, never a gate
 #   9. doctor §27 emits no gap() — it can never become a gate
+#  10. a checkout AHEAD of origin/main is drift, not "current"
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -146,6 +147,28 @@ if [ "$RC" = "0" ]; then
     pass "8. advisory — exits 0 even when drift is found"
 else
     fail "8. exited $RC with drift present; this must never gate"
+fi
+
+# ── 10. AHEAD of origin/main is drift too ──────────────────────────────────
+# The first draft measured only `HEAD..origin/main` — "is it missing merged
+# work". That is not the question. A checkout sitting 0 behind on a branch
+# carrying its own commits runs code that never merged, and the checker called it
+# "current with origin/main": the exact silent pass it exists to prevent,
+# reproduced inside it.
+AH="$TMP/aheadrepo"
+git clone -q "$UP" "$AH" 2>/dev/null
+( cd "$AH" && git fetch -q origin && git checkout -q -b local-work \
+    && echo LOCAL > skills/beta/SKILL.md \
+    && git -c user.email=t@t -c user.name=t commit -qam "never merged" )
+R10="$TMP/root10"; mkroot "$R10"
+ln -s "$AH/skills/beta" "$R10/beta"
+BEHIND=$( cd "$AH" && git rev-list --count HEAD..origin/main )
+OUT=$(run "$R10")
+if [ "$BEHIND" = "0" ] && echo "$OUT" | grep -q 'unmerged commit' \
+   && ! echo "$OUT" | grep -q '\[ok\]'; then
+    pass "10. 0-behind but ahead of origin/main is reported as drift"
+else
+    fail "10. ahead-of-main read as current (behind=$BEHIND): $OUT"
 fi
 
 # ── 9. the doctor section itself can never become a gate ───────────────────
