@@ -46,67 +46,60 @@ def _toplevel(path: Path) -> "Path | None":
 
 
 class RepoState:
-    """Per-repo facts, computed once and shared by every skill resolving into it."""
+    """Per-repo facts, computed once and shared by every skill resolving into it.
 
-    __slots__ = ("root", "branch", "head", "behind", "ahead", "ref", "dirty", "reason")
+    The comparison is `git diff --name-only origin/main` — the WORKING TREE
+    against the upstream ref. Commit topology was the first design and it was
+    wrong in both directions: it called a checkout current while its files were
+    modified on disk, and it called every skill in a repo drifted because one
+    commit touched README.md. What runs is the working tree, so that is what is
+    compared, and one diff per repo answers it for every skill in that repo.
+    """
+
+    __slots__ = ("root", "branch", "head", "ref", "changed", "reason")
 
     def __init__(self, root: Path):
         self.root = root
         self.reason: "str | None" = None
         self.branch = _git(root, "rev-parse", "--abbrev-ref", "HEAD") or "?"
         self.head = _git(root, "rev-parse", "--short", "HEAD") or "?"
-        self.behind: "int | None" = None
-        self.ahead: "int | None" = None
-        self.dirty: "int | None" = None
+        self.changed: "set[str] | None" = None
 
-        # Prefer origin/main, fall back to origin/master. Read only — never fetch:
-        # a doctor run must stay fast and work offline. A stale ref understates
-        # drift, which is why absence is reported rather than treated as clean.
-        self.ref: "str | None" = None
-        for cand in ("refs/remotes/origin/main", "refs/remotes/origin/master"):
-            if _git(root, "rev-parse", "--verify", "--quiet", cand):
-                self.ref = cand.rsplit("refs/remotes/", 1)[-1]
-                break
-        if self.ref is None:
+        # origin/main only. A fallback to origin/master could compare against a
+        # stale ref and then report "current with origin/main" — inventing a
+        # clean answer out of a missing one, which is the failure this check
+        # exists to catch.
+        self.ref = "origin/main"
+        if not _git(root, "rev-parse", "--verify", "--quiet",
+                    "refs/remotes/origin/main"):
             self.reason = "no origin/main ref (never fetched, or no remote)"
             return
 
-        # BOTH directions. "behind" alone answers "is it missing merged work",
-        # which is not the question. The question is whether the code that RUNS
-        # is the code that merged, and a checkout sitting 0 behind on a branch
-        # carrying its own commits is running something else entirely — reporting
-        # that as current is the silent pass this check exists to prevent.
-        counts = _git(root, "rev-list", "--left-right", "--count",
-                      f"{self.ref}...HEAD")
-        parts = counts.split() if counts else []
-        if len(parts) != 2 or not all(x.isdigit() for x in parts):
-            self.reason = f"could not compare HEAD against {self.ref}"
+        # fsmonitor force-disabled: a dead daemon makes git report a clean tree
+        # while files are modified, which would understate drift silently.
+        out = _git(root, "-c", "core.fsmonitor=false",
+                   "diff", "--name-only", self.ref)
+        if out is None:
+            self.reason = f"could not diff working tree against {self.ref}"
             return
-        self.behind, self.ahead = int(parts[0]), int(parts[1])
-
-        porcelain = _git(root, "-c", "core.fsmonitor=false", "status", "--porcelain")
-        # fsmonitor is force-disabled: a dead daemon makes `status` report a clean
-        # tree while files are modified, which would silently understate drift.
-        self.dirty = len(porcelain.splitlines()) if porcelain is not None else None
+        untracked = _git(root, "-c", "core.fsmonitor=false", "ls-files",
+                         "--others", "--exclude-standard")
+        if untracked is None:
+            self.reason = f"could not list untracked files"
+            return
+        self.changed = set(filter(None, out.splitlines())) | \
+                       set(filter(None, untracked.splitlines()))
 
     @property
     def known(self) -> bool:
-        return self.reason is None and self.behind is not None
+        return self.reason is None and self.changed is not None
 
-    @property
-    def drifted(self) -> bool:
-        return self.known and ((self.behind or 0) > 0 or (self.ahead or 0) > 0)
-
-    @property
-    def summary(self) -> str:
-        bits = []
-        if self.behind:
-            bits.append(f"{self.behind} commit(s) behind {self.ref}")
-        if self.ahead:
-            bits.append(f"{self.ahead} unmerged commit(s) of its own")
-        if self.dirty:
-            bits.append(f"{self.dirty} uncommitted")
-        return ", ".join(bits) if bits else "diverged"
+    def drifted_paths(self, rel: str) -> "list[str]":
+        """Changed paths inside `rel` (a repo-relative skill directory)."""
+        if not self.known:
+            return []
+        pre = "" if rel in ("", ".") else rel.rstrip("/") + "/"
+        return sorted(c for c in (self.changed or ()) if c.startswith(pre))
 
 
 def scan(skill_dirs: "list[Path]") -> dict:
@@ -152,7 +145,11 @@ def scan(skill_dirs: "list[Path]") -> dict:
             key = str(top)
             if key not in repos:
                 repos[key] = RepoState(top)
-            by_repo.setdefault(key, []).append(entry.name)
+            try:
+                rel = str(real.relative_to(top))
+            except ValueError:
+                rel = ""
+            by_repo.setdefault(key, []).append((entry.name, rel))
 
     return {"repos": repos, "by_repo": by_repo, "unknown": unknown,
             "no_git": no_git, "scanned": scanned}
@@ -173,42 +170,59 @@ def main(argv: "list[str] | None" = None) -> int:
     r = scan(dirs)
     repos: "dict[str, RepoState]" = r["repos"]
 
-    drifted = {k: v for k, v in repos.items() if v.drifted}
+    # Per skill, not per repo: a commit touching only README.md changes nothing
+    # a skill executes, and reporting every skill in the repo as drifted would
+    # make the advisory noise and get it ignored.
+    drifted: "dict[str, list[tuple[str, int]]]" = {}
+    clean = 0
+    for key, entries in r["by_repo"].items():
+        st = repos[key]
+        if not st.known:
+            continue
+        hits = [(name, len(st.drifted_paths(rel))) for name, rel in entries]
+        d = [(n, c) for n, c in hits if c]
+        if d:
+            drifted[key] = d
+        clean += len(hits) - len(d)
+
     unknown_repos = {k: v for k, v in repos.items() if not v.known}
 
     if args.json:
         print(json.dumps({
             "scanned": r["scanned"],
             "drifted": [
-                {"repo": k, "branch": v.branch, "head": v.head, "behind": v.behind,
-                 "ahead": v.ahead, "dirty": v.dirty, "ref": v.ref,
-                 "skills": r["by_repo"][k]}
+                {"repo": k, "branch": repos[k].branch, "head": repos[k].head,
+                 "ref": repos[k].ref,
+                 "skills": [{"skill": n, "changed_files": c} for n, c in v]}
                 for k, v in drifted.items()
             ],
             "unknown_repos": [
-                {"repo": k, "reason": v.reason, "skills": r["by_repo"][k]}
+                {"repo": k, "reason": v.reason,
+                 "skills": [n for n, _ in r["by_repo"][k]]}
                 for k, v in unknown_repos.items()
             ],
             "unknown_skills": [{"skill": n, "reason": why} for n, why in r["unknown"]],
             "no_git": r["no_git"],
+            "clean": clean,
         }, indent=2))
         return 0
 
-    tracked = r["scanned"] - len(r["no_git"])
     if not drifted and not unknown_repos and not r["unknown"]:
-        print(f"  [ok] {tracked} git-tracked skill(s) are current with origin/main")
+        print(f"  [ok] {clean} git-tracked skill(s) match origin/main")
         if r["no_git"]:
             print(f"        {len(r['no_git'])} installed copy/copies carry no git "
                   f"provenance — drift not evaluable (see P7 skill-source check)")
         return 0
 
-    for key, st in sorted(drifted.items(), key=lambda kv: -len(r["by_repo"][kv[0]])):
-        names = r["by_repo"][key]
-        print(f"  [info] {len(names)} skill(s) run from {key}")
-        print(f"         {st.branch} @ {st.head} — {st.summary}")
-        shown = ", ".join(names[:6]) + (f", +{len(names) - 6} more" if len(names) > 6 else "")
-        print(f"         {shown}")
-        print("         → merged changes to those commits are NOT what runs here")
+    for key, v in sorted(drifted.items(), key=lambda kv: -len(kv[1])):
+        st = repos[key]
+        print(f"  [info] {len(v)} skill(s) differ from {st.ref} in {key}")
+        print(f"         {st.branch} @ {st.head}")
+        for name, cnt in v[:6]:
+            print(f"           {name} — {cnt} file(s) differ from {st.ref}")
+        if len(v) > 6:
+            print(f"           +{len(v) - 6} more")
+        print("         → what runs here is NOT what merged")
 
     for key, st in sorted(unknown_repos.items()):
         print(f"  [info] {len(r['by_repo'][key])} skill(s) at {key}: "
