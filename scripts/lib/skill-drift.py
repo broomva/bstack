@@ -40,7 +40,40 @@ def _git(repo: Path, *args: str) -> "str | None":
     return p.stdout.strip()
 
 
-def _toplevel(path: Path) -> "Path | None":
+def _toplevel(path: Path, known: "list[Path]") -> "Path | None":
+    """Repo root for `path`, reusing already-discovered roots where possible.
+
+    Spawning `git rev-parse` per skill dominated the runtime — 523 of them on
+    the real roots. Skills cluster into a handful of repos, so a path already
+    under a known root is attributed by walking up and looking for a nearer
+    `.git`: filesystem stats instead of a subprocess. A nested repo still wins,
+    because the walk finds its `.git` before reaching the outer root.
+    """
+    for root in known:
+        try:
+            path.relative_to(root)
+        except ValueError:
+            continue
+        cur = path
+        while cur != root:
+            if (cur / ".git").exists():
+                break            # a nearer repo — fall through to git
+            cur = cur.parent
+        else:
+            return root
+
+    # Most installed skills are plain directories with no repo anywhere above
+    # them (408 of 523 here). Spawning git only to be told so was the bulk of the
+    # runtime, and the question is answerable with stats: no `.git` between the
+    # path and the filesystem root means no repo, no subprocess.
+    cur = path
+    while True:
+        if (cur / ".git").exists():
+            break
+        if cur.parent == cur:
+            return None
+        cur = cur.parent
+
     out = _git(path, "rev-parse", "--show-toplevel")
     return Path(out) if out else None
 
@@ -135,7 +168,7 @@ def scan(skill_dirs: "list[Path]") -> dict:
                 continue
             seen[rp] = entry.name
             scanned += 1
-            top = _toplevel(real)
+            top = _toplevel(real, [r.root for r in repos.values()])
             if top is None:
                 # An installed copy rather than a live link into a checkout.
                 # Expected for third-party skills, and P7 already reports
