@@ -15,16 +15,18 @@
 # reports about a working tree, so a mocked git would be testing the mock.
 #
 # Asserts:
-#   1. a skill on a branch behind origin/main is reported as drifted
-#   2. NEGATIVE CONTROL: a skill whose checkout is current reports [ok]
-#   3. a repo with no origin/main ref is UNKNOWN, never clean
+#   1. a merged change the checkout has not pulled is reported
+#   2. NEGATIVE CONTROL: a checkout matching origin/main reports [ok]
+#   3. no origin/main is UNKNOWN — a stale origin/master does not stand in
 #   4. one skill reached through two roots is counted once
 #   5. a dangling symlink is reported, not silently skipped
 #   6. an installed copy with no git provenance is counted, not called current
-#   7. uncommitted changes in the checkout are surfaced
-#   8. the check never exits non-zero — it is advisory, never a gate
-#   9. doctor §27 emits no gap() — it can never become a gate
-#  10. a checkout AHEAD of origin/main is drift, not "current"
+#   7. an uncommitted edit is drift even when commit topology says 0 behind/ahead
+#   8. an untracked file inside the skill is drift
+#   9. a README-only commit does NOT mark skills drifted
+#  10. a 0-behind branch carrying unmerged work is drift
+#  11. advisory — never exits non-zero
+#  12. doctor §27 emits no gap()
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -41,66 +43,71 @@ echo "── skill drift vs origin/main (BRO-2369) ─────────�
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-# ── build an "upstream" and two clones: one current, one parked behind ───────
+# ── one upstream; clones are made per-case so each starts from a known ref ──
 UP="$TMP/upstream"
 mkdir -p "$UP" && ( cd "$UP" && git init -q -b main .
     mkdir -p skills/alpha skills/beta
     echo v1 > skills/alpha/SKILL.md; echo v1 > skills/beta/SKILL.md
+    echo readme > README.md
     git add -A && git -c user.email=t@t -c user.name=t commit -q -m c1 )
 
-git clone -q "$UP" "$TMP/current" 2>/dev/null
-git clone -q "$UP" "$TMP/behind"  2>/dev/null
+up_commit() {  # $1 = path, $2 = content, $3 = message
+    ( cd "$UP" && echo "$2" > "$1" \
+      && git -c user.email=t@t -c user.name=t commit -qam "$3" )
+}
+clone() {      # $1 = name -> $TMP/$1, checked out at origin/main
+    git clone -q "$UP" "$TMP/$1" 2>/dev/null
+    ( cd "$TMP/$1" && git fetch -q origin && git checkout -q -B main origin/main )
+}
+link() {       # $1 = root, $2 = target
+    mkdir -p "$1" && ln -s "$2" "$1/$(basename "$2")"
+}
+run() { "$PY" "$DRIFT" --skills-dir "$@" 2>&1; }
 
-# advance upstream, then refresh only the refs — `behind` now trails main
-( cd "$UP" && echo v2 > skills/alpha/SKILL.md \
-    && git -c user.email=t@t -c user.name=t commit -qam c2 )
-( cd "$TMP/behind"  && git fetch -q origin && git checkout -q -b feature/parked )
-( cd "$TMP/current" && git fetch -q origin && git checkout -q -B main origin/main )
-
-mkroot() { mkdir -p "$1"; }
-run()    { "$PY" "$DRIFT" --skills-dir "$@" 2>&1; }
-
-# ── 1. behind origin/main -> drifted ────────────────────────────────────────
-R1="$TMP/root1"; mkroot "$R1"
-ln -s "$TMP/behind/skills/alpha" "$R1/alpha"
+# ── 1. a merged change to the skill, not pulled -> drift ───────────────────
+clone c1
+up_commit skills/alpha/SKILL.md v2 "alpha v2"
+( cd "$TMP/c1" && git fetch -q origin )
+R1="$TMP/root1"; link "$R1" "$TMP/c1/skills/alpha"
 OUT=$(run "$R1")
-if echo "$OUT" | grep -q 'commit(s) behind' && echo "$OUT" | grep -q 'feature/parked'; then
-    pass "1. a checkout behind origin/main is reported as drifted"
+if echo "$OUT" | grep -q 'differ from origin/main' && echo "$OUT" | grep -q 'alpha'; then
+    pass "1. a merged change the checkout has not pulled is reported"
 else
     fail "1. drift not reported: $OUT"
 fi
 
-# ── 2. NEGATIVE CONTROL — a current checkout must report [ok] ───────────────
-# Without this, assert 1 passes for a checker that flags everything, and a
-# clean report would carry no information.
-R2="$TMP/root2"; mkroot "$R2"
-ln -s "$TMP/current/skills/alpha" "$R2/alpha"
+# ── 2. NEGATIVE CONTROL — a checkout matching origin/main reports [ok] ─────
+# Without this, assert 1 passes for a checker that flags everything and a clean
+# report carries no information.
+clone c2
+R2="$TMP/root2"; link "$R2" "$TMP/c2/skills/alpha"
 OUT=$(run "$R2")
-if echo "$OUT" | grep -q '\[ok\]' && ! echo "$OUT" | grep -q 'behind'; then
-    pass "2. NEGATIVE CONTROL: a current checkout reports [ok], no drift"
+if echo "$OUT" | grep -q '\[ok\]' && ! echo "$OUT" | grep -q 'differ'; then
+    pass "2. NEGATIVE CONTROL: a matching checkout reports [ok]"
 else
-    fail "2. current checkout not reported clean: $OUT"
+    fail "2. matching checkout not reported clean: $OUT"
 fi
 
-# ── 3. no origin/main ref -> UNKNOWN, never clean ───────────────────────────
-NR="$TMP/noremote"
-mkdir -p "$NR/skills/alpha" && ( cd "$NR" && git init -q -b main .
-    echo x > skills/alpha/SKILL.md && git add -A \
-    && git -c user.email=t@t -c user.name=t commit -q -m c1 )
-R3="$TMP/root3"; mkroot "$R3"
-ln -s "$NR/skills/alpha" "$R3/alpha"
+# ── 3. no origin/main -> UNKNOWN, even with a stale origin/master that matches
+# A fallback to master would compare against the wrong ref and then print
+# "current with origin/main" — inventing a clean answer out of a missing one.
+clone c3
+( cd "$TMP/c3" && git update-ref refs/remotes/origin/master HEAD \
+    && git update-ref -d refs/remotes/origin/main )
+R3="$TMP/root3"; link "$R3" "$TMP/c3/skills/alpha"
 OUT=$(run "$R3")
 if echo "$OUT" | grep -q 'UNKNOWN' && ! echo "$OUT" | grep -q '\[ok\]'; then
-    pass "3. a repo with no origin/main is UNKNOWN, not clean"
+    pass "3. missing origin/main is UNKNOWN, and origin/master does not stand in"
 else
     fail "3. missing origin/main did not read as unknown: $OUT"
 fi
 
-# ── 4. one skill through two roots is counted once ──────────────────────────
-# ~/.claude/skills/x -> ~/.agents/skills/x -> checkout is the normal shape here;
-# counting per-root double-reported every skill on this machine.
-RA="$TMP/rootA"; RB="$TMP/rootB"; mkroot "$RA"; mkroot "$RB"
-ln -s "$TMP/behind/skills/alpha" "$RB/alpha"
+# ── 4. one skill through two roots is counted once ─────────────────────────
+clone c4
+up_commit skills/alpha/SKILL.md v3 "alpha v3"
+( cd "$TMP/c4" && git fetch -q origin )
+RA="$TMP/rootA"; RB="$TMP/rootB"; mkdir -p "$RA" "$RB"
+ln -s "$TMP/c4/skills/alpha" "$RB/alpha"
 ln -s "$RB/alpha" "$RA/alpha"
 N=$("$PY" "$DRIFT" --skills-dir "$RA" --skills-dir "$RB" --json 2>/dev/null \
      | "$PY" -c 'import json,sys; d=json.load(sys.stdin); print(sum(len(x["skills"]) for x in d["drifted"]))')
@@ -110,9 +117,9 @@ else
     fail "4. expected 1 skill, got $N (double-counted)"
 fi
 
-# ── 5. a dangling symlink is reported ───────────────────────────────────────
+# ── 5. a dangling symlink is reported ──────────────────────────────────────
 # `readlink` still prints a path for these, so they are easy to miss.
-R5="$TMP/root5"; mkroot "$R5"
+R5="$TMP/root5"; mkdir -p "$R5"
 ln -s "$TMP/does-not-exist" "$R5/ghost"
 OUT=$(run "$R5")
 if echo "$OUT" | grep -q 'could not be resolved' && echo "$OUT" | grep -q 'ghost'; then
@@ -122,8 +129,7 @@ else
 fi
 
 # ── 6. an installed copy with no git provenance is counted, not called current
-R6="$TMP/root6"; mkroot "$R6"
-mkdir -p "$R6/plaincopy" && echo x > "$R6/plaincopy/SKILL.md"
+R6="$TMP/root6"; mkdir -p "$R6/plaincopy"; echo x > "$R6/plaincopy/SKILL.md"
 OUT=$(run "$R6")
 if echo "$OUT" | grep -q 'no git provenance'; then
     pass "6. a non-git installed copy is counted as not-evaluable"
@@ -131,47 +137,75 @@ else
     fail "6. non-git copy not surfaced: $OUT"
 fi
 
-# ── 7. uncommitted changes in the checkout are surfaced ─────────────────────
-echo dirty >> "$TMP/behind/skills/beta/SKILL.md"
-OUT=$(run "$R1")
-if echo "$OUT" | grep -q 'uncommitted'; then
-    pass "7. uncommitted changes in the checkout are surfaced"
+# ── 7. THE BLOCKER — HEAD matches origin/main, file modified on disk ───────
+# The first design compared commit topology, so this printed "[ok] current"
+# while the skill executed modified code. The earlier version of this test
+# passed for the wrong reason: its checkout was already behind, and it dirtied
+# `beta` while scanning `alpha`. Both are fixed here — same skill, no other
+# source of drift.
+clone c7
+R7="$TMP/root7"; link "$R7" "$TMP/c7/skills/alpha"
+BA=$( cd "$TMP/c7" && git rev-list --left-right --count origin/main...HEAD | tr -d '[:space:]' )
+echo MODIFIED-ON-DISK > "$TMP/c7/skills/alpha/SKILL.md"
+OUT=$(run "$R7")
+if [ "$BA" = "00" ] && echo "$OUT" | grep -q 'differ from origin/main'; then
+    pass "7. an uncommitted edit to the installed skill is drift (topology says 0/0)"
 else
-    fail "7. uncommitted changes not surfaced: $OUT"
+    fail "7. working-tree edit missed (behind/ahead=$BA): $OUT"
 fi
 
-# ── 8. advisory: never exits non-zero, even with drift present ──────────────
+# ── 8. an untracked file inside the skill is drift ─────────────────────────
+# `git diff` alone does not see a new file, so a skill could gain a script that
+# never merged and still read as matching.
+clone c8
+R8="$TMP/root8"; link "$R8" "$TMP/c8/skills/alpha"
+echo "print('new')" > "$TMP/c8/skills/alpha/extra.py"
+OUT=$(run "$R8")
+if echo "$OUT" | grep -q 'differ from origin/main'; then
+    pass "8. an untracked file inside the skill counts as drift"
+else
+    fail "8. untracked file missed: $OUT"
+fi
+
+# ── 9. a commit that touches only README leaves skills clean ───────────────
+# Commit topology marked every skill in the repo drifted for this, which is
+# noise, and an advisory that cries wolf gets switched off.
+clone c9
+up_commit README.md changed "readme only"
+( cd "$TMP/c9" && git fetch -q origin )
+BEHIND=$( cd "$TMP/c9" && git rev-list --count HEAD..origin/main )
+R9="$TMP/root9"; link "$R9" "$TMP/c9/skills/alpha"
+OUT=$(run "$R9")
+if [ "$BEHIND" = "1" ] && echo "$OUT" | grep -q '\[ok\]'; then
+    pass "9. a README-only commit does not mark skills drifted (behind=$BEHIND)"
+else
+    fail "9. README-only commit misreported (behind=$BEHIND): $OUT"
+fi
+
+# ── 10. a local commit that never merged is drift ──────────────────────────
+clone c10
+( cd "$TMP/c10" && git checkout -q -b local-work \
+    && echo LOCAL > skills/alpha/SKILL.md \
+    && git -c user.email=t@t -c user.name=t commit -qam "never merged" )
+BEHIND=$( cd "$TMP/c10" && git rev-list --count HEAD..origin/main )
+R10="$TMP/root10"; link "$R10" "$TMP/c10/skills/alpha"
+OUT=$(run "$R10")
+if [ "$BEHIND" = "0" ] && echo "$OUT" | grep -q 'differ from origin/main'; then
+    pass "10. a 0-behind branch carrying unmerged work is drift"
+else
+    fail "10. unmerged local commit read as current (behind=$BEHIND): $OUT"
+fi
+
+# ── 11. advisory: never exits non-zero, even with drift present ────────────
 "$PY" "$DRIFT" --skills-dir "$R1" >/dev/null 2>&1
 RC=$?
 if [ "$RC" = "0" ]; then
-    pass "8. advisory — exits 0 even when drift is found"
+    pass "11. advisory — exits 0 even when drift is found"
 else
-    fail "8. exited $RC with drift present; this must never gate"
+    fail "11. exited $RC with drift present; this must never gate"
 fi
 
-# ── 10. AHEAD of origin/main is drift too ──────────────────────────────────
-# The first draft measured only `HEAD..origin/main` — "is it missing merged
-# work". That is not the question. A checkout sitting 0 behind on a branch
-# carrying its own commits runs code that never merged, and the checker called it
-# "current with origin/main": the exact silent pass it exists to prevent,
-# reproduced inside it.
-AH="$TMP/aheadrepo"
-git clone -q "$UP" "$AH" 2>/dev/null
-( cd "$AH" && git fetch -q origin && git checkout -q -b local-work \
-    && echo LOCAL > skills/beta/SKILL.md \
-    && git -c user.email=t@t -c user.name=t commit -qam "never merged" )
-R10="$TMP/root10"; mkroot "$R10"
-ln -s "$AH/skills/beta" "$R10/beta"
-BEHIND=$( cd "$AH" && git rev-list --count HEAD..origin/main )
-OUT=$(run "$R10")
-if [ "$BEHIND" = "0" ] && echo "$OUT" | grep -q 'unmerged commit' \
-   && ! echo "$OUT" | grep -q '\[ok\]'; then
-    pass "10. 0-behind but ahead of origin/main is reported as drift"
-else
-    fail "10. ahead-of-main read as current (behind=$BEHIND): $OUT"
-fi
-
-# ── 9. the doctor section itself can never become a gate ───────────────────
+# ── 12. the doctor section itself can never become a gate ───────────────────
 # The value of this check is that it is safe to leave on. If a future edit turns
 # an [info] into a gap(), every workspace with a parked checkout starts failing
 # `doctor --strict` on a deployment fact, and the check gets disabled instead.
@@ -179,9 +213,9 @@ fi
 # comment, where `.` matching a multi-byte char is locale- and awk-dependent.
 SEC=$(sed -n '/^section "27\./,/^TOTAL=/p' "$REPO/scripts/doctor.sh")
 if [ -n "$SEC" ] && ! echo "$SEC" | grep -qE '(^|[^_[:alnum:]])gap[[:space:]]+"'; then
-    pass "9. doctor §27 emits no gap() — advisory by construction"
+    pass "12. doctor §27 emits no gap() — advisory by construction"
 else
-    fail "9. doctor §27 calls gap(), or the section was not found"
+    fail "12. doctor §27 calls gap(), or the section was not found"
 fi
 
 echo ""
