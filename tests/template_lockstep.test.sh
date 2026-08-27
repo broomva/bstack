@@ -53,12 +53,29 @@ assert_eq() {
 }
 
 assert_contains() {
-    local name="$1" haystack="$2" needle="$3"
+    local name="$1" haystack="$2" needle="$3" _hit
     # Case-insensitive: canonical word can appear capitalized at sentence
     # start (e.g. "Twenty irreducible primitives" in SKILL.md description)
     # without breaking the lockstep contract — the test only cares the
     # token + count are consistent across files.
-    if echo "$haystack" | grep -iqF "$needle"; then
+    # No pipe. `grep -q` exits on its first match, which closes the pipe while
+    # the writer is still going; the writer takes SIGPIPE and the `if` reads
+    # false, reporting a PRESENT string as missing. That is a false negative on
+    # a containment check, so the same bug can also hide a real lockstep
+    # violation. It surfaced on CI (larger payloads) while passing on macOS,
+    # where the pipe buffer absorbs the whole write — so the fix is structural
+    # rather than tuned to any one platform's buffer size.
+    #
+    # `case` matches in-process. `tr` for the fold, not `${var,,}`: this repo
+    # pins bash 3.2 compatibility (tests/bash32-parse-safety.test.sh).
+    local _h _n
+    _h=$(printf '%s' "$haystack" | tr '[:upper:]' '[:lower:]')
+    _n=$(printf '%s' "$needle"   | tr '[:upper:]' '[:lower:]')
+    case "$_h" in
+        *"$_n"*) _hit=1 ;;
+        *)       _hit=0 ;;
+    esac
+    if [ "$_hit" = "1" ]; then
         echo "  [ok] $name: contains '$needle' (case-insensitive)"
         PASS=$((PASS + 1))
     else
@@ -70,6 +87,37 @@ assert_contains() {
 
 # ── 1. Discover the canonical primitive count from doctor.sh ─────────────
 echo ""
+# ── instrument self-check ───────────────────────────────────────────────────
+# assert_contains was reporting a PRESENT string as missing (SIGPIPE from
+# `echo | grep -q`, BRO-2370). The repair could just as easily have gone the
+# other way and made everything match, which would retire the lockstep contract
+# while printing all-green. So the instrument is checked in BOTH directions
+# before it is trusted, including at a payload size large enough to have been
+# the original trigger.
+_selfcheck() {
+    local big present absent p0 f0
+    p0=$PASS; f0=$FAIL
+    big=$(head -c 200000 /dev/zero | tr '\0' 'x')
+    present="CANARY-TOKEN $big"
+    assert_contains "selfcheck: finds a present needle in a 200KB haystack" \
+        "$present" "CANARY-TOKEN"
+    assert_contains "selfcheck: MUST FAIL on an absent needle" \
+        "$present" "TOKEN-THAT-IS-NOT-THERE"
+    # expected: one pass, one fail. Anything else means the instrument is not
+    # discriminating and every result below it is meaningless.
+    if [ "$PASS" = "$((p0 + 1))" ] && [ "$FAIL" = "$((f0 + 1))" ]; then
+        PASS=$((p0 + 1)); FAIL=$f0
+        echo "  [ok] selfcheck: assert_contains discriminates (1 hit, 1 miss)"
+    else
+        PASS=$p0; FAIL=$((f0 + 1))
+        echo "  [FAIL] selfcheck: assert_contains is not discriminating —" \
+             "everything below this line is meaningless"
+    fi
+}
+echo ""
+echo "=== Instrument self-check ==="
+_selfcheck
+
 echo "=== Discovering canonical primitive count ==="
 
 DOCTOR_COUNT="$(grep -E '^EXPECTED_COUNT=' "$DOCTOR_SH" | head -1 | sed 's/.*=//' | tr -d '"' | tr -d "'")"
