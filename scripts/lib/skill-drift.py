@@ -89,7 +89,7 @@ class RepoState:
     compared, and one diff per repo answers it for every skill in that repo.
     """
 
-    __slots__ = ("root", "branch", "head", "ref", "changed", "reason")
+    __slots__ = ("root", "branch", "head", "ref", "changed", "opaque", "reason")
 
     def __init__(self, root: Path):
         self.root = root
@@ -97,6 +97,7 @@ class RepoState:
         self.branch = _git(root, "rev-parse", "--abbrev-ref", "HEAD") or "?"
         self.head = _git(root, "rev-parse", "--short", "HEAD") or "?"
         self.changed: "set[str] | None" = None
+        self.opaque: "set[str]" = set()
 
         # origin/main only. A fallback to origin/master could compare against a
         # stale ref and then report "current with origin/main" — inventing a
@@ -123,16 +124,44 @@ class RepoState:
         self.changed = set(filter(None, out.splitlines())) | \
                        set(filter(None, untracked.splitlines()))
 
+        # `assume-unchanged` and `skip-worktree` exist to make a modified file
+        # invisible to git — so `diff` reports nothing while the file on disk
+        # differs, and the skill runs code no comparison can see. Verified: a
+        # file edited under assume-unchanged read as "matches origin/main".
+        # These paths are not clean and not drifted; they are UNVERIFIABLE, and
+        # the rule is that what cannot be verified is never reported as current.
+        flags = _git(root, "ls-files", "-v")
+        self.opaque: "set[str]" = set()
+        if flags is None:
+            self.reason = "could not read index flags (ls-files -v)"
+            return
+        for line in flags.splitlines():
+            if len(line) < 3 or line[1] != " ":
+                continue
+            tag, path_ = line[0], line[2:]
+            # lowercase => assume-unchanged; S => skip-worktree
+            if tag.islower() or tag == "S":
+                self.opaque.add(path_)
+
     @property
     def known(self) -> bool:
         return self.reason is None and self.changed is not None
+
+    def _under(self, paths, rel: str) -> "list[str]":
+        pre = "" if rel in ("", ".") else rel.rstrip("/") + "/"
+        return sorted(c for c in paths if c.startswith(pre))
 
     def drifted_paths(self, rel: str) -> "list[str]":
         """Changed paths inside `rel` (a repo-relative skill directory)."""
         if not self.known:
             return []
-        pre = "" if rel in ("", ".") else rel.rstrip("/") + "/"
-        return sorted(c for c in (self.changed or ()) if c.startswith(pre))
+        return self._under(self.changed or (), rel)
+
+    def opaque_paths(self, rel: str) -> "list[str]":
+        """Paths inside `rel` git has been told not to look at."""
+        if not self.known:
+            return []
+        return self._under(self.opaque, rel)
 
 
 def scan(skill_dirs: "list[Path]") -> dict:
@@ -206,14 +235,15 @@ def main(argv: "list[str] | None" = None) -> int:
     # Per skill, not per repo: a commit touching only README.md changes nothing
     # a skill executes, and reporting every skill in the repo as drifted would
     # make the advisory noise and get it ignored.
-    drifted: "dict[str, list[tuple[str, int]]]" = {}
+    drifted: "dict[str, list[tuple[str, int, int]]]" = {}
     clean = 0
     for key, entries in r["by_repo"].items():
         st = repos[key]
         if not st.known:
             continue
-        hits = [(name, len(st.drifted_paths(rel))) for name, rel in entries]
-        d = [(n, c) for n, c in hits if c]
+        hits = [(name, len(st.drifted_paths(rel)), len(st.opaque_paths(rel)))
+                for name, rel in entries]
+        d = [(n, c, o) for n, c, o in hits if c or o]
         if d:
             drifted[key] = d
         clean += len(hits) - len(d)
@@ -226,7 +256,8 @@ def main(argv: "list[str] | None" = None) -> int:
             "drifted": [
                 {"repo": k, "branch": repos[k].branch, "head": repos[k].head,
                  "ref": repos[k].ref,
-                 "skills": [{"skill": n, "changed_files": c} for n, c in v]}
+                 "skills": [{"skill": n, "changed_files": c, "opaque_files": o}
+                            for n, c, o in v]}
                 for k, v in drifted.items()
             ],
             "unknown_repos": [
@@ -251,11 +282,19 @@ def main(argv: "list[str] | None" = None) -> int:
         st = repos[key]
         print(f"  [info] {len(v)} skill(s) differ from {st.ref} in {key}")
         print(f"         {st.branch} @ {st.head}")
-        for name, cnt in v[:6]:
-            print(f"           {name} — {cnt} file(s) differ from {st.ref}")
+        for name, cnt, opq in v[:6]:
+            if cnt:
+                print(f"           {name} — {cnt} file(s) differ from {st.ref}")
+            if opq:
+                print(f"           {name} — {opq} file(s) hidden by "
+                      f"assume-unchanged/skip-worktree: UNVERIFIABLE")
         if len(v) > 6:
             print(f"           +{len(v) - 6} more")
-        print("         → what runs here is NOT what merged")
+        if any(c for _, c, _ in v):
+            print("         → what runs here is NOT what merged")
+        if any(o for _, _, o in v):
+            print("         → hidden paths cannot be compared at all — "
+                  "`git update-index --no-assume-unchanged` to make them visible")
 
     for key, st in sorted(unknown_repos.items()):
         print(f"  [info] {len(r['by_repo'][key])} skill(s) at {key}: "

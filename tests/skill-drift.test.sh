@@ -27,6 +27,9 @@
 #  10. a 0-behind branch carrying unmerged work is drift
 #  11. advisory — never exits non-zero
 #  12. doctor §27 emits no gap()
+#  13/14. assume-unchanged / skip-worktree are UNVERIFIABLE, not clean
+#  15. NEGATIVE CONTROL for 13/14
+#  16. a staged-but-uncommitted edit is drift
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -203,6 +206,50 @@ if [ "$RC" = "0" ]; then
     pass "11. advisory — exits 0 even when drift is found"
 else
     fail "11. exited $RC with drift present; this must never gate"
+fi
+
+# ── 13/14. index flags that hide a file from git ───────────────────────────
+# `assume-unchanged` and `skip-worktree` exist to make a modified file invisible
+# to git. Both produced a FALSE CLEAN: the file on disk read SILENTLY-EDITED and
+# the verdict was "[ok] matches origin/main". A path git has been told not to
+# look at is UNVERIFIABLE, and unverifiable is never reported as current.
+n=13
+for flag in assume-unchanged skip-worktree; do
+    clone "idx$n"
+    ( cd "$TMP/idx$n" && git update-index --$flag skills/alpha/SKILL.md )
+    echo SILENTLY-EDITED > "$TMP/idx$n/skills/alpha/SKILL.md"
+    RI="$TMP/rootidx$n"; link "$RI" "$TMP/idx$n/skills/alpha"
+    SEEN=$( cd "$TMP/idx$n" && git diff --name-only origin/main )
+    OUT=$(run "$RI")
+    if [ -z "$SEEN" ] && echo "$OUT" | grep -q 'UNVERIFIABLE'; then
+        pass "$n. --$flag hides the edit from git; reported UNVERIFIABLE, not clean"
+    else
+        fail "$n. --$flag: git saw '$SEEN', checker said: $OUT"
+    fi
+    n=$((n + 1))
+done
+
+# ── 15. NEGATIVE CONTROL for 13/14 — no flags, unmodified, still [ok] ──────
+# Without this, 13/14 pass for a checker that calls everything unverifiable.
+clone idx15
+R15="$TMP/root15"; link "$R15" "$TMP/idx15/skills/alpha"
+OUT=$(run "$R15")
+if echo "$OUT" | grep -q '\[ok\]' && ! echo "$OUT" | grep -q 'UNVERIFIABLE'; then
+    pass "15. NEGATIVE CONTROL: no index flags, unmodified -> still [ok]"
+else
+    fail "15. clean checkout misreported after the index-flag change: $OUT"
+fi
+
+# ── 16. a staged-but-uncommitted edit is drift ─────────────────────────────
+clone idx16
+echo STAGED > "$TMP/idx16/skills/alpha/SKILL.md"
+( cd "$TMP/idx16" && git add skills/alpha/SKILL.md )
+R16="$TMP/root16"; link "$R16" "$TMP/idx16/skills/alpha"
+OUT=$(run "$R16")
+if echo "$OUT" | grep -q 'differ from origin/main'; then
+    pass "16. a staged-but-uncommitted edit is drift"
+else
+    fail "16. staged edit missed: $OUT"
 fi
 
 # ── 12. the doctor section itself can never become a gate ───────────────────
