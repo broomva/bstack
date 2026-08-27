@@ -48,7 +48,7 @@ def _toplevel(path: Path) -> "Path | None":
 class RepoState:
     """Per-repo facts, computed once and shared by every skill resolving into it."""
 
-    __slots__ = ("root", "branch", "head", "behind", "ref", "dirty", "reason")
+    __slots__ = ("root", "branch", "head", "behind", "ahead", "ref", "dirty", "reason")
 
     def __init__(self, root: Path):
         self.root = root
@@ -56,6 +56,7 @@ class RepoState:
         self.branch = _git(root, "rev-parse", "--abbrev-ref", "HEAD") or "?"
         self.head = _git(root, "rev-parse", "--short", "HEAD") or "?"
         self.behind: "int | None" = None
+        self.ahead: "int | None" = None
         self.dirty: "int | None" = None
 
         # Prefer origin/main, fall back to origin/master. Read only — never fetch:
@@ -70,11 +71,18 @@ class RepoState:
             self.reason = "no origin/main ref (never fetched, or no remote)"
             return
 
-        counts = _git(root, "rev-list", "--count", f"HEAD..{self.ref}")
-        if counts is None or not counts.isdigit():
-            self.reason = f"could not count HEAD..{self.ref}"
+        # BOTH directions. "behind" alone answers "is it missing merged work",
+        # which is not the question. The question is whether the code that RUNS
+        # is the code that merged, and a checkout sitting 0 behind on a branch
+        # carrying its own commits is running something else entirely — reporting
+        # that as current is the silent pass this check exists to prevent.
+        counts = _git(root, "rev-list", "--left-right", "--count",
+                      f"{self.ref}...HEAD")
+        parts = counts.split() if counts else []
+        if len(parts) != 2 or not all(x.isdigit() for x in parts):
+            self.reason = f"could not compare HEAD against {self.ref}"
             return
-        self.behind = int(counts)
+        self.behind, self.ahead = int(parts[0]), int(parts[1])
 
         porcelain = _git(root, "-c", "core.fsmonitor=false", "status", "--porcelain")
         # fsmonitor is force-disabled: a dead daemon makes `status` report a clean
@@ -87,7 +95,18 @@ class RepoState:
 
     @property
     def drifted(self) -> bool:
-        return self.known and (self.behind or 0) > 0
+        return self.known and ((self.behind or 0) > 0 or (self.ahead or 0) > 0)
+
+    @property
+    def summary(self) -> str:
+        bits = []
+        if self.behind:
+            bits.append(f"{self.behind} commit(s) behind {self.ref}")
+        if self.ahead:
+            bits.append(f"{self.ahead} unmerged commit(s) of its own")
+        if self.dirty:
+            bits.append(f"{self.dirty} uncommitted")
+        return ", ".join(bits) if bits else "diverged"
 
 
 def scan(skill_dirs: "list[Path]") -> dict:
@@ -162,7 +181,8 @@ def main(argv: "list[str] | None" = None) -> int:
             "scanned": r["scanned"],
             "drifted": [
                 {"repo": k, "branch": v.branch, "head": v.head, "behind": v.behind,
-                 "dirty": v.dirty, "ref": v.ref, "skills": r["by_repo"][k]}
+                 "ahead": v.ahead, "dirty": v.dirty, "ref": v.ref,
+                 "skills": r["by_repo"][k]}
                 for k, v in drifted.items()
             ],
             "unknown_repos": [
@@ -184,10 +204,8 @@ def main(argv: "list[str] | None" = None) -> int:
 
     for key, st in sorted(drifted.items(), key=lambda kv: -len(r["by_repo"][kv[0]])):
         names = r["by_repo"][key]
-        dirty = f", {st.dirty} uncommitted" if st.dirty else ""
         print(f"  [info] {len(names)} skill(s) run from {key}")
-        print(f"         {st.branch} @ {st.head} — {st.behind} commit(s) behind "
-              f"{st.ref}{dirty}")
+        print(f"         {st.branch} @ {st.head} — {st.summary}")
         shown = ", ".join(names[:6]) + (f", +{len(names) - 6} more" if len(names) > 6 else "")
         print(f"         {shown}")
         print("         → merged changes to those commits are NOT what runs here")
