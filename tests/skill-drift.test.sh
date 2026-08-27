@@ -23,6 +23,7 @@
 #   6. an installed copy with no git provenance is counted, not called current
 #   7. uncommitted changes in the checkout are surfaced
 #   8. the check never exits non-zero — it is advisory, never a gate
+#   9. doctor §27 emits no gap() — it can never become a gate
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -145,6 +146,17 @@ if [ "$RC" = "0" ]; then
     pass "8. advisory — exits 0 even when drift is found"
 else
     fail "8. exited $RC with drift present; this must never gate"
+fi
+
+# ── 9. the doctor section itself can never become a gate ───────────────────
+# The value of this check is that it is safe to leave on. If a future edit turns
+# an [info] into a gap(), every workspace with a parked checkout starts failing
+# `doctor --strict` on a deployment fact, and the check gets disabled instead.
+SEC=$(awk '/^section "27\./{f=1} f{print} /^# .. summary/{if(f)exit}' "$REPO/scripts/doctor.sh")
+if [ -n "$SEC" ] && ! echo "$SEC" | grep -qE '(^|[^_[:alnum:]])gap[[:space:]]+"'; then
+    pass "9. doctor §27 emits no gap() — advisory by construction"
+else
+    fail "9. doctor §27 calls gap(), or the section was not found"
 fi
 
 echo ""
