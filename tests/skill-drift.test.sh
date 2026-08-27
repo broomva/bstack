@@ -152,7 +152,9 @@ fi
 # The value of this check is that it is safe to leave on. If a future edit turns
 # an [info] into a gap(), every workspace with a parked checkout starts failing
 # `doctor --strict` on a deployment fact, and the check gets disabled instead.
-SEC=$(awk '/^section "27\./{f=1} f{print} /^# .. summary/{if(f)exit}' "$REPO/scripts/doctor.sh")
+# Anchored on ASCII only. The first draft terminated on the box-drawing "# ──"
+# comment, where `.` matching a multi-byte char is locale- and awk-dependent.
+SEC=$(sed -n '/^section "27\./,/^TOTAL=/p' "$REPO/scripts/doctor.sh")
 if [ -n "$SEC" ] && ! echo "$SEC" | grep -qE '(^|[^_[:alnum:]])gap[[:space:]]+"'; then
     pass "9. doctor §27 emits no gap() — advisory by construction"
 else

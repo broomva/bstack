@@ -1565,6 +1565,28 @@ else
     fi
 fi
 
+# ── 27. Skill deployment drift (advisory) ───────────────────────────────────
+# A merge to skills/main does not deploy a skill. An installed skill is a symlink
+# into a checkout, and what runs is whatever branch that checkout is parked on —
+# so a merged fix can sit inert with nothing reporting it (BRO-2368: 89 skills
+# running 3 commits behind main, three merged lint/bookkeeping GATE fixes dead).
+#
+# Advisory only, like §4b/§4c/§12: drift is a deployment fact, not a contract
+# violation, and a doctor that failed on it would block unrelated work. Read-only
+# and offline — it reads the origin/main ref the last fetch left and never fetches.
+section "27. Skill deployment drift (advisory)"
+_DRIFT_PY="$BSTACK_REPO/scripts/lib/skill-drift.py"
+if ! command -v python3 >/dev/null 2>&1; then
+    [ "$QUIET" = "0" ] && echo "  [info] python3 unavailable — skipping skill-drift check"
+elif [ ! -f "$_DRIFT_PY" ]; then
+    [ "$QUIET" = "0" ] && echo "  [info] scripts/lib/skill-drift.py missing — skipping skill-drift check"
+elif [ "$QUIET" = "0" ]; then
+    # Never allowed to fail the run: the check reports a fact about deployment,
+    # and its own breakage must not read as a workspace gap.
+    python3 "$_DRIFT_PY" --home "$HOME" 2>/dev/null \
+        || echo "  [info] skill-drift check could not complete"
+fi
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 TOTAL=$((PASSES + GAPS))
