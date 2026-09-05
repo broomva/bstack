@@ -61,8 +61,8 @@ primitives:
     category: execution
     mechanism:
       type: composed
-      spec: "Task tool dispatch in worktrees + bstack-wave for N>1 across-session orchestration"
-    invariant: "No shared mutable file writes between concurrent agents"
+      spec: "Task tool dispatch in worktrees + bstack-wave for N>1 across-session orchestration; every session named <worktree>-<ticket>-<slug> (--name at launch or /rename at the keyboard — the agent composes, verifies against the ListAgents header, and requests; it cannot set it) and addressable via ListAgents/SendMessage; overlap settled by one message to the owning session before the first edit"
+    invariant: "No shared mutable file writes between concurrent agents; every session addressable by a name that carries its worktree and ticket"
     failure_mode: "sequential bottleneck on independent work units"
     introduced_in: 0.1.0
 
@@ -177,12 +177,14 @@ primitives:
     category: meta
     mechanism:
       type: reflex
-      spec: "Agent reflexive rule — surface git status + branch + ahead/behind + PRs + tickets + deploy state before plan"
-    invariant: "The snapshot is part of the planning response — not deferred"
-    failure_mode: "plans built on stale state (uncommitted work, in-flight PRs, stale deploys)"
+      spec: "Agent reflexive rule — surface git status + branch + ahead/behind vs origin/<base> + PRs + tickets + deploy state + the fleet (own session name, every worktree joined to open PRs, every peer session via ListAgents, the shared root workspace, path overlap with in-flight branches) before plan and before the scope lock"
+    invariant: "The snapshot is part of the planning response — not deferred — and it sees the other writers, not just its own worktree"
+    failure_mode: "plans built on stale or single-session state (uncommitted work, in-flight PRs, stale deploys, another session's worktree)"
     rule_of_three:
       - citation: research/notes/2026-05-12-prompt-patterns-raw.md
         summary: "10+ instances of 'help me understand where we stand' / 'is everything committed' in the prompt-pattern dump"
+      - citation: "GetStimulus/sri STI-2669 (2026-09-05)"
+        summary: "one maintainer loop beside 13 linked worktrees and 14 peer sessions, 13 of them under auto-generated names carrying only a directory basename in a listing with no working-directory column; the single-session snapshot could see none of it, and its first command (git status) was dead in the worktree"
     introduced_in: 0.1.0
 
   - id: P16

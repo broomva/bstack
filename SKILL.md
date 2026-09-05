@@ -75,7 +75,7 @@ The twenty primitives. Each closes one specific failure mode that drifts into en
 | **P2** | Control Gate | destructive ops the model didn't authorize |
 | **P3** | Linear Tickets | invisible work |
 | **P4** | PR Pipeline | merging unreviewed code |
-| **P5** | Parallel Agents | sequential bottleneck |
+| **P5** | Parallel Agents | sequential bottleneck; unaddressable sessions colliding in the same files |
 | **P6** | Knowledge Bookkeeping | knowledge graph rot |
 | **P7** | Skill Freshness Check | silent rot of `npx skills add` snapshots |
 | **P8** | Branch + Worktree Janitor | squash-merge accumulation |
@@ -85,7 +85,7 @@ The twenty primitives. Each closes one specific failure mode that drifts into en
 | **P12** | Persistent Loop Discipline (`broomva/persist` skill) | long-horizon work decaying as the context window rots |
 | **P13** | Dream Cycle Discipline | tier-crossing consolidation corrupting upper-tier rules without replay (the *shadow dream* failure mode) |
 | **P14** | Dependency-Chain Reasoning Discipline | "think deeply through chain of dependencies" becoming a ritual phrase without concrete upstream/downstream enumeration |
-| **P15** | State-Snapshot Before Action | plans built on stale state (uncommitted work, in-flight PRs, stale deploys) |
+| **P15** | State-Snapshot Before Action | plans built on stale or single-session state (uncommitted work, in-flight PRs, stale deploys, another session's worktree) |
 | **P16** | Crystallization Discipline (the Bstack Engine) | recurring valuable patterns living only in the user's head — never promoted to skill/primitive/policy infrastructure |
 | **P17** | Lens-Routed Request Articulation (`broomva/role-x` skill, planned) | flat-dispatch fan-out failing to load domain context; agents performing tasks without the typed lens (legal review vs design vs research) that shapes the correct quality_bar |
 | **P18** | Format-Follows-Audience Discipline | markdown-by-default for everything regardless of audience; long specs nobody reads; ASCII pseudo-diagrams + unicode-color-approximation when SVG-in-HTML is the correct primitive |
