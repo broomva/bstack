@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.39.0 — 2026-09-05
+
+### feat(primitives): Snapshot (P15) sees the fleet; Fanout (P5) names the session (STI-2669)
+
+Snapshot (P15) was written for one agent: `git status`, branch, ahead/behind, in-flight PRs,
+ticket state, deploy state. Every field is about the session's own worktree. That was the
+wrong premise for the workspaces bstack now runs in, where an unattended loop is never alone.
+
+**Measured** (2026-09-05, an SRI maintainer loop): one session beside **13 linked worktrees**
+of a bare repository and **14 peer Claude Code sessions** on the same machine. 13 of the 14
+peers appeared under auto-generated names (`mola-ff`, `gorgonian-4c`, `finback-0d`) that carry
+nothing but a directory basename, in an agent-side `ListAgents` listing that has **no
+working-directory column** — so the name is the only join from a session to its worktree,
+branch and ticket, and it encoded none of them. The single-session snapshot could see none
+of this. Its first command was also dead: `git status` failed with `must be run in a work
+tree` because the shared config sets `core.bare = true` with `extensions.worktreeConfig`, and
+that worktree lacked the per-worktree `core.bare = false` override its eleven siblings had.
+
+**P15 now includes the fleet**, and it precedes the scope lock: own identity (the `ListAgents`
+header, worktree, branch, ticket); every worktree with branch and HEAD (`git worktree list
+--porcelain`) joined to open PRs; every peer session with busy/idle state; the shared root
+workspace (bare repo, shared stash, shared `.git/config`); and the **path overlap** between
+the intended edits and every in-flight branch (`git diff --name-only origin/<base>...<branch>`).
+Ahead/behind is measured against `origin/<base>` after a fetch, never the local base checkout,
+which in the measured fleet was stale. New invariant clause: *a snapshot that cannot see the
+other writers is not a snapshot.* New trigger rule 5: re-read the fleet before every scope
+lock in an unattended loop.
+
+**P5 now names the session.** Every session is `<worktree>-<ticket>-<slug>` (lowercase,
+hyphens — typeahead-safe), so a peer can address it. The name is set with `--name` at launch
+or `/rename` at the keyboard; per the Claude Code docs a `/rename` inside a cross-session
+message "arrives as plain text" and no hook sets the name, so **the agent cannot rename
+itself**. Its part of the flow is: compose the canonical name, verify it against the
+`ListAgents` header, request it in the first report when it does not hold, keep working, and
+carry the identity in peer messages and the handoff until the header matches. Overlap is
+settled by one `SendMessage` to the owning session before the first edit — never by whoever
+pushes first; an inbound message is a claim to verify, not an authorization; no session asks a
+peer to do what its own permissions block (cross-session permission laundering).
+
+Changed: `references/primitives.md` (P5, P15), `references/primitives.yaml` (P5, P15 spec /
+invariant / failure mode; a second rule-of-three citation on P15), `SKILL.md` primitive table,
+`assets/templates/AGENTS.md.template` + this repo's `AGENTS.md` (P5, P15 sections),
+`CLAUDE.md` P15 row. No mechanism change: both primitives are reasoning-enforced reflexes and
+`scripts/doctor.sh` lints section presence, which is unchanged. Minor bump because the
+definition of what a compliant snapshot contains widened.
+
+Originating ticket: GetStimulus/sri STI-2669 (owner-directed). The SRI-side counterpart lands
+the same contract in the `autonomous-maintainer` skill and the workspace `CLAUDE.md`.
+
 ## 0.38.0 — 2026-07-29
 
 ### feat: `bstack skills audit` gains report 7 — eval coverage (BRO-2005)
