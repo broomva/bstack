@@ -284,6 +284,38 @@ class UpTest(unittest.TestCase):
                 self.assertEqual(os.path.realpath(c), os.path.realpath(str(wt)))
 
 
+class OrchestratorTest(unittest.TestCase):
+    def test_brief_names_the_orchestrator_when_given(self):
+        with sandbox() as td:
+            write_stub(td)
+            wt = plain_worktree(td, name="wt")
+            roster = write_roster(td, [{"slug": "a", "ticket": "BRO-1"}])
+            _run(["up", str(roster), "--worktree", str(wt),
+                  "--orchestrator", "lobster-orchestrator"])
+            brief = (only_fleet_dir(td) / "briefs" / "wt-bro-1-a.md").read_text()
+            self.assertIn("report to `lobster-orchestrator`", brief)
+
+    def test_orchestrator_defaults_to_claude_session_name(self):
+        import os
+        with sandbox() as td:
+            os.environ["CLAUDE_SESSION_NAME"] = "lobster-orchestrator"
+            write_stub(td)
+            wt = plain_worktree(td, name="wt")
+            roster = write_roster(td, [{"slug": "a", "ticket": "BRO-1"}])
+            _run(["up", str(roster), "--worktree", str(wt)])
+            brief = (only_fleet_dir(td) / "briefs" / "wt-bro-1-a.md").read_text()
+            self.assertIn("report to `lobster-orchestrator`", brief)
+
+    def test_brief_falls_back_to_the_from_of_the_first_message(self):
+        with sandbox() as td:
+            write_stub(td)
+            wt = plain_worktree(td, name="wt")
+            roster = write_roster(td, [{"slug": "a", "ticket": "BRO-1"}])
+            _run(["up", str(roster), "--worktree", str(wt)])
+            brief = (only_fleet_dir(td) / "briefs" / "wt-bro-1-a.md").read_text()
+            self.assertIn("the `from` of your first inbound message", brief)
+
+
 class BriefWithoutLaneTest(unittest.TestCase):
     def test_no_owns_says_so_rather_than_leaving_a_blank(self):
         with sandbox() as td:

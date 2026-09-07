@@ -144,6 +144,23 @@ class DownTest(unittest.TestCase):
             self.assertIn("fleet_2_bbbb", out)
             self.assertEqual(fleet.list_fleet_dirs(), [])
 
+    def test_all_skips_an_unreadable_fleet_dir(self):
+        """A corrupt manifest beside a healthy fleet must not stop the sweep:
+        the healthy fleet is still torn down, the corrupt dir left in place."""
+        with sandbox() as td:
+            write_stub(td)
+            wt = plain_worktree(td, name="wt")
+            roster = write_roster(td, [{"slug": "a", "ticket": "BRO-1"}])
+            _run(["up", str(roster), "--worktree", str(wt), "--fleet", "fleet_ok_0001"])
+            _run(["up", str(roster), "--worktree", str(wt), "--fleet", "fleet_bad_0002"])
+            bad = fleet.state_root() / "fleet_bad_0002"
+            (bad / "fleet.json").write_text("{ not json", encoding="utf-8")
+            rc, out = _run(["down", "--all"])
+            self.assertEqual(rc, 0)
+            self.assertFalse((fleet.state_root() / "fleet_ok_0001").exists())
+            self.assertTrue(bad.exists())            # corrupt dir left in place
+            self.assertIn("fleet_ok_0001", out)
+
     def test_down_needs_a_target(self):
         with sandbox() as td:
             _launch(td)

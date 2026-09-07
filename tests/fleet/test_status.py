@@ -197,6 +197,20 @@ class StatusTest(unittest.TestCase):
             self.assertIn("fleet_1_aaaa", out)
             self.assertIn("fleet_2_bbbb", out)
 
+    def test_all_skips_an_unreadable_fleet_dir(self):
+        """One corrupt fleet.json must not blind the whole sweep."""
+        with sandbox() as td:
+            write_stub(td)
+            wt = plain_worktree(td, name="wt")
+            roster = write_roster(td, [{"slug": "a", "ticket": "BRO-1"}])
+            _run(["up", str(roster), "--worktree", str(wt), "--fleet", "fleet_ok_0001"])
+            _run(["up", str(roster), "--worktree", str(wt), "--fleet", "fleet_bad_0002"])
+            (fleet.state_root() / "fleet_bad_0002" / "fleet.json").write_text(
+                "{ not json", encoding="utf-8")
+            rc, out = _run(["status", "--all"])
+            self.assertEqual(rc, 0)
+            self.assertIn("fleet_ok_0001", out)      # healthy fleet still shown
+
     def test_json_status_reports_whether_liveness_was_available(self):
         with sandbox() as td:
             fd = _launch(td)
