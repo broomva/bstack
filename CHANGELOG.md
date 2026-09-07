@@ -97,6 +97,30 @@ cell, decision rule 7 and the P16 rule-of-three citation, plus a §P5 sentence n
 P19 specs; `assets/templates/AGENTS.md.template` and `CLAUDE.md.template` §P19 in lockstep;
 `bin/bstack` usage.
 
+**Round-1 hardening (P20)** — the invariants above, made teeth:
+
+- `down` never orphans a live fleet even when `claude` cannot run: `_run` reports whether the
+  process actually launched, teardown gates BOTH `stop` and `rm` on it (a missing binary's
+  "no such" errno text can no longer score every peer already-gone), and `_cmd_down` refuses
+  up front with `_ensure_claude_on_path`.
+- `up` refuses `--fleet <id>` when that fleet's `fleet.json` already exists — reusing it would
+  overwrite the state of a possibly-live fleet and orphan its roster.
+- `fleet.json` is written atomically (pid-suffixed sibling tmp + `os.replace`, as
+  `wave.write_manifest` does): a `status`/`list`/`down` read that lands mid-rewrite never sees
+  a torn file.
+- `validate_roster` rejects a roster resolving to more than one worktree (that is the wave
+  shape — `bstack wave dispatch`) and an exact-string duplicate `owns` glob across peers.
+- `up --orchestrator <name>` (default `$CLAUDE_SESSION_NAME`) names the spawning session in
+  each brief's report line; absent, the brief tells the peer to reply to the `from` of its
+  first inbound message. The spawn `cwd` is pinned to the single worktree (regression-tested).
+- `status --all` / `down --all` skip an unreadable fleet dir instead of aborting the sweep.
+- `down --force` deletes the state dir after reclaiming what it can, reporting what it could
+  not reach — so a null-id fleet is clearable rather than stuck.
+- `up`'s trailer and `status`'s waiting suggestion speak the real liveness vocabulary
+  (`status=waiting`, `state=blocked`, `waiting (<waitingFor or input>)`), never the
+  non-existent `needs` field; a waiting peer is told to `claude attach` or stop+respawn, since
+  it cannot take a `SendMessage`.
+
 ### Migration
 
 None. `bstack fleet` is a new, additive subcommand: no existing command changes behavior, no

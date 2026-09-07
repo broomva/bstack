@@ -710,7 +710,8 @@ def render_status(state: FleetState, agents: list[dict] | None) -> str:
     """
     lines = [f"{state.fleet_id} — created {state.created_at} "
              f"({len(state.peers)} peer(s))", ""]
-    lines.append(f"  {'NAME':<40} {'ID':<12} {'LIVE':<10} {'STATE':<12} PID")
+    lines.append(f"  {'NAME':<{peer.NAME_MAX}} {'ID':<12} {'LIVE':<10} "
+                 f"{'STATE':<12} PID")
     attention: list[str] = []
     for p in state.peers:
         klass, entry = peer.liveness(agents, session_id=p.session_id, name=p.name)
@@ -718,7 +719,7 @@ def render_status(state: FleetState, agents: list[dict] | None) -> str:
         agent_state = str(entry.get("state") or "—")
         pid = str(entry.get("pid") or "—")
         sid = p.session_id or "—"
-        lines.append(f"  {p.name:<40} {sid:<12} {klass:<10} "
+        lines.append(f"  {p.name:<{peer.NAME_MAX}} {sid:<12} {klass:<10} "
                      f"{agent_state:<12} {pid}")
         ref = p.session_id or entry.get("id") or "<id>"
         if klass == peer.WAITING:
@@ -842,7 +843,8 @@ def _run(binary: str, *rest: str) -> tuple[int, str, bool]:
             peer.strip_ansi((proc.stdout or "") + (proc.stderr or "")), True)
 
 
-def teardown(fd: Path, *, binary: str, agents: list[dict] | None) -> dict:
+def teardown(fd: Path, *, binary: str, agents: list[dict] | None,
+             force: bool = False) -> dict:
     """Stop + remove every peer of one fleet.
 
     The invariant that matters most lives here: the state directory is deleted
@@ -850,6 +852,11 @@ def teardown(fd: Path, *, binary: str, agents: list[dict] | None) -> dict:
     rewritten with per-peer `removed` flags and kept. Teardown must never
     orphan a fleet by deleting the only record of it — a peer whose id is
     unknown is exactly the case where the operator needs the file most.
+
+    `force` is the operator's explicit override: delete the state dir after
+    reclaiming everything reachable, and report what could not be reached. It
+    exists so a null-id fleet — which is un-reclaimable by construction, since
+    there is no id to `stop`/`rm` — is still clearable.
     """
     state = read_state(fd)
     removed: list[str] = []
@@ -885,11 +892,13 @@ def teardown(fd: Path, *, binary: str, agents: list[dict] | None) -> dict:
             remaining.append({"name": p.name,
                               "reason": f"rm {p.session_id} failed: {tail}"})
     write_state(fd, state)
-    if not remaining:
+    deleted = (not remaining) or force
+    if deleted:
         shutil.rmtree(fd, ignore_errors=True)
     return {"fleet_id": state.fleet_id, "state_dir": str(fd),
             "removed": removed, "remaining": remaining,
-            "state_deleted": not remaining}
+            "state_deleted": deleted,
+            "forced": bool(force and remaining)}
 
 
 def _cmd_down(args) -> int:
@@ -911,14 +920,17 @@ def _cmd_down(args) -> int:
     reports = []
     for fd in dirs:
         try:
-            reports.append(teardown(fd, binary=binary, agents=agents))
+            reports.append(teardown(fd, binary=binary, agents=agents,
+                                    force=args.force))
         except FleetError:
             # One unreadable fleet dir must not blind the sweep (matches
             # `_cmd_list`); a targeted `--fleet` still surfaces it.
             if args.all:
                 continue
             raise
-    failed = any(r["remaining"] for r in reports)
+    # A fleet whose state was deleted (cleanly, or forced) is not a failure —
+    # only an unreclaimed peer whose record we KEPT is.
+    failed = any(r["remaining"] and not r["state_deleted"] for r in reports)
     if args.json:
         print(json.dumps({"fleets": reports}, indent=2))
     else:
@@ -928,7 +940,9 @@ def _cmd_down(args) -> int:
             for item in r["remaining"]:
                 print(f"  • {item['name']}: {item['reason']}")
             if r["state_deleted"]:
-                print(f"  state deleted: {r['state_dir']}")
+                note = (" (forced despite unreclaimed peers)"
+                        if r.get("forced") else "")
+                print(f"  state deleted{note}: {r['state_dir']}")
             else:
                 print(f"  state KEPT (a fleet with an unreclaimed peer is not "
                       f"a deletable record): {r['state_dir']}")
@@ -969,6 +983,9 @@ def build_parser() -> argparse.ArgumentParser:
     dn = sub.add_parser("down", help="stop + remove a fleet's peers")
     dn.add_argument("--fleet", default=None)
     dn.add_argument("--all", action="store_true")
+    dn.add_argument("--force", action="store_true",
+                    help="delete the state dir after reclaiming what it can, "
+                         "reporting what it could not reach (clears a null-id fleet)")
     dn.add_argument("--state-dir", default=None)
     dn.add_argument("--json", action="store_true")
     return parser

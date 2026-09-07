@@ -16,11 +16,11 @@ export BSTACK_FLEET_STATE_DIR
 trap 'rm -rf "$BSTACK_FLEET_STATE_DIR"' EXIT
 
 echo "tests/fleet — python3 -m unittest discover -s tests/fleet -t ."
+# One run. `pipefail` is set, so the pipeline's status is unittest's, not
+# tail's; PIPESTATUS[0] is read explicitly so the intent survives a future
+# edit that drops pipefail.
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests/fleet -t . 2>&1 | tail -n 25
-# `tail` reports its OWN status, so the pipeline above cannot decide the gate.
-# Re-run for the honest exit code.
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests/fleet -t . >/dev/null 2>&1
-rc=$?
+rc="${PIPESTATUS[0]}"
 if [ "$rc" -eq 0 ]; then
   echo "  ✓ tests/fleet suite green"
 else

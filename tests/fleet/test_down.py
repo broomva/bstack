@@ -109,6 +109,34 @@ class DownTest(unittest.TestCase):
             self.assertEqual(_calls(td), ["stop abc120", "rm abc120"])
             self.assertFalse(read_state_json(fd)["peers"][1]["removed"])
 
+    def test_force_clears_a_null_id_fleet(self):
+        """A null-id peer is un-reclaimable by construction (no id to stop/rm),
+        so without --force its fleet is un-clearable. --force deletes the dir
+        after reclaiming what it can and still reports what it could not reach."""
+        with sandbox() as td:
+            fd = _launch(td)
+            sf = fd / "fleet.json"
+            data = json.loads(sf.read_text())
+            data["peers"][1]["session_id"] = None
+            sf.write_text(json.dumps(data))
+            rc, out = _run(["down", "--fleet", fd.name, "--force"])
+            self.assertEqual(rc, 0)
+            self.assertFalse(fd.exists(), "--force did not clear the state dir")
+            self.assertIn("unknown id", out)          # still reported
+            self.assertIn("forced", out)
+
+    def test_without_force_a_null_id_fleet_keeps_its_dir(self):
+        with sandbox() as td:
+            fd = _launch(td)
+            sf = fd / "fleet.json"
+            data = json.loads(sf.read_text())
+            data["peers"][1]["session_id"] = None
+            sf.write_text(json.dumps(data))
+            rc, out = _run(["down", "--fleet", fd.name])
+            self.assertEqual(rc, 1)
+            self.assertTrue(fd.exists())
+            self.assertIn("state KEPT", out)
+
     def test_rm_saying_not_found_counts_as_removed(self):
         """A session the client already reaped is reclaimed, not a failure."""
         with sandbox() as td:
