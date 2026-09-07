@@ -180,6 +180,15 @@ for bad in '[]' '{"peers":{}}' '{"peers":["x"]}'; do
     else
         assert_fail "the shape guard classifies $bad (not the generic exception fallback)" "$OUT"
     fi
+    # This root holds ONLY the malformed record — no valid FLEET row. It is the
+    # one place a mutant that sets `found` on the FLEET path alone is visible;
+    # every other negative assertion runs on a root that also has a real orphan,
+    # so the valid row satisfies them and the mutant survives.
+    if grep -q "nothing outstanding here" <<< "$OUT"; then
+        assert_fail "an UNKNOWN-only finding suppresses the clean line ($bad)" "$OUT"
+    else
+        assert_pass "an UNKNOWN-only finding suppresses the clean line ($bad)"
+    fi
 done
 
 # 5c. UNREADABLE ROOT. pathlib.glob swallows PermissionError, which would render
@@ -229,6 +238,113 @@ if grep -q "absent-root?FLEET" <<< "$OUT"; then
     assert_pass "the injected path is sanitised into one inert line"
 else
     assert_fail "the injected path is sanitised into one inert line" "$OUT"
+fi
+
+# 5d-ter. The OTHER two root-echoing branches. clean() is applied on three
+#     branches; only NOROOT was pinned, so a mutation of either of the others
+#     could forge a full row from a newline in the root path and no case noticed.
+FORGE=$'\n'"FLEET"$'\t'"fleet_FORGED_0001"$'\t'"99/99 peer(s) unreclaimed"$'\t'"0.0"
+
+# (a) CLEAN branch: an existing, readable, EMPTY root whose name carries the payload.
+EMPTY_FORGE="$TMP/base$FORGE"
+mkdir -p "$EMPTY_FORGE"
+OUT="$(section28 "$EMPTY_FORGE")"
+if grep -qE '^[[:space:]]*\[info\] fleet_FORGED_0001' <<< "$OUT"; then
+    assert_fail "the CLEAN branch cannot forge a fleet row" "$OUT"
+else
+    assert_pass "the CLEAN branch cannot forge a fleet row"
+fi
+
+# (b) unreadable-root branch: same payload, plus mode 000 so scandir raises.
+if [ "$(id -u)" -ne 0 ]; then
+    UNREAD_FORGE="$TMP/locked$FORGE"
+    mkdir -p "$UNREAD_FORGE"; chmod 000 "$UNREAD_FORGE"
+    OUT="$(section28 "$UNREAD_FORGE")"
+    chmod 755 "$UNREAD_FORGE"
+    if grep -qE '^[[:space:]]*\[info\] fleet_FORGED_0001' <<< "$OUT"; then
+        assert_fail "the unreadable-root branch cannot forge a fleet row" "$OUT"
+    else
+        assert_pass "the unreadable-root branch cannot forge a fleet row"
+    fi
+else
+    assert_pass "unreadable-root forge case skipped (running as root)"
+fi
+
+# 5d-quinquies. The os.stat fix ADDED two root-echoing branches ("cannot be
+#     read" and "is not a directory"), and the chmod-000 forge above does not
+#     reach either: stat on a mode-000 directory succeeds (it needs +x on the
+#     PARENT), so that case lands on the scandir branch. Every branch that
+#     echoes the root gets its own forge fixture, or the sanitiser is pinned on
+#     some branches and free on others — which is how (c) stayed open.
+if [ "$(id -u)" -ne 0 ]; then
+    # (c) stat-OSError branch: untraversable PARENT, payload in the root path.
+    LP="$TMP/lockedparent2"; mkdir -p "$LP"; chmod 000 "$LP"
+    OUT="$(section28 "$LP/root$FORGE")"
+    chmod 755 "$LP"
+    if grep -qE '^[[:space:]]*\[info\] fleet_FORGED_0001' <<< "$OUT"; then
+        assert_fail "the stat-unreadable branch cannot forge a fleet row" "$OUT"
+    else
+        assert_pass "the stat-unreadable branch cannot forge a fleet row"
+    fi
+else
+    assert_pass "stat-unreadable forge case skipped (running as root)"
+fi
+
+# (d) not-a-directory branch: a FILE at a path carrying the payload. The payload
+#     must be SLASH-FREE here — a filename cannot contain "/", so the usual
+#     "99/99 peer(s)" form silently fails to create the fixture and the case
+#     then tests the absent-root branch instead, passing for the wrong reason.
+FORGE_FILE=$'\n'"FLEET"$'\t'"fleet_FORGED_0001"$'\t'"99 peers unreclaimed"$'\t'"0.0"
+NOTDIR_FORGE="$TMP/rootfile$FORGE_FILE"
+: > "$NOTDIR_FORGE"
+if [ ! -e "$NOTDIR_FORGE" ]; then
+    assert_fail "not-a-directory forge fixture was created" "creation failed — the case would test the wrong branch"
+fi
+OUT="$(section28 "$NOTDIR_FORGE")"
+if grep -qE '^[[:space:]]*\[info\] fleet_FORGED_0001' <<< "$OUT"; then
+    assert_fail "the not-a-directory branch cannot forge a fleet row" "$OUT"
+else
+    assert_pass "the not-a-directory branch cannot forge a fleet row"
+fi
+
+# 5d-quater. BLOCKER from round 3: the root check must classify the same way on
+#     every interpreter. Path.is_dir() re-raises PermissionError on CPython
+#     <= 3.12 and returns False on >= 3.13, so a root whose PARENT is not
+#     traversable either crashed the section into an empty body or was reported
+#     as absent. os.stat raises everywhere, so this asserts BEHAVIOUR, not a
+#     version: unreadable is unknown, and it is never silently clean or absent.
+if [ "$(id -u)" -ne 0 ]; then
+    LOCKED="$TMP/lockedparent"
+    mkdir -p "$LOCKED/root"; chmod 000 "$LOCKED"
+    OUT="$(section28 "$LOCKED/root")"
+    chmod 755 "$LOCKED"
+    if grep -q "state root cannot be read" <<< "$OUT"; then
+        assert_pass "a root under an untraversable parent reports unknown"
+    else
+        assert_fail "a root under an untraversable parent reports unknown" "$OUT"
+    fi
+    if grep -q "nothing to check here" <<< "$OUT" || grep -q "nothing outstanding here" <<< "$OUT"; then
+        assert_fail "an unreadable root is never reported absent or clean" "$OUT"
+    else
+        assert_pass "an unreadable root is never reported absent or clean"
+    fi
+    # The section must have a BODY: an empty body is the crash signature.
+    if [ "$(grep -c '\[info\]' <<< "$OUT")" -ge 1 ]; then
+        assert_pass "the section still renders a body (no interpreter crash)"
+    else
+        assert_fail "the section still renders a body (no interpreter crash)" "$OUT"
+    fi
+else
+    assert_pass "untraversable-parent case skipped (running as root)"
+fi
+
+# A file where a directory is expected is also not clean.
+NOTDIR_ROOT="$TMP/rootisfile"; : > "$NOTDIR_ROOT"
+OUT="$(section28 "$NOTDIR_ROOT")"
+if grep -q "not a directory" <<< "$OUT"; then
+    assert_pass "a state root that is a file reports unknown"
+else
+    assert_fail "a state root that is a file reports unknown" "$OUT"
 fi
 
 # 5e. IMPORT HYGIENE (security). `python3 -` puts the CWD at sys.path[0], and
@@ -304,7 +420,10 @@ fi
 # like one. PR #105 solved the same problem structurally; this does the same.
 # Case 9 (the totals line, which carries the gap count) is the runtime gate;
 # this is the independent one, and it fails on the mutant by construction.
-SECTION_SRC="$(sed -n '/^section "28\./,/^# ── /p' "$BSTACK_REPO/scripts/doctor.sh")"
+# Comment lines are stripped first: with the quote anchor loosened (so
+# `gap 'single'` cannot slip past), ordinary prose containing "ok " or "gap "
+# inside the section would otherwise fail the suite. Calls survive the strip.
+SECTION_SRC="$(sed -n '/^section "28\./,/^# ── /p' "$BSTACK_REPO/scripts/doctor.sh" | grep -v '^[[:space:]]*#')"
 if [ -z "$SECTION_SRC" ]; then
     assert_fail "§28 source range is extractable" "sed range matched nothing"
 elif grep -qE '(^|[^_[:alnum:]])(gap|ok)[[:space:]]' <<< "$SECTION_SRC"; then

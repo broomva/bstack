@@ -1602,7 +1602,7 @@ elif [ ! -f "$BSTACK_REPO/scripts/fleet.py" ]; then
     [ "$QUIET" = "0" ] && echo "  [info] scripts/fleet.py absent (bstack < 0.40.0) — no fleet mechanism to check"
 else
     _FLEET_REPORT="$(python3 - "$BSTACK_REPO/scripts" <<'PY'
-import json, os, sys, time
+import json, os, stat, sys, time
 from pathlib import Path
 
 # python3 - puts '' (the CWD) at sys.path[0], and fleet.py's own
@@ -1631,8 +1631,24 @@ def clean(text: str) -> str:
     return str(text).replace("\t", "?").replace("\n", "?").replace("\r", "?")
 
 
-if not root.is_dir():
+# os.stat, not Path.is_dir(). is_dir() only became total in CPython 3.13: on
+# 3.12 and earlier it RE-RAISES PermissionError, and this statement sits
+# upstream of every per-entry guard — so a root whose PARENT is not traversable
+# killed the interpreter and rendered the section as a header with no body, the
+# exact failure this section exists to prevent. On 3.13+ the same input silently
+# returned False and reported the root as absent, which is a different wrong
+# answer. os.stat raises on every version, so one code path classifies the same
+# way everywhere: absent is absent, unreadable is unknown.
+try:
+    st = os.stat(root)
+except (FileNotFoundError, NotADirectoryError):
     print(f"NOROOT\t{clean(root)}\t\t")
+    raise SystemExit(0)
+except OSError as exc:
+    print(f"UNKNOWN\t{clean(root)}\tstate root cannot be read ({type(exc).__name__})\t")
+    raise SystemExit(0)
+if not stat.S_ISDIR(st.st_mode):
+    print(f"UNKNOWN\t{clean(root)}\tstate root is not a directory\t")
     raise SystemExit(0)
 
 
