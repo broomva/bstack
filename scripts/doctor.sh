@@ -1605,10 +1605,10 @@ else
 import json, os, sys, time
 from pathlib import Path
 
-# `python3 -` puts '' (the CWD) at sys.path[0], and fleet.py's own
-# `from scripts import peer` finds no `scripts` package beside it — so without
+# python3 - puts '' (the CWD) at sys.path[0], and fleet.py's own
+# "from scripts import peer" finds no scripts package beside it — so without
 # this, resolution falls through to the audited workspace's cwd and doctor would
-# EXECUTE a foreign scripts/peer.py. `bstack doctor` is documented to run from
+# EXECUTE a foreign scripts/peer.py. bstack doctor is documented to run from
 # an arbitrary directory, so that cwd is not trusted input.
 sys.path[:] = [q for q in sys.path if q not in ("", ".", os.getcwd())]
 sys.path.insert(0, sys.argv[1])
@@ -1624,16 +1624,16 @@ except Exception as exc:                  # noqa: BLE001
     print(f"UNKNOWN\t-\tcannot resolve the fleet state root ({type(exc).__name__})\t")
     raise SystemExit(0)
 
-if not root.is_dir():
-    print(f"NOROOT\t{root}\t\t")
-    raise SystemExit(0)
-
-
 def clean(text: str) -> str:
     """A record is tab-delimited and line-based; a tab or newline in a fleet id
     would shift every field and truncate the remedy into an id that resolves to
-    nothing. `--fleet <id>` is unvalidated, so sanitise rather than trust."""
+    nothing. The --fleet id is unvalidated, so sanitise rather than trust."""
     return str(text).replace("\t", "?").replace("\n", "?").replace("\r", "?")
+
+
+if not root.is_dir():
+    print(f"NOROOT\t{clean(root)}\t\t")
+    raise SystemExit(0)
 
 
 # pathlib.glob SWALLOWS PermissionError: an unreadable root would yield zero
@@ -1665,8 +1665,8 @@ for e in entries:
             print(f"UNKNOWN\t{name}\tno fleet.json in the directory\t")
             continue
         data = json.loads(f.read_text(encoding="utf-8"))
-        # Valid JSON of the wrong SHAPE is the trap: `{"peers": ["x"]}` or a
-        # bare `[]` parses fine and then raises on .get(). Coerce, never assume.
+        # Valid JSON of the wrong SHAPE is the trap: a peers list of strings,
+        # or a bare [], parses fine and then raises on .get(). Coerce, never assume.
         peers = data.get("peers") if isinstance(data, dict) else None
         if not isinstance(peers, list) or not all(isinstance(q, dict) for q in peers):
             # A list whose entries are not peer records is malformed too. Counting

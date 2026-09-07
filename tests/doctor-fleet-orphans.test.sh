@@ -63,6 +63,15 @@ if grep -q "bstack fleet down --fleet fleet_1788000000_aaaa" <<< "$OUT"; then
 else
     assert_fail "prints the remedy naming the fleet id" "$OUT"
 fi
+# The section's CENTRAL invariant, and the only thing separating clean from
+# not-clean: when there is a finding, the clean line must be ABSENT. Every other
+# assertion greps for presence, so a mutation of the `found` flag prints an
+# orphan AND "nothing outstanding here" in the same breath and passes them all.
+if grep -q "nothing outstanding here" <<< "$OUT"; then
+    assert_fail "a named orphan suppresses the clean line" "$OUT"
+else
+    assert_pass "a named orphan suppresses the clean line"
+fi
 
 # 2. NEGATIVE CONTROL. An absent root is reported, never passed over in silence.
 OUT="$(section28 "$TMP/absent")"
@@ -148,6 +157,11 @@ EOF
     else
         assert_fail "a real orphan sorting after a malformed record is still named ($bad)" "$OUT"
     fi
+    if grep -q "nothing outstanding here" <<< "$OUT"; then
+        assert_fail "a malformed record suppresses the clean line ($bad)" "$OUT"
+    else
+        assert_pass "a malformed record suppresses the clean line ($bad)"
+    fi
 done
 
 # 5b-bis. The shape guard and the total-body except are DEFENCE IN DEPTH: either
@@ -192,6 +206,29 @@ if grep -q "not a directory" <<< "$OUT"; then
     assert_pass "a fleet_* entry that is not a directory reports unknown"
 else
     assert_fail "a fleet_* entry that is not a directory reports unknown" "$OUT"
+fi
+
+# 5d-bis. ROW INJECTION via the absent-root branch. The report is line-based, so
+#     a newline in the state-root path can forge an entire FLEET row — a wholly
+#     invented orphan with an invented remedy, which is the worst thing an
+#     advisory section can print. clean() must be applied on EVERY branch that
+#     echoes a path, including the one that reports the root as absent.
+INJ="$TMP/absent-root"$'\n'"FLEET"$'\t'"fleet_INJECTED_9999"$'\t'"99/99 peer(s) unreclaimed"$'\t'"0.0"
+OUT="$(section28 "$INJ")"
+# Discriminating form: the payload string legitimately survives as INERT TEXT
+# inside the sanitised NOROOT line, so grepping for it anywhere fails on the
+# fixed code. What must not exist is a forged ROW — an [info] line whose subject
+# is the injected id. (The first version of this assertion got that wrong.)
+if grep -qE '^[[:space:]]*\[info\] fleet_INJECTED_9999' <<< "$OUT"; then
+    assert_fail "a newline in the state-root path cannot forge a fleet row" "$OUT"
+else
+    assert_pass "a newline in the state-root path cannot forge a fleet row"
+fi
+# ...and the payload must be neutralised rather than echoed raw.
+if grep -q "absent-root?FLEET" <<< "$OUT"; then
+    assert_pass "the injected path is sanitised into one inert line"
+else
+    assert_fail "the injected path is sanitised into one inert line" "$OUT"
 fi
 
 # 5e. IMPORT HYGIENE (security). `python3 -` puts the CWD at sys.path[0], and
@@ -270,9 +307,9 @@ fi
 SECTION_SRC="$(sed -n '/^section "28\./,/^# ── /p' "$BSTACK_REPO/scripts/doctor.sh")"
 if [ -z "$SECTION_SRC" ]; then
     assert_fail "§28 source range is extractable" "sed range matched nothing"
-elif grep -qE '(^|[^_[:alnum:]])(gap|ok)[[:space:]]+"' <<< "$SECTION_SRC"; then
+elif grep -qE '(^|[^_[:alnum:]])(gap|ok)[[:space:]]' <<< "$SECTION_SRC"; then
     assert_fail "§28 calls neither gap() nor ok() — it cannot move the totals" \
-        "$(grep -nE '(^|[^_[:alnum:]])(gap|ok)[[:space:]]+"' <<< "$SECTION_SRC" | head -2)"
+        "$(grep -nE '(^|[^_[:alnum:]])(gap|ok)[[:space:]]' <<< "$SECTION_SRC" | head -2)"
 else
     assert_pass "§28 calls neither gap() nor ok() — it cannot move the totals"
 fi
