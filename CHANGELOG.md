@@ -1,5 +1,104 @@
 # Changelog
 
+## 0.40.1 — 2026-09-07
+
+### feat(doctor): §28 reports unreclaimed fleets (BRO-2473)
+
+`bstack fleet` shipped in 0.40.0 and `/arc` §7 promises "every peer this session
+raised is stopped" — but nothing observed it. Measured on 0.40.0: zero
+fleet-aware hooks across all three registration surfaces, zero mentions of fleet
+in `scripts/doctor.sh`. The `tests/fleet/` suite gates the *tool's* correctness,
+never the *agent's* cleanup, so an orphaned fleet was invisible: its peers keep
+consuming budget and its state directory survives with nothing reporting it.
+
+The check leans on what `fleet down` guarantees: a fleet's state directory is
+deleted only when every peer was removed or was already gone — **unless
+`--force` was passed**, which deletes the record regardless. So the implication
+holds in one direction, and that is the direction the section uses: a surviving
+`fleet_*` directory is a fleet that was never fully reclaimed. The converse does
+not hold, so the clean line reports "nothing outstanding here" and names
+`--force` rather than claiming everything was reclaimed. A filesystem read: no
+subprocess, no network, no `claude agents` call.
+
+- The state root is resolved by importing `fleet.state_root()` rather than
+  re-deriving `~/.cache/bstack/fleet`, so the section cannot drift from the
+  ontology (flag > `BSTACK_FLEET_STATE_DIR` > config `fleet_state_dir` >
+  default) the day someone sets the config key.
+- The root check uses `os.stat`, not `Path.is_dir()`. `is_dir()` only became
+  total in CPython 3.13: on 3.12 and earlier it re-raises `PermissionError`, and
+  that statement sits upstream of every per-entry guard — so a root whose
+  *parent* was not traversable killed the interpreter and produced exactly the
+  empty body this section exists to prevent. On 3.13+ the same input silently
+  returned `False` and reported the root as absent, a different wrong answer.
+  `os.stat` raises on every version, so one code path classifies identically
+  everywhere; verified under 3.9.6 and 3.14.3.
+- Every answer that is not a positive finding says which kind of not-finding it
+  is. A surviving directory is named with its unreclaimed-peer count, age and
+  remedy. An unreadable state root, a `fleet_*` entry that is not a directory, a
+  missing or unreadable `fleet.json`, and valid JSON of the wrong shape all
+  report **unknown**. An absent root reports that there is nothing to check
+  *here*, since a `--state-dir` flag is invisible to doctor. Only an existing,
+  readable, empty root is clean.
+- Totality is structural, not enumerated. Four review rounds each found one
+  more input that emptied the report — a wrong-shape record, an untraversable
+  parent, an undecodable byte, a NUL in a config path — and each was closed by
+  adding a guard at one more print site, which trades a round per hazard. Three
+  properties now hold for any input, each provable by deleting one thing:
+  stdout cannot raise on an unencodable character; every record goes through a
+  single `emit()` that sanitises every field, so no value can shift a column or
+  forge a row; and anything still escaping lands in one outer handler that
+  emits a single honest `UNKNOWN` row. An empty body is the signature that
+  reads as clean, and it is now unreachable.
+- The trust boundary is stated rather than a totality claim. Everything inside
+  the python process is total; the process itself is guarded at the shell layer,
+  because `command -v python3` proves presence and not that the interpreter
+  runs — a pyenv shim for an uninstalled version is executable and exits 127,
+  and the substitution used to discard that status and leak stderr, rendering a
+  header with no body while an orphan sat on disk. The exit status is captured,
+  stderr is redirected as every other python block in the file already does, and
+  an empty or failed run becomes an honest row.
+- A `fleet.json` whose `schema_version` this check does not read reports unknown
+  instead of applying v1 field semantics to it and printing a count under a
+  remedy that would error.
+- Nothing outside the guarded region touches the filesystem or the environment.
+  The `sys.path` prologue used to run at module level, and `os.getcwd()` raises
+  `FileNotFoundError` when the invoking directory has been deleted — routine
+  here, since `make janitor` removes worktrees while sessions are live. It sat
+  outside `try: scan()`, so it emptied the section while doctor still reported
+  the workspace compliant. The prologue now runs inside the guard.
+- `clean()` keeps what is printable instead of listing what to reject. A
+  blocklist is learned one incident at a time, and it had already missed `ESC`:
+  erase-line plus cursor-up in a name that sorts later can overwrite an orphan
+  printed above it, forging a row by deleting one.
+- `fleet.json` is opened only when it is a regular file. A FIFO passes
+  `exists()` and then blocks at `open()` until a writer appears, so doctor would
+  hang forever under a hook with no timeout above it. Non-termination is not an
+  exception, so no handler can catch it — the only defence is refusing to open.
+- Every per-directory body is total: a raise would empty the whole report, and
+  an empty report renders as a header with no body — the most confident clean
+  signal an advisory section can emit. One malformed directory must never
+  suppress the fleets that sort after it.
+- The import strips the CWD from `sys.path` first. `python3 -` puts the invoking
+  directory at `sys.path[0]`, and `fleet.py`'s own `from scripts import peer`
+  would otherwise resolve there — executing a foreign `scripts/peer.py` from the
+  audited workspace. `bstack doctor` is documented to run from an arbitrary
+  directory, so that path is untrusted input.
+- Advisory only, deliberately: a fleet mid-flight is the expected state during
+  an arc. It never moves the pass/gap totals and never fails `--strict`, because
+  a GAP here would fire on healthy work and teach the operator to skip the
+  section.
+
+`tests/doctor-fleet-orphans.test.sh` pins all of it in 84 cases, and every hand
+mutant dies: the inverted predicate, silence on a surviving directory, an
+unreadable root falling back to `pathlib.glob` (which swallows
+`PermissionError`), a non-directory entry skipped into clean, the shape guard
+and the total-body `except` dropped independently *and* together, the clean line
+claiming reclamation, the advisory becoming a GAP, the CWD left on `sys.path`,
+and the field sanitiser removed. Neutrality is asserted at the source (§28 calls
+neither `ok()` nor `gap()`), because a runtime `--strict` assertion cannot
+discriminate — it passes on the mutant in a gappy workspace and in a clean one
+alike. §27 is left free for the open PR #105.
+
 ## 0.40.0 — 2026-09-06
 
 ### feat(fleet): the generalized fleet-dispatch substrate — `up` / `status` / `list` / `down` on the shared peer spawn contract (BRO-2454)
