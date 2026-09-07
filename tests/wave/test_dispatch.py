@@ -131,6 +131,55 @@ class DispatchTest(unittest.TestCase):
             self.assertIn("--strict-mcp-config", out)
             self.assertIn("crossSessionInbound", out)
 
+    def test_duplicate_session_name_rejected_before_worktree(self):
+        """Two plans whose (worktree basename, ticket, slug) compose the same
+        name must fail validation: two peers under one name are unaddressable."""
+        from scripts.wave import main
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["BSTACK_WAVE_CACHE_DIR"] = td + "/cache"
+            os.environ["BSTACK_WAVE_CLAUDE_BIN"] = "/bin/true"
+            repo = _init_repo(Path(td))
+            pa = _put_plan(repo, "a")
+            # Different worktree dir + different branch, but the basename
+            # `wt-a` and slug `a` compose the same `wt-a-a`.
+            pb = repo / "plan-a-twin.md"
+            pb.write_text(
+                "---\nwave:\n  worktree: ../other/wt-a\n  branch: feat/a-twin\n"
+                "  slug: a\n---\n\n# Twin\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", str(pb)], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "twin"], check=True)
+            import contextlib, io
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as ctx:
+                main(["dispatch", str(pa), str(pb)])
+            self.assertEqual(ctx.exception.code, 1)
+            self.assertIn("duplicate session name", err.getvalue())
+            self.assertIn("wt-a-a", err.getvalue())
+            self.assertFalse((Path(td) / "wt-a").exists())
+            self.assertFalse(Path(td + "/cache").exists())
+
+    def test_bad_mcp_value_is_a_clean_validation_error(self):
+        """`mcp: yolo` in the frontmatter must surface as `error: ...` with exit 1,
+        not as a PeerError traceback escaping main."""
+        from scripts.wave import main
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["BSTACK_WAVE_CACHE_DIR"] = td + "/cache"
+            os.environ["BSTACK_WAVE_CLAUDE_BIN"] = "/bin/true"
+            repo = _init_repo(Path(td))
+            pa = repo / "plan-a.md"
+            pa.write_text("---\nwave:\n  worktree: ../wt-a\n  branch: feat/a\n"
+                          "  slug: a\n  mcp: yolo\n---\n\n# Plan\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", str(pa)], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "plan"], check=True)
+            import contextlib, io
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as ctx:
+                main(["dispatch", str(pa)])
+            self.assertEqual(ctx.exception.code, 1)
+            self.assertIn("error:", err.getvalue())
+            self.assertIn("mcp mode", err.getvalue())
+            self.assertFalse((Path(td) / "wt-a").exists())
+
     def test_validation_failure_aborts_pre_worktree(self):
         from scripts.wave import main
         with tempfile.TemporaryDirectory() as td:

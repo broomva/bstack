@@ -33,7 +33,10 @@ was not run by CI (`ci.yml` runs `tests/*.test.sh` only), so none of this had a 
   the full argv under `--dry-run`, writes the manifest **before** the first launch (a
   peer's first act is `wave report --event started`, which validates its slug against
   the manifest), records `session_id` + `session_name` per plan as each spawn returns,
-  and exits 1 when any spawn returned no id. Per-plan `mcp: inherit` in the `wave:`
+  and exits 1 when any spawn returned no id. Two plans that compose the same session
+  name (long slugs truncated at 64, or a worktree basename equal to the slug) are
+  rejected at validation, before any worktree or session exists — two peers under one
+  name are unaddressable — and a bad `mcp:` value is a clean `error:` line, not a traceback. Per-plan `mcp: inherit` in the `wave:`
   frontmatter (or `BSTACK_PEER_MCP=inherit`) keeps the project's MCP servers for
   peers that need them; strict is the unattended-safe default.
 - `wave status` gains `SESSION` and `LIVE` columns and two suggestions: a peer

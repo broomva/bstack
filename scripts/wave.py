@@ -344,6 +344,7 @@ def validate_plans(plan_paths: list[Path]) -> list[dict]:
     seen_branches: dict[str, Path] = {}
     seen_worktrees: dict[str, Path] = {}
     seen_repos: set[Path] = set()
+    seen_names: dict[str, Path] = {}
     resolved_plan_paths: set[Path] = set()
 
     for pp in plan_paths:
@@ -373,10 +374,22 @@ def validate_plans(plan_paths: list[Path]) -> list[dict]:
             "linear": fm.get("linear"),
             "mcp": fm.get("mcp"),
         })
-        # Fail before anything is created: a bad mcp value or an uncomposable
-        # name is a validation error, not a launch-time surprise.
-        peer.mcp_mode(fm.get("mcp"))
-        peer.compose_name(worktree_abs, fm.get("linear"), entries[-1]["slug"])
+        # Fail before anything is created: a bad mcp value, an uncomposable
+        # name, or two plans that compose the SAME session name (long slugs
+        # truncated at NAME_MAX, or a worktree basename equal to the slug) are
+        # validation errors, not launch-time surprises. Two peers under one
+        # name would be unaddressable by the P5 contract.
+        try:
+            peer.mcp_mode(fm.get("mcp"))
+            name = peer.compose_name(worktree_abs, fm.get("linear"), entries[-1]["slug"])
+        except peer.PeerError as exc:
+            raise WaveError(f"{pp}: {exc}") from exc
+        if name in seen_names:
+            raise WaveError(
+                f"duplicate session name {name!r} composed by {pp} and "
+                f"{seen_names[name]}; give one of them a distinct slug")
+        seen_names[name] = pp
+        entries[-1]["session_name"] = name
 
     for repo in seen_repos:
         if not _git_is_clean(repo, exclude_paths=resolved_plan_paths):
@@ -561,8 +574,6 @@ def _build_prompt(wave_id: str, slug: str, plan_path: Path, worktree: Path,
 def _cmd_dispatch(args) -> int:
     entries = validate_plans(args.plans)  # atomic; raises on first failure
     binary = _claude_binary()
-    for e in entries:
-        e["session_name"] = peer.compose_name(e["worktree"], e.get("linear"), e["slug"])
     if args.dry_run:
         print(f"would dispatch wave with {len(entries)} plan(s):")
         for e in entries:
