@@ -36,7 +36,10 @@ Config + state:
   version                         Print this install's VERSION.
 
 Orchestration:
-  wave <subcommand>               P19 parallel sub-phase dispatch.
+  wave <subcommand>               P19 parallel sub-phase dispatch — one
+                                  worktree + branch per plan file.
+  fleet up|status|list|down       P19 fleet dispatch — N coordinating peers
+                                  in ONE worktree, from a roster (≥ 0.40.0).
 
 Observability:
   metrics collect|observe         Setpoint measurement pipeline (≥ 0.4.0).
@@ -69,6 +72,7 @@ Examples:
   bstack doctor --quiet
   bstack config set auto_upgrade true
   bstack wave dispatch plans/sub-a.md plans/sub-b.md
+  bstack fleet up roster.jsonl --dry-run
   bstack cross-review 195 --repo broomva/broomva.tech --post-comment
   bstack release tag
 EOF
@@ -334,6 +338,7 @@ case "$cmd" in
     config)                 exec "$BIN_DIR/bstack-config" "$@" ;;
     update-check)           exec "$BIN_DIR/bstack-update-check" "$@" ;;
     wave)                   exec "$BIN_DIR/bstack-wave" "$@" ;;
+    fleet)                  exec "$BIN_DIR/bstack-fleet" "$@" ;;
     metrics)                exec "$BIN_DIR/bstack-metrics" "$@" ;;
     status)                 exec "$BIN_DIR/bstack-status" "$@" ;;
     skills)                 exec "$BIN_DIR/bstack-skills" "$@" ;;

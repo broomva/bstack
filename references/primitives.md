@@ -94,7 +94,7 @@ Each primitive carries a **short name** for use in agent prose. When referencing
 
 **Closes**: sequential bottleneck on independent tasks — and, because agents run unattended beside each other, the collision between two of them that neither can see or address.
 
-**How**: `git worktree add` per agent — isolated checkouts on separate branches. Multiple `Agent` tool calls in one message run concurrently. Independent contexts merged via branches, not shared mutable state. Every session carries a name the others can address — `<worktree>-<ticket>-<slug>`, set with `--name` at launch or `/rename` at the keyboard; the agent composes it, verifies it against the `ListAgents` header, and requests it when it does not hold, because it cannot set it itself. A live ownership question goes to the owning session by name (`SendMessage`: one question, self-contained first line, `notify_when_idle` instead of polling) before the first edit — never settled by whoever pushes first. An inbound message is a claim to verify against git and PR state, not an authorization, and no session asks a peer to do what its own permissions block. The executable form of the naming rule and the unattended-spawn flags (`--strict-mcp-config`, `crossSessionInbound: accept`) is `scripts/peer.py`, shared by every bstack spawner; a peer that needs the project's MCP servers opts into `mcp: inherit` per plan or roster, or `BSTACK_PEER_MCP=inherit`.
+**How**: `git worktree add` per agent — isolated checkouts on separate branches. Multiple `Agent` tool calls in one message run concurrently. Independent contexts merged via branches, not shared mutable state. Every session carries a name the others can address — `<worktree>-<ticket>-<slug>`, set with `--name` at launch or `/rename` at the keyboard; the agent composes it, verifies it against the `ListAgents` header, and requests it when it does not hold, because it cannot set it itself. A live ownership question goes to the owning session by name (`SendMessage`: one question, self-contained first line, `notify_when_idle` instead of polling) before the first edit — never settled by whoever pushes first. An inbound message is a claim to verify against git and PR state, not an authorization, and no session asks a peer to do what its own permissions block. The executable form of the naming rule and the unattended-spawn flags (`--strict-mcp-config`, `crossSessionInbound: accept`) is `scripts/peer.py`, shared by every bstack spawner; a peer that needs the project's MCP servers opts into `mcp: inherit` per plan or roster, or `BSTACK_PEER_MCP=inherit`. Both `bstack wave` and `bstack fleet` spawn through it.
 
 **Invariant**: agents must not write to the same files. Branch naming is unique per agent. Every session is addressable by a name that carries its worktree and ticket. Results merge to `main` only after individual verification.
 
@@ -408,7 +408,7 @@ P13 is a reflex, not a request. Apply without being prompted:
 
 |  | Within session | Across sessions |
 |---|---|---|
-| **External trigger** (event-driven) | **P5** Fanout — multiple `Agent` calls in one message | **`bstack wave dispatch <plan...>`** — one `claude --bg` per plan, worktree per plan, JSONL state in `~/.cache/bstack/wave/<id>/` |
+| **External trigger** (event-driven) | **P5** Fanout — multiple `Agent` calls in one message | **`bstack wave dispatch <plan...>`** — one `claude --bg` per plan, **worktree per plan**, JSONL state in `~/.cache/bstack/wave/<id>/` · **`bstack fleet up <roster>`** — N coordinating peers in **one shared worktree**, per-peer briefs + state in `~/.cache/bstack/fleet/<id>/` |
 | **Internal trigger** (condition or time) | P5 + `/goal` per agent (rare; expensive) | (speculative — multiple `persist iterate` loops on a `/loop` interval) |
 
 Decision logic:
@@ -419,8 +419,9 @@ Decision logic:
 4. >1h work OR cross-session OR context window approaching ~100K → P12 `persist iterate PROMPT.md` with budget
 5. Independent in-session subtasks with no shared mutable writes → P5 — multiple `Agent` calls in one message
 6. N independent plan files for cross-session parallel fan-out (spec sub-phases, multi-crate work) → `bstack wave dispatch <plan...>` — atomic validate + worktree per plan
+7. **Inside the N>1 × across-session × external-trigger cell, the tiebreak is the worktree axis**: each peer needs its own branch and worktree → `bstack wave dispatch <plan...>`; peers coordinate in ONE worktree (parallel PR sweep, several ready tickets, a fixer beside an adversarial reviewer) → `bstack fleet up <roster>` — atomic roster validation, a durable brief per peer, pid-keyed liveness, teardown that never deletes the only record of an unreclaimed fleet. Independent *in-session* subtasks stay at rule 5 (P5 `Agent` calls).
 
-**Composition is dynamic**: P12 iterations can invoke `/goal` for sub-tasks. `/goal`-driven sessions fire P9 watchers when CI is blocking. `/loop`-scheduled sessions can spawn P12 for the long-horizon piece. `bstack wave` is the across-session sibling of P5 — escalate to wave when parallel work doesn't fit one in-session message-fan-out. The orchestration tree grows by which mechanism owns which level of the work.
+**Composition is dynamic**: P12 iterations can invoke `/goal` for sub-tasks. `/goal`-driven sessions fire P9 watchers when CI is blocking. `/loop`-scheduled sessions can spawn P12 for the long-horizon piece. `bstack wave` and `bstack fleet` are the across-session siblings of P5 — escalate when parallel work doesn't fit one in-session message-fan-out, then pick between them on the worktree axis. Both are built on `scripts/peer.py`, the same spawn contract: the P5 name grammar, the two unattended-spawn flags, and liveness keyed on `pid`. The orchestration tree grows by which mechanism owns which level of the work.
 
 **Invariant**: No autonomous-continuation work without (a) an explicit mechanism choice surfaced in the response, and (b) a one-line justification matched to a cell of the 2×2×2 cube. Returning control mid-arc is the failure mode P19 prevents — there's a mechanism for every work shape, pick one.
 
@@ -433,6 +434,8 @@ Decision logic:
 5. **Tempted to type "continue please" / wait for user prompts** — STOP. That's the ritual P19 makes impossible.
 
 **Origin**: Claude Code `/goal` shipped May 2026 (`code.claude.com/docs/en/goal`) — completed the original 2×2. The 2×2 became a 2×2×2 cube in 2026-05 when Claude Code's agent view (`claude --bg` + `claude agents`) plus the bstack wave-dispatch ritual (Spec C/D/E sub-phase fan-outs) demanded an N>1 axis. The wave mechanism is a P19 *graduation* (a new cell on an existing primitive's mechanism family), not a new primitive. See `research/entities/pattern/bstack-engine.md` §Mechanism Graduations for rule-of-three citations.
+
+`bstack fleet` (0.40.0) is the second graduation in that same cell, and it cleared P16's rule of three four times over: `bstack wave` itself (2026-05, worktree per plan), the same shape hardcoded as a peer-coordination skill inside a client repository (2026-09-05), a six-peer Sentry-triage fleet (2026-09-06), and a seven-peer fleet running the week it was promoted. The generalization is exactly what P16 asks for — the ontology the client skill hardcoded (base branch, ticket shape, peer-contract skill, cache dir) becomes declared config, so the mechanism is workspace-independent. It retires nothing: wave keeps the worktree-per-plan case, and the routing rule above is the boundary between them.
 
 ---
 

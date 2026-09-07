@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# bstack-fleet — N coordinating peers in one worktree (Fanout P5, Orchestrate P19).
+#
+# Thin shim that dispatches to scripts/fleet.py. Mirrors the bstack-wave
+# shim pattern. Forwards argv unchanged.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+FLEET_PY="$SCRIPT_DIR/scripts/fleet.py"
+
+if [ ! -f "$FLEET_PY" ]; then
+  echo "bstack-fleet: scripts/fleet.py not found at $FLEET_PY" >&2
+  exit 1
+fi
+
+exec python3 "$FLEET_PY" "$@"
