@@ -74,6 +74,7 @@ Once installed, the skill exposes these commands:
 
 **Orchestration & observability**
 - **`wave`** — Orchestrate (P19) parallel sub-phase dispatch: one background agent + worktree per plan file
+- **`fleet`** — Orchestrate (P19) fleet dispatch: N coordinating peers in **one shared** worktree, from a roster (`up` / `status` / `list` / `down`). Routing: own branch per peer → `wave`; peers coordinate in one worktree → `fleet`
 - **`crystallize`** — Crystallize (P16) rule-of-three candidate detector over conversation logs
 - **`metrics`** — setpoint measurement pipeline (collect / observe)
 - **`skills`** — companion-skill roster manager (install / status / list)

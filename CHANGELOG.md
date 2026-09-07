@@ -1,5 +1,132 @@
 # Changelog
 
+## 0.40.0 — 2026-09-06
+
+### feat(fleet): the generalized fleet-dispatch substrate — `up` / `status` / `list` / `down` on the shared peer spawn contract (BRO-2454)
+
+0.39.0 shipped the fleet **contract** — Snapshot (P15) reads the fleet, Fanout (P5) names
+the session — and none of the **mechanism**. The only spawner bstack shipped was `bstack
+wave`, which is one shape: worktree per plan, N branches, N checkouts. The other shape —
+**N peers coordinating inside ONE worktree** (a parallel PR sweep, several ready tickets, a
+fixer beside an adversarial reviewer) — existed only as a skill hardcoded inside one client
+repository, where its base branch, ticket shape, peer-contract skill and cache directory
+were constants.
+
+Crystallize (P16) rule of three, cleared four times: `bstack wave` (2026-05), that client
+skill (2026-09-05), a six-peer Sentry-triage fleet (2026-09-06), a seven-peer fleet running
+the same week. The generalization is to **declare the ontology the skill hardcoded**.
+
+**RCS reading**: a fleet is N controllers at L0/L1 sharing one plant (the repository and its
+root workspace). Spawning and reclaiming controllers is an L2 action; the P15 fleet read is
+the observation; the canonical name is the state's identity coordinate; overlap negotiated
+by one message to the owning peer is the shield.
+
+**Measured disturbances** (2026-09-05/06, Claude Code 2.1.258), each of which the peer brief
+now defends against: a transient `Login expired` killed a whole fleet mid-turn and every peer
+lost its in-memory work (mitigation: durability — file the ticket and write findings BEFORE
+going deep); a dead session still lists as `blocked`, so only a `pid` proves liveness; a peer
+stalled on ANY blocking wait (`AskUserQuestion`, `gh pr checks`, a `sleep` loop) cannot take
+an inbound message and can only be restarted — the orchestrator owns the wait.
+
+**New**
+
+- `bin/bstack-fleet` → `scripts/fleet.py` (stdlib only), wired as `bstack fleet`.
+- `fleet up <roster> [--dry-run] [--fleet id] [--worktree path] [--json]` — validates the
+  whole roster atomically (empty roster, missing `slug`, unknown key named, duplicate composed
+  name, bad `mcp` mode) **before anything spawns**; composes each name with
+  `peer.compose_name`; writes `<state_dir>/<fleet-id>/fleet.json` **before the first spawn**
+  and again after each one; writes a durable brief per peer under `briefs/<name>.md`; passes a
+  SHORT positional prompt that points at the brief; spawns via `peer.build_spawn_argv` +
+  `peer.spawn`; exits 1 if any spawn returned no id.
+- `fleet status [--fleet id | --all] [--json]` — one `claude agents --json --all` read for the
+  whole call, then `NAME ID LIVE STATE PID` per peer with an action per class.
+- `fleet list` — every fleet with created-at, peer count and counts by liveness class.
+- `fleet down (--fleet id | --all) [--json]` — `stop` then `rm` per peer, tolerating a failure
+  when the session is already gone.
+
+**Ontology** — precedence per key: CLI flag > env `BSTACK_FLEET_<KEY>` >
+`~/.bstack/config.yaml` flat key `fleet_<key>` (the file `bin/bstack-config` reads, honouring
+`BSTACK_STATE_DIR`, parsed by a flat line reader — no PyYAML) > default.
+
+| Key | Default | What it decides |
+|---|---|---|
+| `base` | `main` | the base branch quoted in every brief |
+| `peer_contract` | `autonomous` | the skill a peer invokes first |
+| `allowed_tools` | unset | peer inherits the project's permission mode; a roster entry may override |
+| `state_dir` | `~/.cache/bstack/fleet` | where fleet state and briefs live |
+| `ticket_pattern` | `[A-Za-z]+-\d+` | pulls a ticket out of the branch name when a roster entry has none |
+| `mcp` | `strict` | `peer.mcp_mode`; a roster entry may set `inherit` |
+
+**Roster**: a path or `-` for stdin; JSONL (blank lines and `#` comments ignored) or a single
+JSON array. Per entry: `slug` (required), `ticket`, `prompt`, `worktree` (default: the current
+worktree), `role` (→ `--agent`), `model`, `allowed_tools`, `mcp`, `owns` (the path globs that
+peer owns — its lane, quoted into the brief).
+
+**Routing rule** (Orchestrate (P19), the N>1 × across-session × external-trigger cell now
+holds two mechanisms and the tiebreak is the worktree axis):
+
+- each peer needs its own branch and worktree → `bstack wave dispatch <plan...>`
+- peers coordinate in one worktree → `bstack fleet up <roster>`
+- independent in-session subtasks → Fanout (P5) `Agent` calls in one message
+
+**Invariants**
+
+- `down` deletes a fleet's state directory **only** when every peer was removed or was already
+  gone. Otherwise the file is kept with per-peer `removed` flags and the command exits 1.
+  Teardown must never orphan a fleet by deleting the only record of it — a peer whose id was
+  never captured is exactly the case where the operator still needs the file.
+- The state file is written **before** the first spawn, so a crash mid-`up` leaves a truthful
+  record rather than a fleet of orphans nobody can name.
+- `status` renders `unknown` and prints `(liveness unavailable: …)` when the agent listing
+  cannot be read. It never reports a fleet clean because the instrument failed.
+- Nothing is written and nothing spawns under `--dry-run`, including the state root.
+
+**Tests** — `tests/fleet/` (91 python unittest cases across roster parsing, name composition,
+config precedence, `up`, `status`, `list`, `down`), run in CI by `tests/fleet.test.sh` under
+the existing `tests/*.test.sh` job (`ci.yml` runs shell wrappers only; a python suite with no
+wrapper is a dead gate — how wave shipped ungated until BRO-2453). A hand mutation sweep
+pins the clauses that matter: state written after the spawn instead of before, `down` deleting
+state despite a failure, `down` skipping `rm`, `status` coercing an unreadable listing,
+duplicate names accepted, the positional prompt omitted, the brief losing its `## Task`
+section, `--dry-run` launching, a null-id peer counted as removed, unknown roster keys ignored,
+inverted config precedence, per-entry `mcp` ignored.
+
+**Docs** — `SKILL.md` command list + routing paragraph; `references/primitives.md` §P19 cube
+cell, decision rule 7 and the P16 rule-of-three citation, plus a §P5 sentence naming
+`scripts/peer.py` as the executable form of the naming rule; `references/primitives.yaml` P5 +
+P19 specs; `assets/templates/AGENTS.md.template` and `CLAUDE.md.template` §P19 in lockstep;
+`bin/bstack` usage.
+
+**Round-1 hardening (P20)** — the invariants above, made teeth:
+
+- `down` never orphans a live fleet even when `claude` cannot run: `_run` reports whether the
+  process actually launched, teardown gates BOTH `stop` and `rm` on it (a missing binary's
+  "no such" errno text can no longer score every peer already-gone), and `_cmd_down` refuses
+  up front with `_ensure_claude_on_path`.
+- `up` refuses `--fleet <id>` when that fleet's `fleet.json` already exists — reusing it would
+  overwrite the state of a possibly-live fleet and orphan its roster.
+- `fleet.json` is written atomically (pid-suffixed sibling tmp + `os.replace`, as
+  `wave.write_manifest` does): a `status`/`list`/`down` read that lands mid-rewrite never sees
+  a torn file.
+- `validate_roster` rejects a roster resolving to more than one worktree (that is the wave
+  shape — `bstack wave dispatch`) and an exact-string duplicate `owns` glob across peers.
+- `up --orchestrator <name>` (default `$CLAUDE_SESSION_NAME`) names the spawning session in
+  each brief's report line; absent, the brief tells the peer to reply to the `from` of its
+  first inbound message. The spawn `cwd` is pinned to the single worktree (regression-tested).
+- `status --all` / `down --all` skip an unreadable fleet dir instead of aborting the sweep.
+- `down --force` deletes the state dir after reclaiming what it can, reporting what it could
+  not reach — so a null-id fleet is clearable rather than stuck.
+- `up`'s trailer and `status`'s waiting suggestion speak the real liveness vocabulary
+  (`status=waiting`, `state=blocked`, `waiting (<waitingFor or input>)`), never the
+  non-existent `needs` field; a waiting peer is told to `claude attach` or stop+respawn, since
+  it cannot take a `SendMessage`.
+
+### Migration
+
+None. `bstack fleet` is a new, additive subcommand: no existing command changes behavior, no
+default flips, and `scripts/peer.py` is used, not modified. Minor bump because a new
+orchestration mechanism enters the P19 cube and the governance templates change with it.
+
 ## 0.39.1 — 2026-09-06
 
 ### fix(wave): peers are named, spawned unattended-safe, and joined to their live session (BRO-2453)

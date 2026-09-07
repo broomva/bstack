@@ -61,7 +61,7 @@ primitives:
     category: execution
     mechanism:
       type: composed
-      spec: "Task tool dispatch in worktrees + bstack-wave for N>1 across-session orchestration; every session named <worktree>-<ticket>-<slug> (--name at launch or /rename at the keyboard — the agent composes, verifies against the ListAgents header, and requests; it cannot set it) and addressable via ListAgents/SendMessage; overlap settled by one message to the owning session before the first edit"
+      spec: "Task tool dispatch in worktrees + bstack-wave (worktree per plan) / bstack-fleet (N peers, one shared worktree) for N>1 across-session orchestration, both spawning through scripts/peer.py; every session named <worktree>-<ticket>-<slug> (--name at launch or /rename at the keyboard — the agent composes, verifies against the ListAgents header, and requests; it cannot set it) and addressable via ListAgents/SendMessage; overlap settled by one message to the owning session before the first edit"
     invariant: "No shared mutable file writes between concurrent agents; every session addressable by a name that carries its worktree and ticket"
     failure_mode: "sequential bottleneck on independent work units"
     introduced_in: 0.1.0
@@ -227,7 +227,7 @@ primitives:
     category: meta
     mechanism:
       type: composed
-      spec: "2×2×2 mechanism cube (session-scope × trigger × N) → /goal | p9 watch | /loop | persist iterate | Fanout | bstack wave"
+      spec: "2×2×2 mechanism cube (session-scope × trigger × N) → /goal | p9 watch | /loop | persist iterate | Fanout | bstack wave (worktree per plan) | bstack fleet (N peers, one shared worktree)"
     invariant: "No autonomous-continuation work without explicit mechanism choice + cube-cell citation"
     failure_mode: "implicit between-reflex handoffs ('continue please'); using wrong mechanism for work shape"
     introduced_in: 0.2.0
