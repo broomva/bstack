@@ -160,6 +160,14 @@ class RepoState:
         # mtimes; still no network.
         self.ref_age = _ref_age_days(root)
         if self.ref_age is None:
+            # DECLARED BACKSTOP, not a reachable state, and deliberately not
+            # given a behavioural test that would pass vacuously. The ref just
+            # verified above, which means it lives in packed-refs or in a loose
+            # refs/remotes/origin/main — and either file dates it. Remove both
+            # and rev-parse --verify fails first, returning the "no origin/main
+            # ref" reason above. It survives mutation for that reason; the arm
+            # is kept because "undatable" must never fall through to a clean
+            # verdict if a future git changes where refs live.
             self.reason = "cannot date origin/main (no FETCH_HEAD, packed-refs or loose ref)"
             return
         if self.ref_age > stale_days:
