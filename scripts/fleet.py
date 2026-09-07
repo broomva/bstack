@@ -431,8 +431,17 @@ def write_state(fd: Path, state: FleetState) -> None:
         "base_worktree": state.base_worktree,
         "peers": [asdict(p) for p in state.peers],
     }
-    (fd / "fleet.json").write_text(
+    # Atomic, as `wave.write_manifest` is: `up` rewrites this file after each
+    # spawn while `status`/`list`/`down` (and a peer's own read) may land on it
+    # concurrently. A truncate-then-write (`write_text`) hands a reader an empty
+    # or half-written file. Write a sibling tmp in the SAME directory (so the
+    # replace is a rename, not a cross-device copy) and `os.replace` it in;
+    # pid-suffixed so two writers never collide on the tmp name.
+    target = fd / "fleet.json"
+    tmp = fd / f".fleet.json.{os.getpid()}.tmp"
+    tmp.write_text(
         json.dumps(payload, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+    os.replace(tmp, target)
 
 
 def read_state(fd: Path) -> FleetState:
