@@ -112,6 +112,51 @@ class RosterValidateTest(unittest.TestCase):
             self.assertEqual([e["name"] for e in out],
                              ["shared-wt-bro-1-fix", "shared-wt-bro-1-review"])
 
+    def test_more_than_one_worktree_is_rejected(self):
+        """A fleet is N peers in ONE worktree. Two distinct worktrees is the
+        wave shape; the error names the offending entry and points at wave."""
+        with sandbox() as td:
+            a = td / "wt-a"; a.mkdir()
+            b = td / "wt-b"; b.mkdir()
+            with self.assertRaises(fleet.FleetError) as ctx:
+                fleet.validate_roster(
+                    [{"slug": "fix", "ticket": "BRO-1", "worktree": str(a)},
+                     {"slug": "rev", "ticket": "BRO-1", "worktree": str(b)}])
+            msg = str(ctx.exception)
+            self.assertIn("rev", msg)                # the offender, by name
+            self.assertIn("share ONE worktree", msg)
+            self.assertIn("wave dispatch", msg)
+
+    def test_one_worktree_across_many_peers_is_fine(self):
+        with sandbox() as td:
+            wt = td / "shared"; wt.mkdir()
+            out = fleet.validate_roster(
+                [{"slug": "fix", "ticket": "BRO-1", "worktree": str(wt)},
+                 {"slug": "rev", "ticket": "BRO-1", "worktree": str(wt)}])
+            self.assertEqual(len(out), 2)
+
+    def test_duplicate_owns_glob_across_peers_rejected(self):
+        with sandbox() as td:
+            wt = td / "shared"; wt.mkdir()
+            with self.assertRaises(fleet.FleetError) as ctx:
+                fleet.validate_roster(
+                    [{"slug": "fix", "ticket": "BRO-1", "owns": ["scripts/*.py"]},
+                     {"slug": "rev", "ticket": "BRO-1", "owns": ["scripts/*.py"]}],
+                    worktree_flag=str(wt))
+            msg = str(ctx.exception)
+            self.assertIn("scripts/*.py", msg)
+            self.assertIn("same lane", msg)
+
+    def test_distinct_owns_globs_are_fine(self):
+        with sandbox() as td:
+            wt = td / "shared"; wt.mkdir()
+            out = fleet.validate_roster(
+                [{"slug": "fix", "ticket": "BRO-1", "owns": ["scripts/*.py"]},
+                 {"slug": "rev", "ticket": "BRO-1", "owns": ["tests/**"]}],
+                worktree_flag=str(wt))
+            self.assertEqual([sorted(e["owns"]) for e in out],
+                             [["scripts/*.py"], ["tests/**"]])
+
     def test_bad_mcp_mode_rejected_before_launch(self):
         with sandbox() as td:
             with self.assertRaises(Exception) as ctx:

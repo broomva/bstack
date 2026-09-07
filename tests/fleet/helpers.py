@@ -60,9 +60,10 @@ def write_stub(td: Path) -> Path:
       gone-rm-<id>     — `rm <id>` exits 1 saying the session is not found
 
     It records, per spawn: the exact argv (NUL-separated, because the prompt is
-    multi-line) and — the assertion that a "write state after spawning" mutant
-    cannot survive — whether a `fleet.json` already existed when it was called.
-    `stop`/`rm` calls append to `calls.log`.
+    multi-line), the working directory it was launched in (`cwd-<n>.log`, so a
+    "drop the spawn cwd" mutant cannot survive) and — the assertion that a
+    "write state after spawning" mutant cannot survive — whether a `fleet.json`
+    already existed when it was called. `stop`/`rm` calls append to `calls.log`.
     """
     d = str(td)
     stub = td / "fake-claude.sh"
@@ -82,6 +83,7 @@ def write_stub(td: Path) -> Path:
         "fi\n"
         "n=$(ls \"$D\"/argv-*.log 2>/dev/null | wc -l | tr -d ' ')\n"
         "printf '%s\\0' \"$@\" > \"$D/argv-$n.log\"\n"
+        "pwd -P > \"$D/cwd-$n.log\"\n"
         "if ls \"$BSTACK_FLEET_STATE_DIR\"/fleet_*/fleet.json >/dev/null 2>&1; then\n"
         "  echo yes > \"$D/state-at-spawn-$n\"\n"
         "else\n"
@@ -139,6 +141,12 @@ def argv_logs(td: Path) -> list[list[str]]:
     for log in sorted(td.glob("argv-*.log")):
         out.append(log.read_text(encoding="utf-8").split("\0")[:-1])
     return out
+
+
+def cwd_logs(td: Path) -> list[str]:
+    """The working directory each spawn was launched in, in call order."""
+    return [log.read_text(encoding="utf-8").strip()
+            for log in sorted(td.glob("cwd-*.log"))]
 
 
 def only_fleet_dir(td: Path) -> Path:

@@ -325,6 +325,9 @@ def validate_roster(entries: list[dict], *, worktree_flag: str | None = None,
     resolved: list[dict] = []
     seen: dict[str, str] = {}
     branch_ticket_cache: dict[str, str | None] = {}
+    base_worktree: str | None = None    # realpath of the fleet's ONE worktree
+    base_worktree_slug: str | None = None
+    owns_seen: dict[str, str] = {}      # glob → slug that already claimed it
 
     for i, raw in enumerate(entries, start=1):
         unknown = [k for k in raw if k not in ROSTER_KEYS]
@@ -341,6 +344,29 @@ def validate_roster(entries: list[dict], *, worktree_flag: str | None = None,
                 f"roster entry {i} ({slug}): owns must be a list of path globs")
 
         worktree = str(Path(str(raw.get("worktree") or default_worktree)).expanduser())
+        # One fleet, ONE worktree — its peers coordinate by lane INSIDE it
+        # (P15 overlap), which is the whole point that separates a fleet from a
+        # wave. A roster resolving to two worktrees is the worktree-per-peer
+        # shape, and that is `bstack wave dispatch`, not `fleet up`.
+        rp = os.path.realpath(worktree)
+        if base_worktree is None:
+            base_worktree, base_worktree_slug = rp, slug
+        elif rp != base_worktree:
+            raise FleetError(
+                f"roster entry {i} ({slug}): worktree {worktree!r} differs from "
+                f"entry {base_worktree_slug!r}'s — a fleet's peers share ONE "
+                f"worktree; use `bstack wave dispatch` for a worktree per peer")
+        # Two peers cannot own the same lane: an exact-string duplicate `owns`
+        # glob makes the shared-file collision the naming rule exists to prevent
+        # (P5 invariant) inevitable. Dedupe within one entry; reject across.
+        for glob in dict.fromkeys(str(o) for o in owns):
+            if glob in owns_seen:
+                raise FleetError(
+                    f"roster entry {i} ({slug}): owns glob {glob!r} is already "
+                    f"claimed by entry {owns_seen[glob]!r} — two peers cannot "
+                    f"own the same lane")
+            owns_seen[glob] = slug
+
         ticket = raw.get("ticket")
         if not ticket:
             if worktree not in branch_ticket_cache:

@@ -10,9 +10,9 @@ import io
 import unittest
 
 from scripts import fleet
-from tests.fleet.helpers import (argv_logs, only_fleet_dir, plain_worktree,
-                                 read_state_json, sandbox, write_roster,
-                                 write_stub)
+from tests.fleet.helpers import (argv_logs, cwd_logs, only_fleet_dir,
+                                 plain_worktree, read_state_json, sandbox,
+                                 write_roster, write_stub)
 
 
 def _run(argv) -> tuple[int, str]:
@@ -245,6 +245,21 @@ class UpTest(unittest.TestCase):
             state = read_state_json(only_fleet_dir(td))
             self.assertEqual(state["peers"][0]["worktree"], str(other))
             self.assertEqual(state["peers"][0]["name"], "other-bro-1-a")
+
+    def test_every_peer_spawns_in_the_single_worktree(self):
+        """The stub records its own `pwd`; a mutant dropping `cwd=e['worktree']`
+        from the spawn would launch in the launcher's cwd and this dies."""
+        import os
+        with sandbox() as td:
+            write_stub(td)
+            wt = plain_worktree(td, name="wt")
+            roster = write_roster(td, [{"slug": "fix", "ticket": "BRO-1"},
+                                       {"slug": "rev", "ticket": "BRO-1"}])
+            _run(["up", str(roster), "--worktree", str(wt)])
+            cwds = cwd_logs(td)
+            self.assertEqual(len(cwds), 2)
+            for c in cwds:
+                self.assertEqual(os.path.realpath(c), os.path.realpath(str(wt)))
 
 
 class BriefWithoutLaneTest(unittest.TestCase):
