@@ -35,6 +35,34 @@ was written to catch. Concretely:
 - One skill reached through two roots (`~/.claude/skills/x` →
   `~/.agents/skills/x`) is ONE skill, keyed on the resolved path.
 
+Three ways the check could report a *positive clean verdict* on a skill that
+does not match, all found in review and all now pinned by regression cases:
+
+- **Renames.** git detects renames by default, and for a rename `--name-only`
+  prints only the DESTINATION. Moving a skill's only file out of its directory
+  produced a diff naming a path outside the skill and nothing inside it, so the
+  skill read as current. `--no-renames` lists both sides.
+- **Non-ASCII paths.** Without `-z`, git C-quotes any path containing a byte
+  >= 0x80, a quote, a backslash or a control character —
+  `"skills/alpha/NARI\303\221O.txt"` — and the prefix test never matches, so the
+  path is dropped and the skill reads as current. This was live on this machine:
+  a tracked file under `colombia-conflict` carries an N-tilde. All three git
+  calls now pass `-z` and split on NUL, which also fixes the identical blind
+  spot in the `assume-unchanged` detection. `-z` output is deliberately not
+  stripped, because a path may legitimately begin or end with a space.
+- **Stale refs.** An `origin/main` that exists but was never refreshed is not a
+  comparison, it is a comparison against a fiction. Measured here: a clone with
+  no `FETCH_HEAD`, whose `packed-refs` was last written 61 days earlier, had an
+  `origin/main` **180 commits** behind upstream — and its 23 skills were being
+  counted inside "match origin/main". Ref age is now derived from file mtimes
+  (still no network), reported on every line, and a ref older than
+  `--stale-days` (default 30) makes the repo UNKNOWN rather than a basis for
+  comparison.
+
+A symlink in a skills root that resolves to a file is also reported rather than
+dropped: it has the shape of an installed skill, and it was the one entry the
+scan discarded with no counter and no line.
+
 Advisory only, like §4b, §4c, §12 and §28: it prints `[info]` and calls neither
 `ok()` nor `gap()`, so the doctor totals and `--strict` are unaffected. Drift is
 a deployment fact, not a contract violation, and a doctor that failed on it

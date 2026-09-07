@@ -23,11 +23,20 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
+# Beyond this, origin/main is too old for "matches origin/main" to mean anything.
+DEFAULT_STALE_DAYS = 30.0
 
-def _git(repo: Path, *args: str) -> "str | None":
-    """Run git in `repo`, returning stripped stdout or None on any failure."""
+
+def _git(repo: Path, *args: str, raw: bool = False) -> "str | None":
+    """Run git in `repo`, returning stdout or None on any failure.
+
+    `raw=True` skips the strip(), and every -z call must use it: a path may
+    legitimately begin or end with a space, and stripping the whole stdout would
+    silently rewrite the first and last records.
+    """
     try:
         p = subprocess.run(
             ("git", "-C", str(repo), *args),
@@ -37,7 +46,38 @@ def _git(repo: Path, *args: str) -> "str | None":
         return None
     if p.returncode != 0:
         return None
-    return p.stdout.strip()
+    return p.stdout if raw else p.stdout.strip()
+
+
+def _z(out: "str | None") -> "list[str]":
+    """Split NUL-delimited git output, dropping the trailing empty record."""
+    if not out:
+        return []
+    return [r for r in out.split("\0") if r]
+
+
+def _ref_age_days(root: Path) -> "float | None":
+    """Days since `origin/main` could last have been updated, from file mtimes.
+
+    No network: the newest of FETCH_HEAD, packed-refs and the loose remote ref
+    bounds when the ref could last have moved. Returns None when none exists,
+    which means the freshness of the comparison is unknowable.
+    """
+    gd = _git(root, "rev-parse", "--absolute-git-dir")
+    if not gd:
+        return None
+    g = Path(gd)
+    newest = None
+    for rel in ("FETCH_HEAD", "packed-refs", "refs/remotes/origin/main"):
+        try:
+            m = (g / rel).stat().st_mtime
+        except OSError:
+            continue
+        if newest is None or m > newest:
+            newest = m
+    if newest is None:
+        return None
+    return max(0.0, (time.time() - newest) / 86400.0)
 
 
 def _toplevel(path: Path, known: "list[Path]") -> "Path | None":
@@ -89,11 +129,13 @@ class RepoState:
     compared, and one diff per repo answers it for every skill in that repo.
     """
 
-    __slots__ = ("root", "branch", "head", "ref", "changed", "opaque", "reason")
+    __slots__ = ("root", "branch", "head", "ref", "changed", "opaque", "reason",
+                 "ref_age")
 
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, stale_days: float = DEFAULT_STALE_DAYS):
         self.root = root
         self.reason: "str | None" = None
+        self.ref_age: "float | None" = None
         self.branch = _git(root, "rev-parse", "--abbrev-ref", "HEAD") or "?"
         self.head = _git(root, "rev-parse", "--short", "HEAD") or "?"
         self.changed: "set[str] | None" = None
@@ -109,6 +151,22 @@ class RepoState:
             self.reason = "no origin/main ref (never fetched, or no remote)"
             return
 
+        # A ref that exists but was never refreshed is not a comparison, it is a
+        # comparison against a fiction — and the module's own rule is that what
+        # cannot be verified is never reported as current. Measured on this
+        # machine: a clone with no FETCH_HEAD whose packed-refs was last written
+        # 61 days earlier had an origin/main 180 commits behind upstream, and its
+        # 23 skills were being counted as matching origin/main. Dated from
+        # mtimes; still no network.
+        self.ref_age = _ref_age_days(root)
+        if self.ref_age is None:
+            self.reason = "cannot date origin/main (no FETCH_HEAD, packed-refs or loose ref)"
+            return
+        if self.ref_age > stale_days:
+            self.reason = (f"origin/main last fetched {self.ref_age:.0f}d ago "
+                           f"(> {stale_days:.0f}d) — too stale to compare")
+            return
+
         # fsmonitor force-disabled: a dead daemon makes git report a clean tree
         # while files are modified, which would understate drift silently.
         # --no-renames is load-bearing, not tidiness. git detects renames by
@@ -119,18 +177,27 @@ class RepoState:
         # matching origin/main. That is not merely an UNKNOWN gone wrong; it is a
         # positive clean verdict on a drifted skill, the exact failure this
         # module exists to prevent. --no-renames lists both sides.
+        # -z is not cosmetic. WITHOUT it git renders any path containing a byte
+        # >= 0x80, a quote, a backslash or a control char as a C-quoted string
+        # wrapped in literal double quotes:
+        #     "skills/alpha/NARI\303\221O.txt"
+        # _under()'s startswith(rel + "/") then never matches, the path is
+        # dropped, and the skill reports as matching origin/main. That is a
+        # positive clean verdict on a diverging skill — the failure this module
+        # exists to prevent — and it is LIVE on this machine: the tracked file
+        # skills/knowledge/colombia-conflict/.../CEV_TERRITORIAL_NARINO_*.txt.gz
+        # carries an N-tilde. -z emits raw bytes and no quoting.
         out = _git(root, "-c", "core.fsmonitor=false",
-                   "diff", "--no-renames", "--name-only", self.ref)
+                   "diff", "-z", "--no-renames", "--name-only", self.ref, raw=True)
         if out is None:
             self.reason = f"could not diff working tree against {self.ref}"
             return
         untracked = _git(root, "-c", "core.fsmonitor=false", "ls-files",
-                         "--others", "--exclude-standard")
+                         "--others", "--exclude-standard", "-z", raw=True)
         if untracked is None:
             self.reason = "could not list untracked files"
             return
-        self.changed = set(filter(None, out.splitlines())) | \
-                       set(filter(None, untracked.splitlines()))
+        self.changed = set(_z(out)) | set(_z(untracked))
 
         # `assume-unchanged` and `skip-worktree` exist to make a modified file
         # invisible to git — so `diff` reports nothing while the file on disk
@@ -138,12 +205,15 @@ class RepoState:
         # file edited under assume-unchanged read as "matches origin/main".
         # These paths are not clean and not drifted; they are UNVERIFIABLE, and
         # the rule is that what cannot be verified is never reported as current.
-        flags = _git(root, "ls-files", "-v")
+        # -z here too: an assume-unchanged path with a non-ASCII byte is quoted
+        # exactly the same way, so the UNVERIFIABLE detection had the identical
+        # blind spot. The <tag><space><path> record shape is unchanged by -z.
+        flags = _git(root, "ls-files", "-v", "-z", raw=True)
         self.opaque: "set[str]" = set()
         if flags is None:
             self.reason = "could not read index flags (ls-files -v)"
             return
-        for line in flags.splitlines():
+        for line in _z(flags):
             if len(line) < 3 or line[1] != " ":
                 continue
             tag, path_ = line[0], line[2:]
@@ -172,7 +242,7 @@ class RepoState:
         return self._under(self.opaque, rel)
 
 
-def scan(skill_dirs: "list[Path]") -> dict:
+def scan(skill_dirs: "list[Path]", stale_days: float = DEFAULT_STALE_DAYS) -> dict:
     repos: "dict[str, RepoState]" = {}
     # repo key -> skill names; and the names this could not evaluate at all
     by_repo: "dict[str, list[str]]" = {}
@@ -199,7 +269,17 @@ def scan(skill_dirs: "list[Path]") -> dict:
                 unknown.append((f"{base.name}/{entry.name}", "unresolvable path"))
                 continue
             if not real.is_dir():
-                continue          # CLAUDE.md and friends are not skills
+                # A plain FILE in the skills root (CLAUDE.md and friends) is not
+                # a skill and is silently skipped, correctly. A SYMLINK that
+                # resolves to a file is different: it has the shape of an
+                # installed skill and is the one entry this loop dropped with no
+                # counter and no line, so a root containing only that printed
+                # "0 git-tracked skill(s) match origin/main" — a clean-sounding
+                # verdict over nothing.
+                if entry.is_symlink():
+                    unknown.append((f"{base.name}/{entry.name}",
+                                    "resolves to a file, not a skill directory"))
+                continue
             rp = str(real)
             if rp in seen:
                 continue
@@ -214,7 +294,7 @@ def scan(skill_dirs: "list[Path]") -> dict:
                 continue
             key = str(top)
             if key not in repos:
-                repos[key] = RepoState(top)
+                repos[key] = RepoState(top, stale_days)
             try:
                 rel = str(real.relative_to(top))
             except ValueError:
@@ -231,13 +311,16 @@ def main(argv: "list[str] | None" = None) -> int:
                     help="a directory of installed skills; repeatable")
     ap.add_argument("--home", default=os.path.expanduser("~"))
     ap.add_argument("--json", action="store_true", help="machine-readable output")
+    ap.add_argument("--stale-days", type=float, default=DEFAULT_STALE_DAYS,
+                    help="origin/main older than this many days is UNKNOWN, not "
+                         "a basis for comparison (default: %(default)s)")
     args = ap.parse_args(argv)
 
     dirs = [Path(d) for d in args.skills_dir] or [
         Path(args.home) / ".claude" / "skills",
         Path(args.home) / ".agents" / "skills",
     ]
-    r = scan(dirs)
+    r = scan(dirs, args.stale_days)
     repos: "dict[str, RepoState]" = r["repos"]
 
     # Per skill, not per repo: a commit touching only README.md changes nothing
@@ -263,7 +346,7 @@ def main(argv: "list[str] | None" = None) -> int:
             "scanned": r["scanned"],
             "drifted": [
                 {"repo": k, "branch": repos[k].branch, "head": repos[k].head,
-                 "ref": repos[k].ref,
+                 "ref": repos[k].ref, "ref_age_days": repos[k].ref_age,
                  "skills": [{"skill": n, "changed_files": c, "opaque_files": o}
                             for n, c, o in v]}
                 for k, v in drifted.items()
@@ -286,7 +369,10 @@ def main(argv: "list[str] | None" = None) -> int:
         # counting [ok] lines is a real way people diff two doctor runs. Every
         # advisory section this one follows (§4b, §4c, §12) and §28 beside it
         # use [info] only.
-        print(f"  [info] {clean} git-tracked skill(s) match origin/main")
+        ages = [st.ref_age for st in repos.values()
+                if st.known and st.ref_age is not None]
+        qual = f" (refs fetched <= {max(ages):.0f}d ago)" if ages else ""
+        print(f"  [info] {clean} git-tracked skill(s) match origin/main{qual}")
         if r["no_git"]:
             print(f"        {len(r['no_git'])} installed copy/copies carry no git "
                   f"provenance — drift not evaluable (see P7 skill-source check)")
@@ -294,8 +380,9 @@ def main(argv: "list[str] | None" = None) -> int:
 
     for key, v in sorted(drifted.items(), key=lambda kv: -len(kv[1])):
         st = repos[key]
+        age = f", fetched {st.ref_age:.0f}d ago" if st.ref_age is not None else ""
         print(f"  [info] {len(v)} skill(s) differ from {st.ref} in {key}")
-        print(f"         {st.branch} @ {st.head}")
+        print(f"         {st.branch} @ {st.head}{age}")
         for name, cnt, opq in v[:6]:
             if cnt:
                 print(f"           {name} — {cnt} file(s) differ from {st.ref}")
