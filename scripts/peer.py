@@ -6,10 +6,10 @@ A peer is a background Claude Code session another session can address. The
 contract this module makes executable, and that the tests pin:
 
   1. Every peer is NAMED at launch, `<worktree>-<ticket>-<slug>` (lowercase,
-     hyphens only, typeahead-safe), because the agent-side `ListAgents`
-     listing has no working-directory column — the name is the only join from
-     a session to its worktree, branch and ticket, and a running session cannot
-     rename itself. Measured 2026-09-06 (Claude Code 2.1.258): a session spawned
+     hyphens only, typeahead-safe). The CLI listing carries `cwd`, but the
+     agent-side `ListAgents` tool a peer sees from inside a session does not —
+     there the name is the only join from a session to its worktree, branch
+     and ticket — and a running session cannot rename itself. Measured 2026-09-06 (Claude Code 2.1.258): a session spawned
      without `--name` is displayed under its prompt text.
   2. Every unattended spawn carries `--strict-mcp-config` by default (a fresh
      session in a project with unapproved `.mcp.json` servers otherwise stalls
@@ -25,8 +25,16 @@ contract this module makes executable, and that the tests pin:
   4. `claude --bg` prints `backgrounded · <id>` (ANSI-coloured on a TTY). The
      id is captured with the colour codes stripped — an un-stripped regex
      reports every spawn as failed and a later teardown then removes nothing.
-  5. Liveness comes from `claude agents --json --all`, keyed on `pid`. A dead
-     session can keep listing as `blocked`; only a pid is a live process.
+  5. Liveness comes from `claude agents --json --all`. Measured schema on
+     2.1.258 (fixture `tests/wave/fixtures/claude-agents-2.1.258.json`, 32
+     entries): every entry has `kind` (background|interactive), `sessionId`,
+     `name`, `cwd`, `startedAt`; background entries also carry the short `id`
+     (= sessionId[:8]) and a `state` (working|blocked|done|failed|stopped);
+     a live process carries `pid` and a `status` (idle|busy|waiting) with
+     `waitingFor` when waiting ("dialog open", "permission prompt", ...).
+     There is NO `needs` field — an earlier draft of this module keyed on one
+     and was caught by review against the real payload. A dead session can
+     keep a `state` of `blocked`; only a pid is a process.
 
 Stdlib-only.
 """
@@ -46,8 +54,10 @@ INBOUND_ACCEPT_SETTINGS = json.dumps(
 NAME_MAX = 64
 MCP_MODES = ("strict", "inherit")
 
-_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
-_BACKGROUNDED_RE = re.compile(r"backgrounded\W*([0-9a-f]{6,})", re.IGNORECASE)
+# CSI sequences (colour/cursor) and OSC sequences (titles, OSC-8 hyperlinks).
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
+# The id is on the same line as the word; never let the scan cross a newline.
+_BACKGROUNDED_RE = re.compile(r"backgrounded[^\S\n]*[^\w\n]*([0-9a-f]{6,})", re.IGNORECASE)
 _NON_SLUG_RE = re.compile(r"[^a-z0-9]+")
 
 
@@ -146,8 +156,19 @@ class SpawnResult:
         return "ERROR: " + (tail[-1][:120] if tail else f"exit {self.returncode}")
 
 
+def spawn_timeout(default: float = 60.0) -> float:
+    """$BSTACK_PEER_SPAWN_TIMEOUT seconds, else the default. `claude --bg`
+    returns as soon as the session is registered, so this only bounds a
+    launcher that blocks (login/trust prompt) — and the spawn is serial, so a
+    10-plan wave with a stuck launcher costs 10× this."""
+    try:
+        return float(os.environ.get("BSTACK_PEER_SPAWN_TIMEOUT") or default)
+    except ValueError:
+        return default
+
+
 def spawn(argv: Sequence[str], *, cwd: str | os.PathLike | None = None,
-          timeout: float = 60.0) -> SpawnResult:
+          timeout: float | None = None) -> SpawnResult:
     """Run `claude --bg ...` synchronously. `--bg` returns as soon as the
     session is registered, so blocking here is cheap and is the only way to
     read the id it prints. stdin is /dev/null: a peer must never inherit the
@@ -157,15 +178,27 @@ def spawn(argv: Sequence[str], *, cwd: str | os.PathLike | None = None,
         i = list(argv).index("--name")
         if i + 1 < len(argv):
             name = str(argv[i + 1])
+    if timeout is None:
+        timeout = spawn_timeout()
     try:
         proc = subprocess.run(
             list(argv), cwd=str(cwd) if cwd else None,
             stdin=subprocess.DEVNULL, capture_output=True, text=True,
             timeout=timeout,
         )
-    except subprocess.TimeoutExpired:
-        return SpawnResult(name=name, session_id=None, returncode=None,
-                           output=f"timeout after {timeout:.0f}s", ok=False)
+    except subprocess.TimeoutExpired as exc:
+        # The launcher was killed, but the session it registered may be alive:
+        # TimeoutExpired carries whatever it had already printed. Keep the id
+        # so the manifest can still join the peer instead of orphaning it.
+        def _s(x):
+            return x.decode(errors="replace") if isinstance(x, bytes) else (x or "")
+        partial = strip_ansi(_s(exc.stdout) + _s(exc.stderr))
+        sid = parse_session_id(partial)
+        return SpawnResult(name=name, session_id=sid, returncode=None,
+                           output=(f"timeout after {timeout:.0f}s; " +
+                                   (f"session {sid} was registered before the launcher stalled — "
+                                    f"check `claude agents`" if sid else "no session id seen")),
+                           ok=False)
     except OSError as exc:
         return SpawnResult(name=name, session_id=None, returncode=None,
                            output=str(exc), ok=False)
@@ -178,11 +211,12 @@ def spawn(argv: Sequence[str], *, cwd: str | os.PathLike | None = None,
 # --------------------------------------------------------------------------- #
 # Liveness
 # --------------------------------------------------------------------------- #
-LIVE = "live"              # a pid is present: a real process
-IDLE_START = "idle-start"  # the entry says it needs a prompt: dispatch by message
-DONE = "done"              # finished cleanly
-GONE = "gone"              # listed without a pid, or not listed at all
-UNKNOWN = "unknown"        # nothing to join on (no id recorded / agents unreadable)
+LIVE = "live"        # a pid, and the process is idle or busy
+WAITING = "waiting"  # a pid, `status: waiting` — blocked on a dialog / permission / input
+IDLE_START = WAITING  # older name; the idle-start hypothesis is one `waitingFor` value
+DONE = "done"        # `state: done` — the turn finished (the process may still be up)
+GONE = "gone"        # `state: failed|stopped`, no pid, or not listed at all
+UNKNOWN = "unknown"  # nothing to join on (no id recorded / agents unreadable)
 
 
 def list_agents(binary: str = "claude", timeout: float = 20.0) -> list[dict] | None:
@@ -210,40 +244,62 @@ def list_agents(binary: str = "claude", timeout: float = 20.0) -> list[dict] | N
 
 
 def find_agent(agents: Iterable[dict] | None, *, session_id: str | None = None,
-               name: str | None = None) -> dict | None:
-    """Join by id first (stable), then by name (the address)."""
+               name: str | None = None, cwd: str | os.PathLike | None = None) -> dict | None:
+    """Join by short id (background entries carry `id`; every entry carries a
+    `sessionId` the short id prefixes), then by name (the address), then by
+    `cwd` when the caller knows the worktree and nothing else matched."""
     if not agents:
         return None
+    agents = list(agents)
     if session_id:
+        sid = session_id.lower()
         for a in agents:
-            if str(a.get("id", "")).lower() == session_id.lower():
+            if str(a.get("id", "")).lower() == sid or str(a.get("sessionId", "")).lower().startswith(sid):
                 return a
     if name:
         for a in agents:
             if a.get("name") == name:
                 return a
+    if cwd:
+        want = os.path.realpath(str(cwd))
+        hits = [a for a in agents if a.get("cwd") and os.path.realpath(str(a["cwd"])) == want]
+        if len(hits) == 1:
+            return hits[0]
     return None
 
 
 def classify(entry: dict | None) -> str:
-    """One word per agent entry. `needs` wins over `pid` because it is the
-    actionable one; a missing pid is GONE even if the state says otherwise."""
+    """One word per agent entry, in the order the real schema demands:
+    a terminal `state` first (failed/stopped are gone, done is done even if
+    the process lingers), then `status: waiting` (the actionable one), then
+    the pid. A missing pid is GONE whatever `state` says — a dead background
+    session keeps listing as `blocked`."""
     if entry is None:
         return GONE
-    if entry.get("needs"):
-        return IDLE_START
-    if entry.get("pid"):
-        return LIVE
-    if str(entry.get("state", "")).lower() == "done":
+    state = str(entry.get("state") or "").lower()
+    status = str(entry.get("status") or "").lower()
+    if state in ("failed", "stopped"):
+        return GONE
+    if state == "done":
         return DONE
-    return GONE
+    if not entry.get("pid"):
+        return GONE
+    if status == "waiting":
+        return WAITING
+    return LIVE
+
+
+def waiting_for(entry: dict | None) -> str:
+    """The `waitingFor` text of a waiting entry ("dialog open", "permission
+    prompt", ...), or "" — for the operator's suggestion line."""
+    return str((entry or {}).get("waitingFor") or "")
 
 
 def liveness(agents: list[dict] | None, *, session_id: str | None,
-             name: str | None) -> tuple[str, dict | None]:
+             name: str | None, cwd: str | os.PathLike | None = None) -> tuple[str, dict | None]:
     """(classification, entry). UNKNOWN when there is nothing to join on or
     the listing could not be read — a check that cannot tell must say so."""
-    if agents is None or not (session_id or name):
+    if agents is None or not (session_id or name or cwd):
         return UNKNOWN, None
-    entry = find_agent(agents, session_id=session_id, name=name)
+    entry = find_agent(agents, session_id=session_id, name=name, cwd=cwd)
     return classify(entry), entry

@@ -31,18 +31,23 @@ class WaveError(Exception):
 
 
 _FM_DELIM = "---"
+WAVE_KEYS = ("worktree", "branch", "base", "slug", "linear", "mcp")
 
 
 def parse_plan_frontmatter(plan_path: Path) -> dict[str, str]:
     """Parse the `wave:` block of a plan file's YAML frontmatter.
 
-    Returns a flat dict with keys: worktree, branch, base, slug, linear.
-    `worktree` and `branch` are required; others are optional (may be missing).
+    Returns a flat dict with keys from WAVE_KEYS: worktree, branch (required),
+    base, slug, linear, mcp (optional). `mcp` is `strict` (default) or
+    `inherit` — see scripts/peer.py; `inherit` keeps the project's MCP servers
+    for a peer that needs them (e.g. the Linear MCP for P3).
 
     Raises WaveError with a clear message on:
       - missing/unreadable file
       - no `---` frontmatter block at top
       - frontmatter present but no `wave:` key
+      - an unknown key under `wave:` (a typo such as `mpc:` would otherwise
+        silently strip the peer of every MCP tool)
     """
     p = Path(plan_path)
     try:
@@ -92,6 +97,11 @@ def parse_plan_frontmatter(plan_path: Path) -> dict[str, str]:
     for required in ("worktree", "branch"):
         if required not in out:
             raise WaveError(f"{p}: wave.{required} is required")
+    unknown = sorted(set(out) - set(WAVE_KEYS))
+    if unknown:
+        raise WaveError(
+            f"{p}: unknown key(s) under wave: {', '.join(unknown)} "
+            f"(known: {', '.join(WAVE_KEYS)})")
 
     return out
 
@@ -132,9 +142,13 @@ def write_manifest(wave_dir: Path, m: Manifest) -> None:
         "repo_root": m.repo_root,
         "plans": [asdict(p) for p in m.plans],
     }
-    (wave_dir / "manifest.json").write_text(
-        json.dumps(data, indent=2, sort_keys=False) + "\n", encoding="utf-8"
-    )
+    # Atomic: peers read this file while dispatch is still rewriting it (their
+    # first act is `wave report --event started`, which validates the slug
+    # against it). A truncate-then-write would hand a reader half a file.
+    target = wave_dir / "manifest.json"
+    tmp = wave_dir / f".manifest.json.{os.getpid()}.tmp"
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+    os.replace(tmp, target)
 
 
 def read_manifest(wave_dir: Path) -> Manifest:
@@ -247,19 +261,25 @@ def render_status_table(wd: Path, agents: list[dict] | None = None) -> str:
             all_merged = False
         pr = _pr_number(s.get("pr", ""))
         live, entry = peer.liveness(agents, session_id=plan.session_id,
-                                    name=plan.session_name)
+                                    name=plan.session_name, cwd=plan.worktree)
         rows.append((plan.slug, plan.branch, plan.linear or "—", ev, pr,
                      plan.session_name or "—", live))
         if ev == "pr_opened" and s.get("pr"):
             open_prs.append(s["pr"])
         sid = plan.session_id or (entry or {}).get("id") or "<id>"
-        if live == peer.IDLE_START:
+        if live == peer.WAITING:
+            why = peer.waiting_for(entry) or "input"
             attention.append(
-                f"  • {plan.session_name or plan.slug} is waiting for a prompt — "
-                f"SendMessage it its plan, or: claude attach {sid}")
+                f"  • {plan.session_name or plan.slug} is waiting ({why}) — "
+                f"claude attach {sid} to answer it, or SendMessage it by name")
+        elif live == peer.DONE and ev not in ("pr_merged", "failed"):
+            attention.append(
+                f"  • {plan.session_name or plan.slug} finished its turn after "
+                f"'{ev}' without reaching pr_merged — read: claude logs {sid}")
         elif live == peer.GONE and ev not in ("pr_merged", "failed"):
             attention.append(
-                f"  • {plan.session_name or plan.slug} is gone (no pid) after "
+                f"  • {plan.session_name or plan.slug} is gone "
+                f"({(entry or {}).get('state') or 'not listed'}) after "
                 f"'{ev}' — inspect: claude logs {sid}; then re-dispatch")
     lines = [f"{m.wave_id} ({m.name or '—'}) — created {m.created_at}", ""]
     lines.append(f"  {'SLUG':<28} {'BRANCH':<28} {'LINEAR':<10} {'LAST EVENT':<16} "

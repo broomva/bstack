@@ -31,6 +31,20 @@ def _put_plan(repo: Path, slug: str) -> Path:
 
 
 class DispatchTest(unittest.TestCase):
+    _ENV = ("BSTACK_WAVE_CACHE_DIR", "BSTACK_WAVE_CLAUDE_BIN", "BSTACK_PEER_MCP")
+
+    def setUp(self):
+        self._saved = {k: os.environ.get(k) for k in self._ENV}
+        for k in self._ENV:
+            os.environ.pop(k, None)
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
     def test_dry_run_creates_nothing(self):
         from scripts.wave import main
         with tempfile.TemporaryDirectory() as td:

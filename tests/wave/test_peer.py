@@ -1,8 +1,10 @@
 """The peer-session spawn contract (scripts/peer.py). Every assertion here is
 a clause of Fanout (P5) that a mutation must break: drop a flag, loosen the
 name grammar, or skip the ANSI strip and a test goes red."""
+import json
 import os
 import unittest
+from pathlib import Path
 
 from scripts import peer
 
@@ -126,46 +128,147 @@ class SessionIdCaptureTest(unittest.TestCase):
 
 
 class LivenessTest(unittest.TestCase):
-    AGENTS = [
-        {"id": "aaaaaa01", "name": "wt-bro-1-live", "state": "working", "pid": 4242},
-        {"id": "aaaaaa02", "name": "wt-bro-2-idle", "state": "blocked",
-         "needs": "send a prompt to start", "pid": 4243},
-        {"id": "aaaaaa03", "name": "wt-bro-3-dead", "state": "blocked"},
-        {"id": "aaaaaa04", "name": "wt-bro-4-done", "state": "done"},
-    ]
+    """Bound to the artifact: the fixture is a scrubbed capture of
+    `claude agents --json --all` on Claude Code 2.1.258 (32 entries, 11 distinct
+    kind/state/status shapes). An earlier draft keyed on an invented `needs`
+    field; the first assertion here is that no such field exists."""
+    FIX = Path(__file__).parent / "fixtures" / "claude-agents-2.1.258.json"
 
-    def test_pid_means_live(self):
-        self.assertEqual(peer.liveness(self.AGENTS, session_id="aaaaaa01", name=None)[0],
-                         peer.LIVE)
+    @classmethod
+    def setUpClass(cls):
+        cls.agents = json.loads(cls.FIX.read_text())
+        cls.by_name = {a["name"]: a for a in cls.agents}
 
-    def test_needs_means_idle_start_even_with_pid(self):
-        self.assertEqual(peer.liveness(self.AGENTS, session_id="aaaaaa02", name=None)[0],
-                         peer.IDLE_START)
+    def _cls(self, name):
+        return peer.liveness(self.agents, session_id=None, name=name)[0]
+
+    def test_fixture_is_the_real_schema_not_an_invented_one(self):
+        keys = {k for a in self.agents for k in a}
+        self.assertNotIn("needs", keys)
+        self.assertTrue({"kind", "sessionId", "name", "cwd"} <= keys)
+        self.assertTrue(any(a.get("status") == "waiting" for a in self.agents))
+        self.assertTrue(any(a.get("state") == "done" and a.get("pid") for a in self.agents))
+        self.assertTrue(any(a.get("state") in ("failed", "stopped") for a in self.agents))
+
+    def test_busy_working_with_pid_is_live(self):
+        a = next(a for a in self.agents if a.get("status") == "busy" and a.get("state") == "working")
+        self.assertEqual(peer.classify(a), peer.LIVE)
+
+    def test_waiting_status_is_waiting_with_reason(self):
+        a = next(a for a in self.agents if a.get("status") == "waiting")
+        self.assertEqual(peer.classify(a), peer.WAITING)
+        self.assertEqual(peer.waiting_for(a), a["waitingFor"])
+        self.assertEqual(peer.IDLE_START, peer.WAITING)   # older name still resolves
+
+    def test_done_state_is_done_even_with_a_live_pid(self):
+        a = next(a for a in self.agents if a.get("state") == "done" and a.get("pid"))
+        self.assertEqual(peer.classify(a), peer.DONE)
+
+    def test_failed_and_stopped_are_gone(self):
+        for st in ("failed", "stopped"):
+            a = next(a for a in self.agents if a.get("state") == st)
+            self.assertEqual(peer.classify(a), peer.GONE, st)
+
+    def test_done_without_pid_is_done_not_gone(self):
+        """A finished turn whose process has exited is still `done`: the state
+        is terminal and known, which is more than `gone` says."""
+        a = next(a for a in self.agents if a.get("state") == "done" and not a.get("pid"))
+        self.assertEqual(peer.classify(a), peer.DONE)
+
+    def test_terminal_state_beats_a_lingering_pid(self):
+        """Synthetic: `stopped`/`failed` with a pid that has not been reaped yet
+        is still gone — the state is terminal whatever the process table says."""
+        for st in ("stopped", "failed"):
+            a = {"id": "0badf00d", "sessionId": "0badf00d-0000", "kind": "background",
+                 "name": "x", "cwd": "/w/x", "state": st, "pid": 4242, "status": "idle"}
+            self.assertEqual(peer.classify(a), peer.GONE, st)
 
     def test_blocked_without_pid_is_gone_not_blocked(self):
-        self.assertEqual(peer.liveness(self.AGENTS, session_id="aaaaaa03", name=None)[0],
-                         peer.GONE)
+        a = {"id": "deadbeef", "sessionId": "deadbeef-0000", "kind": "background",
+             "name": "x", "cwd": "/w/x", "state": "blocked"}
+        self.assertEqual(peer.classify(a), peer.GONE)
 
-    def test_done_state(self):
-        self.assertEqual(peer.liveness(self.AGENTS, session_id="aaaaaa04", name=None)[0],
-                         peer.DONE)
+    def test_blocked_with_pid_and_idle_status_is_live(self):
+        a = next(a for a in self.agents if a.get("state") == "blocked" and a.get("pid"))
+        self.assertEqual(peer.classify(a), peer.LIVE)
 
     def test_unlisted_is_gone(self):
-        self.assertEqual(peer.liveness(self.AGENTS, session_id="ffffffff", name="nope")[0],
-                         peer.GONE)
+        self.assertEqual(peer.liveness(self.agents, session_id="ffffffff", name="nope")[0], peer.GONE)
+
+    def test_join_by_short_id_hits_background_entry(self):
+        a = next(a for a in self.agents if a.get("id"))
+        cls, entry = peer.liveness(self.agents, session_id=a["id"], name=None)
+        self.assertIs(entry, a)
+
+    def test_join_by_session_id_prefix_hits_interactive_entry(self):
+        a = next(a for a in self.agents if a.get("kind") == "interactive")
+        self.assertNotIn("id", a)
+        cls, entry = peer.liveness(self.agents, session_id=a["sessionId"][:8], name=None)
+        self.assertIs(entry, a)
 
     def test_join_falls_back_to_name(self):
-        cls, entry = peer.liveness(self.AGENTS, session_id=None, name="wt-bro-1-live")
-        self.assertEqual(cls, peer.LIVE)
-        self.assertEqual(entry["id"], "aaaaaa01")
+        a = next(a for a in self.agents if a.get("kind") == "interactive" and a.get("pid"))
+        cls, entry = peer.liveness(self.agents, session_id=None, name=a["name"])
+        self.assertIs(entry, a)
+        self.assertIn(cls, (peer.LIVE, peer.WAITING))
+
+    def test_join_by_cwd_when_unique(self):
+        import collections
+        counts = collections.Counter(a["cwd"] for a in self.agents)
+        cwd = next(c for c, n in counts.items() if n == 1)
+        cls, entry = peer.liveness(self.agents, session_id=None, name=None, cwd=cwd)
+        self.assertEqual(entry["cwd"], cwd)
+
+    def test_join_by_cwd_refuses_ambiguity(self):
+        import collections
+        counts = collections.Counter(a["cwd"] for a in self.agents)
+        cwd = next(c for c, n in counts.items() if n > 1)
+        cls, entry = peer.liveness(self.agents, session_id="zzzzzzzz", name="zz", cwd=cwd)
+        self.assertIsNone(entry)
+        self.assertEqual(cls, peer.GONE)
 
     def test_unreadable_listing_is_unknown_not_clean(self):
-        self.assertEqual(peer.liveness(None, session_id="aaaaaa01", name=None)[0],
-                         peer.UNKNOWN)
+        self.assertEqual(peer.liveness(None, session_id="aaaaaa01", name=None)[0], peer.UNKNOWN)
 
     def test_nothing_to_join_on_is_unknown(self):
-        self.assertEqual(peer.liveness(self.AGENTS, session_id=None, name=None)[0],
-                         peer.UNKNOWN)
+        self.assertEqual(peer.liveness(self.agents, session_id=None, name=None)[0], peer.UNKNOWN)
+
+
+class AnsiAndTimeoutTest(unittest.TestCase):
+    def test_osc_hyperlink_and_title_are_stripped(self):
+        osc8 = "\x1b]8;;https://x\x07backgrounded\x1b]8;;\x07 · \x1b]0;title\x1b\\0f29e602\n"
+        self.assertEqual(peer.parse_session_id(osc8), "0f29e602")
+        self.assertNotIn("\x1b", peer.strip_ansi(osc8))
+
+    def test_id_must_be_on_the_same_line(self):
+        self.assertIsNone(peer.parse_session_id("backgrounded\n\n0000000000 table rule\n"))
+        self.assertIsNone(peer.parse_session_id("backgrounded at 1788758028\n"))
+
+    def test_timeout_keeps_an_id_the_launcher_already_printed(self):
+        import tempfile, os as _os
+        with tempfile.TemporaryDirectory() as td:
+            stub = Path(td) / "slow.sh"
+            stub.write_text("#!/bin/sh\nprintf 'backgrounded · 0f29e602\\n'\nsleep 5\n")
+            stub.chmod(0o755)
+            r = peer.spawn([str(stub), "--bg", "--name", "n"], timeout=1)
+            self.assertFalse(r.ok)
+            self.assertEqual(r.session_id, "0f29e602")
+            self.assertIn("timeout", r.output)
+            self.assertIn("0f29e602", r.output)
+
+    def test_spawn_timeout_env(self):
+        import os as _os
+        saved = _os.environ.pop("BSTACK_PEER_SPAWN_TIMEOUT", None)
+        try:
+            self.assertEqual(peer.spawn_timeout(60.0), 60.0)
+            _os.environ["BSTACK_PEER_SPAWN_TIMEOUT"] = "7"
+            self.assertEqual(peer.spawn_timeout(60.0), 7.0)
+            _os.environ["BSTACK_PEER_SPAWN_TIMEOUT"] = "nope"
+            self.assertEqual(peer.spawn_timeout(60.0), 60.0)
+        finally:
+            _os.environ.pop("BSTACK_PEER_SPAWN_TIMEOUT", None)
+            if saved is not None:
+                _os.environ["BSTACK_PEER_SPAWN_TIMEOUT"] = saved
 
 
 if __name__ == "__main__":

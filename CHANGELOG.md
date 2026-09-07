@@ -1,3 +1,5 @@
+# Changelog
+
 ## 0.39.1 — 2026-09-06
 
 ### fix(wave): peers are named, spawned unattended-safe, and joined to their live session (BRO-2453)
@@ -24,11 +26,16 @@ was not run by CI (`ci.yml` runs `tests/*.test.sh` only), so none of this had a 
 - New `scripts/peer.py` — the spawn contract as code, shared with the coming
   `bstack fleet`: `compose_name` (the P5 grammar), `build_spawn_argv` (`--bg --name
   <n> [--strict-mcp-config] --settings <accept> … <prompt>`, prompt last), `spawn`
-  (synchronous, stdin `/dev/null`, ANSI-stripped `backgrounded · <id>` capture — an
-  un-stripped regex reports every spawn failed and a later teardown removes nothing),
-  `list_agents` / `liveness` (keyed on `pid`; `needs` set = idle start, dispatch by
-  message; listed without a pid = gone even if the state says `blocked`; unreadable
-  listing = `unknown`, never clean).
+  (synchronous, stdin `/dev/null`, `$BSTACK_PEER_SPAWN_TIMEOUT` bound, ANSI/OSC-stripped
+  `backgrounded · <id>` capture that also reads the id out of a timed-out launcher —
+  an un-stripped regex reports every spawn failed and leaves nothing to join on),
+  `list_agents` / `liveness` read against the real `claude agents --json --all`
+  schema (fixture captured from 2.1.258 and committed under `tests/wave/fixtures/`):
+  `state: failed|stopped` = gone, `state: done` = done even if the process lingers,
+  `status: waiting` (+ `waitingFor`) = waiting on a dialog/permission/input, a pid
+  with idle/busy = live, no pid = gone whatever `state` says, unreadable listing =
+  `unknown`, never clean. There is no `needs` field; a first draft keyed on one and
+  review against the live payload caught it.
 - `wave dispatch` names each peer from its worktree, `linear` ticket and slug, prints
   the full argv under `--dry-run`, writes the manifest **before** the first launch (a
   peer's first act is `wave report --event started`, which validates its slug against
@@ -39,8 +46,13 @@ was not run by CI (`ci.yml` runs `tests/*.test.sh` only), so none of this had a 
   name are unaddressable — and a bad `mcp:` value is a clean `error:` line, not a traceback. Per-plan `mcp: inherit` in the `wave:`
   frontmatter (or `BSTACK_PEER_MCP=inherit`) keeps the project's MCP servers for
   peers that need them; strict is the unattended-safe default.
-- `wave status` gains `SESSION` and `LIVE` columns and two suggestions: a peer
-  waiting for a prompt, and a peer gone before its plan finished.
+- `wave status` gains `SESSION` and `LIVE` columns and three suggestions: a peer
+  waiting (with the `waitingFor` reason), a peer that finished its turn without
+  reaching `pr_merged`, and a peer gone before its plan finished. The manifest is
+  written atomically (`os.replace`) because peers read it while dispatch rewrites it.
+- Unknown keys under `wave:` are rejected by name (a typo such as `mpc:` would
+  otherwise silently strip the peer of every MCP tool); `mcp:` is documented in
+  `SKILL.md` and P5.
 - `tests/wave.test.sh` runs the python suite under the existing `tests/*.test.sh` CI
   job; `tests/wave/test_peer.py` pins every clause above (each flag individually,
   the grammar, the ANSI fixture, the liveness classes); `fake_claude.sh` now answers
@@ -49,8 +61,6 @@ was not run by CI (`ci.yml` runs `tests/*.test.sh` only), so none of this had a 
 Patch bump: additive flags on an existing command, no default flip for anyone not
 running wave. Manifest schema unchanged (new fields default to `null`; old
 manifests still read).
-
-# Changelog
 
 ## 0.39.0 — 2026-09-05
 
