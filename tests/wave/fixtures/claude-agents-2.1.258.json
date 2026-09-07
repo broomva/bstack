@@ -1,0 +1,311 @@
+[
+ {
+  "id": "3a0a8a20",
+  "cwd": "/w/broomva",
+  "kind": "background",
+  "startedAt": 1780089019987,
+  "sessionId": "3a0a8a20-9abd-5a71-2244-5498f2009d8d",
+  "name": "/effort",
+  "state": "failed"
+ },
+ {
+  "id": "b77f1e97",
+  "cwd": "/w/target",
+  "kind": "background",
+  "startedAt": 1787845186652,
+  "sessionId": "b77f1e97-ea49-5a86-f520-7a75ebdd61c3",
+  "name": "walkie-probe-target",
+  "state": "stopped"
+ },
+ {
+  "id": "e78d7e85",
+  "cwd": "/w/parity",
+  "kind": "background",
+  "startedAt": 1787845691160,
+  "sessionId": "e78d7e85-131d-4846-213a-d2b06326e2a4",
+  "name": "walkie-parity-target",
+  "state": "done"
+ },
+ {
+  "pid": 61001,
+  "cwd": "/w/cichlid",
+  "kind": "interactive",
+  "startedAt": 1788486883301,
+  "sessionId": "01a6e0f2-c12d-b9ac-ea45-61afb7ddc772",
+  "name": "cichlid-42",
+  "status": "idle"
+ },
+ {
+  "pid": 24701,
+  "cwd": "/w/broomva",
+  "kind": "interactive",
+  "startedAt": 1788491820416,
+  "sessionId": "e16e6379-5422-2531-0f06-bc73441eee7c",
+  "name": "broomva-5f"
+ },
+ {
+  "pid": 4917,
+  "cwd": "/w/sri",
+  "kind": "interactive",
+  "startedAt": 1788556082968,
+  "sessionId": "fa9681f3-cb6e-3380-5faa-9659799364f6",
+  "name": "sri-87",
+  "status": "idle"
+ },
+ {
+  "pid": 95304,
+  "cwd": "/w/mola",
+  "kind": "interactive",
+  "startedAt": 1788558086196,
+  "sessionId": "dcbd5a0f-3b65-0428-f22a-6c70d15305d1",
+  "name": "mola-ff",
+  "status": "busy"
+ },
+ {
+  "pid": 12948,
+  "cwd": "/w/arapaima",
+  "kind": "interactive",
+  "startedAt": 1788564989063,
+  "sessionId": "4eedf2f9-98a8-ee17-7f4d-fe6b62132952",
+  "name": "arapaima-b2",
+  "status": "idle"
+ },
+ {
+  "pid": 64910,
+  "id": "0476b13e",
+  "cwd": "/w/finback",
+  "kind": "background",
+  "startedAt": 1788577518732,
+  "sessionId": "0476b13e-6703-c214-0877-8f81969c5452",
+  "name": "The dependency that owns the lat",
+  "status": "idle",
+  "state": "blocked"
+ },
+ {
+  "pid": 41226,
+  "cwd": "/w/albacore",
+  "kind": "interactive",
+  "startedAt": 1788578779357,
+  "sessionId": "3886e0eb-6425-2e5d-8cb3-d57301122982",
+  "name": "albacore-31",
+  "status": "idle"
+ },
+ {
+  "pid": 64968,
+  "cwd": "/w/arapaima",
+  "kind": "interactive",
+  "startedAt": 1788582390150,
+  "sessionId": "e83e1c42-c525-9b61-eac9-e61df82ab7b9",
+  "name": "arapaima-a9",
+  "status": "idle"
+ },
+ {
+  "pid": 76093,
+  "cwd": "/w/arapaima",
+  "kind": "interactive",
+  "startedAt": 1788627657691,
+  "sessionId": "a652b6c4-1be2-d7c1-ba8e-dcbb14774cd7",
+  "name": "arapaima-9f",
+  "status": "idle"
+ },
+ {
+  "pid": 52419,
+  "cwd": "/w/ondine",
+  "kind": "interactive",
+  "startedAt": 1788628444370,
+  "sessionId": "d97f962b-9ebf-7896-41f5-550aade69022",
+  "name": "ondine-92",
+  "status": "idle"
+ },
+ {
+  "pid": 89676,
+  "cwd": "/w/tellin",
+  "kind": "interactive",
+  "startedAt": 1788630700434,
+  "sessionId": "c9cb8785-fac1-89c6-1768-6a7a0e2bd1b0",
+  "name": "tellin-a9",
+  "status": "idle"
+ },
+ {
+  "pid": 99779,
+  "cwd": "/w/bannerfish",
+  "kind": "interactive",
+  "startedAt": 1788649538884,
+  "sessionId": "7e3a5f90-efbf-6321-67c5-8c516693f91d",
+  "name": "bannerfish-f7",
+  "status": "idle"
+ },
+ {
+  "pid": 60243,
+  "cwd": "/w/polyp",
+  "kind": "interactive",
+  "startedAt": 1788657650558,
+  "sessionId": "9e761ed6-9dd6-b5e7-096b-71bd05bba72b",
+  "name": "polyp-b2",
+  "status": "busy"
+ },
+ {
+  "pid": 59498,
+  "id": "c4128860",
+  "cwd": "/w/cusk",
+  "kind": "background",
+  "startedAt": 1788666953680,
+  "sessionId": "c4128860-68a7-2fb5-a61f-9394ac536ff0",
+  "name": "Autonomous maintainer skill and ",
+  "status": "idle",
+  "state": "blocked"
+ },
+ {
+  "pid": 68565,
+  "cwd": "/w/taimen",
+  "kind": "interactive",
+  "startedAt": 1788702250927,
+  "sessionId": "6a0a146b-4cd2-e461-ada9-8a1bf39d33c0",
+  "name": "taimen-1c",
+  "status": "busy"
+ },
+ {
+  "pid": 99026,
+  "cwd": "/w/turbot",
+  "kind": "interactive",
+  "startedAt": 1788709009489,
+  "sessionId": "736344b9-f3a6-6d43-f63c-64cfdfe7929f",
+  "name": "turbot-8b",
+  "status": "idle"
+ },
+ {
+  "pid": 54132,
+  "cwd": "/w/polyp",
+  "kind": "interactive",
+  "startedAt": 1788710596684,
+  "sessionId": "0f440c95-a2d8-69e3-4b74-f14a38ccb542",
+  "name": "polyp-63",
+  "status": "idle"
+ },
+ {
+  "pid": 59487,
+  "id": "0c0f04c3",
+  "cwd": "/w/lobster",
+  "kind": "background",
+  "startedAt": 1788740066011,
+  "sessionId": "0c0f04c3-06e1-dceb-667a-8e888d305122",
+  "name": "sentry-triage-fleet",
+  "status": "idle",
+  "state": "working"
+ },
+ {
+  "pid": 69335,
+  "id": "a0e2ee20",
+  "cwd": "/w/lobster",
+  "kind": "background",
+  "startedAt": 1788746455102,
+  "sessionId": "a0e2ee20-b92d-cb34-189d-833b2df40924",
+  "name": "lobster-orchestrator",
+  "status": "idle",
+  "state": "done"
+ },
+ {
+  "pid": 77281,
+  "id": "3d3608d6",
+  "cwd": "/w/sti-2638-eve-exporter-monitor",
+  "kind": "background",
+  "startedAt": 1788746462690,
+  "sessionId": "3d3608d6-8ac5-a12a-4ead-387860f0099e",
+  "name": "lobster-sti-2638-eve-exporter",
+  "status": "idle",
+  "state": "blocked"
+ },
+ {
+  "pid": 79407,
+  "id": "50ff268e",
+  "cwd": "/w/lobster",
+  "kind": "background",
+  "startedAt": 1788748608459,
+  "sessionId": "50ff268e-0088-be66-9305-980204152579",
+  "name": "lobster-verification",
+  "status": "idle",
+  "state": "working"
+ },
+ {
+  "pid": 36039,
+  "cwd": "/w/snipefish",
+  "kind": "interactive",
+  "startedAt": 1788749942167,
+  "sessionId": "8f1a2375-5b42-6b4e-7dd0-f463f8a4526e",
+  "name": "snipefish-30",
+  "status": "busy"
+ },
+ {
+  "pid": 8778,
+  "id": "f4c7ed91",
+  "cwd": "/w/feature+sti-2685-milestone-capture-reason-split",
+  "kind": "background",
+  "startedAt": 1788754919886,
+  "sessionId": "f4c7ed91-9ac5-88ab-297a-864b22dbb012",
+  "name": "lobster-capture-config",
+  "status": "busy",
+  "state": "working"
+ },
+ {
+  "pid": 56923,
+  "id": "483c5326",
+  "cwd": "/w/sti-2683-onboarding-db",
+  "kind": "background",
+  "startedAt": 1788754921532,
+  "sessionId": "483c5326-0153-bf70-7672-b6b657eea236",
+  "name": "lobster-onboarding-db",
+  "status": "idle",
+  "state": "done"
+ },
+ {
+  "pid": 52019,
+  "cwd": "/w/clam",
+  "kind": "interactive",
+  "startedAt": 1788755612241,
+  "sessionId": "711f6eea-fb1e-ad4e-c8fa-6a59d67f2309",
+  "name": "clam-eb",
+  "status": "waiting",
+  "waitingFor": "dialog open"
+ },
+ {
+  "pid": 85670,
+  "cwd": "/w/catshark",
+  "kind": "interactive",
+  "startedAt": 1788756791061,
+  "sessionId": "206e704a-bece-0a95-a76c-682b6c595051",
+  "name": "catshark-8c",
+  "status": "waiting",
+  "waitingFor": "dialog open"
+ },
+ {
+  "pid": 60120,
+  "cwd": "/w/broomva",
+  "kind": "interactive",
+  "startedAt": 1788757121315,
+  "sessionId": "5b7285f2-3cee-d9c3-9974-e6890e47c931",
+  "name": "broomva-a5",
+  "status": "busy"
+ },
+ {
+  "pid": 43201,
+  "id": "e46f5efb",
+  "cwd": "/w/lobster",
+  "kind": "background",
+  "startedAt": 1788758621327,
+  "sessionId": "e46f5efb-3114-c93d-71ac-43cc34c6cea3",
+  "name": "fleet-effort-probe",
+  "status": "idle",
+  "state": "done"
+ },
+ {
+  "pid": 20857,
+  "id": "e9234009",
+  "cwd": "/w/lobster",
+  "kind": "background",
+  "startedAt": 1788758721922,
+  "sessionId": "e9234009-051b-6e07-8d2f-9504c93634e2",
+  "name": "lobster-sti-2694-level-read",
+  "status": "busy",
+  "state": "working"
+ }
+]
