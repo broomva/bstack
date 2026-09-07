@@ -342,10 +342,19 @@ fi
 clone c20
 R20="$TMP/root20"; link "$R20" "$TMP/c20/skills/alpha"
 GD20="$(cd "$TMP/c20" && git rev-parse --absolute-git-dir)"
-OLD=$(( $(date +%s) - 60*86400 ))
-for f in FETCH_HEAD packed-refs refs/remotes/origin/main; do
-    [ -e "$GD20/$f" ] && touch -t "$(date -r $OLD +%Y%m%d%H%M.%S)" "$GD20/$f"
-done
+# os.utime, not `touch -t "$(date -r ...)"`. `date -r SECONDS` is BSD; on GNU
+# `-r` is --reference=FILE, so the macOS-only form died on ubuntu CI with
+# `date: 1783637570: No such file or directory` while passing locally. The suite
+# already requires python3, so this has no platform variance at all.
+"$PY" - "$GD20" <<'PYEOF'
+import os, sys, time
+gd = sys.argv[1]
+old = time.time() - 60 * 86400
+for f in ("FETCH_HEAD", "packed-refs", "refs/remotes/origin/main"):
+    p = os.path.join(gd, f)
+    if os.path.exists(p):
+        os.utime(p, (old, old))
+PYEOF
 OUT=$(run "$R20")
 if echo "$OUT" | grep -q 'UNKNOWN' && echo "$OUT" | grep -q 'too stale to compare'; then
     pass "20. a 60d-stale origin/main is UNKNOWN, not a comparison"
