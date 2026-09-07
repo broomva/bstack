@@ -57,27 +57,33 @@ def _z(out: "str | None") -> "list[str]":
 
 
 def _ref_age_days(root: Path) -> "float | None":
-    """Days since `origin/main` could last have been updated, from file mtimes.
+    """Days since this repo last FETCHED, from FETCH_HEAD's mtime. No network.
 
-    No network: the newest of FETCH_HEAD, packed-refs and the loose remote ref
-    bounds when the ref could last have moved. Returns None when none exists,
-    which means the freshness of the comparison is unknowable.
+    FETCH_HEAD only, deliberately. An earlier version also accepted `packed-refs`
+    and the loose `refs/remotes/origin/main`, which is wrong in the dangerous
+    direction: `git gc` runs `pack-refs`, which REWRITES packed-refs without any
+    fetch having happened. Measured — a clone whose refs were aged 60 days, then
+    `git gc`:
+
+        before gc:  packed-refs  60d
+        after  gc:  packed-refs   0d      (no fetch occurred)
+
+    so a repo that had not fetched in two months reported as fetched today, and
+    the staleness gate this function exists to feed silently reopened. Only
+    FETCH_HEAD's mtime means "a fetch happened here".
+
+    Returns None when FETCH_HEAD is absent — a clone that has never fetched. That
+    is genuinely unknowable, not fresh: its origin/main is frozen at clone time
+    and nothing on disk says whether that was an hour or a year ago.
     """
     gd = _git(root, "rev-parse", "--absolute-git-dir")
     if not gd:
         return None
-    g = Path(gd)
-    newest = None
-    for rel in ("FETCH_HEAD", "packed-refs", "refs/remotes/origin/main"):
-        try:
-            m = (g / rel).stat().st_mtime
-        except OSError:
-            continue
-        if newest is None or m > newest:
-            newest = m
-    if newest is None:
+    try:
+        return max(0.0, (time.time() - (Path(gd) / "FETCH_HEAD").stat().st_mtime)
+                   / 86400.0)
+    except OSError:
         return None
-    return max(0.0, (time.time() - newest) / 86400.0)
 
 
 def _toplevel(path: Path, known: "list[Path]") -> "Path | None":
@@ -160,15 +166,13 @@ class RepoState:
         # mtimes; still no network.
         self.ref_age = _ref_age_days(root)
         if self.ref_age is None:
-            # DECLARED BACKSTOP, not a reachable state, and deliberately not
-            # given a behavioural test that would pass vacuously. The ref just
-            # verified above, which means it lives in packed-refs or in a loose
-            # refs/remotes/origin/main — and either file dates it. Remove both
-            # and rev-parse --verify fails first, returning the "no origin/main
-            # ref" reason above. It survives mutation for that reason; the arm
-            # is kept because "undatable" must never fall through to a clean
-            # verdict if a future git changes where refs live.
-            self.reason = "cannot date origin/main (no FETCH_HEAD, packed-refs or loose ref)"
+            # REACHABLE, and common: `git clone` never writes FETCH_HEAD, so any
+            # clone that has not since fetched lands here. Its origin/main is a
+            # snapshot from clone time and nothing on disk dates it, so it is
+            # UNKNOWN rather than current — which is also the honest answer for
+            # the real case that motivated this: 23 skills in a clone with no
+            # FETCH_HEAD whose origin/main was 180 commits behind upstream.
+            self.reason = "cannot date origin/main (no FETCH_HEAD — never fetched since clone)"
             return
         if self.ref_age > stale_days:
             self.reason = (f"origin/main last fetched {self.ref_age:.0f}d ago "

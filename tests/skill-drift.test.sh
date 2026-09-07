@@ -35,7 +35,8 @@
 #  19. a NON-ASCII assume-unchanged path is UNVERIFIABLE (same quoting blind spot)
 #  20. a STALE origin/main is UNKNOWN, not a basis for "matches origin/main"
 #  21. NEGATIVE CONTROL for 20 — a freshly fetched ref still compares normally
-#  22. STRUCTURAL: the undatable-ref arm exists (unreachable by construction)
+#  22. a clone that NEVER FETCHED is UNKNOWN (git clone writes no FETCH_HEAD)
+#  23. `git gc` must not reset the freshness clock (pack-refs rewrites packed-refs)
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -372,15 +373,46 @@ else
     fail "21. a fresh ref was misreported as stale: $OUT"
 fi
 
-# ── 22. STRUCTURAL — the undatable-ref arm exists. It is unreachable: the ref
-# verifies only if packed-refs or a loose refs/remotes/origin/main is present,
-# and either dates it; remove both and rev-parse --verify fails first. So it
-# survives behavioural mutation by construction and is asserted at the source
-# instead of being given a test that would pass without exercising anything.
-if grep -q 'cannot date origin/main' "$REPO/scripts/lib/skill-drift.py"; then
-    pass "22. the undatable-ref arm is present (structural; unreachable by construction)"
+# ── 22. A CLONE THAT NEVER FETCHED is UNKNOWN, not current. `git clone` does
+# not write FETCH_HEAD, so nothing on disk says whether its origin/main snapshot
+# is an hour or a year old. This arm was first shipped as a "declared
+# unreachable" backstop asserted only at the source — which was wrong: once ref
+# age keyed on FETCH_HEAD alone (see case 23) it became both reachable and
+# common, and it now gets a real behavioural test.
+git clone -q "$UP" "$TMP/c22" 2>/dev/null      # deliberately NOT the clone() helper: no fetch
+R22="$TMP/root22"; link "$R22" "$TMP/c22/skills/alpha"
+GD22="$(cd "$TMP/c22" && git rev-parse --absolute-git-dir)"
+if [ -e "$GD22/FETCH_HEAD" ]; then
+    fail "22. fixture invalid — a plain clone wrote FETCH_HEAD"
 else
-    fail "22. the undatable-ref arm was removed"
+    OUT=$(run "$R22")
+    if echo "$OUT" | grep -q 'UNKNOWN' && echo "$OUT" | grep -q 'never fetched since clone'; then
+        pass "22. a clone that never fetched is UNKNOWN, not current"
+    else
+        fail "22. never-fetched clone misreported: $OUT"
+    fi
+fi
+
+# ── 23. `git gc` MUST NOT RESET THE FRESHNESS CLOCK. The first version of the
+# staleness gate took the newest mtime of FETCH_HEAD, packed-refs and the loose
+# remote ref. `git gc` runs `pack-refs`, which rewrites packed-refs with NO fetch
+# having happened — measured, a repo aged 60 days read as 0 days old right after
+# gc, so the gate silently reopened in the dangerous direction. Ref age now keys
+# on FETCH_HEAD alone, the only file whose mtime means "a fetch happened here".
+clone c23
+R23="$TMP/root23"; link "$R23" "$TMP/c23/skills/alpha"
+GD23="$(cd "$TMP/c23" && git rev-parse --absolute-git-dir)"
+"$PY" - "$GD23" <<'PYEOF'
+import os, sys, time
+os.utime(os.path.join(sys.argv[1], "FETCH_HEAD"),
+         ((t := time.time() - 60 * 86400), t))
+PYEOF
+( cd "$TMP/c23" && git gc --quiet 2>/dev/null; git pack-refs --all 2>/dev/null ) || true
+OUT=$(run "$R23")
+if echo "$OUT" | grep -q 'too stale to compare'; then
+    pass "23. git gc does not reset the freshness clock"
+else
+    fail "23. gc hid a 60d-stale ref: $OUT"
 fi
 
 echo ""
