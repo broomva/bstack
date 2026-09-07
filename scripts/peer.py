@@ -306,11 +306,12 @@ def classify(entry: dict | None) -> str:
     a terminal `state` first (failed/stopped → gone, done → done even if the
     process lingers), then no-pid → gone (a dead background session keeps
     listing as `blocked`, so the pid is the liveness test), then anything that
-    means "needs the operator". On 2.1.258 that surfaces two different ways:
-    an interactive session sets `status: waiting` (with `waitingFor`); a
-    background `--bg` peer — every peer wave/fleet spawn — sets `state:
-    blocked` and never `status: waiting`, so both map to WAITING or the class
-    is unreachable for the sessions this module produces."""
+    means "needs the operator". On 2.1.258 "needs the operator"
+    surfaces two ways: an interactive session sets `status: waiting` (with
+    `waitingFor`), and a background `--bg` peer was observed setting `state:
+    blocked`. Both map to WAITING, so the class is reached however a given
+    build reports it — the classifier does not depend on which field a peer of
+    a particular kind happens to use."""
     if entry is None:
         return GONE
     state = str(entry.get("state") or "").lower()

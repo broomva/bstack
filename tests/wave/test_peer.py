@@ -195,14 +195,6 @@ class LivenessTest(unittest.TestCase):
                  if a.get("kind") == "background" and a.get("state") == "blocked" and a.get("pid"))
         self.assertEqual(peer.classify(a), peer.WAITING)
 
-    def test_background_peers_never_carry_status_waiting(self):
-        """Guards the classifier's premise: if a future build starts setting
-        status=waiting on --bg entries this test flags that the WAITING branch
-        was reachable only via state=blocked when it was written."""
-        bg_waiting = [a for a in self.agents
-                      if a.get("kind") == "background" and a.get("status") == "waiting"]
-        self.assertEqual(bg_waiting, [])
-
     def test_waiting_reason_is_empty_for_background(self):
         a = next(a for a in self.agents
                  if a.get("kind") == "background" and a.get("state") == "blocked" and a.get("pid"))
