@@ -24,6 +24,14 @@ subprocess, no network, no `claude agents` call.
   re-deriving `~/.cache/bstack/fleet`, so the section cannot drift from the
   ontology (flag > `BSTACK_FLEET_STATE_DIR` > config `fleet_state_dir` >
   default) the day someone sets the config key.
+- The root check uses `os.stat`, not `Path.is_dir()`. `is_dir()` only became
+  total in CPython 3.13: on 3.12 and earlier it re-raises `PermissionError`, and
+  that statement sits upstream of every per-entry guard — so a root whose
+  *parent* was not traversable killed the interpreter and produced exactly the
+  empty body this section exists to prevent. On 3.13+ the same input silently
+  returned `False` and reported the root as absent, a different wrong answer.
+  `os.stat` raises on every version, so one code path classifies identically
+  everywhere; verified under 3.9.6 and 3.14.3.
 - Every answer that is not a positive finding says which kind of not-finding it
   is. A surviving directory is named with its unreclaimed-peer count, age and
   remedy. An unreadable state root, a `fleet_*` entry that is not a directory, a
@@ -45,7 +53,7 @@ subprocess, no network, no `claude agents` call.
   a GAP here would fire on healthy work and teach the operator to skip the
   section.
 
-`tests/doctor-fleet-orphans.test.sh` pins all of it in 44 cases, and every hand
+`tests/doctor-fleet-orphans.test.sh` pins all of it in 55 cases, and every hand
 mutant dies: the inverted predicate, silence on a surviving directory, an
 unreadable root falling back to `pathlib.glob` (which swallows
 `PermissionError`), a non-directory entry skipped into clean, the shape guard
