@@ -30,6 +30,7 @@
 #  13/14. assume-unchanged / skip-worktree are UNVERIFIABLE, not clean
 #  15. NEGATIVE CONTROL for 13/14
 #  16. a staged-but-uncommitted edit is drift
+#  17. a file RENAMED out of the skill dir is drift (rename detection hides the source)
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -258,11 +259,32 @@ fi
 # `doctor --strict` on a deployment fact, and the check gets disabled instead.
 # Anchored on ASCII only. The first draft terminated on the box-drawing "# ──"
 # comment, where `.` matching a multi-byte char is locale- and awk-dependent.
-SEC=$(sed -n '/^section "27\./,/^TOTAL=/p' "$REPO/scripts/doctor.sh")
+# Terminate at §28, not TOTAL=. v0.40.1 inserted §28 between §27 and the
+# summary, so the original range silently grew to cover BOTH sections: the
+# assertion would then pass or fail on §28's behaviour while naming §27.
+SEC=$(sed -n '/^section "27\./,/^# ── Section 28:/p' "$REPO/scripts/doctor.sh")
 if [ -n "$SEC" ] && ! echo "$SEC" | grep -qE '(^|[^_[:alnum:]])gap[[:space:]]+"'; then
     pass "12. doctor §27 emits no gap() — advisory by construction"
 else
     fail "12. doctor §27 calls gap(), or the section was not found"
+fi
+
+# ── 17. a file RENAMED OUT of the skill dir is drift ───────────────────────
+# git detects renames by default (diff.renames=true), and for a rename
+# `--name-only` prints only the DESTINATION. Moving skills/alpha/SKILL.md out
+# therefore produced a diff naming only the new path and nothing under
+# skills/alpha/, so drifted_paths() found nothing and the skill whose only file
+# had just left was reported as MATCHING origin/main — a positive clean verdict
+# on a drifted skill, which is precisely the failure this module exists to
+# prevent. Found by CodeRabbit on PR #105; `--no-renames` lists both sides.
+clone c17
+R17="$TMP/root17"; link "$R17" "$TMP/c17/skills/alpha"
+( cd "$TMP/c17" && git mv skills/alpha/SKILL.md README-moved.md )
+OUT=$(run "$R17")
+if echo "$OUT" | grep -q 'differ from origin/main' && echo "$OUT" | grep -q 'alpha'; then
+    pass "17. a file renamed OUT of the skill dir is drift, not clean"
+else
+    fail "17. rename out of the skill dir misreported as clean: $OUT"
 fi
 
 echo ""

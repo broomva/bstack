@@ -111,15 +111,23 @@ class RepoState:
 
         # fsmonitor force-disabled: a dead daemon makes git report a clean tree
         # while files are modified, which would understate drift silently.
+        # --no-renames is load-bearing, not tidiness. git detects renames by
+        # default (diff.renames=true), and for a rename `--name-only` prints only
+        # the DESTINATION. Move skills/alpha/SKILL.md to README.md and the diff
+        # says "README.md", nothing under skills/alpha/ — so drifted_paths()
+        # finds nothing and the skill whose only file just left reports as
+        # matching origin/main. That is not merely an UNKNOWN gone wrong; it is a
+        # positive clean verdict on a drifted skill, the exact failure this
+        # module exists to prevent. --no-renames lists both sides.
         out = _git(root, "-c", "core.fsmonitor=false",
-                   "diff", "--name-only", self.ref)
+                   "diff", "--no-renames", "--name-only", self.ref)
         if out is None:
             self.reason = f"could not diff working tree against {self.ref}"
             return
         untracked = _git(root, "-c", "core.fsmonitor=false", "ls-files",
                          "--others", "--exclude-standard")
         if untracked is None:
-            self.reason = f"could not list untracked files"
+            self.reason = "could not list untracked files"
             return
         self.changed = set(filter(None, out.splitlines())) | \
                        set(filter(None, untracked.splitlines()))
