@@ -1623,26 +1623,16 @@ try:
 except Exception:                         # noqa: BLE001 - older/odd streams
     pass
 
-# python3 - puts '' (the CWD) at sys.path[0], and fleet.py's own
-# "from scripts import peer" finds no scripts package beside it — so without
-# this, resolution falls through to the audited workspace's cwd and doctor would
-# EXECUTE a foreign scripts/peer.py. bstack doctor is documented to run from
-# an arbitrary directory, so that cwd is not trusted input.
-sys.path[:] = [q for q in sys.path if q not in ("", ".", os.getcwd())]
-sys.path.insert(0, sys.argv[1])
-
-_BAD = ("\t", "\n", "\r", "\x00")
-
-
 def clean(text):
-    """A record is tab-delimited and line-based, so a tab, newline or NUL in a
-    path or a fleet id would shift every column or forge an entire row. The
-    --fleet id is unvalidated and a state root comes from env or config, so
-    sanitise rather than trust."""
-    out = str(text)
-    for ch in _BAD:
-        out = out.replace(ch, "?")
-    return out
+    """Structural, not a blocklist. A record is tab-delimited and line-based, so
+    a tab or newline shifts every column or forges a row; a NUL truncates; and
+    an ESC is worse than either, because erase-line plus cursor-up can overwrite
+    an orphan already printed above it — forging a row by erasing one. Listing
+    the characters to reject means learning them one incident at a time, so
+    invert it: keep what is printable, replace everything else. str.isprintable
+    is False for control characters and for Unicode separators such as U+2028,
+    and True for the ASCII space and for accented letters."""
+    return "".join(c if c.isprintable() or c == " " else "?" for c in str(text))
 
 
 def emit(kind, name="-", detail="", age=""):
@@ -1652,6 +1642,27 @@ def emit(kind, name="-", detail="", age=""):
 
 
 def scan():
+    # INSIDE the guard, deliberately. This prologue touches the environment, and
+    # anything outside try: scan() that can raise reintroduces the empty-body
+    # failure the whole section is built to prevent — os.getcwd() raises
+    # FileNotFoundError when the invoking directory has been deleted, which is
+    # routine here (make janitor removes worktrees while sessions are live).
+    # The rule is structural: nothing outside the guard touches the filesystem
+    # or the environment.
+    #
+    # Why the path is scrubbed at all: python3 - puts the CWD at sys.path[0],
+    # and fleet.py's own "from scripts import peer" finds no scripts package
+    # beside it — so without this, resolution falls through to the audited
+    # workspace's cwd and doctor would EXECUTE a foreign scripts/peer.py.
+    # bstack doctor is documented to run from an arbitrary directory, so that
+    # cwd is not trusted input.
+    try:
+        cwd = os.getcwd()
+    except Exception:                     # noqa: BLE001 - deleted cwd
+        cwd = None
+    sys.path[:] = [q for q in sys.path if q not in ("", ".", cwd)]
+    sys.path.insert(0, sys.argv[1])
+
     try:
         from fleet import state_root      # one source of truth for the ontology
     except Exception as exc:              # noqa: BLE001 - report, never guess
@@ -1705,8 +1716,18 @@ def scan():
                 continue
             d = Path(e.path)
             f = d / "fleet.json"
-            if not f.exists():
+            try:
+                fst = os.stat(f)
+            except OSError:
                 emit("UNKNOWN", e.name, "no fleet.json in the directory")
+                continue
+            # A FIFO passes exists() and then BLOCKS at open() until a writer
+            # appears — doctor would hang forever, and it runs from a
+            # SessionStart hook with no timeout anywhere above it. Non-
+            # termination is not an exception, so no handler can catch it;
+            # the only defence is to refuse to open anything but a regular file.
+            if not stat.S_ISREG(fst.st_mode):
+                emit("UNKNOWN", e.name, "fleet.json is not a regular file")
                 continue
             data = json.loads(f.read_text(encoding="utf-8"))
             # Valid JSON of the wrong SHAPE is the trap: a peers list of strings,
@@ -1750,6 +1771,13 @@ PY
                 ;;
             FLEET)
                 [ "$QUIET" = "0" ] && echo "  [info] $_name — $_detail, ${_age}h since last write; if it is not in flight: bstack fleet status --fleet $_name, then bstack fleet down --fleet $_name (--force if a peer's id was never captured)"
+                ;;
+            *)
+                # emit() is total on the python side, so this is unreachable
+                # today. It exists because the read side enumerating four kinds
+                # and dropping the rest is the same silence the section exists
+                # to prevent, one layer down.
+                [ "$QUIET" = "0" ] && echo "  [info] unrecognised fleet report row ($_k): $_name $_detail"
                 ;;
         esac
     done <<< "$_FLEET_REPORT"

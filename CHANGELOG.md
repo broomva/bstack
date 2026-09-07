@@ -49,6 +49,20 @@ subprocess, no network, no `claude agents` call.
   forge a row; and anything still escaping lands in one outer handler that
   emits a single honest `UNKNOWN` row. An empty body is the signature that
   reads as clean, and it is now unreachable.
+- Nothing outside the guarded region touches the filesystem or the environment.
+  The `sys.path` prologue used to run at module level, and `os.getcwd()` raises
+  `FileNotFoundError` when the invoking directory has been deleted — routine
+  here, since `make janitor` removes worktrees while sessions are live. It sat
+  outside `try: scan()`, so it emptied the section while doctor still reported
+  the workspace compliant. The prologue now runs inside the guard.
+- `clean()` keeps what is printable instead of listing what to reject. A
+  blocklist is learned one incident at a time, and it had already missed `ESC`:
+  erase-line plus cursor-up in a name that sorts later can overwrite an orphan
+  printed above it, forging a row by deleting one.
+- `fleet.json` is opened only when it is a regular file. A FIFO passes
+  `exists()` and then blocks at `open()` until a writer appears, so doctor would
+  hang forever under a hook with no timeout above it. Non-termination is not an
+  exception, so no handler can catch it — the only defence is refusing to open.
 - Every per-directory body is total: a raise would empty the whole report, and
   an empty report renders as a header with no body — the most confident clean
   signal an advisory section can emit. One malformed directory must never
@@ -63,7 +77,7 @@ subprocess, no network, no `claude agents` call.
   a GAP here would fire on healthy work and teach the operator to skip the
   section.
 
-`tests/doctor-fleet-orphans.test.sh` pins all of it in 69 cases, and every hand
+`tests/doctor-fleet-orphans.test.sh` pins all of it in 76 cases, and every hand
 mutant dies: the inverted predicate, silence on a surviving directory, an
 unreadable root falling back to `pathlib.glob` (which swallows
 `PermissionError`), a non-directory entry skipped into clean, the shape guard

@@ -455,6 +455,78 @@ else
     assert_pass "no traceback leaks to stderr under --quiet (NUL config root)"
 fi
 
+# 5g. DELETED CWD. os.getcwd() raises FileNotFoundError when the invoking
+#     directory has been removed — routine here, since make janitor removes
+#     worktrees while sessions are live, and doctor runs from a SessionStart
+#     hook in an arbitrary directory. The prologue used to run OUTSIDE the
+#     scan guard, so this emptied the section and leaked a traceback while
+#     doctor still reported the workspace fully compliant.
+DEADCWD="$TMP/deadcwd"
+mkdir -p "$DEADCWD"
+OUT="$(cd "$DEADCWD" && rmdir "$DEADCWD" && BSTACK_FLEET_STATE_DIR="$TMP/live" bash "$DOCTOR" 2>/dev/null \
+        | sed -n '/28. Unreclaimed fleets/,/^$/p')"
+if [ "$(grep -c '\[info\]' <<< "$OUT")" -ge 1 ]; then
+    assert_pass "a deleted working directory still renders a body"
+else
+    assert_fail "a deleted working directory still renders a body" "EMPTY BODY"
+fi
+if grep -q "fleet_1788000000_aaaa" <<< "$OUT"; then
+    assert_pass "a deleted working directory still names the orphan"
+else
+    assert_fail "a deleted working directory still names the orphan" "$OUT"
+fi
+mkdir -p "$DEADCWD"
+ERR="$(cd "$DEADCWD" && rmdir "$DEADCWD" && BSTACK_FLEET_STATE_DIR="$TMP/live" bash "$DOCTOR" --quiet 2>&1 >/dev/null)"
+if grep -q "Traceback" <<< "$ERR"; then
+    assert_fail "no traceback leaks under --quiet with a deleted cwd" "$ERR"
+else
+    assert_pass "no traceback leaks under --quiet with a deleted cwd"
+fi
+
+# 5h. NON-TERMINATION. A FIFO passes exists() and then BLOCKS at open() until a
+#     writer appears. This is not an exception, so no handler can catch it and
+#     the outer guard is irrelevant — doctor would hang forever under a hook
+#     with no timeout above it. The assertion is wrapped in `timeout` on
+#     purpose: without it a regression HANGS the CI job instead of failing it,
+#     which is a worse outcome than the bug.
+if command -v mkfifo >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1; then
+    FIFOROOT="$TMP/fiforoot"; mkdir -p "$FIFOROOT/fleet_1788000000_fff"
+    mkfifo "$FIFOROOT/fleet_1788000000_fff/fleet.json"
+    if OUT="$(timeout 20 env BSTACK_FLEET_STATE_DIR="$FIFOROOT" bash "$DOCTOR" 2>/dev/null \
+                | sed -n '/28. Unreclaimed fleets/,/^$/p')"; then
+        if grep -q "not a regular file" <<< "$OUT"; then
+            assert_pass "a FIFO fleet.json is refused, not opened"
+        else
+            assert_fail "a FIFO fleet.json is refused, not opened" "$OUT"
+        fi
+    else
+        assert_fail "a FIFO fleet.json is refused, not opened" "doctor HUNG (timeout) — non-termination"
+    fi
+    rm -f "$FIFOROOT/fleet_1788000000_fff/fleet.json"
+else
+    assert_pass "FIFO case skipped (mkfifo or timeout unavailable)"
+fi
+
+# 5i. ESCAPE SEQUENCES. clean() keeps only printable characters, so a name
+#     carrying ESC cannot erase or overwrite a line already printed above it.
+#     Entries are emitted sorted, so an erase-line + cursor-up in a name that
+#     sorts LATER can overwrite a real orphan — forging a row by deleting one.
+ESCROOT="$TMP/escroot"
+ESCNAME="fleet_1788000000_a$(printf '\033')[2K$(printf '\033')[1Ab"
+mkdir -p "$ESCROOT/$ESCNAME"
+printf '{"schema_version":1,"peers":[{"name":"a","removed":null}]}' > "$ESCROOT/$ESCNAME/fleet.json"
+OUT="$(section28 "$ESCROOT")"
+if printf '%s' "$OUT" | LC_ALL=C grep -q "$(printf '\033')"; then
+    assert_fail "an ESC in a fleet id never reaches the terminal" "raw ESC survived into the output"
+else
+    assert_pass "an ESC in a fleet id never reaches the terminal"
+fi
+if grep -q "1/1 peer(s) unreclaimed" <<< "$OUT"; then
+    assert_pass "the ESC-bearing fleet is still reported"
+else
+    assert_fail "the ESC-bearing fleet is still reported" "$OUT"
+fi
+
 # 5e. IMPORT HYGIENE (security). `python3 -` puts the CWD at sys.path[0], and
 #     fleet.py's own `from scripts import peer` finds no `scripts` package beside
 #     it — so without stripping the cwd, doctor EXECUTES a foreign
@@ -546,10 +618,22 @@ fi
 # is deliberately unreachable by black-box test — and an unreachable guard is
 # exactly the kind that gets deleted in a refactor. Assert it structurally, and
 # declare the remainder rather than implying coverage that does not exist.
-if grep -qE '^\s*except Exception as exc:.*last line of defence' "$BSTACK_REPO/scripts/doctor.sh"; then
+if awk '/^try:$/{t=NR} /^    scan\(\)$/{if (NR==t+1) s=NR} /^except Exception as exc:/{if (s && NR==s+1) print "WRAPS"}' \
+        "$BSTACK_REPO/scripts/doctor.sh" | grep -q WRAPS; then
     assert_pass "the outer scan guard is present (structural; not reachable by any constructible input)"
 else
     assert_fail "the outer scan guard is present (structural; not reachable by any constructible input)"
+fi
+
+# Same class, one layer down: emit() is total on the python side, so the shell
+# read loop's catch-all arm cannot be reached by any input either. A read side
+# that enumerates four kinds and silently drops the rest is the same silence
+# this section exists to prevent, so its presence is asserted structurally too.
+if awk '/^section "28\./{f=1} f && /^ *\*\)$/{print "HASDEFAULT"} /^# \xe2\x94\x80\xe2\x94\x80 summary/{exit}' \
+        "$BSTACK_REPO/scripts/doctor.sh" | grep -q HASDEFAULT; then
+    assert_pass "the shell read loop has a catch-all arm (structural; unreachable while emit() is total)"
+else
+    assert_fail "the shell read loop has a catch-all arm (structural; unreachable while emit() is total)"
 fi
 
 echo ""
