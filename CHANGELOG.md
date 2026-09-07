@@ -54,10 +54,16 @@ does not match, all found in review and all now pinned by regression cases:
   comparison, it is a comparison against a fiction. Measured here: a clone with
   no `FETCH_HEAD`, whose `packed-refs` was last written 61 days earlier, had an
   `origin/main` **180 commits** behind upstream — and its 23 skills were being
-  counted inside "match origin/main". Ref age is now derived from file mtimes
-  (still no network), reported on every line, and a ref older than
-  `--stale-days` (default 30) makes the repo UNKNOWN rather than a basis for
-  comparison.
+  counted inside "match origin/main". Ref age now comes from **`FETCH_HEAD`'s
+  mtime alone** (still no network), is reported on every line, and beyond
+  `--stale-days` (default 30) the repo is UNKNOWN rather than a basis for
+  comparison. FETCH_HEAD only, deliberately: an earlier form also accepted
+  `packed-refs`, and `git gc` runs `pack-refs`, which rewrites that file with no
+  fetch having happened. Measured — a repo aged 60 days read as 0 days old
+  immediately after `git gc`, silently reopening the very gate this closes.
+  A clone that has never fetched writes no `FETCH_HEAD` at all and is therefore
+  UNKNOWN, which is the honest answer: its `origin/main` is frozen at clone time
+  and nothing on disk says whether that was an hour or a year ago.
 
 A symlink in a skills root that resolves to a file is also reported rather than
 dropped: it has the shape of an installed skill, and it was the one entry the
