@@ -35,6 +35,7 @@
 #  19. a NON-ASCII assume-unchanged path is UNVERIFIABLE (same quoting blind spot)
 #  20. a STALE origin/main is UNKNOWN, not a basis for "matches origin/main"
 #  21. NEGATIVE CONTROL for 20 — a freshly fetched ref still compares normally
+#  22. STRUCTURAL: the undatable-ref arm exists (unreachable by construction)
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -360,6 +361,17 @@ if echo "$OUT" | grep -qE '\[info\].*match origin/main' && ! echo "$OUT" | grep 
     pass "21. NEGATIVE CONTROL: a freshly fetched ref still compares"
 else
     fail "21. a fresh ref was misreported as stale: $OUT"
+fi
+
+# ── 22. STRUCTURAL — the undatable-ref arm exists. It is unreachable: the ref
+# verifies only if packed-refs or a loose refs/remotes/origin/main is present,
+# and either dates it; remove both and rev-parse --verify fails first. So it
+# survives behavioural mutation by construction and is asserted at the source
+# instead of being given a test that would pass without exercising anything.
+if grep -q 'cannot date origin/main' "$REPO/scripts/lib/skill-drift.py"; then
+    pass "22. the undatable-ref arm is present (structural; unreachable by construction)"
+else
+    fail "22. the undatable-ref arm was removed"
 fi
 
 echo ""
