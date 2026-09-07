@@ -1,5 +1,99 @@
 # Changelog
 
+## 0.40.2 — 2026-09-07
+
+### feat(doctor): §27 reports skills whose executed code diverges from origin/main (BRO-2369)
+
+A merge to a skills repo's `main` does not deploy a skill. An installed skill is
+usually a symlink into a checkout, and what actually runs is whatever branch
+that checkout is parked on — so a merged fix can sit inert with nothing
+reporting it. BRO-2368 is the measured instance: 89 skills running three commits
+behind main, with three merged lint and bookkeeping GATE fixes dead on disk.
+
+`scripts/lib/skill-drift.py` compares the **working tree** against `origin/main`,
+per skill. Commit topology was the first design and was wrong in both
+directions: it called a checkout current while its files were modified on disk,
+and it called every skill in a repo drifted because one commit touched
+`README.md`.
+
+The rule the module is built around: **a skill it cannot evaluate is reported
+UNKNOWN, never current.** This check exists because the failure mode is a silent
+pass, so a checker resolving ambiguity toward "fine" would reproduce the bug it
+was written to catch. Concretely:
+
+- No `origin/master` fallback. Comparing against a stale ref and then printing
+  "current with origin/main" would invent a clean answer out of a missing one.
+- `core.fsmonitor=false` on every git call. A dead fsmonitor daemon makes git
+  report a clean tree while files are modified, which would understate drift
+  silently.
+- `assume-unchanged` and `skip-worktree` paths are **UNVERIFIABLE**, not clean.
+  Those flags exist to make a modified file invisible to git, so `diff` reports
+  nothing while the file on disk differs and the skill runs code no comparison
+  can see.
+- A dangling symlink is caught by `resolve(strict=True)`, since a dead link
+  still prints a plausible path under `readlink`.
+- One skill reached through two roots (`~/.claude/skills/x` →
+  `~/.agents/skills/x`) is ONE skill, keyed on the resolved path.
+
+Three ways the check could report a *positive clean verdict* on a skill that
+does not match, all found in review and all now pinned by regression cases:
+
+- **Renames.** git detects renames by default, and for a rename `--name-only`
+  prints only the DESTINATION. Moving a skill's only file out of its directory
+  produced a diff naming a path outside the skill and nothing inside it, so the
+  skill read as current. `--no-renames` lists both sides.
+- **Non-ASCII paths.** Without `-z`, git C-quotes any path containing a byte
+  >= 0x80, a quote, a backslash or a control character —
+  `"skills/alpha/NARI\303\221O.txt"` — and the prefix test never matches, so the
+  path is dropped and the skill reads as current. This was live on this machine:
+  a tracked file under `colombia-conflict` carries an N-tilde. All three git
+  calls now pass `-z` and split on NUL, which also fixes the identical blind
+  spot in the `assume-unchanged` detection. `-z` output is deliberately not
+  stripped, because a path may legitimately begin or end with a space.
+- **Stale refs.** An `origin/main` that exists but was never refreshed is not a
+  comparison, it is a comparison against a fiction. Measured here: a clone with
+  no `FETCH_HEAD`, whose `packed-refs` was last written 61 days earlier, had an
+  `origin/main` **180 commits** behind upstream — and its 23 skills were being
+  counted inside "match origin/main". Ref age now comes from **`FETCH_HEAD`'s
+  mtime, guarded by its content**, and beyond `--stale-days` (default 30) the
+  repo is UNKNOWN rather than a basis for comparison. Still no network.
+
+  Every other candidate was measured and every one lies toward "fresh":
+  `packed-refs` is rewritten by `git pack-refs`, hence by `git gc`, which
+  `gc.auto` fires unattended (200d → 0d with no fetch); the reflog *file's*
+  mtime is reset by `gc` too, since gc runs `reflog expire` (100d → 0d); and the
+  reflog's *content*, while immune to all of that, answers the wrong question —
+  it records when the ref last MOVED, so a repo fetching daily from a quiet
+  upstream reads as ancient. `FETCH_HEAD` is written by any fetch that reached a
+  remote, including one that changed nothing, and survives `gc` intact
+  (77d → 77d). Its weakness is that *any* remote writes it, so its content is
+  checked for origin's own URL — normalised, because git strips the trailing
+  `.git` when it writes the file. A future mtime is treated as undatable rather
+  than clamped to zero: clamping resolves an anomaly toward "freshly fetched",
+  the one move this module exists to refuse. `--git-common-dir`, not
+  `--absolute-git-dir`, because `FETCH_HEAD` lives in the common directory and a
+  linked worktree's own gitdir has none of these files.
+
+A symlink in a skills root that resolves to a file is also reported rather than
+dropped: it has the shape of an installed skill, and it was the one entry the
+scan discarded with no counter and no line.
+
+Advisory only, like §4b, §4c, §12 and §28: it prints `[info]` and calls neither
+`ok()` nor `gap()`, so the doctor totals and `--strict` are unaffected. Drift is
+a deployment fact, not a contract violation, and a doctor that failed on it
+would block unrelated work. Read-only and offline — it reads whatever ref the
+last fetch left and never fetches.
+
+Performance: repo roots are resolved by walking for `.git` rather than spawning
+`git rev-parse` per skill. 408 of 523 installed skills here have no repo above
+them at all, and spawning git only to be told so dominated the runtime.
+
+`§27` was reserved by 0.40.1's §28, which skipped the number to avoid a merge
+conflict; both sections now sit in order.
+
+16-case suite in `tests/skill-drift.test.sh`, including negative controls that
+fail a checker which flags everything and a checker which flags nothing.
+
 ## 0.40.1 — 2026-09-07
 
 ### feat(doctor): §28 reports unreclaimed fleets (BRO-2473)
