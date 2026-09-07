@@ -18,6 +18,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
+try:  # `from scripts.wave import main` (tests) — package-relative
+    from scripts import peer
+except ImportError:  # `python3 scripts/wave.py` — scripts/ is sys.path[0]
+    import peer  # type: ignore[no-redef]
+
 _DATE_PREFIX = re.compile(r"^\d{4}-\d{2}-\d{2}-")
 
 
@@ -26,18 +31,23 @@ class WaveError(Exception):
 
 
 _FM_DELIM = "---"
+WAVE_KEYS = ("worktree", "branch", "base", "slug", "linear", "mcp")
 
 
 def parse_plan_frontmatter(plan_path: Path) -> dict[str, str]:
     """Parse the `wave:` block of a plan file's YAML frontmatter.
 
-    Returns a flat dict with keys: worktree, branch, base, slug, linear.
-    `worktree` and `branch` are required; others are optional (may be missing).
+    Returns a flat dict with keys from WAVE_KEYS: worktree, branch (required),
+    base, slug, linear, mcp (optional). `mcp` is `strict` (default) or
+    `inherit` — see scripts/peer.py; `inherit` keeps the project's MCP servers
+    for a peer that needs them (e.g. the Linear MCP for P3).
 
     Raises WaveError with a clear message on:
       - missing/unreadable file
       - no `---` frontmatter block at top
       - frontmatter present but no `wave:` key
+      - an unknown key under `wave:` (a typo such as `mpc:` would otherwise
+        silently strip the peer of every MCP tool)
     """
     p = Path(plan_path)
     try:
@@ -87,6 +97,11 @@ def parse_plan_frontmatter(plan_path: Path) -> dict[str, str]:
     for required in ("worktree", "branch"):
         if required not in out:
             raise WaveError(f"{p}: wave.{required} is required")
+    unknown = sorted(set(out) - set(WAVE_KEYS))
+    if unknown:
+        raise WaveError(
+            f"{p}: unknown key(s) under wave: {', '.join(unknown)} "
+            f"(known: {', '.join(WAVE_KEYS)})")
 
     return out
 
@@ -104,6 +119,8 @@ class PlanEntry:
     linear: str | None
     agent_pid: int | None
     launched_at: str | None
+    session_id: str | None = None      # `claude --bg` short id (peer.parse_session_id)
+    session_name: str | None = None    # `<worktree>-<ticket>-<slug>` (peer.compose_name)
 
 
 @dataclass
@@ -125,9 +142,13 @@ def write_manifest(wave_dir: Path, m: Manifest) -> None:
         "repo_root": m.repo_root,
         "plans": [asdict(p) for p in m.plans],
     }
-    (wave_dir / "manifest.json").write_text(
-        json.dumps(data, indent=2, sort_keys=False) + "\n", encoding="utf-8"
-    )
+    # Atomic: peers read this file while dispatch is still rewriting it (their
+    # first act is `wave report --event started`, which validates the slug
+    # against it). A truncate-then-write would hand a reader half a file.
+    target = wave_dir / "manifest.json"
+    tmp = wave_dir / f".manifest.json.{os.getpid()}.tmp"
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+    os.replace(tmp, target)
 
 
 def read_manifest(wave_dir: Path) -> Manifest:
@@ -217,12 +238,18 @@ def _pr_number(pr_url: str) -> str:
     return url or "—"
 
 
-def render_status_table(wd: Path) -> str:
-    """Render the human-readable status table including reflexive suggestions."""
+def render_status_table(wd: Path, agents: list[dict] | None = None) -> str:
+    """Render the human-readable status table including reflexive suggestions.
+
+    `agents` is the parsed `claude agents --json --all` listing (or None when
+    it could not be read). Liveness is joined per plan by session id, then by
+    session name; a plan with nothing to join on renders as `unknown`, never
+    as live."""
     m = read_manifest(wd)
     state = read_wave_state(wd)
-    rows: list[tuple[str, str, str, str, str]] = []
+    rows: list[tuple[str, str, str, str, str, str, str]] = []
     open_prs: list[str] = []
+    attention: list[str] = []
     all_merged = True
     any_event = False
     for plan in m.plans:
@@ -233,21 +260,52 @@ def render_status_table(wd: Path) -> str:
         if ev != "pr_merged":
             all_merged = False
         pr = _pr_number(s.get("pr", ""))
-        rows.append((plan.slug, plan.branch, plan.linear or "—", ev, pr))
+        # The worktree join is a LEGACY fallback: a pre-0.39.1 manifest carries
+        # no id and no name, so the worktree is the only handle. A current row
+        # has an id (the stable key) — never adopt a same-cwd session for it, or
+        # an operator's `claude` opened in the worktree, or a re-dispatched
+        # peer, gets reported as this plan's live peer.
+        legacy = not (plan.session_id or plan.session_name)
+        live, entry = peer.liveness(
+            agents, session_id=plan.session_id, name=plan.session_name,
+            cwd=plan.worktree if legacy else None)
+        rows.append((plan.slug, plan.branch, plan.linear or "—", ev, pr,
+                     plan.session_name or "—", live))
         if ev == "pr_opened" and s.get("pr"):
             open_prs.append(s["pr"])
+        sid = plan.session_id or (entry or {}).get("id") or "<id>"
+        if live == peer.WAITING:
+            why = peer.waiting_for(entry) or "input"
+            attention.append(
+                f"  • {plan.session_name or plan.slug} is waiting ({why}) — "
+                f"claude attach {sid} to answer it, or SendMessage it by name")
+        elif live == peer.DONE and ev not in ("pr_merged", "failed"):
+            attention.append(
+                f"  • {plan.session_name or plan.slug} finished its turn after "
+                f"'{ev}' without reaching pr_merged — read: claude logs {sid}")
+        elif live == peer.GONE and ev not in ("pr_merged", "failed"):
+            attention.append(
+                f"  • {plan.session_name or plan.slug} is gone "
+                f"({(entry or {}).get('state') or 'not listed'}) after "
+                f"'{ev}' — inspect: claude logs {sid}; then re-dispatch")
     lines = [f"{m.wave_id} ({m.name or '—'}) — created {m.created_at}", ""]
-    lines.append(f"  {'SLUG':<28} {'BRANCH':<28} {'LINEAR':<10} {'LAST EVENT':<16} {'PR'}")
-    for slug, branch, linear, ev, pr in rows:
-        lines.append(f"  {slug:<28} {branch:<28} {linear:<10} {ev:<16} {pr}")
+    lines.append(f"  {'SLUG':<28} {'BRANCH':<28} {'LINEAR':<10} {'LAST EVENT':<16} "
+                 f"{'PR':<8} {'SESSION':<40} LIVE")
+    for slug, branch, linear, ev, pr, sname, live in rows:
+        lines.append(f"  {slug:<28} {branch:<28} {linear:<10} {ev:<16} {pr:<8} "
+                     f"{sname:<40} {live}")
     lines.append("")
-    if open_prs:
+    if agents is None:
+        lines.append("(liveness unavailable: `claude agents --json --all` could not be read)")
+    if open_prs or attention:
         lines.append("Suggestions:")
         for pr in open_prs:
             num = _pr_number(pr).lstrip("#")
             lines.append(f"  • {pr} is open — run: p9 watch {num} --background")
+        lines.extend(attention)
     if all_merged and any_event:
-        lines.append("Suggestions:")
+        if not (open_prs or attention):
+            lines.append("Suggestions:")
         lines.append("  • All slugs merged — run: make janitor && "
                      "python3 skills/bookkeeping/scripts/bookkeeping.py run")
     return "\n".join(lines)
@@ -313,6 +371,7 @@ def validate_plans(plan_paths: list[Path]) -> list[dict]:
     seen_branches: dict[str, Path] = {}
     seen_worktrees: dict[str, Path] = {}
     seen_repos: set[Path] = set()
+    seen_names: dict[str, Path] = {}
     resolved_plan_paths: set[Path] = set()
 
     for pp in plan_paths:
@@ -340,7 +399,24 @@ def validate_plans(plan_paths: list[Path]) -> list[dict]:
             "base": fm.get("base", "main"),
             "slug": fm.get("slug") or derive_slug(pp),
             "linear": fm.get("linear"),
+            "mcp": fm.get("mcp"),
         })
+        # Fail before anything is created: a bad mcp value, an uncomposable
+        # name, or two plans that compose the SAME session name (long slugs
+        # truncated at NAME_MAX, or a worktree basename equal to the slug) are
+        # validation errors, not launch-time surprises. Two peers under one
+        # name would be unaddressable by the P5 contract.
+        try:
+            peer.mcp_mode(fm.get("mcp"))
+            name = peer.compose_name(worktree_abs, fm.get("linear"), entries[-1]["slug"])
+        except peer.PeerError as exc:
+            raise WaveError(f"{pp}: {exc}") from exc
+        if name in seen_names:
+            raise WaveError(
+                f"duplicate session name {name!r} composed by {pp} and "
+                f"{seen_names[name]}; give one of them a distinct slug")
+        seen_names[name] = pp
+        entries[-1]["session_name"] = name
 
     for repo in seen_repos:
         if not _git_is_clean(repo, exclude_paths=resolved_plan_paths):
@@ -368,7 +444,7 @@ def _cmd_status(args) -> int:
     wd = wave_dir(args.wave_id)
     if not wd.exists():
         raise WaveError(f"wave {args.wave_id} not found at {wd}")
-    print(render_status_table(wd))
+    print(render_status_table(wd, agents=peer.list_agents(_claude_binary())))
     return 0
 
 
@@ -500,8 +576,12 @@ def _create_worktree(repo: Path, worktree: Path, branch: str, base: str) -> None
     )
 
 
-def _build_prompt(wave_id: str, slug: str, plan_path: Path, worktree: Path) -> str:
+def _build_prompt(wave_id: str, slug: str, plan_path: Path, worktree: Path,
+                  session_name: str) -> str:
     return (
+        f"Session: {session_name}\n"
+        f"Peers address you by that name (Fanout P5); keep it in every report and "
+        f"in the handoff.\n"
         f"Worktree: {worktree}\n"
         f"You are already inside this worktree; do not re-enter or recreate it.\n"
         f"Plan: {plan_path}\n"
@@ -520,10 +600,15 @@ def _build_prompt(wave_id: str, slug: str, plan_path: Path, worktree: Path) -> s
 
 def _cmd_dispatch(args) -> int:
     entries = validate_plans(args.plans)  # atomic; raises on first failure
+    binary = _claude_binary()
     if args.dry_run:
         print(f"would dispatch wave with {len(entries)} plan(s):")
         for e in entries:
             print(f"  {e['slug']:<28} {e['branch']:<28} {e['worktree']}")
+            argv = peer.build_spawn_argv(
+                e["session_name"], "<prompt>", binary=binary,
+                mcp=peer.mcp_mode(e.get("mcp")))
+            print(f"    spawn: {' '.join(_shell_quote(a) for a in argv)}")
         return 0
     _ensure_claude_on_path()
 
@@ -531,31 +616,48 @@ def _cmd_dispatch(args) -> int:
     wd = wave_dir(wave_id)
     wd.mkdir(parents=True, exist_ok=True)
 
-    plan_entries: list[PlanEntry] = []
+    # The manifest is written BEFORE any peer launches: a peer's very first
+    # act is `bstack wave report --event started`, which validates its slug
+    # against this file. Session ids are filled in as each spawn returns.
     repo_root = entries[0]["repo_root"]
-    for e in entries:
-        wt = Path(e["worktree"])
-        _create_worktree(Path(e["repo_root"]), wt, e["branch"], e["base"])
-        prompt = _build_prompt(wave_id, e["slug"], Path(e["plan_path"]), wt)
-        proc = subprocess.Popen(
-            [_claude_binary(), "--bg", prompt],
-            cwd=str(wt),
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-        plan_entries.append(PlanEntry(
+    plan_entries: list[PlanEntry] = [
+        PlanEntry(
             slug=e["slug"], plan_path=e["plan_path"], worktree=e["worktree"],
             branch=e["branch"], base=e["base"], linear=e.get("linear"),
-            agent_pid=proc.pid, launched_at=_utc_now_iso(),
-        ))
+            agent_pid=None, launched_at=None, session_id=None,
+            session_name=e["session_name"],
+        )
+        for e in entries
+    ]
+    manifest = Manifest(wave_id=wave_id, name=args.name, created_at=_utc_now_iso(),
+                        repo_root=repo_root, plans=plan_entries)
+    write_manifest(wd, manifest)
 
-    write_manifest(wd, Manifest(
-        wave_id=wave_id, name=args.name, created_at=_utc_now_iso(),
-        repo_root=repo_root, plans=plan_entries,
-    ))
-    print(f"Wave {wave_id} launched ({len(plan_entries)} agents).")
+    failures = 0
+    for e, pe in zip(entries, plan_entries):
+        wt = Path(e["worktree"])
+        _create_worktree(Path(e["repo_root"]), wt, e["branch"], e["base"])
+        prompt = _build_prompt(wave_id, e["slug"], Path(e["plan_path"]), wt,
+                               pe.session_name or "")
+        argv = peer.build_spawn_argv(pe.session_name or "", prompt, binary=binary,
+                                     mcp=peer.mcp_mode(e.get("mcp")))
+        res = peer.spawn(argv, cwd=wt)
+        pe.launched_at = _utc_now_iso()
+        pe.session_id = res.session_id
+        write_manifest(wd, manifest)  # persist each id as soon as it is known
+        if not res.ok:
+            failures += 1
+        print(f"  {pe.slug:<28} {pe.session_name:<40} {res.summary}")
+
+    print(f"Wave {wave_id} launched ({len(plan_entries) - failures}/{len(plan_entries)} agents).")
     print(f"Watch dashboard:  claude agents")
     print(f"Forensic state:   bstack wave status {wave_id}")
-    return 0
+    return 1 if failures else 0
+
+
+def _shell_quote(arg: str) -> str:
+    import shlex
+    return shlex.quote(str(arg))
 
 
 if __name__ == "__main__":

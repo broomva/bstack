@@ -65,3 +65,36 @@ class ManifestTest(unittest.TestCase):
             write_manifest(wd, m)
             raw = json.loads((wd / "manifest.json").read_text())
             self.assertEqual(raw["schema_version"], 1)
+
+
+class ManifestAtomicityTest(unittest.TestCase):
+    def test_readers_never_see_a_partial_manifest(self):
+        """Peers read manifest.json while dispatch rewrites it after every
+        spawn. A truncate-then-write hands readers half a file; an atomic
+        replace never does. 200 plans × 150 rewrites against a hot reader."""
+        import threading
+        from scripts.wave import write_manifest, read_manifest, Manifest, PlanEntry, WaveError
+        with tempfile.TemporaryDirectory() as td:
+            wd = Path(td)
+            plans = [PlanEntry(slug=f"s{i}", plan_path="/p", worktree="/w", branch=f"b{i}",
+                               base="main", linear=None, agent_pid=None, launched_at=None)
+                     for i in range(200)]
+            m = Manifest(wave_id="wave_atomic", name=None, created_at="t", repo_root="/", plans=plans)
+            write_manifest(wd, m)
+            stop = threading.Event(); failures = []; reads = [0]
+            def reader():
+                while not stop.is_set():
+                    try:
+                        read_manifest(wd); reads[0] += 1
+                    except WaveError as exc:
+                        failures.append(str(exc))
+            th = [threading.Thread(target=reader) for _ in range(3)]
+            for t in th: t.start()
+            for i in range(150):
+                plans[i % 200].session_id = f"id{i:06d}"
+                write_manifest(wd, m)
+            stop.set()
+            for t in th: t.join()
+            self.assertGreater(reads[0], 0)
+            self.assertEqual(failures, [], failures[:3])
+            self.assertEqual([p.name for p in wd.iterdir()], ["manifest.json"])

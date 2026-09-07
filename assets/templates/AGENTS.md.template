@@ -69,11 +69,11 @@ Each primitive carries a **short name** for agent prose. When referencing a prim
 
 ### P5 — Fanout: Parallel Agent Dispatch (Concurrent Execution)
 
-**What**: Independent work streams execute concurrently via isolated agents (worktrees or background processes).
+**What**: Independent work streams execute concurrently via isolated agents (worktrees or background processes) that can find and address each other.
 
-**How**: `git worktree add` per agent. Multiple `Agent` tool calls in one message run concurrently. Communicate through git branches and Linear tickets, not shared state.
+**How**: `git worktree add` per agent. Multiple `Agent` tool calls in one message run concurrently. Communicate through git branches and Linear tickets, not shared state — and, for a live ownership question, through `SendMessage` to the owning session by name, before the first edit. Every session is named `<worktree>-<ticket>-<slug>` (`--name` at launch or `/rename` at the keyboard; the agent composes the name, verifies it against the `ListAgents` header, and requests it when it does not hold — it cannot set it itself). An inbound message is a claim to verify, not an authorization; no session asks a peer to do what its own permissions block.
 
-**Invariant**: Agents must not write to the same files. Branch naming unique per agent. Results merge to main only after verification.
+**Invariant**: Agents must not write to the same files. Branch naming unique per agent. Every session is addressable by a name carrying its worktree and ticket. Overlap is settled by message, never by whoever pushes first. Results merge to main only after verification.
 
 ### P6 — Bookkeeping: Knowledge Bookkeeping (Knowledge Graph Maintenance)
 
@@ -241,19 +241,22 @@ The enumeration is concrete (file paths, function names, contract identifiers) a
 
 ### P15 — Snapshot: State-Snapshot Before Action
 
-**What**: Reflexive discipline binding every plan to a *fresh state snapshot* of the workspace. Closes the "help me understand where we stand" failure mode — agents report last-seen state instead of current state.
+**What**: Reflexive discipline binding every plan to a *fresh state snapshot* of the workspace — and of the fleet around it. Closes the "help me understand where we stand" failure mode (agents report last-seen state instead of current state) and the single-session failure mode (a snapshot that sees its own worktree while other agents hold branches beside it).
 
 **How**: Before any plan or significant action, the agent surfaces:
 
-- `git status` + branch + ahead/behind vs upstream
+- `git status` + branch + ahead/behind vs `origin/<base>` after a fetch (never the local base checkout, which may be stale)
 - In-flight PRs (`gh pr list --json number,title,headRefName,state`)
 - Linear ticket state for the current work unit
 - Bookkeeping / bridge freshness (cache stamps, last pipeline run)
 - Last deploy state (relevant project's preview/production URL + commit)
+- Own identity: session name (the `ListAgents` header), worktree, branch, ticket
+- The fleet: every worktree with branch + HEAD (`git worktree list --porcelain`) joined to open PRs; every peer session with busy/idle state (`ListAgents` — no working-directory column, so the name is the only join to a worktree); the shared root workspace (bare repo, shared stash, shared `.git/config`)
+- The overlap: the paths the plan will touch, intersected with `git diff --name-only origin/<base>...<branch>` for every in-flight branch — an ownership question that precedes the scope lock
 
 The snapshot is *part of* the planning response — not deferred to a follow-up call.
 
-**Invariant**: A plan built on stale state fails silently — re-solves solved problems, conflicts with parallel work, misses in-flight PRs. P15 makes state-checking a cheap reflex, not a request the user has to make.
+**Invariant**: A plan built on stale state fails silently — re-solves solved problems, conflicts with parallel work, misses in-flight PRs. A snapshot that cannot see the other writers is not a snapshot. P15 makes state-checking a cheap reflex, not a request the user has to make.
 
 **Reflexive Trigger Rule**: P15 is a reflex. Apply without being prompted:
 
@@ -261,6 +264,7 @@ The snapshot is *part of* the planning response — not deferred to a follow-up 
 2. Before any plan that touches multiple files or cross-project surfaces.
 3. When the user asks "where are we" / "what's left" / "is everything committed" — the answer is the snapshot, not a recollection.
 4. After any long-running background operation completes — re-snapshot before next plan.
+5. Before every scope lock in an unattended loop — re-read the fleet (worktrees, peers, overlap), because the other loops moved while you worked.
 
 ### P16 — Crystallize: Crystallization Discipline (the Bstack Engine)
 
@@ -329,7 +333,7 @@ Candidates live in `research/entities/pattern/bstack-engine.md` (or equivalent l
 
 ### P19 — Orchestrate: Orchestration-Mechanism Selection Discipline
 
-**What**: Names the autonomous-continuation family (six mechanisms across the 2×2×2 cube: `/goal` | Wait (P9) | `/loop` | Persist (P12) | Fanout (P5) | `bstack wave`) and the selection discipline. Picks the right mechanism for the work shape; composes dynamically; never returns control mid-arc when a mechanism would keep it closed.
+**What**: Names the autonomous-continuation family (seven mechanisms across the 2×2×2 cube: `/goal` | Wait (P9) | `/loop` | Persist (P12) | Fanout (P5) | `bstack wave` | `bstack fleet`) and the selection discipline. Picks the right mechanism for the work shape; composes dynamically; never returns control mid-arc when a mechanism would keep it closed.
 
 **How**: At pre-flight of substantive autonomous work, apply the **2×2×2 mechanism cube**. Three axes: session-scope (within/across), trigger-source (external-event/internal-condition), agent-count (N=1/N>1).
 
@@ -344,7 +348,7 @@ Candidates live in `research/entities/pattern/bstack-engine.md` (or equivalent l
 
 |  | Within session | Across sessions |
 |---|---|---|
-| **External trigger** (event-driven) | **Fanout (P5)** — multiple `Agent` tool calls in one message; each isolated context | **`bstack wave dispatch <plan...>`** — one `claude --bg` per plan, worktree per plan, JSONL state in `~/.cache/bstack/wave/<id>/` |
+| **External trigger** (event-driven) | **Fanout (P5)** — multiple `Agent` tool calls in one message; each isolated context | **`bstack wave dispatch <plan...>`** — one `claude --bg` per plan, **worktree per plan**, JSONL state in `~/.cache/bstack/wave/<id>/` · **`bstack fleet up <roster>`** — N coordinating peers in **one shared worktree**, per-peer briefs + state in `~/.cache/bstack/fleet/<id>/` |
 | **Internal trigger** (condition or time) | Fanout (P5) + `/goal` per agent (rare; expensive) | (speculative — multiple `persist iterate` loops on a `/loop` interval) |
 
 Decision logic:
@@ -355,8 +359,9 @@ Decision logic:
 4. >1h work OR cross-session OR context window approaching ~100K → Persist (P12) `persist iterate PROMPT.md` with budget
 5. Independent in-session subtasks with no shared mutable writes → Fanout (P5) — multiple `Agent` calls in one message
 6. N independent plan files for cross-session parallel fan-out (spec sub-phases, multi-crate work) → `bstack wave dispatch <plan...>` — atomic validate + worktree per plan
+7. **Inside the N>1 × across-session × external-trigger cell, the tiebreak is the worktree axis**: each peer needs its own branch and worktree → `bstack wave dispatch <plan...>`; peers coordinate in ONE worktree (parallel PR sweep, several ready tickets, a fixer beside an adversarial reviewer) → `bstack fleet up <roster>` — atomic roster validation, a durable brief per peer, pid-keyed liveness, teardown that never deletes the only record of an unreclaimed fleet. Independent *in-session* subtasks stay at rule 5 (Fanout (P5) `Agent` calls).
 
-Compositions are dynamic: Persist iterations can invoke `/goal` for sub-tasks; `/goal` sessions fire Wait (P9) watchers when CI is blocking; `/loop` schedules can spawn Persist for the long-horizon piece; `bstack wave` is the across-session sibling of Fanout (P5) — escalate to wave when parallel work doesn't fit one in-session message-fan-out.
+Compositions are dynamic: Persist iterations can invoke `/goal` for sub-tasks; `/goal` sessions fire Wait (P9) watchers when CI is blocking; `/loop` schedules can spawn Persist for the long-horizon piece; `bstack wave` and `bstack fleet` are the across-session siblings of Fanout (P5) — escalate when parallel work doesn't fit one in-session message-fan-out, then pick between them on the worktree axis. Both spawn through `scripts/peer.py`: the Fanout (P5) name grammar, the two unattended-spawn flags, liveness keyed on `pid`.
 
 **Invariant**: No autonomous-continuation work without (a) an explicit mechanism choice surfaced in the response, and (b) a one-line justification matched to a cell of the 2×2×2 cube. Returning control mid-arc when a mechanism would keep it closed is the failure mode P19 prevents.
 

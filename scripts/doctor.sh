@@ -1587,6 +1587,265 @@ elif [ "$QUIET" = "0" ]; then
         || echo "  [info] skill-drift check could not complete"
 fi
 
+# ── Section 28: Unreclaimed fleets (BRO-2473) ──────────────────────────────
+# `bstack fleet down` deletes a fleet's state directory only when every peer was
+# removed or was already gone — UNLESS `--force` was passed, which deletes the
+# record regardless (scripts/fleet.py `deleted = (not remaining) or force`). So
+# the contrapositive holds in one direction only, and that is the direction this
+# section uses: a surviving fleet_* directory is a fleet that was never fully
+# reclaimed. The converse does NOT hold — a forced teardown leaves nothing to
+# find, so absence of a record is not proof of reclamation, and the clean line
+# says so rather than claiming every fleet was reclaimed
+# — one still in flight, or an orphan whose peers keep burning budget with
+# nothing watching them.
+#
+# Why this earns a section: /arc §7 promises "every peer this session raised is
+# stopped", and until now nothing observed it — zero fleet-aware hooks on any of
+# the three registration surfaces, zero mentions of fleet in this file. The
+# tests/fleet suite gates the TOOL's correctness, never the AGENT's cleanup, so
+# "peers reclaimed" was prose. CLAUDE.md §Ritual vs Substance says a discipline
+# with no machine-checkable behaviour is not a discipline.
+#
+# The root is resolved by IMPORTING fleet.state_root() rather than re-deriving
+# `~/.cache/bstack/fleet` here: the ontology is flag > BSTACK_FLEET_STATE_DIR >
+# config `fleet_state_dir` > default, and a second enumeration of it would drift
+# from the tool the day someone sets the config key.
+#
+# Advisory only, deliberately: a fleet mid-flight is the expected state during
+# an arc, not a defect. Age plus the remedy is the signal; a GAP here would fire
+# on healthy work and teach the operator to skip the section. An unreadable
+# fleet.json reports `unknown` rather than clean — a check that cannot tell must
+# say so, which is the same rule `fleet status` follows for an unreadable agent
+# listing.
+section "28. Unreclaimed fleets (bstack fleet)"
+if ! command -v python3 >/dev/null 2>&1; then
+    [ "$QUIET" = "0" ] && echo "  [info] python3 unavailable — skipping fleet-state check"
+elif [ ! -f "$BSTACK_REPO/scripts/fleet.py" ]; then
+    [ "$QUIET" = "0" ] && echo "  [info] scripts/fleet.py absent (bstack < 0.40.0) — no fleet mechanism to check"
+else
+    # The trust boundary, stated: everything INSIDE the python process is total
+    # (see the header there), and the process ITSELF is guarded here. The
+    # command -v test above proves presence, not that it runs — a pyenv shim for an
+    # uninstalled version is +x and exits 127, and a broken PYTHONHOME aborts
+    # before the first line executes. Either way the substitution used to yield
+    # nothing, and nothing is the empty body that reads as clean. So: stderr is
+    # redirected (every other python block in this file already does that), the
+    # exit status is captured, and an empty or failed run is turned into an
+    # honest row rather than silence.
+    _FLEET_REPORT="$(python3 - "$BSTACK_REPO/scripts" 2>/dev/null <<'PY'
+import json, os, stat, sys, time
+from pathlib import Path
+
+# TOTALITY BY STRUCTURE, not by enumeration. Four review rounds each found one
+# more input that emptied this report — a wrong-shape record, an untraversable
+# parent, an undecodable byte, a NUL in a config path — and each was closed by
+# adding one more guard at one more print site. That trades a round per hazard,
+# so the shape is wrong, not the guards. Three properties now hold for ANY
+# input, and each is provable by deleting one thing:
+#   1. stdout cannot raise on an unencodable character (reconfigure below);
+#   2. every record goes through emit(), which sanitises EVERY field, so no
+#      value can shift a column or forge a row;
+#   3. anything that still escapes lands in one outer handler that emits a
+#      single honest UNKNOWN row. SystemExit is a BaseException, so the early
+#      returns below are unaffected.
+# An empty body is the signature that reads as clean. Inside this process it is
+# unreachable; the process itself is guarded at the shell layer above, because a
+# claim of totality is only as wide as the scope it names — and this one was
+# asserted three times at a scope narrower than the failure surface before that
+# was true.
+try:
+    sys.stdout.reconfigure(errors="backslashreplace")
+except Exception:                         # noqa: BLE001 - older/odd streams
+    pass
+
+def clean(text):
+    """Structural, not a blocklist. A record is tab-delimited and line-based, so
+    a tab or newline shifts every column or forges a row; a NUL truncates; and
+    an ESC is worse than either, because erase-line plus cursor-up can overwrite
+    an orphan already printed above it — forging a row by erasing one. Listing
+    the characters to reject means learning them one incident at a time, so
+    invert it: keep what is printable, replace everything else. str.isprintable
+    is False for control characters and for Unicode separators such as U+2028,
+    and True for the ASCII space and for accented letters."""
+    return "".join(c if c.isprintable() or c == " " else "?" for c in str(text))
+
+
+def emit(kind, name="-", detail="", age=""):
+    """The ONLY way this section prints. One choke point means a new field or a
+    new branch cannot forget the sanitiser."""
+    print(clean(kind) + "\t" + clean(name) + "\t" + clean(detail) + "\t" + clean(age))
+
+
+def scan():
+    # INSIDE the guard, deliberately. This prologue touches the environment, and
+    # anything outside try: scan() that can raise reintroduces the empty-body
+    # failure the whole section is built to prevent — os.getcwd() raises
+    # FileNotFoundError when the invoking directory has been deleted, which is
+    # routine here (make janitor removes worktrees while sessions are live).
+    # The rule is structural: nothing outside the guard touches the filesystem
+    # or the environment.
+    #
+    # Why the path is scrubbed at all: python3 - puts the CWD at sys.path[0],
+    # and fleet.py's own "from scripts import peer" finds no scripts package
+    # beside it — so without this, resolution falls through to the audited
+    # workspace's cwd and doctor would EXECUTE a foreign scripts/peer.py.
+    # bstack doctor is documented to run from an arbitrary directory, so that
+    # cwd is not trusted input.
+    try:
+        cwd = os.getcwd()
+    except Exception:                     # noqa: BLE001 - deleted cwd
+        cwd = None
+    sys.path[:] = [q for q in sys.path if q not in ("", ".", cwd)]
+    sys.path.insert(0, sys.argv[1])
+
+    try:
+        from fleet import state_root      # one source of truth for the ontology
+    except Exception as exc:              # noqa: BLE001 - report, never guess
+        emit("UNKNOWN", "-", "cannot import fleet.state_root (" + type(exc).__name__ + ")")
+        return
+
+    try:
+        root = state_root()
+    except Exception as exc:              # noqa: BLE001
+        emit("UNKNOWN", "-", "cannot resolve the fleet state root (" + type(exc).__name__ + ")")
+        return
+
+    # os.stat, not Path.is_dir(). is_dir() only became total in CPython 3.13: on
+    # 3.12 and earlier it RE-RAISES PermissionError, and this sits upstream of
+    # every per-entry guard, so a root whose PARENT is not traversable killed the
+    # interpreter. On 3.13+ the same input silently returned False and reported
+    # the root absent, a different wrong answer. os.stat raises on every version,
+    # so one code path classifies the same way everywhere. The handler is
+    # Exception, not OSError: a NUL in a config path raises ValueError here.
+    try:
+        st = os.stat(root)
+    except (FileNotFoundError, NotADirectoryError):
+        emit("NOROOT", root)
+        return
+    except Exception as exc:              # noqa: BLE001
+        emit("UNKNOWN", root, "state root cannot be read (" + type(exc).__name__ + ")")
+        return
+    if not stat.S_ISDIR(st.st_mode):
+        emit("UNKNOWN", root, "state root is not a directory")
+        return
+
+    # pathlib.glob SWALLOWS PermissionError: an unreadable root would yield zero
+    # entries and render as the most confident clean line the section can print.
+    # scandir surfaces it, so an unreadable root reports unknown instead.
+    try:
+        entries = sorted(os.scandir(root), key=lambda e: e.name)
+    except Exception as exc:              # noqa: BLE001
+        emit("UNKNOWN", root, "state root is not readable (" + type(exc).__name__ + ")")
+        return
+
+    found = False
+    for e in entries:
+        if not e.name.startswith("fleet_"):
+            continue
+        found = True
+        # Per-entry isolation, on top of the outer guard: one malformed
+        # directory must never suppress the fleets that sort after it.
+        try:
+            if not e.is_dir():
+                emit("UNKNOWN", e.name, "a fleet_* entry that is not a directory")
+                continue
+            d = Path(e.path)
+            f = d / "fleet.json"
+            try:
+                fst = os.stat(f)
+            except OSError:
+                emit("UNKNOWN", e.name, "no fleet.json in the directory")
+                continue
+            # A FIFO passes exists() and then BLOCKS at open() until a writer
+            # appears — doctor would hang forever, and it runs from a
+            # SessionStart hook with no timeout anywhere above it. Non-
+            # termination is not an exception, so no handler can catch it;
+            # the only defence is to refuse to open anything but a regular file.
+            if not stat.S_ISREG(fst.st_mode):
+                emit("UNKNOWN", e.name, "fleet.json is not a regular file")
+                continue
+            data = json.loads(f.read_text(encoding="utf-8"))
+            # Valid JSON of the wrong SHAPE is the trap: a peers list of strings,
+            # or a bare [], parses fine and then raises on .get(). Coerce.
+            # fleet.py refuses a schema it does not know; reading v1 fields out of
+            # it and printing a count would be guessing, and the remedy line
+            # would name a command that errors. It can tell, so it says.
+            # Compared against 1 directly, NOT via a tuple that also admits
+            # None: an ABSENT key reads as None, and fleet.py rejects that too
+            # (unknown schema_version=None), so the old form whitelisted the one
+            # value it was written to catch, and every remedy it printed for
+            # such a record errored. fleet.py always writes the key, so no
+            # bstack-written record reaches this branch.
+            # No backticks anywhere in this heredoc: bash 3.2 parses them inside
+            # a $()-nested quoted heredoc and the file stops being valid.
+            if isinstance(data, dict) and data.get("schema_version") != 1:
+                emit("UNKNOWN", e.name,
+                     "fleet.json schema_version=" + str(data.get("schema_version"))
+                     + " is not one this check reads")
+                continue
+            peers = data.get("peers") if isinstance(data, dict) else None
+            if not isinstance(peers, list) or not all(isinstance(q, dict) for q in peers):
+                emit("UNKNOWN", e.name, "fleet.json is not a fleet record")
+                continue
+            open_peers = [q for q in peers if not q.get("removed")]
+            try:
+                age_h = "%.1f" % ((time.time() - d.stat().st_mtime) / 3600.0)
+            except Exception:             # noqa: BLE001
+                age_h = "?"
+            emit("FLEET", e.name,
+                 str(len(open_peers)) + "/" + str(len(peers)) + " peer(s) unreclaimed",
+                 age_h)
+        except Exception as exc:          # noqa: BLE001 - report, never die
+            emit("UNKNOWN", e.name, "unreadable fleet record (" + type(exc).__name__ + ")")
+
+    if not found:
+        emit("CLEAN", root)
+
+
+try:
+    scan()
+except Exception as exc:                  # noqa: BLE001 - the last line of defence
+    emit("UNKNOWN", "-", "the fleet scan failed (" + type(exc).__name__ + ")")
+PY
+)"
+    _FLEET_RC=$?
+    # Two DISTINCT process-level failures, deliberately not folded into one
+    # `||`: a single fixture that exits non-zero AND prints nothing satisfies
+    # both halves, so either could be deleted with the suite still green. Split,
+    # each branch owns a message no other input produces, and each is pinned by
+    # its own case. The empty-stdout branch is the load-bearing one — a silent
+    # python3 exiting 0 is exactly the header-with-no-body signature.
+    if [ "$_FLEET_RC" != "0" ]; then
+        _FLEET_REPORT="$(printf 'UNKNOWN\t-\tthe fleet probe did not run (python3 exited %s)\t' "$_FLEET_RC")"
+    elif [ -z "$_FLEET_REPORT" ]; then
+        _FLEET_REPORT="$(printf 'UNKNOWN\t-\tthe fleet probe printed nothing (python3 exited 0)\t')"
+    fi
+    while IFS=$'\t' read -r _k _name _detail _age; do
+        [ -z "$_k" ] && continue
+        case "$_k" in
+            NOROOT)
+                [ "$QUIET" = "0" ] && echo "  [info] no fleet state root at $_name — nothing to check here (a --state-dir flag doctor cannot see would live elsewhere)"
+                ;;
+            CLEAN)
+                [ "$QUIET" = "0" ] && echo "  [info] no fleet record survives under $_name — nothing outstanding here (note: bstack fleet down --force deletes the record even with peers unreclaimed, and leaves nothing to find)"
+                ;;
+            UNKNOWN)
+                [ "$QUIET" = "0" ] && echo "  [info] $_name — $_detail; state is unknown, not clean"
+                ;;
+            FLEET)
+                [ "$QUIET" = "0" ] && echo "  [info] $_name — $_detail, ${_age}h since last write; if it is not in flight: bstack fleet status --fleet $_name, then bstack fleet down --fleet $_name (the id is shown sanitised, so copy it from the state dir if it does not resolve; --force if a peer's id was never captured)"
+                ;;
+            *)
+                # emit() is total on the python side, so this is unreachable
+                # today. It exists because the read side enumerating four kinds
+                # and dropping the rest is the same silence the section exists
+                # to prevent, one layer down.
+                [ "$QUIET" = "0" ] && echo "  [info] unrecognised fleet report row ($_k): $_name $_detail"
+                ;;
+        esac
+    done <<< "$_FLEET_REPORT"
+fi
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 TOTAL=$((PASSES + GAPS))

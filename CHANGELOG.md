@@ -1,5 +1,352 @@
 # Changelog
 
+## 0.40.1 — 2026-09-07
+
+### feat(doctor): §28 reports unreclaimed fleets (BRO-2473)
+
+`bstack fleet` shipped in 0.40.0 and `/arc` §7 promises "every peer this session
+raised is stopped" — but nothing observed it. Measured on 0.40.0: zero
+fleet-aware hooks across all three registration surfaces, zero mentions of fleet
+in `scripts/doctor.sh`. The `tests/fleet/` suite gates the *tool's* correctness,
+never the *agent's* cleanup, so an orphaned fleet was invisible: its peers keep
+consuming budget and its state directory survives with nothing reporting it.
+
+The check leans on what `fleet down` guarantees: a fleet's state directory is
+deleted only when every peer was removed or was already gone — **unless
+`--force` was passed**, which deletes the record regardless. So the implication
+holds in one direction, and that is the direction the section uses: a surviving
+`fleet_*` directory is a fleet that was never fully reclaimed. The converse does
+not hold, so the clean line reports "nothing outstanding here" and names
+`--force` rather than claiming everything was reclaimed. A filesystem read: no
+subprocess, no network, no `claude agents` call.
+
+- The state root is resolved by importing `fleet.state_root()` rather than
+  re-deriving `~/.cache/bstack/fleet`, so the section cannot drift from the
+  ontology (flag > `BSTACK_FLEET_STATE_DIR` > config `fleet_state_dir` >
+  default) the day someone sets the config key.
+- The root check uses `os.stat`, not `Path.is_dir()`. `is_dir()` only became
+  total in CPython 3.13: on 3.12 and earlier it re-raises `PermissionError`, and
+  that statement sits upstream of every per-entry guard — so a root whose
+  *parent* was not traversable killed the interpreter and produced exactly the
+  empty body this section exists to prevent. On 3.13+ the same input silently
+  returned `False` and reported the root as absent, a different wrong answer.
+  `os.stat` raises on every version, so one code path classifies identically
+  everywhere; verified under 3.9.6 and 3.14.3.
+- Every answer that is not a positive finding says which kind of not-finding it
+  is. A surviving directory is named with its unreclaimed-peer count, age and
+  remedy. An unreadable state root, a `fleet_*` entry that is not a directory, a
+  missing or unreadable `fleet.json`, and valid JSON of the wrong shape all
+  report **unknown**. An absent root reports that there is nothing to check
+  *here*, since a `--state-dir` flag is invisible to doctor. Only an existing,
+  readable, empty root is clean.
+- Totality is structural, not enumerated. Four review rounds each found one
+  more input that emptied the report — a wrong-shape record, an untraversable
+  parent, an undecodable byte, a NUL in a config path — and each was closed by
+  adding a guard at one more print site, which trades a round per hazard. Three
+  properties now hold for any input, each provable by deleting one thing:
+  stdout cannot raise on an unencodable character; every record goes through a
+  single `emit()` that sanitises every field, so no value can shift a column or
+  forge a row; and anything still escaping lands in one outer handler that
+  emits a single honest `UNKNOWN` row. An empty body is the signature that
+  reads as clean, and it is now unreachable.
+- The trust boundary is stated rather than a totality claim. Everything inside
+  the python process is total; the process itself is guarded at the shell layer,
+  because `command -v python3` proves presence and not that the interpreter
+  runs — a pyenv shim for an uninstalled version is executable and exits 127,
+  and the substitution used to discard that status and leak stderr, rendering a
+  header with no body while an orphan sat on disk. The exit status is captured,
+  stderr is redirected as every other python block in the file already does, and
+  an empty or failed run becomes an honest row.
+- A `fleet.json` whose `schema_version` this check does not read reports unknown
+  instead of applying v1 field semantics to it and printing a count under a
+  remedy that would error.
+- Nothing outside the guarded region touches the filesystem or the environment.
+  The `sys.path` prologue used to run at module level, and `os.getcwd()` raises
+  `FileNotFoundError` when the invoking directory has been deleted — routine
+  here, since `make janitor` removes worktrees while sessions are live. It sat
+  outside `try: scan()`, so it emptied the section while doctor still reported
+  the workspace compliant. The prologue now runs inside the guard.
+- `clean()` keeps what is printable instead of listing what to reject. A
+  blocklist is learned one incident at a time, and it had already missed `ESC`:
+  erase-line plus cursor-up in a name that sorts later can overwrite an orphan
+  printed above it, forging a row by deleting one.
+- `fleet.json` is opened only when it is a regular file. A FIFO passes
+  `exists()` and then blocks at `open()` until a writer appears, so doctor would
+  hang forever under a hook with no timeout above it. Non-termination is not an
+  exception, so no handler can catch it — the only defence is refusing to open.
+- Every per-directory body is total: a raise would empty the whole report, and
+  an empty report renders as a header with no body — the most confident clean
+  signal an advisory section can emit. One malformed directory must never
+  suppress the fleets that sort after it.
+- The import strips the CWD from `sys.path` first. `python3 -` puts the invoking
+  directory at `sys.path[0]`, and `fleet.py`'s own `from scripts import peer`
+  would otherwise resolve there — executing a foreign `scripts/peer.py` from the
+  audited workspace. `bstack doctor` is documented to run from an arbitrary
+  directory, so that path is untrusted input.
+- Advisory only, deliberately: a fleet mid-flight is the expected state during
+  an arc. It never moves the pass/gap totals and never fails `--strict`, because
+  a GAP here would fire on healthy work and teach the operator to skip the
+  section.
+
+`tests/doctor-fleet-orphans.test.sh` pins all of it in 84 cases, and every hand
+mutant dies: the inverted predicate, silence on a surviving directory, an
+unreadable root falling back to `pathlib.glob` (which swallows
+`PermissionError`), a non-directory entry skipped into clean, the shape guard
+and the total-body `except` dropped independently *and* together, the clean line
+claiming reclamation, the advisory becoming a GAP, the CWD left on `sys.path`,
+and the field sanitiser removed. Neutrality is asserted at the source (§28 calls
+neither `ok()` nor `gap()`), because a runtime `--strict` assertion cannot
+discriminate — it passes on the mutant in a gappy workspace and in a clean one
+alike. §27 is left free for the open PR #105.
+
+## 0.40.0 — 2026-09-06
+
+### feat(fleet): the generalized fleet-dispatch substrate — `up` / `status` / `list` / `down` on the shared peer spawn contract (BRO-2454)
+
+0.39.0 shipped the fleet **contract** — Snapshot (P15) reads the fleet, Fanout (P5) names
+the session — and none of the **mechanism**. The only spawner bstack shipped was `bstack
+wave`, which is one shape: worktree per plan, N branches, N checkouts. The other shape —
+**N peers coordinating inside ONE worktree** (a parallel PR sweep, several ready tickets, a
+fixer beside an adversarial reviewer) — existed only as a skill hardcoded inside one client
+repository, where its base branch, ticket shape, peer-contract skill and cache directory
+were constants.
+
+Crystallize (P16) rule of three, cleared four times: `bstack wave` (2026-05), that client
+skill (2026-09-05), a six-peer Sentry-triage fleet (2026-09-06), a seven-peer fleet running
+the same week. The generalization is to **declare the ontology the skill hardcoded**.
+
+**RCS reading**: a fleet is N controllers at L0/L1 sharing one plant (the repository and its
+root workspace). Spawning and reclaiming controllers is an L2 action; the P15 fleet read is
+the observation; the canonical name is the state's identity coordinate; overlap negotiated
+by one message to the owning peer is the shield.
+
+**Measured disturbances** (2026-09-05/06, Claude Code 2.1.258), each of which the peer brief
+now defends against: a transient `Login expired` killed a whole fleet mid-turn and every peer
+lost its in-memory work (mitigation: durability — file the ticket and write findings BEFORE
+going deep); a dead session still lists as `blocked`, so only a `pid` proves liveness; a peer
+stalled on ANY blocking wait (`AskUserQuestion`, `gh pr checks`, a `sleep` loop) cannot take
+an inbound message and can only be restarted — the orchestrator owns the wait.
+
+**New**
+
+- `bin/bstack-fleet` → `scripts/fleet.py` (stdlib only), wired as `bstack fleet`.
+- `fleet up <roster> [--dry-run] [--fleet id] [--worktree path] [--json]` — validates the
+  whole roster atomically (empty roster, missing `slug`, unknown key named, duplicate composed
+  name, bad `mcp` mode) **before anything spawns**; composes each name with
+  `peer.compose_name`; writes `<state_dir>/<fleet-id>/fleet.json` **before the first spawn**
+  and again after each one; writes a durable brief per peer under `briefs/<name>.md`; passes a
+  SHORT positional prompt that points at the brief; spawns via `peer.build_spawn_argv` +
+  `peer.spawn`; exits 1 if any spawn returned no id.
+- `fleet status [--fleet id | --all] [--json]` — one `claude agents --json --all` read for the
+  whole call, then `NAME ID LIVE STATE PID` per peer with an action per class.
+- `fleet list` — every fleet with created-at, peer count and counts by liveness class.
+- `fleet down (--fleet id | --all) [--json]` — `stop` then `rm` per peer, tolerating a failure
+  when the session is already gone.
+
+**Ontology** — precedence per key: CLI flag > env `BSTACK_FLEET_<KEY>` >
+`~/.bstack/config.yaml` flat key `fleet_<key>` (the file `bin/bstack-config` reads, honouring
+`BSTACK_STATE_DIR`, parsed by a flat line reader — no PyYAML) > default.
+
+| Key | Default | What it decides |
+|---|---|---|
+| `base` | `main` | the base branch quoted in every brief |
+| `peer_contract` | `autonomous` | the skill a peer invokes first |
+| `allowed_tools` | unset | peer inherits the project's permission mode; a roster entry may override |
+| `state_dir` | `~/.cache/bstack/fleet` | where fleet state and briefs live |
+| `ticket_pattern` | `[A-Za-z]+-\d+` | pulls a ticket out of the branch name when a roster entry has none |
+| `mcp` | `strict` | `peer.mcp_mode`; a roster entry may set `inherit` |
+
+**Roster**: a path or `-` for stdin; JSONL (blank lines and `#` comments ignored) or a single
+JSON array. Per entry: `slug` (required), `ticket`, `prompt`, `worktree` (default: the current
+worktree), `role` (→ `--agent`), `model`, `allowed_tools`, `mcp`, `owns` (the path globs that
+peer owns — its lane, quoted into the brief).
+
+**Routing rule** (Orchestrate (P19), the N>1 × across-session × external-trigger cell now
+holds two mechanisms and the tiebreak is the worktree axis):
+
+- each peer needs its own branch and worktree → `bstack wave dispatch <plan...>`
+- peers coordinate in one worktree → `bstack fleet up <roster>`
+- independent in-session subtasks → Fanout (P5) `Agent` calls in one message
+
+**Invariants**
+
+- `down` deletes a fleet's state directory **only** when every peer was removed or was already
+  gone. Otherwise the file is kept with per-peer `removed` flags and the command exits 1.
+  Teardown must never orphan a fleet by deleting the only record of it — a peer whose id was
+  never captured is exactly the case where the operator still needs the file.
+- The state file is written **before** the first spawn, so a crash mid-`up` leaves a truthful
+  record rather than a fleet of orphans nobody can name.
+- `status` renders `unknown` and prints `(liveness unavailable: …)` when the agent listing
+  cannot be read. It never reports a fleet clean because the instrument failed.
+- Nothing is written and nothing spawns under `--dry-run`, including the state root.
+
+**Tests** — `tests/fleet/` (91 python unittest cases across roster parsing, name composition,
+config precedence, `up`, `status`, `list`, `down`), run in CI by `tests/fleet.test.sh` under
+the existing `tests/*.test.sh` job (`ci.yml` runs shell wrappers only; a python suite with no
+wrapper is a dead gate — how wave shipped ungated until BRO-2453). A hand mutation sweep
+pins the clauses that matter: state written after the spawn instead of before, `down` deleting
+state despite a failure, `down` skipping `rm`, `status` coercing an unreadable listing,
+duplicate names accepted, the positional prompt omitted, the brief losing its `## Task`
+section, `--dry-run` launching, a null-id peer counted as removed, unknown roster keys ignored,
+inverted config precedence, per-entry `mcp` ignored.
+
+**Docs** — `SKILL.md` command list + routing paragraph; `references/primitives.md` §P19 cube
+cell, decision rule 7 and the P16 rule-of-three citation, plus a §P5 sentence naming
+`scripts/peer.py` as the executable form of the naming rule; `references/primitives.yaml` P5 +
+P19 specs; `assets/templates/AGENTS.md.template` and `CLAUDE.md.template` §P19 in lockstep;
+`bin/bstack` usage.
+
+**Round-1 hardening (P20)** — the invariants above, made teeth:
+
+- `down` never orphans a live fleet even when `claude` cannot run: `_run` reports whether the
+  process actually launched, teardown gates BOTH `stop` and `rm` on it (a missing binary's
+  "no such" errno text can no longer score every peer already-gone), and `_cmd_down` refuses
+  up front with `_ensure_claude_on_path`.
+- `up` refuses `--fleet <id>` when that fleet's `fleet.json` already exists — reusing it would
+  overwrite the state of a possibly-live fleet and orphan its roster.
+- `fleet.json` is written atomically (pid-suffixed sibling tmp + `os.replace`, as
+  `wave.write_manifest` does): a `status`/`list`/`down` read that lands mid-rewrite never sees
+  a torn file.
+- `validate_roster` rejects a roster resolving to more than one worktree (that is the wave
+  shape — `bstack wave dispatch`) and an exact-string duplicate `owns` glob across peers.
+- `up --orchestrator <name>` (default `$CLAUDE_SESSION_NAME`) names the spawning session in
+  each brief's report line; absent, the brief tells the peer to reply to the `from` of its
+  first inbound message. The spawn `cwd` is pinned to the single worktree (regression-tested).
+- `status --all` / `down --all` skip an unreadable fleet dir instead of aborting the sweep.
+- `down --force` deletes the state dir after reclaiming what it can, reporting what it could
+  not reach — so a null-id fleet is clearable rather than stuck.
+- `up`'s trailer and `status`'s waiting suggestion speak the real liveness vocabulary
+  (`status=waiting`, `state=blocked`, `waiting (<waitingFor or input>)`), never the
+  non-existent `needs` field; a waiting peer is told to `claude attach` or stop+respawn, since
+  it cannot take a `SendMessage`.
+
+### Migration
+
+None. `bstack fleet` is a new, additive subcommand: no existing command changes behavior, no
+default flips, and `scripts/peer.py` is used, not modified. Minor bump because a new
+orchestration mechanism enters the P19 cube and the governance templates change with it.
+
+## 0.39.1 — 2026-09-06
+
+### fix(wave): peers are named, spawned unattended-safe, and joined to their live session (BRO-2453)
+
+0.39.0 made the contract explicit — Fanout (P5): every session is
+`<worktree>-<ticket>-<slug>` so a peer can address it — and `bstack wave`, the one
+spawner bstack ships, did not meet it. `scripts/wave.py` launched each plan as
+`claude --bg <prompt>` and nothing else.
+
+**Measured** (2026-09-06, Claude Code 2.1.258, two scratch spawns read back through
+`claude agents --json --all` and `claude logs`): the positional prompt *does* run as
+the first turn on this build (an SRI note from the day before had recorded an idle
+start; it did not reproduce), so dispatch was not the defect. What was: a peer spawned
+without `--name` is displayed under its **prompt text**; no `--strict-mcp-config`
+(an unattended peer in a project with unapproved `.mcp.json` servers stalls on the
+trust dialog) and no `--settings '{"crossSessionInbound":"accept"}'` (it cannot take
+a `SendMessage`) — zero occurrences of either flag anywhere in the repo; the manifest
+kept only the launcher's `Popen` pid, so `wave status` could not join a plan to its
+session and had no liveness read at all; and the python suite under `tests/wave/`
+was not run by CI (`ci.yml` runs `tests/*.test.sh` only), so none of this had a gate.
+
+**Now**
+
+- New `scripts/peer.py` — the spawn contract as code, shared with the coming
+  `bstack fleet`: `compose_name` (the P5 grammar), `build_spawn_argv` (`--bg --name
+  <n> [--strict-mcp-config] --settings <accept> … <prompt>`, prompt last), `spawn`
+  (synchronous, stdin `/dev/null`, `$BSTACK_PEER_SPAWN_TIMEOUT` bound, ANSI/OSC-stripped
+  `backgrounded · <id>` capture that also reads the id out of a timed-out launcher —
+  an un-stripped regex reports every spawn failed and leaves nothing to join on),
+  `list_agents` / `liveness` read against the real `claude agents --json --all`
+  schema (fixture captured from 2.1.258 and committed under `tests/wave/fixtures/`):
+  `state: failed|stopped` = gone, `state: done` = done even if the process lingers,
+  `status: waiting` (+ `waitingFor`) = waiting on a dialog/permission/input, a pid
+  with idle/busy = live, no pid = gone whatever `state` says, unreadable listing =
+  `unknown`, never clean. There is no `needs` field; a first draft keyed on one and
+  review against the live payload caught it.
+- `wave dispatch` names each peer from its worktree, `linear` ticket and slug, prints
+  the full argv under `--dry-run`, writes the manifest **before** the first launch (a
+  peer's first act is `wave report --event started`, which validates its slug against
+  the manifest), records `session_id` + `session_name` per plan as each spawn returns,
+  and exits 1 when any spawn returned no id. Two plans that compose the same session
+  name (long slugs truncated at 64, or a worktree basename equal to the slug) are
+  rejected at validation, before any worktree or session exists — two peers under one
+  name are unaddressable — and a bad `mcp:` value is a clean `error:` line, not a traceback. Per-plan `mcp: inherit` in the `wave:`
+  frontmatter (or `BSTACK_PEER_MCP=inherit`) keeps the project's MCP servers for
+  peers that need them; strict is the unattended-safe default.
+- A background peer that needs the operator surfaces as `state: blocked` in
+  `claude agents --json --all`, not `status: waiting` (that is the interactive
+  dialog layer), so `classify` maps both to `waiting` — otherwise the class is
+  unreachable for the `--bg` peers wave spawns and a stalled peer reads `live`.
+  The worktree join is legacy-only (a pre-0.39.1 manifest with no id and no
+  name) and adopts only a `background` session, so an operator's `claude` in the
+  worktree, or a re-dispatched peer reusing the deterministic name, is never
+  reported as this plan's live peer. `spawn` writes child output to a temp file
+  rather than a pipe, so a `--bg` grandchild that keeps the pipe cannot hold the
+  launcher for the full timeout.
+- `wave status` gains `SESSION` and `LIVE` columns and three suggestions: a peer
+  waiting (with the `waitingFor` reason), a peer that finished its turn without
+  reaching `pr_merged`, and a peer gone before its plan finished. The manifest is
+  written atomically (`os.replace`) because peers read it while dispatch rewrites it.
+- Unknown keys under `wave:` are rejected by name (a typo such as `mpc:` would
+  otherwise silently strip the peer of every MCP tool); `mcp:` is documented in
+  `SKILL.md` and P5.
+- `tests/wave.test.sh` runs the python suite under the existing `tests/*.test.sh` CI
+  job; `tests/wave/test_peer.py` pins every clause above (each flag individually,
+  the grammar, the ANSI fixture, the liveness classes); `fake_claude.sh` now answers
+  like the real binary and takes the prompt as the last argument.
+
+Patch bump: additive flags on an existing command, no default flip for anyone not
+running wave. Manifest schema unchanged (new fields default to `null`; old
+manifests still read).
+
+## 0.39.0 — 2026-09-05
+
+### feat(primitives): Snapshot (P15) sees the fleet; Fanout (P5) names the session (STI-2669)
+
+Snapshot (P15) was written for one agent: `git status`, branch, ahead/behind, in-flight PRs,
+ticket state, deploy state. Every field is about the session's own worktree. That was the
+wrong premise for the workspaces bstack now runs in, where an unattended loop is never alone.
+
+**Measured** (2026-09-05, an SRI maintainer loop): one session beside **13 linked worktrees**
+of a bare repository and **14 peer Claude Code sessions** on the same machine. 13 of the 14
+peers appeared under auto-generated names (`mola-ff`, `gorgonian-4c`, `finback-0d`) that carry
+nothing but a directory basename, in an agent-side `ListAgents` listing that has **no
+working-directory column** — so the name is the only join from a session to its worktree,
+branch and ticket, and it encoded none of them. The single-session snapshot could see none
+of this. Its first command was also dead: `git status` failed with `must be run in a work
+tree` because the shared config sets `core.bare = true` with `extensions.worktreeConfig`, and
+that worktree lacked the per-worktree `core.bare = false` override its eleven siblings had.
+
+**P15 now includes the fleet**, and it precedes the scope lock: own identity (the `ListAgents`
+header, worktree, branch, ticket); every worktree with branch and HEAD (`git worktree list
+--porcelain`) joined to open PRs; every peer session with busy/idle state; the shared root
+workspace (bare repo, shared stash, shared `.git/config`); and the **path overlap** between
+the intended edits and every in-flight branch (`git diff --name-only origin/<base>...<branch>`).
+Ahead/behind is measured against `origin/<base>` after a fetch, never the local base checkout,
+which in the measured fleet was stale. New invariant clause: *a snapshot that cannot see the
+other writers is not a snapshot.* New trigger rule 5: re-read the fleet before every scope
+lock in an unattended loop.
+
+**P5 now names the session.** Every session is `<worktree>-<ticket>-<slug>` (lowercase,
+hyphens — typeahead-safe), so a peer can address it. The name is set with `--name` at launch
+or `/rename` at the keyboard; per the Claude Code docs a `/rename` inside a cross-session
+message "arrives as plain text" and no hook sets the name, so **the agent cannot rename
+itself**. Its part of the flow is: compose the canonical name, verify it against the
+`ListAgents` header, request it in the first report when it does not hold, keep working, and
+carry the identity in peer messages and the handoff until the header matches. Overlap is
+settled by one `SendMessage` to the owning session before the first edit — never by whoever
+pushes first; an inbound message is a claim to verify, not an authorization; no session asks a
+peer to do what its own permissions block (cross-session permission laundering).
+
+Changed: `references/primitives.md` (P5, P15), `references/primitives.yaml` (P5, P15 spec /
+invariant / failure mode; a second rule-of-three citation on P15), `SKILL.md` primitive table,
+`assets/templates/AGENTS.md.template` + this repo's `AGENTS.md` (P5, P15 sections),
+`CLAUDE.md` P15 row. No mechanism change: both primitives are reasoning-enforced reflexes and
+`scripts/doctor.sh` lints section presence, which is unchanged. Minor bump because the
+definition of what a compliant snapshot contains widened.
+
+Originating ticket: GetStimulus/sri STI-2669 (owner-directed). The SRI-side counterpart lands
+the same contract in the `autonomous-maintainer` skill and the workspace `CLAUDE.md`.
+
 ## 0.38.0 — 2026-07-29
 
 ### feat: `bstack skills audit` gains report 7 — eval coverage (BRO-2005)
