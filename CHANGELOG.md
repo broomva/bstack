@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.40.2 — 2026-09-07
+
+### feat(doctor): §27 reports skills whose executed code diverges from origin/main (BRO-2369)
+
+A merge to a skills repo's `main` does not deploy a skill. An installed skill is
+usually a symlink into a checkout, and what actually runs is whatever branch
+that checkout is parked on — so a merged fix can sit inert with nothing
+reporting it. BRO-2368 is the measured instance: 89 skills running three commits
+behind main, with three merged lint and bookkeeping GATE fixes dead on disk.
+
+`scripts/lib/skill-drift.py` compares the **working tree** against `origin/main`,
+per skill. Commit topology was the first design and was wrong in both
+directions: it called a checkout current while its files were modified on disk,
+and it called every skill in a repo drifted because one commit touched
+`README.md`.
+
+The rule the module is built around: **a skill it cannot evaluate is reported
+UNKNOWN, never current.** This check exists because the failure mode is a silent
+pass, so a checker resolving ambiguity toward "fine" would reproduce the bug it
+was written to catch. Concretely:
+
+- No `origin/master` fallback. Comparing against a stale ref and then printing
+  "current with origin/main" would invent a clean answer out of a missing one.
+- `core.fsmonitor=false` on every git call. A dead fsmonitor daemon makes git
+  report a clean tree while files are modified, which would understate drift
+  silently.
+- `assume-unchanged` and `skip-worktree` paths are **UNVERIFIABLE**, not clean.
+  Those flags exist to make a modified file invisible to git, so `diff` reports
+  nothing while the file on disk differs and the skill runs code no comparison
+  can see.
+- A dangling symlink is caught by `resolve(strict=True)`, since a dead link
+  still prints a plausible path under `readlink`.
+- One skill reached through two roots (`~/.claude/skills/x` →
+  `~/.agents/skills/x`) is ONE skill, keyed on the resolved path.
+
+Advisory only, like §4b, §4c, §12 and §28: it prints `[info]` and calls neither
+`ok()` nor `gap()`, so the doctor totals and `--strict` are unaffected. Drift is
+a deployment fact, not a contract violation, and a doctor that failed on it
+would block unrelated work. Read-only and offline — it reads whatever ref the
+last fetch left and never fetches.
+
+Performance: repo roots are resolved by walking for `.git` rather than spawning
+`git rev-parse` per skill. 408 of 523 installed skills here have no repo above
+them at all, and spawning git only to be told so dominated the runtime.
+
+`§27` was reserved by 0.40.1's §28, which skipped the number to avoid a merge
+conflict; both sections now sit in order.
+
+16-case suite in `tests/skill-drift.test.sh`, including negative controls that
+fail a checker which flags everything and a checker which flags nothing.
+
 ## 0.40.1 — 2026-09-07
 
 ### feat(doctor): §28 reports unreclaimed fleets (BRO-2473)
