@@ -31,6 +31,10 @@
 #  15. NEGATIVE CONTROL for 13/14
 #  16. a staged-but-uncommitted edit is drift
 #  17. a file RENAMED out of the skill dir is drift (rename detection hides the source)
+#  18. a NON-ASCII diverging path is drift (git C-quotes it without -z)
+#  19. a NON-ASCII assume-unchanged path is UNVERIFIABLE (same quoting blind spot)
+#  20. a STALE origin/main is UNKNOWN, not a basis for "matches origin/main"
+#  21. NEGATIVE CONTROL for 20 — a freshly fetched ref still compares normally
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -285,6 +289,77 @@ if echo "$OUT" | grep -q 'differ from origin/main' && echo "$OUT" | grep -q 'alp
     pass "17. a file renamed OUT of the skill dir is drift, not clean"
 else
     fail "17. rename out of the skill dir misreported as clean: $OUT"
+fi
+
+# ── 18/19. NON-ASCII PATHS. git renders any path containing a byte >= 0x80, a
+# quote, a backslash or a control char as a C-quoted string wrapped in literal
+# double quotes — "skills/alpha/NARI\303\221O.txt" — unless -z is passed. The
+# prefix test in _under() then never matches, the path is dropped, and the skill
+# reports as MATCHING origin/main: a positive clean verdict on a diverging
+# skill. The same quoting defeated the assume-unchanged detection independently,
+# so both arms are pinned. Live on this machine: the tracked file
+# skills/knowledge/colombia-conflict/.../CEV_TERRITORIAL_NARI<N-tilde>O_*.txt.gz.
+# Found by P20 round 1 on PR #105.
+NON_ASCII="NARI$(printf '\303\221')O.txt"
+
+clone c18
+# NOT up_commit: that uses `commit -am`, which stages modifications to TRACKED
+# files only, so a brand-new path would never reach the upstream commit and the
+# case would pass vacuously against a clone that is not actually behind.
+( cd "$UP" && printf 'v2\n' > "skills/alpha/$NON_ASCII" && git add -A \
+  && git -c user.email=t@t -c user.name=t commit -qm "non-ascii divergence" )
+( cd "$TMP/c18" && git fetch -q origin )
+BEHIND18=$( cd "$TMP/c18" && git rev-list --count HEAD..origin/main )
+R18="$TMP/root18"; link "$R18" "$TMP/c18/skills/alpha"
+OUT=$(run "$R18")
+if [ "$BEHIND18" = "1" ] && echo "$OUT" | grep -q 'differ from origin/main' && echo "$OUT" | grep -q 'alpha'; then
+    pass "18. a non-ASCII diverging path is drift, not clean"
+else
+    fail "18. non-ASCII divergence misreported (behind=$BEHIND18): $OUT"
+fi
+
+clone c19
+R19="$TMP/root19"; link "$R19" "$TMP/c19/skills/alpha"
+( cd "$TMP/c19" && printf 'v1\n' > "skills/alpha/$NON_ASCII" \
+  && git add -A && git -c user.email=t@t -c user.name=t commit -qm "add non-ascii" \
+  && git update-index --assume-unchanged "skills/alpha/$NON_ASCII" \
+  && printf 'EDITED\n' > "skills/alpha/$NON_ASCII" )
+OUT=$(run "$R19")
+if echo "$OUT" | grep -q 'UNVERIFIABLE'; then
+    pass "19. a non-ASCII assume-unchanged path is UNVERIFIABLE, not clean"
+else
+    fail "19. non-ASCII assume-unchanged misreported: $OUT"
+fi
+
+# ── 20/21. REF FRESHNESS. `origin/main` that exists but was never refreshed is
+# not a comparison, it is a comparison against a fiction — and the module's own
+# rule is that what cannot be verified is never reported as current. Measured on
+# this machine when the check was written: a clone with no FETCH_HEAD whose
+# packed-refs was last written 61 days earlier had an origin/main 180 commits
+# behind upstream, and its 23 skills were counted inside "match origin/main".
+# Dated from mtimes, so still no network. Found by P20 round 1 on PR #105.
+clone c20
+R20="$TMP/root20"; link "$R20" "$TMP/c20/skills/alpha"
+GD20="$(cd "$TMP/c20" && git rev-parse --absolute-git-dir)"
+OLD=$(( $(date +%s) - 60*86400 ))
+for f in FETCH_HEAD packed-refs refs/remotes/origin/main; do
+    [ -e "$GD20/$f" ] && touch -t "$(date -r $OLD +%Y%m%d%H%M.%S)" "$GD20/$f"
+done
+OUT=$(run "$R20")
+if echo "$OUT" | grep -q 'UNKNOWN' && echo "$OUT" | grep -q 'too stale to compare'; then
+    pass "20. a 60d-stale origin/main is UNKNOWN, not a comparison"
+else
+    fail "20. stale ref treated as a valid basis: $OUT"
+fi
+
+# Without this, case 20 passes for a checker that calls EVERY repo stale.
+clone c21
+R21="$TMP/root21"; link "$R21" "$TMP/c21/skills/alpha"
+OUT=$(run "$R21")
+if echo "$OUT" | grep -qE '\[info\].*match origin/main' && ! echo "$OUT" | grep -q 'too stale'; then
+    pass "21. NEGATIVE CONTROL: a freshly fetched ref still compares"
+else
+    fail "21. a fresh ref was misreported as stale: $OUT"
 fi
 
 echo ""
