@@ -580,6 +580,15 @@ def _cmd_up(args) -> int:
     fleet_id = args.fleet or mint_fleet_id()
     fd = fleet_dir(fleet_id, args.state_dir)
 
+    # A reused `--fleet <id>` would overwrite the state file of a fleet that may
+    # still be running — the current roster becomes an orphan nobody can name.
+    # Refuse; the operator must `down` it first (a minted id never collides).
+    if args.fleet and (fd / "fleet.json").exists():
+        raise FleetError(
+            f"fleet {fleet_id} already exists at {fd / 'fleet.json'}: "
+            f"`bstack fleet down --fleet {fleet_id}` first, or omit --fleet to "
+            f"mint a fresh id. Reusing it would orphan the current roster.")
+
     if args.dry_run:
         payload = {"dry_run": True, "fleet_id": fleet_id,
                    "state_dir": str(fd), "peers": []}

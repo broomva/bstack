@@ -234,6 +234,28 @@ class UpTest(unittest.TestCase):
             self.assertTrue(
                 (fleet.state_root() / "fleet_123_abcd" / "fleet.json").exists())
 
+    def test_up_refuses_to_overwrite_an_existing_fleet_id(self):
+        """Reusing `--fleet <id>` would orphan the roster already at that id.
+        The first roster's state file must survive the refusal untouched."""
+        with sandbox() as td:
+            write_stub(td)
+            wt = plain_worktree(td, name="wt")
+            r1 = write_roster(td, [{"slug": "a", "ticket": "BRO-1"}])
+            rc1, _ = _run(["up", str(r1), "--worktree", str(wt),
+                           "--fleet", "fleet_x_0001"])
+            self.assertEqual(rc1, 0)
+            fd = fleet.state_root() / "fleet_x_0001"
+            first = read_state_json(fd)
+
+            r2 = write_roster(td, [{"slug": "b", "ticket": "BRO-1"}],
+                              name="r2.jsonl")
+            rc2, _ = _run(["up", str(r2), "--worktree", str(wt),
+                           "--fleet", "fleet_x_0001"])
+            self.assertEqual(rc2, 1)
+            self.assertEqual(read_state_json(fd), first)   # untouched
+            self.assertEqual([p["slug"] for p in read_state_json(fd)["peers"]],
+                             ["a"])
+
     def test_per_entry_worktree_is_the_spawn_cwd(self):
         with sandbox() as td:
             write_stub(td)
