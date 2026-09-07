@@ -82,6 +82,19 @@ class UpTest(unittest.TestCase):
             self.assertIn("wt-bro-2454-fixer → abc120", out)
             self.assertIn("ListAgents", out)
 
+    def test_up_trailer_speaks_the_real_liveness_vocabulary(self):
+        """The trailer once told the operator to look for `needs=<…>`, a field
+        that does not exist. It must name the real liveness vocabulary."""
+        with sandbox() as td:
+            write_stub(td)
+            wt = plain_worktree(td, name="wt")
+            roster = write_roster(td, [{"slug": "a", "ticket": "BRO-1"}])
+            rc, out = _run(["up", str(roster), "--worktree", str(wt)])
+            self.assertEqual(rc, 0, out)
+            self.assertNotIn("needs", out)
+            self.assertIn("status=waiting", out)
+            self.assertIn("state=blocked", out)
+
     def test_state_file_exists_before_the_first_spawn(self):
         with sandbox() as td:
             write_stub(td)

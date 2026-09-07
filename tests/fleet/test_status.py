@@ -147,6 +147,23 @@ class StatusTest(unittest.TestCase):
             # A live peer needs nothing said about it.
             self.assertNotIn("wt-bro-1-alpha is gone", out)
 
+    def test_waiting_suggestion_carries_the_reason_and_the_restart_action(self):
+        with sandbox() as td:
+            fd = _launch(td)
+            (td / "agents.json").write_text(json.dumps([
+                {"id": "abc120", "name": "wt-bro-1-alpha", "pid": 71,
+                 "status": "waiting", "waitingFor": "dialog open"},
+                {"id": "abc121", "name": "wt-bro-1-bravo", "pid": 72,
+                 "kind": "background", "state": "working", "status": "waiting"},
+            ]), encoding="utf-8")
+            _, out = _run(["status", "--fleet", fd.name])
+            self.assertIn("wt-bro-1-alpha is waiting (dialog open)", out)
+            self.assertIn("claude attach abc120 to answer it, or stop+respawn", out)
+            # A background peer carries no waitingFor → the reason is `input`.
+            self.assertIn("wt-bro-1-bravo is waiting (input)", out)
+            # The retired wording (a waiting peer cannot take a SendMessage).
+            self.assertNotIn("its brief pointer", out)
+
     def test_unreadable_listing_renders_unknown_never_clean(self):
         with sandbox() as td:
             fd = _launch(td)

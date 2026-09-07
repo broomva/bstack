@@ -634,9 +634,10 @@ def _cmd_up(args) -> int:
         print(f"Fleet {fleet_id} launched "
               f"({len(peers) - failures}/{len(peers)} peers).")
         print(f"State: {fd / 'fleet.json'}")
-        print("Next: ListAgents — the peers should appear under these names; "
-              "a peer showing needs=<…> started idle: SendMessage it its brief "
-              "pointer.")
+        print("Next: ListAgents — the peers should appear under these names. "
+              "Run `fleet status` for liveness: a peer at status=waiting is "
+              "blocked on input (claude attach to answer it, or stop+respawn); "
+              "a background peer at state=blocked with no pid has gone.")
     return 1 if failures else 0
 
 
@@ -668,10 +669,15 @@ def render_status(state: FleetState, agents: list[dict] | None) -> str:
         lines.append(f"  {p.name:<40} {sid:<12} {klass:<10} "
                      f"{agent_state:<12} {pid}")
         ref = p.session_id or entry.get("id") or "<id>"
-        if klass == peer.IDLE_START:
+        if klass == peer.WAITING:
+            # A waiting peer is blocked on a dialog/permission/input; it cannot
+            # take a SendMessage, so the only moves are to answer it at the
+            # keyboard or stop+respawn. `waitingFor` is the reason; a background
+            # peer carries none, so it degrades to `input`.
+            reason = peer.waiting_for(entry) or "input"
             attention.append(
-                f"  • {p.name} started idle — SendMessage {p.name} its brief "
-                f"pointer (or: claude attach {ref})")
+                f"  • {p.name} is waiting ({reason}) — claude attach {ref} to "
+                f"answer it, or stop+respawn")
         elif klass == peer.GONE:
             attention.append(
                 f"  • {p.name} is gone (no pid): claude logs {ref}; "
