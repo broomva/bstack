@@ -37,6 +37,11 @@
 #  21. NEGATIVE CONTROL for 20 — a freshly fetched ref still compares normally
 #  22. a clone that NEVER FETCHED is UNKNOWN (git clone writes no FETCH_HEAD)
 #  23. `git gc` must not reset the freshness clock (pack-refs rewrites packed-refs)
+#  24. a fetch of ANOTHER remote must not stamp origin as fresh
+#  25. a FUTURE mtime is undatable, never clamped to "just fetched"
+#  26. a LINKED WORKTREE is still evaluable (FETCH_HEAD lives in the common dir)
+#  27. an UNTRACKED non-ASCII file is drift (the third -z site, ls-files --others)
+#  28. a `.git`-suffixed origin URL still matches FETCH_HEAD (git normalises it)
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -386,7 +391,7 @@ if [ -e "$GD22/FETCH_HEAD" ]; then
     fail "22. fixture invalid — a plain clone wrote FETCH_HEAD"
 else
     OUT=$(run "$R22")
-    if echo "$OUT" | grep -q 'UNKNOWN' && echo "$OUT" | grep -q 'never fetched since clone'; then
+    if echo "$OUT" | grep -q 'UNKNOWN' && echo "$OUT" | grep -q 'no FETCH_HEAD from origin'; then
         pass "22. a clone that never fetched is UNKNOWN, not current"
     else
         fail "22. never-fetched clone misreported: $OUT"
@@ -413,6 +418,108 @@ if echo "$OUT" | grep -q 'too stale to compare'; then
     pass "23. git gc does not reset the freshness clock"
 else
     fail "23. gc hid a 60d-stale ref: $OUT"
+fi
+
+# ── 24. A FETCH OF ANOTHER REMOTE must not stamp origin as fresh. FETCH_HEAD is
+# written by a fetch of ANY remote, so its mtime alone says "we fetched
+# something", not "we fetched origin". Its CONTENT records the URL each branch
+# came from, which is what makes the distinction. Found by P20 round 2.
+clone c24
+R24="$TMP/root24"; link "$R24" "$TMP/c24/skills/alpha"
+OTHER="$TMP/other24"; mkdir -p "$OTHER" && ( cd "$OTHER" && git init -q -b main . \
+    && echo z > z.txt && git add -A && git -c user.email=t@t -c user.name=t commit -qm o1 )
+CD24="$(cd "$TMP/c24" && cd "$(git rev-parse --git-common-dir)" && pwd)"
+"$PY" - "$CD24" <<'PYEOF'
+import os, sys, time
+os.utime(os.path.join(sys.argv[1], "FETCH_HEAD"),
+         ((t := time.time() - 90 * 86400), t))
+PYEOF
+( cd "$TMP/c24" && git remote add other "$OTHER" && git fetch -q other ) >/dev/null 2>&1
+OUT=$(run "$R24")
+if echo "$OUT" | grep -q 'UNKNOWN'; then
+    pass "24. fetching another remote does not stamp origin as fresh"
+else
+    fail "24. another remote's fetch was read as an origin fetch: $OUT"
+fi
+
+# ── 25. A FUTURE MTIME is undatable, not "just fetched". Clock skew, a restored
+# backup or an unpacked tarball can date FETCH_HEAD ahead of now; the first
+# version clamped the negative age to 0.0, which resolves an anomaly toward
+# freshly-fetched — the one move this module exists to refuse.
+clone c25
+R25="$TMP/root25"; link "$R25" "$TMP/c25/skills/alpha"
+CD25="$(cd "$TMP/c25" && cd "$(git rev-parse --git-common-dir)" && pwd)"
+"$PY" - "$CD25" <<'PYEOF'
+import os, sys, time
+os.utime(os.path.join(sys.argv[1], "FETCH_HEAD"),
+         ((t := time.time() + 2 * 86400), t))
+PYEOF
+OUT=$(run "$R25")
+if echo "$OUT" | grep -q 'UNKNOWN'; then
+    pass "25. a future FETCH_HEAD mtime is undatable, not fresh"
+else
+    fail "25. a future mtime was clamped to fresh: $OUT"
+fi
+
+# ── 26. A LINKED WORKTREE is still evaluable. FETCH_HEAD lives in the COMMON
+# dir, so keying on --absolute-git-dir (which returns .git/worktrees/<n>) made
+# every linked worktree permanently undatable — a regression the staleness work
+# introduced, in a workspace where most checkouts are worktrees.
+clone c26
+( cd "$TMP/c26" && git worktree add -q "$TMP/wt26" -b wt26b ) >/dev/null 2>&1
+mkdir -p "$TMP/wt26/skills/alpha" 2>/dev/null || true
+R26="$TMP/root26"; link "$R26" "$TMP/wt26/skills/alpha"
+OUT=$(run "$R26")
+if echo "$OUT" | grep -q 'cannot date origin/main'; then
+    fail "26. a linked worktree is structurally undatable: $OUT"
+else
+    pass "26. a linked worktree is still evaluable"
+fi
+
+# ── 27. THE THIRD -z SITE. `ls-files --others` quotes non-ASCII paths exactly as
+# `diff` does. Cases 18/19 cover the diff and ls-files -v sites; dropping -z from
+# THIS one survived every case — three doors guarded, two tested. The divergence
+# here is an UNTRACKED file, which only this call can see. Found by P20 round 2.
+clone c27
+R27="$TMP/root27"; link "$R27" "$TMP/c27/skills/alpha"
+# A name NOT tracked upstream. Case 18 commits $NON_ASCII to $UP, so reusing it
+# here overwrote a TRACKED file — that is a modification, which the `diff` call
+# reports, so this case passed under the very mutant it exists to catch. Assert
+# the file is genuinely untracked before drawing any conclusion from the result.
+UNTRACKED27="ONLY-HERE-$(printf '\303\221').txt"
+printf 'untracked\n' > "$TMP/c27/skills/alpha/$UNTRACKED27"
+if ( cd "$TMP/c27" && git ls-files --error-unmatch "skills/alpha/$UNTRACKED27" ) >/dev/null 2>&1; then
+    fail "27. fixture invalid — the probe file is tracked, so this tests diff, not ls-files --others"
+fi
+OUT=$(run "$R27")
+if echo "$OUT" | grep -q 'differ from origin/main' && echo "$OUT" | grep -q 'alpha'; then
+    pass "27. an untracked non-ASCII file is drift (ls-files --others -z)"
+else
+    fail "27. untracked non-ASCII file missed: $OUT"
+fi
+
+# ── 28. URL NORMALISATION. git strips the trailing `.git` when it writes
+# FETCH_HEAD: config holds `https://host/o/r.git`, FETCH_HEAD records
+# `branch 'main' of https://host/o/r`. An exact substring test therefore reported
+# EVERY real repo on this machine as undatable while the suite was 27/27 green —
+# the fixtures use bare local paths, which have no suffix to strip. Caught only
+# by running the module against the live install. The fixture below reproduces
+# the suffix that the other cases structurally cannot.
+UPGIT="$TMP/upstream.git"
+cp -R "$UP" "$UPGIT"
+git clone -q "$UPGIT" "$TMP/c28" 2>/dev/null
+( cd "$TMP/c28" && git fetch -q origin )
+R28="$TMP/root28"; link "$R28" "$TMP/c28/skills/alpha"
+URL28=$( cd "$TMP/c28" && git remote get-url origin )
+OUT=$(run "$R28")
+case "$URL28" in
+    *.git) : ;;
+    *) fail "28. fixture invalid — origin URL '$URL28' has no .git suffix to normalise" ;;
+esac
+if echo "$OUT" | grep -q 'cannot date origin/main'; then
+    fail "28. a .git-suffixed origin URL was treated as a different remote: $OUT"
+else
+    pass "28. a .git-suffixed origin URL still matches FETCH_HEAD"
 fi
 
 echo ""

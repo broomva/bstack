@@ -33,9 +33,17 @@ DEFAULT_STALE_DAYS = 30.0
 def _git(repo: Path, *args: str, raw: bool = False) -> "str | None":
     """Run git in `repo`, returning stdout or None on any failure.
 
-    `raw=True` skips the strip(), and every -z call must use it: a path may
-    legitimately begin or end with a space, and stripping the whole stdout would
-    silently rewrite the first and last records.
+    `raw=True` skips the strip(), and every -z call uses it.
+
+    The reason is narrower than "a path may begin or end with a space", which is
+    what an earlier version of this docstring claimed and is mechanically false:
+    -z output always ends in NUL, and NUL is not whitespace to str.strip(), so
+    the LAST record is unreachable by it. Only the FIRST record is exposed, and
+    only when the path itself starts with whitespace. Inside a skill
+    subdirectory that cannot happen, so the real exposure is a repo-root-level
+    path. raw=True is still correct — it removes the question rather than
+    reasoning about which records are safe — but the mechanism is that one, not
+    the trailing-space story.
     """
     try:
         p = subprocess.run(
@@ -57,33 +65,72 @@ def _z(out: "str | None") -> "list[str]":
 
 
 def _ref_age_days(root: Path) -> "float | None":
-    """Days since this repo last FETCHED, from FETCH_HEAD's mtime. No network.
+    """Days since this repo last FETCHED ORIGIN. No network.
 
-    FETCH_HEAD only, deliberately. An earlier version also accepted `packed-refs`
-    and the loose `refs/remotes/origin/main`, which is wrong in the dangerous
-    direction: `git gc` runs `pack-refs`, which REWRITES packed-refs without any
-    fetch having happened. Measured — a clone whose refs were aged 60 days, then
-    `git gc`:
+    FETCH_HEAD's mtime, guarded by its content. Every alternative was measured
+    and every one lies in the dangerous direction:
 
-        before gc:  packed-refs  60d
-        after  gc:  packed-refs   0d      (no fetch occurred)
+      packed-refs        `git pack-refs`, hence `git gc` (which gc.auto fires
+                         unattended), rewrites it with no fetch: 200d -> 0d.
+      reflog file mtime  also reset by `git gc`, because gc runs `reflog
+                         expire`: 100d -> 0d. (Bare `pack-refs` leaves it.)
+      reflog CONTENT     survives gc and every mtime game, but answers the wrong
+                         question: it records when the ref last MOVED, so a repo
+                         that fetches daily from a quiet upstream reads as
+                         ancient. Staleness is about when we last CHECKED.
 
-    so a repo that had not fetched in two months reported as fetched today, and
-    the staleness gate this function exists to feed silently reopened. Only
-    FETCH_HEAD's mtime means "a fetch happened here".
+    FETCH_HEAD is written by any fetch that reached a remote, including one that
+    changed nothing, and measured to survive `git gc` intact (77d -> 77d). Its
+    weakness is that ANY remote writes it, so fetching a different remote would
+    stamp origin as fresh while origin was never contacted. The content closes
+    that: FETCH_HEAD records the URL each fetched branch came from, so it is
+    only accepted when origin's own URL appears in it.
 
-    Returns None when FETCH_HEAD is absent — a clone that has never fetched. That
-    is genuinely unknowable, not fresh: its origin/main is frozen at clone time
-    and nothing on disk says whether that was an hour or a year ago.
+    --git-common-dir, not --absolute-git-dir: FETCH_HEAD lives in the common
+    directory, and a linked worktree's own gitdir has none of these files. Using
+    the worktree gitdir made every linked worktree structurally undatable, which
+    in this workspace is most of them.
+
+    Returns None whenever freshness cannot be established — no FETCH_HEAD (a
+    clone that has never fetched), a last fetch that was some other remote, or a
+    future mtime (clock skew, restored backup, unpacked tarball). A future
+    timestamp is NOT clamped to zero: clamping resolves an anomaly toward
+    "freshly fetched", which is the one move this module exists to refuse.
     """
-    gd = _git(root, "rev-parse", "--absolute-git-dir")
-    if not gd:
+    cd = _git(root, "rev-parse", "--git-common-dir")
+    if not cd:
         return None
+    common = Path(cd)
+    if not common.is_absolute():          # `.git` is returned relative to root
+        common = root / common
+    fh = common / "FETCH_HEAD"
     try:
-        return max(0.0, (time.time() - (Path(gd) / "FETCH_HEAD").stat().st_mtime)
-                   / 86400.0)
+        mtime = fh.stat().st_mtime
+        text = fh.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
+    url = _git(root, "remote", "get-url", "origin")
+    if not url:
+        return None
+    # git NORMALISES the URL when it writes FETCH_HEAD: config carries
+    #   https://github.com/broomva/skills.git
+    # and FETCH_HEAD records
+    #   branch 'main' of https://github.com/broomva/skills
+    # so an exact substring test reports every real repo on this machine as
+    # undatable. Caught by running it against the live install, not by the
+    # suite, which was 27/27 at the time. Compare with the trailing `.git` and
+    # slash removed from both sides.
+    def _norm(u: str) -> str:
+        u = u.strip().rstrip("/")
+        return u[:-4] if u.endswith(".git") else u
+    if _norm(url) not in _norm(text):
+        # the last fetch did not reach origin, so its timestamp says nothing
+        # about how current origin/main is
+        return None
+    age = (time.time() - mtime) / 86400.0
+    if age < 0:
+        return None
+    return age
 
 
 def _toplevel(path: Path, known: "list[Path]") -> "Path | None":
@@ -172,7 +219,7 @@ class RepoState:
             # UNKNOWN rather than current — which is also the honest answer for
             # the real case that motivated this: 23 skills in a clone with no
             # FETCH_HEAD whose origin/main was 180 commits behind upstream.
-            self.reason = "cannot date origin/main (no FETCH_HEAD — never fetched since clone)"
+            self.reason = "cannot date origin/main (no FETCH_HEAD from origin — never fetched, or last fetch was another remote)"
             return
         if self.ref_age > stale_days:
             self.reason = (f"origin/main last fetched {self.ref_age:.0f}d ago "
