@@ -76,11 +76,20 @@ class ConfigFileReaderTest(unittest.TestCase):
                 "\n"
                 "fleet_base: develop   # trailing comment\n"
                 'fleet_peer_contract: "quoted"\n'
+                'fleet_ticket_prefix: "REL#42"   # a # inside quotes is data\n'
                 "not a key value line\n")
             cfg = fleet.read_config_file()
             self.assertEqual(cfg["fleet_base"], "develop")
             self.assertEqual(cfg["fleet_peer_contract"], "quoted")
+            self.assertEqual(cfg["fleet_ticket_prefix"], "REL#42")   # quotes win over the # comment split
             self.assertNotIn("# a comment line", cfg)
+
+    def test_config_value_keeps_hash_inside_quotes(self):
+        # Direct guard on _config_value: splitting on `#` before stripping the
+        # quotes would truncate a branch/ticket ref that legitimately holds one.
+        self.assertEqual(fleet._config_value('"release#42"'), "release#42")
+        self.assertEqual(fleet._config_value("develop   # trailing"), "develop")
+        self.assertEqual(fleet._config_value("'a#b'"), "a#b")
 
     def test_missing_config_file_is_not_an_error(self):
         with sandbox():

@@ -81,10 +81,10 @@ holds two mechanisms and the tiebreak is the worktree axis):
   cannot be read. It never reports a fleet clean because the instrument failed.
 - Nothing is written and nothing spawns under `--dry-run`, including the state root.
 
-**Tests** — `tests/fleet/` (68 python unittest cases across roster parsing, name composition,
+**Tests** — `tests/fleet/` (91 python unittest cases across roster parsing, name composition,
 config precedence, `up`, `status`, `list`, `down`), run in CI by `tests/fleet.test.sh` under
 the existing `tests/*.test.sh` job (`ci.yml` runs shell wrappers only; a python suite with no
-wrapper is a dead gate — how wave shipped ungated until BRO-2453). A 13-mutant hand sweep
+wrapper is a dead gate — how wave shipped ungated until BRO-2453). A hand mutation sweep
 pins the clauses that matter: state written after the spawn instead of before, `down` deleting
 state despite a failure, `down` skipping `rm`, `status` coercing an unreadable listing,
 duplicate names accepted, the positional prompt omitted, the brief losing its `## Task`
