@@ -16,7 +16,7 @@
 #
 # Asserts:
 #   1. a merged change the checkout has not pulled is reported
-#   2. NEGATIVE CONTROL: a checkout matching origin/main reports [ok]
+#   2. NEGATIVE CONTROL: a checkout matching origin/main reports the clean line
 #   3. no origin/main is UNKNOWN — a stale origin/master does not stand in
 #   4. one skill reached through two roots is counted once
 #   5. a dangling symlink is reported, not silently skipped
@@ -79,14 +79,14 @@ else
     fail "1. drift not reported: $OUT"
 fi
 
-# ── 2. NEGATIVE CONTROL — a checkout matching origin/main reports [ok] ─────
+# ── 2. NEGATIVE CONTROL — a matching checkout reports the clean line ───────
 # Without this, assert 1 passes for a checker that flags everything and a clean
 # report carries no information.
 clone c2
 R2="$TMP/root2"; link "$R2" "$TMP/c2/skills/alpha"
 OUT=$(run "$R2")
-if echo "$OUT" | grep -q '\[ok\]' && ! echo "$OUT" | grep -q 'differ'; then
-    pass "2. NEGATIVE CONTROL: a matching checkout reports [ok]"
+if echo "$OUT" | grep -qE '\[info\].*match origin/main' && ! echo "$OUT" | grep -q 'differ'; then
+    pass "2. NEGATIVE CONTROL: a matching checkout reports the clean line"
 else
     fail "2. matching checkout not reported clean: $OUT"
 fi
@@ -179,7 +179,7 @@ up_commit README.md changed "readme only"
 BEHIND=$( cd "$TMP/c9" && git rev-list --count HEAD..origin/main )
 R9="$TMP/root9"; link "$R9" "$TMP/c9/skills/alpha"
 OUT=$(run "$R9")
-if [ "$BEHIND" = "1" ] && echo "$OUT" | grep -q '\[ok\]'; then
+if [ "$BEHIND" = "1" ] && echo "$OUT" | grep -qE '\[info\].*match origin/main'; then
     pass "9. a README-only commit does not mark skills drifted (behind=$BEHIND)"
 else
     fail "9. README-only commit misreported (behind=$BEHIND): $OUT"
@@ -229,13 +229,13 @@ for flag in assume-unchanged skip-worktree; do
     n=$((n + 1))
 done
 
-# ── 15. NEGATIVE CONTROL for 13/14 — no flags, unmodified, still [ok] ──────
+# ── 15. NEGATIVE CONTROL for 13/14 — no flags, unmodified, still clean ─────
 # Without this, 13/14 pass for a checker that calls everything unverifiable.
 clone idx15
 R15="$TMP/root15"; link "$R15" "$TMP/idx15/skills/alpha"
 OUT=$(run "$R15")
-if echo "$OUT" | grep -q '\[ok\]' && ! echo "$OUT" | grep -q 'UNVERIFIABLE'; then
-    pass "15. NEGATIVE CONTROL: no index flags, unmodified -> still [ok]"
+if echo "$OUT" | grep -qE '\[info\].*match origin/main' && ! echo "$OUT" | grep -q 'UNVERIFIABLE'; then
+    pass "15. NEGATIVE CONTROL: no index flags, unmodified -> still clean"
 else
     fail "15. clean checkout misreported after the index-flag change: $OUT"
 fi

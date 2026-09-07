@@ -272,7 +272,13 @@ def main(argv: "list[str] | None" = None) -> int:
         return 0
 
     if not drifted and not unknown_repos and not r["unknown"]:
-        print(f"  [ok] {clean} git-tracked skill(s) match origin/main")
+        # [info], not [ok]: in doctor's output `ok()` both prints [ok] AND
+        # increments PASSES. This line is printed by python and counted by
+        # nothing, so [ok] would render a check that does not exist — and
+        # counting [ok] lines is a real way people diff two doctor runs. Every
+        # advisory section this one follows (§4b, §4c, §12) and §28 beside it
+        # use [info] only.
+        print(f"  [info] {clean} git-tracked skill(s) match origin/main")
         if r["no_git"]:
             print(f"        {len(r['no_git'])} installed copy/copies carry no git "
                   f"provenance — drift not evaluable (see P7 skill-source check)")
