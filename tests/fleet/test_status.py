@@ -99,20 +99,32 @@ class ClassifyShapeTest(unittest.TestCase):
     """The shapes the real classifier reaches, straight from the fixture — the
     guardrail the invented schema tripped over."""
 
-    def test_background_blocked_with_a_pid_is_live_not_gone(self):
-        # The shape a healthy background fleet peer sits in between turns:
-        # `state: blocked`, `status: idle`, and a live `pid`. Only the pid
-        # decides — this is LIVE. (A `blocked` WITHOUT a pid is the dead-session
-        # shape and classifies GONE; see `delta` below.)
+    def test_background_blocked_with_a_pid_is_waiting_not_live(self):
+        # A background `--bg` peer surfaces "needs the operator" as
+        # `state: blocked` (never `status: waiting`, which is the interactive
+        # dialog layer) — with a live `pid` and even `status: idle`. That is
+        # WAITING, not LIVE: the peer is stalled on a login / usage / permission
+        # prompt and cannot take an inbound message. Only a `blocked` WITHOUT a
+        # pid is the dead-session shape and classifies GONE (see `delta`).
         blocked = next(e for e in json.loads(_REAL_AGENTS.read_text())
                        if e.get("kind") == "background"
                        and e.get("state") == "blocked" and e.get("pid"))
-        self.assertEqual(peer.classify(blocked), peer.LIVE)
+        self.assertEqual(peer.classify(blocked), peer.WAITING)
 
-    def test_waiting_entry_carries_a_reason(self):
-        waiting = _real_of(peer.WAITING)
+    def test_interactive_waiting_entry_carries_a_reason(self):
+        # An interactive `status: waiting` entry is the only shape that carries
+        # a `waitingFor` reason; a background WAITING (state:blocked) does not,
+        # and its suggestion degrades to "input".
+        waiting = next(e for e in json.loads(_REAL_AGENTS.read_text())
+                       if e.get("status") == "waiting")
         self.assertEqual(peer.classify(waiting), peer.WAITING)
         self.assertTrue(peer.waiting_for(waiting))          # a real `waitingFor`
+
+    def test_background_waiting_reason_degrades_to_empty(self):
+        blocked = next(e for e in json.loads(_REAL_AGENTS.read_text())
+                       if e.get("kind") == "background"
+                       and e.get("state") == "blocked" and e.get("pid"))
+        self.assertEqual(peer.waiting_for(blocked), "")
 
 
 class StatusTest(unittest.TestCase):
