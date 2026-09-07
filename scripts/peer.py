@@ -19,9 +19,10 @@ contract this module makes executable, and that the tests pin:
      a workspace whose project servers are already approved may opt into
      `mcp="inherit"` per plan/roster or via `BSTACK_PEER_MCP=inherit`.
   3. The prompt is passed positionally and LAST. Measured 2.1.258: it runs as
-     the first turn. Older notes recorded an idle start on an earlier build, so
-     the liveness read below DETECTS that case (`needs` set on the agent
-     entry) instead of assuming either way.
+     the first turn. Older notes recorded an idle start on an earlier build;
+     the liveness read below does not assume either way — it reports what the
+     listing shows (see clause 5), and a peer needing the operator surfaces as
+     WAITING there.
   4. `claude --bg` prints `backgrounded · <id>` (ANSI-coloured on a TTY). The
      id is captured with the colour codes stripped — an un-stripped regex
      reports every spawn as failed and a later teardown then removes nothing.
@@ -180,28 +181,48 @@ def spawn(argv: Sequence[str], *, cwd: str | os.PathLike | None = None,
             name = str(argv[i + 1])
     if timeout is None:
         timeout = spawn_timeout()
+    # stdout/stderr go to a temp FILE, not a pipe: `subprocess.run` with a pipe
+    # blocks until EOF, and if `claude --bg`'s background child keeps the stdout
+    # pipe open the launcher's own exit is not enough — every spawn would cost
+    # the full timeout. A file returns as soon as the direct child exits,
+    # whatever the grandchild holds. The file is managed by hand (not `with`)
+    # so the timeout handler below can still read the id the launcher printed
+    # before it stalled. stdin is /dev/null: a peer never inherits the terminal.
+    import tempfile
+
+    def _read(buf) -> str:
+        try:
+            buf.seek(0)
+            return buf.read()
+        except Exception:
+            return ""
+
+    buf = tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace")
     try:
-        proc = subprocess.run(
-            list(argv), cwd=str(cwd) if cwd else None,
-            stdin=subprocess.DEVNULL, capture_output=True, text=True,
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired as exc:
-        # The launcher was killed, but the session it registered may be alive:
-        # TimeoutExpired carries whatever it had already printed. Keep the id
-        # so the manifest can still join the peer instead of orphaning it.
-        def _s(x):
-            return x.decode(errors="replace") if isinstance(x, bytes) else (x or "")
-        partial = strip_ansi(_s(exc.stdout) + _s(exc.stderr))
-        sid = parse_session_id(partial)
-        return SpawnResult(name=name, session_id=sid, returncode=None,
-                           output=(f"timeout after {timeout:.0f}s; " +
-                                   (f"session {sid} was registered before the launcher stalled — "
-                                    f"check `claude agents`" if sid else "no session id seen")),
-                           ok=False)
-    except OSError as exc:
-        return SpawnResult(name=name, session_id=None, returncode=None,
-                           output=str(exc), ok=False)
+        try:
+            proc = subprocess.run(
+                list(argv), cwd=str(cwd) if cwd else None,
+                stdin=subprocess.DEVNULL, stdout=buf, stderr=subprocess.STDOUT,
+                text=True, timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            # The launcher was killed, but the session it registered may be
+            # alive: the temp file holds whatever it printed. Keep the id so the
+            # manifest can still join the peer instead of orphaning it.
+            partial = strip_ansi(_read(buf))
+            sid = parse_session_id(partial)
+            return SpawnResult(name=name, session_id=sid, returncode=None,
+                               output=(f"timeout after {timeout:.0f}s; " +
+                                       (f"session {sid} was registered before the launcher stalled — "
+                                        f"check `claude agents`" if sid else "no session id seen")),
+                               ok=False)
+        except OSError as exc:
+            return SpawnResult(name=name, session_id=None, returncode=None,
+                               output=str(exc), ok=False)
+        captured = _read(buf)
+    finally:
+        buf.close()
+    proc = subprocess.CompletedProcess(proc.args, proc.returncode, captured, "")
     out = strip_ansi((proc.stdout or "") + (proc.stderr or ""))[:4000]
     sid = parse_session_id(out)
     return SpawnResult(name=name, session_id=sid, returncode=proc.returncode,
@@ -252,17 +273,29 @@ def find_agent(agents: Iterable[dict] | None, *, session_id: str | None = None,
         return None
     agents = list(agents)
     if session_id:
+        # The id is the stable key. A recorded id that is absent from a listing
+        # that includes completed sessions means gone — do NOT fall through to
+        # the name, because compose_name is deterministic and a re-dispatch of
+        # the same plan produces the same name (an old wave would then adopt the
+        # new wave's peer).
         sid = session_id.lower()
         for a in agents:
             if str(a.get("id", "")).lower() == sid or str(a.get("sessionId", "")).lower().startswith(sid):
                 return a
+        return None
     if name:
         for a in agents:
             if a.get("name") == name:
                 return a
     if cwd:
+        # Legacy manifests carry no id/name; the worktree is the only join. Only
+        # a background peer lives in a wave/fleet worktree — an interactive
+        # `claude` the operator opened there to look must not be adopted as the
+        # peer and reported live.
         want = os.path.realpath(str(cwd))
-        hits = [a for a in agents if a.get("cwd") and os.path.realpath(str(a["cwd"])) == want]
+        hits = [a for a in agents
+                if a.get("kind") == "background" and a.get("cwd")
+                and os.path.realpath(str(a["cwd"])) == want]
         if len(hits) == 1:
             return hits[0]
     return None
@@ -270,10 +303,14 @@ def find_agent(agents: Iterable[dict] | None, *, session_id: str | None = None,
 
 def classify(entry: dict | None) -> str:
     """One word per agent entry, in the order the real schema demands:
-    a terminal `state` first (failed/stopped are gone, done is done even if
-    the process lingers), then `status: waiting` (the actionable one), then
-    the pid. A missing pid is GONE whatever `state` says — a dead background
-    session keeps listing as `blocked`."""
+    a terminal `state` first (failed/stopped → gone, done → done even if the
+    process lingers), then no-pid → gone (a dead background session keeps
+    listing as `blocked`, so the pid is the liveness test), then anything that
+    means "needs the operator". On 2.1.258 that surfaces two different ways:
+    an interactive session sets `status: waiting` (with `waitingFor`); a
+    background `--bg` peer — every peer wave/fleet spawn — sets `state:
+    blocked` and never `status: waiting`, so both map to WAITING or the class
+    is unreachable for the sessions this module produces."""
     if entry is None:
         return GONE
     state = str(entry.get("state") or "").lower()
@@ -284,7 +321,7 @@ def classify(entry: dict | None) -> str:
         return DONE
     if not entry.get("pid"):
         return GONE
-    if status == "waiting":
+    if status == "waiting" or state == "blocked":
         return WAITING
     return LIVE
 

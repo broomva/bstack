@@ -146,3 +146,65 @@ class StatusLivenessTest(unittest.TestCase):
             self.assertIn("unknown", out)
             self.assertNotIn(" live", out)
             self.assertIn("liveness unavailable", out)
+
+
+class StatusLivenessCwdFallbackTest(unittest.TestCase):
+    """The worktree join is legacy-only. A current row (has a session_id) that
+    is gone must read gone even when a session sits in its worktree; only a
+    manifest with no id and no name may fall back to cwd."""
+
+    def _wave(self, td, plans):
+        from scripts.wave import write_manifest, Manifest, PlanEntry
+        import os
+        os.environ["BSTACK_WAVE_CACHE_DIR"] = td
+        wd = Path(td) / "wave_cwd"
+        write_manifest(wd, Manifest(
+            wave_id="wave_cwd", name="t", created_at="t", repo_root="/",
+            plans=[PlanEntry(slug=s, plan_path=f"/p/{s}", worktree=wt, branch=f"feat/{s}",
+                             base="main", linear=None, agent_pid=None, launched_at=None,
+                             session_id=sid, session_name=nm)
+                   for s, wt, sid, nm in plans]))
+        for s, *_ in plans:
+            (wd / f"{s}.status.jsonl").write_text(json.dumps({"ts": "t", "event": "started"}) + "\n")
+        return wd
+
+    def test_current_row_gone_is_not_rescued_by_a_same_cwd_session(self):
+        from scripts.wave import render_status_table
+        from scripts import peer
+        squatter = [{"pid": 999, "id": "5a5a5a5a", "sessionId": "5a5a5a5a-0000",
+                     "kind": "background", "name": "someone-else", "cwd": "/w/p",
+                     "state": "working", "status": "busy"}]
+        with tempfile.TemporaryDirectory() as td:
+            wd = self._wave(td, [("p", "/w/p", "deadbe00", "wt-p")])  # recorded id, absent
+            out = render_status_table(wd, agents=squatter)
+            row = next(l for l in out.splitlines() if l.strip().startswith("p "))
+            self.assertTrue(row.rstrip().endswith(peer.GONE), row)
+
+    def test_named_row_with_failed_id_capture_is_not_cwd_rescued(self):
+        """session_name set (compose_name always runs) but id capture failed:
+        the name is the address. If no agent carries that name, the peer is
+        gone — a background session in the same worktree must NOT be adopted.
+        This is the case the render-layer cwd gate exists for (find_agent's
+        name join does not reach cwd, but the render must not PASS cwd here)."""
+        from scripts.wave import render_status_table
+        from scripts import peer
+        bg = [{"pid": 7, "id": "77777777", "sessionId": "77777777-0000",
+               "kind": "background", "name": "unrelated", "cwd": "/w/p",
+               "state": "working", "status": "busy"}]
+        with tempfile.TemporaryDirectory() as td:
+            wd = self._wave(td, [("p", "/w/p", None, "wt-p")])  # no id, name set, name absent
+            out = render_status_table(wd, agents=bg)
+            row = next(l for l in out.splitlines() if l.strip().startswith("p "))
+            self.assertTrue(row.rstrip().endswith(peer.GONE), row)
+
+    def test_legacy_row_joins_a_background_session_by_cwd(self):
+        from scripts.wave import render_status_table
+        from scripts import peer
+        bg = [{"pid": 42, "id": "abcdef01", "sessionId": "abcdef01-0000",
+               "kind": "background", "name": "legacy-peer", "cwd": "/w/leg",
+               "state": "working", "status": "busy"}]
+        with tempfile.TemporaryDirectory() as td:
+            wd = self._wave(td, [("p", "/w/leg", None, None)])  # no id, no name
+            out = render_status_table(wd, agents=bg)
+            row = next(l for l in out.splitlines() if l.strip().startswith("p "))
+            self.assertTrue(row.rstrip().endswith(peer.LIVE), row)

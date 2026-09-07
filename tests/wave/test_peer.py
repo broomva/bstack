@@ -188,9 +188,25 @@ class LivenessTest(unittest.TestCase):
              "name": "x", "cwd": "/w/x", "state": "blocked"}
         self.assertEqual(peer.classify(a), peer.GONE)
 
-    def test_blocked_with_pid_and_idle_status_is_live(self):
-        a = next(a for a in self.agents if a.get("state") == "blocked" and a.get("pid"))
-        self.assertEqual(peer.classify(a), peer.LIVE)
+    def test_background_blocked_with_pid_is_waiting_not_live(self):
+        """The shape every wave/fleet peer actually reaches when it needs the
+        operator: a --bg session sets state=blocked, never status=waiting."""
+        a = next(a for a in self.agents
+                 if a.get("kind") == "background" and a.get("state") == "blocked" and a.get("pid"))
+        self.assertEqual(peer.classify(a), peer.WAITING)
+
+    def test_background_peers_never_carry_status_waiting(self):
+        """Guards the classifier's premise: if a future build starts setting
+        status=waiting on --bg entries this test flags that the WAITING branch
+        was reachable only via state=blocked when it was written."""
+        bg_waiting = [a for a in self.agents
+                      if a.get("kind") == "background" and a.get("status") == "waiting"]
+        self.assertEqual(bg_waiting, [])
+
+    def test_waiting_reason_is_empty_for_background(self):
+        a = next(a for a in self.agents
+                 if a.get("kind") == "background" and a.get("state") == "blocked" and a.get("pid"))
+        self.assertEqual(peer.waiting_for(a), "")   # bg entries carry no waitingFor
 
     def test_unlisted_is_gone(self):
         self.assertEqual(peer.liveness(self.agents, session_id="ffffffff", name="nope")[0], peer.GONE)
@@ -205,6 +221,24 @@ class LivenessTest(unittest.TestCase):
         self.assertNotIn("id", a)
         cls, entry = peer.liveness(self.agents, session_id=a["sessionId"][:8], name=None)
         self.assertIs(entry, a)
+
+    def test_recorded_id_absent_is_gone_not_adopted_by_name(self):
+        """A re-dispatch reuses the deterministic name; an old wave whose peer's
+        id has left the listing must read gone, not adopt the new peer."""
+        live = next(a for a in self.agents if a.get("id") and a.get("pid"))
+        cls, entry = peer.liveness(self.agents, session_id="deadbe00", name=live["name"])
+        self.assertIsNone(entry)
+        self.assertEqual(cls, peer.GONE)
+
+    def test_cwd_join_ignores_an_interactive_session_in_the_worktree(self):
+        """The operator opening a `claude` in a peer's worktree must not be
+        adopted as the (legacy, id-less) peer and reported live."""
+        import collections
+        counts = collections.Counter(a["cwd"] for a in self.agents)
+        inter = next(a for a in self.agents
+                     if a.get("kind") == "interactive" and counts[a["cwd"]] == 1)
+        cls, entry = peer.liveness(self.agents, session_id=None, name=None, cwd=inter["cwd"])
+        self.assertIsNone(entry)
 
     def test_join_falls_back_to_name(self):
         a = next(a for a in self.agents if a.get("kind") == "interactive" and a.get("pid"))

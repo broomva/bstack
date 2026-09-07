@@ -260,8 +260,15 @@ def render_status_table(wd: Path, agents: list[dict] | None = None) -> str:
         if ev != "pr_merged":
             all_merged = False
         pr = _pr_number(s.get("pr", ""))
-        live, entry = peer.liveness(agents, session_id=plan.session_id,
-                                    name=plan.session_name, cwd=plan.worktree)
+        # The worktree join is a LEGACY fallback: a pre-0.39.1 manifest carries
+        # no id and no name, so the worktree is the only handle. A current row
+        # has an id (the stable key) — never adopt a same-cwd session for it, or
+        # an operator's `claude` opened in the worktree, or a re-dispatched
+        # peer, gets reported as this plan's live peer.
+        legacy = not (plan.session_id or plan.session_name)
+        live, entry = peer.liveness(
+            agents, session_id=plan.session_id, name=plan.session_name,
+            cwd=plan.worktree if legacy else None)
         rows.append((plan.slug, plan.branch, plan.linear or "—", ev, pr,
                      plan.session_name or "—", live))
         if ev == "pr_opened" and s.get("pr"):

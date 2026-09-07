@@ -46,6 +46,16 @@ was not run by CI (`ci.yml` runs `tests/*.test.sh` only), so none of this had a 
   name are unaddressable — and a bad `mcp:` value is a clean `error:` line, not a traceback. Per-plan `mcp: inherit` in the `wave:`
   frontmatter (or `BSTACK_PEER_MCP=inherit`) keeps the project's MCP servers for
   peers that need them; strict is the unattended-safe default.
+- A background peer that needs the operator surfaces as `state: blocked` in
+  `claude agents --json --all`, not `status: waiting` (that is the interactive
+  dialog layer), so `classify` maps both to `waiting` — otherwise the class is
+  unreachable for the `--bg` peers wave spawns and a stalled peer reads `live`.
+  The worktree join is legacy-only (a pre-0.39.1 manifest with no id and no
+  name) and adopts only a `background` session, so an operator's `claude` in the
+  worktree, or a re-dispatched peer reusing the deterministic name, is never
+  reported as this plan's live peer. `spawn` writes child output to a temp file
+  rather than a pipe, so a `--bg` grandchild that keeps the pipe cannot hold the
+  launcher for the full timeout.
 - `wave status` gains `SESSION` and `LIVE` columns and three suggestions: a peer
   waiting (with the `waitingFor` reason), a peer that finished its turn without
   reaching `pr_merged`, and a peer gone before its plan finished. The manifest is
