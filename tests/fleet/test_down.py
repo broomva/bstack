@@ -23,6 +23,13 @@ def _run(argv) -> tuple[int, str]:
     return rc, buf.getvalue()
 
 
+def _run_err(argv) -> tuple[int, str, str]:
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        rc = fleet.main(argv)
+    return rc, out.getvalue(), err.getvalue()
+
+
 def _launch(td, slugs=("alpha", "bravo")):
     write_stub(td)
     wt = plain_worktree(td, name="wt")
@@ -148,6 +155,52 @@ class DownTest(unittest.TestCase):
             rc, out = _run(["down", "--all"])
             self.assertEqual(rc, 0)
             self.assertIn("(no fleets)", out)
+
+    def test_missing_binary_keeps_state_and_removes_nothing(self):
+        """The BLOCKER: a `claude` that cannot run must NOT delete a live
+        fleet. `_ensure_claude_on_path` refuses before teardown; the message
+        says so, and no `stop`/`rm` is attempted."""
+        import os
+        with sandbox() as td:
+            fd = _launch(td)
+            os.environ["BSTACK_FLEET_CLAUDE_BIN"] = "definitely-not-claude-xyz"
+            rc, _out, err = _run_err(["down", "--fleet", fd.name])
+            self.assertEqual(rc, 1)
+            self.assertTrue(fd.exists(), "state deleted when the binary is missing")
+            self.assertIn("not found on PATH", err)
+            self.assertEqual(_calls(td), [])            # nothing was reclaimed
+
+    def test_a_binary_that_cannot_launch_never_counts_a_peer_removed(self):
+        """Isolate the launched-guard from `_ensure_claude_on_path`: even past
+        that check, a `stop`/`rm` that OSErrors returns a 'no such' errno string
+        — without the `launched` guard that reads as 'already gone' and the live
+        fleet's only record is deleted."""
+        import os
+        with sandbox() as td:
+            fd = _launch(td)
+            orig = fleet._ensure_claude_on_path
+            fleet._ensure_claude_on_path = lambda binary: None
+            os.environ["BSTACK_FLEET_CLAUDE_BIN"] = "definitely-not-claude-xyz"
+            try:
+                rc, out = _run(["down", "--fleet", fd.name])
+            finally:
+                fleet._ensure_claude_on_path = orig
+            self.assertEqual(rc, 1)
+            self.assertTrue(fd.exists(), "a command that never ran removed nothing")
+            self.assertIn("state KEPT", out)
+            state = read_state_json(fd)
+            self.assertTrue(all(p["removed"] is False for p in state["peers"]))
+
+    def test_stop_refuses_but_rm_reaps_it_counts_removed(self):
+        """A `stop` that exits non-zero does not block removal — the removal is
+        `rm`, and here `rm` finds the session already gone."""
+        with sandbox() as td:
+            fd = _launch(td, slugs=("solo",))
+            (td / "fail-stop-abc120").write_text("1")   # stop refuses (launched)
+            (td / "gone-rm-abc120").write_text("1")      # rm: not found
+            rc, out = _run(["down", "--fleet", fd.name])
+            self.assertEqual(rc, 0, out)
+            self.assertFalse(fd.exists())
 
     def test_json_report_names_what_remains(self):
         with sandbox() as td:

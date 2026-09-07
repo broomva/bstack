@@ -105,11 +105,31 @@ def config_file() -> Path:
     return Path(root).expanduser() / "config.yaml"
 
 
+def _config_value(raw: str) -> str:
+    """One config value: quotes first, comments second.
+
+    Splitting on `#` before the quotes are off truncates `fleet_base:
+    "release#42"` to `release` — a branch or a ticket reference with a `#` in
+    it is data, not a comment. So: a quoted value is taken verbatim up to its
+    closing quote, and in an unquoted value a `#` only opens a comment when it
+    follows whitespace or opens the value.
+    """
+    value = raw.strip()
+    if value[:1] in ('"', "'"):
+        end = value.find(value[0], 1)
+        if end != -1:
+            return value[1:end]
+    m = re.search(r"(?:^|\s)#", value)
+    if m:
+        value = value[:m.start()]
+    return value.strip()
+
+
 def read_config_file() -> dict[str, str]:
-    """Flat `key: value` reader. Blank lines and `#` comments ignored; a
-    trailing `# comment` on a value is stripped. Deliberately not YAML: the
-    file bstack-config writes is flat by construction, and a parser dependency
-    in a stdlib-only tool is a portability bug waiting to happen."""
+    """Flat `key: value` reader. Blank lines and `#` comment lines ignored; a
+    value is unquoted and de-commented by `_config_value`. Deliberately not
+    YAML: the file bstack-config writes is flat by construction, and a parser
+    dependency in a stdlib-only tool is a portability bug waiting to happen."""
     path = config_file()
     out: dict[str, str] = {}
     try:
@@ -121,8 +141,7 @@ def read_config_file() -> dict[str, str]:
         if not stripped or stripped.startswith("#") or ":" not in stripped:
             continue
         key, _, value = stripped.partition(":")
-        value = value.split("#", 1)[0].strip().strip('"').strip("'")
-        out[key.strip()] = value
+        out[key.strip()] = _config_value(value)
     return out
 
 
@@ -198,7 +217,14 @@ def parse_roster(source: str, *, stdin=None) -> list[dict]:
     the read: validation is a separate, atomic step (`validate_roster`).
     """
     if source == "-":
-        text = (stdin if stdin is not None else sys.stdin).read()
+        stream = stdin if stdin is not None else sys.stdin
+        # A `-` at a keyboard is a hang, not a read: the operator sees nothing
+        # and the fleet never launches. Fail with the remedy instead.
+        if callable(getattr(stream, "isatty", None)) and stream.isatty():
+            raise FleetError(
+                "roster is `-` but stdin is a terminal: pipe the roster in "
+                "(`... | bstack fleet up -`) or pass a path")
+        text = stream.read()
         origin = "<stdin>"
     else:
         path = Path(source).expanduser()
@@ -731,13 +757,24 @@ def _looks_already_gone(text: str) -> bool:
     return any(h in low for h in _NOT_FOUND_HINTS)
 
 
-def _run(binary: str, *rest: str) -> tuple[int, str]:
+def _run(binary: str, *rest: str) -> tuple[int, str, bool]:
+    """Run one `claude` subcommand. Returns `(returncode, output, launched)`.
+
+    `launched` is False when the process never started (a missing or
+    inexecutable binary, any OSError, a timeout): the "output" is then an errno
+    string, not a claim about the session. This matters because a missing
+    binary's OSError text ("[Errno 2] No such file or directory") contains
+    "no such", which `_looks_already_gone` reads as "the session is gone" — and
+    a whole LIVE fleet would then be scored fully-reclaimed and deleted.
+    `launched` is the guard that says: a command that never ran removed nothing.
+    """
     try:
         proc = subprocess.run([binary, *rest], stdin=subprocess.DEVNULL,
                               capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.TimeoutExpired) as exc:
-        return 1, str(exc)
-    return proc.returncode, peer.strip_ansi((proc.stdout or "") + (proc.stderr or ""))
+        return 1, str(exc), False
+    return (proc.returncode,
+            peer.strip_ansi((proc.stdout or "") + (proc.stderr or "")), True)
 
 
 def teardown(fd: Path, *, binary: str, agents: list[dict] | None) -> dict:
@@ -760,12 +797,24 @@ def teardown(fd: Path, *, binary: str, agents: list[dict] | None) -> dict:
                               "reason": "unknown id — remove by name from "
                                         "claude agents"})
             continue
-        _run(binary, "stop", p.session_id)
-        rc, out = _run(binary, "rm", p.session_id)
-        ok = rc == 0 or _looks_already_gone(out) or klass == peer.GONE
+        # Gate BOTH calls, not just `rm`. A binary that cannot launch returns
+        # an errno string from either; discarding `stop`'s launch status and
+        # trusting only `rm`'s is the round-2 prediction. A peer counts removed
+        # only when the removal ACTUALLY RAN and succeeded (or the session was
+        # already gone), or the peer was already classified GONE. `stop`'s exit
+        # code is not gated — a peer that refuses `stop` but whose `rm` reaps it
+        # is still reclaimed; only its LAUNCH is required.
+        _stop_rc, _stop_out, stop_launched = _run(binary, "stop", p.session_id)
+        rc, out, rm_launched = _run(binary, "rm", p.session_id)
+        launched = stop_launched and rm_launched
+        ok = (launched and (rc == 0 or _looks_already_gone(out))) or klass == peer.GONE
         p.removed = ok
         if ok:
             removed.append(p.name)
+        elif not launched:
+            remaining.append({"name": p.name,
+                              "reason": f"claude never ran for {p.session_id} "
+                                        f"({(out or '').strip()[:100]})"})
         else:
             tail = (out.strip().splitlines() or [f"exit {rc}"])[-1][:120]
             remaining.append({"name": p.name,
@@ -789,6 +838,10 @@ def _cmd_down(args) -> int:
     else:
         raise FleetError("down requires --fleet <id> or --all")
     binary = _claude_binary()
+    # Refuse before touching state. Without this, a missing binary makes every
+    # `stop`/`rm` OSError with a "no such" message that scores every peer
+    # already-gone → the state directory of a LIVE fleet is deleted.
+    _ensure_claude_on_path(binary)
     agents = peer.list_agents(binary)
     reports = [teardown(fd, binary=binary, agents=agents) for fd in dirs]
     failed = any(r["remaining"] for r in reports)
