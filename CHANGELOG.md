@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.40.1 — 2026-09-07
+
+### feat(doctor): §28 reports unreclaimed fleets (BRO-2473)
+
+`bstack fleet` shipped in 0.40.0 and `/arc` §7 promises "every peer this session
+raised is stopped" — but nothing observed it. Measured on 0.40.0: zero
+fleet-aware hooks across all three registration surfaces, zero mentions of fleet
+in `scripts/doctor.sh`. The `tests/fleet/` suite gates the *tool's* correctness,
+never the *agent's* cleanup, so an orphaned fleet was invisible: its peers keep
+consuming budget and its state directory survives with nothing reporting it.
+
+The check leans on an invariant `fleet down` already guarantees: a fleet's state
+directory is deleted **only** when every peer was removed or was already gone.
+The contrapositive is the whole section — a surviving `fleet_*` directory is
+exactly a fleet that was never fully reclaimed. That makes it a filesystem read:
+no subprocess, no network, no `claude agents` call.
+
+- The state root is resolved by importing `fleet.state_root()` rather than
+  re-deriving `~/.cache/bstack/fleet`, so the section cannot drift from the
+  ontology (flag > `BSTACK_FLEET_STATE_DIR` > config `fleet_state_dir` >
+  default) the day someone sets the config key.
+- Three answers, and only one of them is clean: a surviving directory is named
+  with its unreclaimed-peer count, its age, and the remedy (`fleet status`, then
+  `fleet down`, `--force` when a peer's id was never captured); an absent root
+  or an unreadable `fleet.json` reports **unknown**, never clean — the rule
+  `fleet status` already follows for an unreadable agent listing.
+- Advisory only, deliberately: a fleet mid-flight is the expected state during
+  an arc. It never moves the pass/gap totals and never fails `--strict`, because
+  a GAP here would fire on healthy work and teach the operator to skip the
+  section.
+
+`tests/doctor-fleet-orphans.test.sh` pins all of it (10 cases: positive,
+negative, empty, two unknown shapes, all-removed, and the two neutrality
+assertions); 6/6 hand mutants killed, including the inverted predicate and the
+advisory-becomes-a-GAP regression. §27 is left free for the open PR #105.
+
 ## 0.40.0 — 2026-09-06
 
 ### feat(fleet): the generalized fleet-dispatch substrate — `up` / `status` / `list` / `down` on the shared peer spawn contract (BRO-2454)

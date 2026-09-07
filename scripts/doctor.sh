@@ -1565,6 +1565,104 @@ else
     fi
 fi
 
+# ── Section 28: Unreclaimed fleets (BRO-2473) ──────────────────────────────
+# `bstack fleet down` deletes a fleet's state directory ONLY when every peer was
+# removed or was already gone (scripts/fleet.py — the no-orphan invariant its
+# P20 rounds mutation-proved). The contrapositive is the entire check: a
+# surviving fleet_* directory is exactly a fleet that was never fully reclaimed
+# — one still in flight, or an orphan whose peers keep burning budget with
+# nothing watching them.
+#
+# Why this earns a section: /arc §7 promises "every peer this session raised is
+# stopped", and until now nothing observed it — zero fleet-aware hooks on any of
+# the three registration surfaces, zero mentions of fleet in this file. The
+# tests/fleet suite gates the TOOL's correctness, never the AGENT's cleanup, so
+# "peers reclaimed" was prose. CLAUDE.md §Ritual vs Substance says a discipline
+# with no machine-checkable behaviour is not a discipline.
+#
+# The root is resolved by IMPORTING fleet.state_root() rather than re-deriving
+# `~/.cache/bstack/fleet` here: the ontology is flag > BSTACK_FLEET_STATE_DIR >
+# config `fleet_state_dir` > default, and a second enumeration of it would drift
+# from the tool the day someone sets the config key.
+#
+# Advisory only, deliberately: a fleet mid-flight is the expected state during
+# an arc, not a defect. Age plus the remedy is the signal; a GAP here would fire
+# on healthy work and teach the operator to skip the section. An unreadable
+# fleet.json reports `unknown` rather than clean — a check that cannot tell must
+# say so, which is the same rule `fleet status` follows for an unreadable agent
+# listing.
+section "28. Unreclaimed fleets (bstack fleet)"
+if ! command -v python3 >/dev/null 2>&1; then
+    [ "$QUIET" = "0" ] && echo "  [info] python3 unavailable — skipping fleet-state check"
+elif [ ! -f "$BSTACK_REPO/scripts/fleet.py" ]; then
+    [ "$QUIET" = "0" ] && echo "  [info] scripts/fleet.py absent (bstack < 0.40.0) — no fleet mechanism to check"
+else
+    _FLEET_REPORT="$(python3 - "$BSTACK_REPO/scripts" <<'PY'
+import json, sys, time
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1])
+try:
+    from fleet import state_root          # one source of truth for the ontology
+except Exception as exc:                  # noqa: BLE001 - report, never guess
+    print(f"UNKNOWN\t-\tcannot import fleet.state_root ({type(exc).__name__})\t")
+    raise SystemExit(0)
+
+try:
+    root = state_root()
+except Exception as exc:                  # noqa: BLE001
+    print(f"UNKNOWN\t-\tcannot resolve the fleet state root ({type(exc).__name__})\t")
+    raise SystemExit(0)
+
+if not root.is_dir():
+    print(f"NOROOT\t{root}\t\t")
+    raise SystemExit(0)
+
+found = False
+for d in sorted(root.glob("fleet_*")):
+    if not d.is_dir():
+        continue
+    found = True
+    f = d / "fleet.json"
+    if not f.exists():
+        print(f"UNKNOWN\t{d.name}\tno fleet.json in the directory\t")
+        continue
+    try:
+        data = json.loads(f.read_text(encoding="utf-8"))
+    except Exception as exc:              # noqa: BLE001
+        print(f"UNKNOWN\t{d.name}\tunreadable fleet.json ({type(exc).__name__})\t")
+        continue
+    peers = data.get("peers") or []
+    open_peers = [p for p in peers if not p.get("removed")]
+    try:
+        age_h = f"{(time.time() - d.stat().st_mtime) / 3600.0:.1f}"
+    except OSError:
+        age_h = "?"
+    print(f"FLEET\t{d.name}\t{len(open_peers)}/{len(peers)} peer(s) unreclaimed\t{age_h}")
+
+if not found:
+    print(f"CLEAN\t{root}\t\t")
+PY
+)"
+    while IFS=$'\t' read -r _k _name _detail _age; do
+        [ -z "$_k" ] && continue
+        case "$_k" in
+            NOROOT)
+                [ "$QUIET" = "0" ] && echo "  [info] no fleet state root at $_name — no fleet has been raised on this machine"
+                ;;
+            CLEAN)
+                [ "$QUIET" = "0" ] && echo "  [info] no fleet directories under $_name — every fleet raised here was reclaimed"
+                ;;
+            UNKNOWN)
+                [ "$QUIET" = "0" ] && echo "  [info] $_name — $_detail; state is unknown, not clean"
+                ;;
+            FLEET)
+                [ "$QUIET" = "0" ] && echo "  [info] $_name — $_detail, ${_age}h since last write; if it is not in flight: bstack fleet status --fleet $_name, then bstack fleet down --fleet $_name (--force if a peer's id was never captured)"
+                ;;
+        esac
+    done <<< "$_FLEET_REPORT"
+fi
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 TOTAL=$((PASSES + GAPS))
