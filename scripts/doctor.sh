@@ -1748,7 +1748,15 @@ def scan():
             # fleet.py refuses a schema it does not know; reading v1 fields out of
             # it and printing a count would be guessing, and the remedy line
             # would name a command that errors. It can tell, so it says.
-            if isinstance(data, dict) and data.get("schema_version") not in (1, None):
+            # Compared against 1 directly, NOT via a tuple that also admits
+            # None: an ABSENT key reads as None, and fleet.py rejects that too
+            # (unknown schema_version=None), so the old form whitelisted the one
+            # value it was written to catch, and every remedy it printed for
+            # such a record errored. fleet.py always writes the key, so no
+            # bstack-written record reaches this branch.
+            # No backticks anywhere in this heredoc: bash 3.2 parses them inside
+            # a $()-nested quoted heredoc and the file stops being valid.
+            if isinstance(data, dict) and data.get("schema_version") != 1:
                 emit("UNKNOWN", e.name,
                      "fleet.json schema_version=" + str(data.get("schema_version"))
                      + " is not one this check reads")
@@ -1779,8 +1787,16 @@ except Exception as exc:                  # noqa: BLE001 - the last line of defe
 PY
 )"
     _FLEET_RC=$?
-    if [ "$_FLEET_RC" != "0" ] || [ -z "$_FLEET_REPORT" ]; then
+    # Two DISTINCT process-level failures, deliberately not folded into one
+    # `||`: a single fixture that exits non-zero AND prints nothing satisfies
+    # both halves, so either could be deleted with the suite still green. Split,
+    # each branch owns a message no other input produces, and each is pinned by
+    # its own case. The empty-stdout branch is the load-bearing one — a silent
+    # python3 exiting 0 is exactly the header-with-no-body signature.
+    if [ "$_FLEET_RC" != "0" ]; then
         _FLEET_REPORT="$(printf 'UNKNOWN\t-\tthe fleet probe did not run (python3 exited %s)\t' "$_FLEET_RC")"
+    elif [ -z "$_FLEET_REPORT" ]; then
+        _FLEET_REPORT="$(printf 'UNKNOWN\t-\tthe fleet probe printed nothing (python3 exited 0)\t')"
     fi
     while IFS=$'\t' read -r _k _name _detail _age; do
         [ -z "$_k" ] && continue

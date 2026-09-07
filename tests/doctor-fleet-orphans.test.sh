@@ -139,7 +139,12 @@ fi
 #     sorted) suppresses every fleet after it. Each shape must report unknown,
 #     and a good fleet sorting AFTER a bad one must still be named.
 i=0
-for bad in '[]' 'null' '"a string"' '{"peers":{}}' '{"peers":["x"]}' '{"peers":[["nested"]]}' '{"no_peers_key":1}'; do
+# The dict-shaped fixtures declare schema_version 1 on purpose: the schema guard
+# runs BEFORE the shape guard, so a dict without the key is now classified as a
+# schema problem (correctly — fleet.py rejects it too) and would never reach the
+# shape guard these cases exist to exercise. The non-dict inputs skip the schema
+# guard entirely, so they are left bare.
+for bad in '[]' 'null' '"a string"' '{"schema_version":1,"peers":{}}' '{"schema_version":1,"peers":["x"]}' '{"schema_version":1,"peers":[["nested"]]}' '{"schema_version":1,"no_peers_key":1}'; do
     i=$((i + 1))
     R="$TMP/shape$i"
     mkdir -p "$R/fleet_1000000000_aaaa" "$R/fleet_2000000000_zzzz"
@@ -172,7 +177,7 @@ done
 #     except). Pin the guard by its message: a shape it can classify must read
 #     "not a fleet record", never the generic exception fallback. Now both
 #     layers are independently gated.
-for bad in '[]' '{"peers":{}}' '{"peers":["x"]}'; do
+for bad in '[]' '{"schema_version":1,"peers":{}}' '{"schema_version":1,"peers":["x"]}'; do
     R="$TMP/shapemsg$(echo "$bad" | cksum | cut -d' ' -f1)"
     mkdir -p "$R/fleet_1788000000_aaaa"
     printf '%s' "$bad" > "$R/fleet_1788000000_aaaa/fleet.json"
@@ -654,6 +659,81 @@ else
     assert_pass "an unknown schema_version does not print a fabricated count"
 fi
 
+# 5m. THE ABSENT SCHEMA KEY, the sibling of 5l. `data.get("schema_version")` is
+#     None when the key is MISSING, and fleet.py rejects that exactly as it
+#     rejects 999 ("unknown schema_version=None"). The first form of the 5l
+#     guard read `not in (1, None)`, which whitelisted the very value it was
+#     written to catch: §28 printed "1/2 peer(s) unreclaimed" and a remedy whose
+#     every command — status, down, down --force, all of which read_state first
+#     — errored on that record. Reported by P20 round 7.
+NOSV="$TMP/schemanone"; mkdir -p "$NOSV/fleet_1788000000_nosv"
+printf '{"peers":[{"name":"a","removed":null},{"name":"b","removed":"2026-01-01"}]}' \
+    > "$NOSV/fleet_1788000000_nosv/fleet.json"
+OUT="$(section28 "$NOSV")"
+if grep -q "schema_version=None" <<< "$OUT"; then
+    assert_pass "an ABSENT schema_version reports unknown, like fleet.py does"
+else
+    assert_fail "an ABSENT schema_version reports unknown, like fleet.py does" "$OUT"
+fi
+if grep -q "peer(s) unreclaimed" <<< "$OUT"; then
+    assert_fail "an absent schema_version does not print a count the remedy cannot act on" "$OUT"
+else
+    assert_pass "an absent schema_version does not print a count the remedy cannot act on"
+fi
+
+# 5n. THE SILENT INTERPRETER — the load-bearing half of the process guard, and
+#     the one the round-6 fixture could not isolate. That fixture exited 127 AND
+#     printed nothing, satisfying both conditions at once, so either could be
+#     deleted with the suite still green. A python3 that exits 0 with no output
+#     drives ONLY the empty-report branch; without it the report stays empty,
+#     the read loop iterates zero times, and §28 renders a header with no body —
+#     the exact signature every round has been chasing, restored silently.
+QUIETPY="$TMP/quietpy"; mkdir -p "$QUIETPY"
+printf '#!/bin/sh\nexit 0\n' > "$QUIETPY/python3"; chmod +x "$QUIETPY/python3"
+OUT="$(PATH="$QUIETPY:$PATH" BSTACK_FLEET_STATE_DIR="$TMP/live" bash "$DOCTOR" 2>/dev/null \
+        | sed -n '/28. Unreclaimed fleets/,/^$/p')"
+if [ "$(grep -c '\[info\]' <<< "$OUT")" -ge 1 ]; then
+    assert_pass "a python3 that exits 0 printing nothing still renders a body"
+else
+    assert_fail "a python3 that exits 0 printing nothing still renders a body" "EMPTY BODY"
+fi
+if grep -q "the fleet probe printed nothing" <<< "$OUT"; then
+    assert_pass "a silent python3 is named as silent, not as a non-zero exit"
+else
+    assert_fail "a silent python3 is named as silent, not as a non-zero exit" "$OUT"
+fi
+
+# 5o. THE OTHER HALF — a python3 that WRITES to stdout and exits non-zero. Only
+#     the rc branch can catch this: the report is non-empty, so without the rc
+#     check the garbage is parsed and reported as an unrecognised row, which
+#     reads as a malformed record rather than as a probe that failed.
+NOISYPY="$TMP/noisypy"; mkdir -p "$NOISYPY"
+printf '#!/bin/sh\necho "pyenv: version 3.99.0 is not installed"\nexit 127\n' > "$NOISYPY/python3"
+chmod +x "$NOISYPY/python3"
+OUT="$(PATH="$NOISYPY:$PATH" BSTACK_FLEET_STATE_DIR="$TMP/live" bash "$DOCTOR" 2>/dev/null \
+        | sed -n '/28. Unreclaimed fleets/,/^$/p')"
+if grep -q "the fleet probe did not run (python3 exited 127)" <<< "$OUT"; then
+    assert_pass "a python3 that prints and exits 127 is reported by its exit status"
+else
+    assert_fail "a python3 that prints and exits 127 is reported by its exit status" "$OUT"
+fi
+if grep -q "unrecognised fleet report row" <<< "$OUT"; then
+    assert_fail "a failed probe is not mistaken for a malformed record" "$OUT"
+else
+    assert_pass "a failed probe is not mistaken for a malformed record"
+fi
+
+# 5p. The remedy's sanitised-id note. clean() rewrites any non-printable byte in
+#     a fleet id to '?', so the id the operator reads is not always the id on
+#     disk; the remedy says so. Deleting that clause left the suite green, so it
+#     is pinned here rather than trusted.
+OUT="$(section28 "$TMP/live")"
+if grep -q "the id is shown sanitised" <<< "$OUT"; then
+    assert_pass "the remedy warns that the printed id is sanitised"
+else
+    assert_fail "the remedy warns that the printed id is sanitised" "$OUT"
+fi
+
 # 6. ADVISORY NEUTRALITY, pinned to a workspace with KNOWN gaps.
 #    Both assertions are differential and both run against a synthetic gappy
 #    workspace, for one reason: on a machine that is already at N/N with zero
@@ -727,7 +807,9 @@ fi
 
 echo ""
 if [ "$FAIL" -eq 0 ]; then
-    echo "  ✓ doctor §28: $PASS/$PASS passed${SKIP:+ ($SKIP skipped — not coverage)}"
+    SKIP_NOTE=""
+    [ "$SKIP" -gt 0 ] && SKIP_NOTE=" ($SKIP skipped — not coverage)"
+    echo "  ✓ doctor §28: $PASS/$PASS passed$SKIP_NOTE"
     exit 0
 fi
 echo "  ✗ doctor §28: $FAIL failed, $PASS passed"
