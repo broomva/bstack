@@ -109,21 +109,42 @@ else
     assert_fail "a directory whose peers are all removed still surfaces, at 0 unreclaimed" "$OUT"
 fi
 
-# 6. ADVISORY NEUTRALITY. The section must never move the pass/gap totals and
-#    must never fail --strict: a fleet in flight is the expected state mid-arc,
-#    and a GAP here would fire on healthy work.
-T_CLEAN="$(BSTACK_FLEET_STATE_DIR="$TMP/empty" bash "$DOCTOR" --quiet 2>&1 | tail -1)"
-T_DIRTY="$(BSTACK_FLEET_STATE_DIR="$TMP/live" bash "$DOCTOR" --quiet 2>&1 | tail -1)"
+# 6. ADVISORY NEUTRALITY, pinned to a workspace with KNOWN gaps.
+#    Both assertions are differential and both run against a synthetic gappy
+#    workspace, for one reason: on a machine that is already at N/N with zero
+#    gaps, `--strict` exits 0 whatever §28 does, so an absolute assertion passes
+#    vacuously and a neutrality regression ships. CI runs against a scaffold
+#    that HAS gaps — which is how the absolute form was caught. Pinning the
+#    workspace makes the check mean the same thing in both places: §28 must not
+#    move the totals, and must not change the --strict verdict, when there are
+#    real gaps for it to be confused with.
+GAPPY="$TMP/gappy"
+mkdir -p "$GAPPY/.control" "$GAPPY/.git"   # enough for doctor to accept it; governance files absent ⇒ gaps
+
+T_CLEAN="$(BROOMVA_WORKSPACE="$GAPPY" BSTACK_FLEET_STATE_DIR="$TMP/empty" bash "$DOCTOR" --quiet 2>&1 | tail -1)"
+T_DIRTY="$(BROOMVA_WORKSPACE="$GAPPY" BSTACK_FLEET_STATE_DIR="$TMP/live"  bash "$DOCTOR" --quiet 2>&1 | tail -1)"
 if [ "$T_CLEAN" = "$T_DIRTY" ]; then
-    assert_pass "an unreclaimed fleet does not move the doctor totals"
+    assert_pass "an unreclaimed fleet does not move the doctor totals (gappy workspace)"
 else
-    assert_fail "an unreclaimed fleet does not move the doctor totals" "clean=[$T_CLEAN] dirty=[$T_DIRTY]"
+    assert_fail "an unreclaimed fleet does not move the doctor totals (gappy workspace)" "clean=[$T_CLEAN] dirty=[$T_DIRTY]"
 fi
-BSTACK_FLEET_STATE_DIR="$TMP/live" bash "$DOCTOR" --quiet --strict >/dev/null 2>&1
-if [ "$?" -eq 0 ]; then
-    assert_pass "an unreclaimed fleet does not fail --strict"
+
+# Guard against the assertion above going vacuous: the pinned workspace must
+# really have gaps, or "totals unchanged" proves nothing.
+if grep -q "gap(s)" <<< "$T_DIRTY"; then
+    assert_pass "the pinned workspace really has gaps (the neutrality check is not vacuous)"
 else
-    assert_fail "an unreclaimed fleet does not fail --strict"
+    assert_fail "the pinned workspace really has gaps (the neutrality check is not vacuous)" "$T_DIRTY"
+fi
+
+BROOMVA_WORKSPACE="$GAPPY" BSTACK_FLEET_STATE_DIR="$TMP/empty" bash "$DOCTOR" --quiet --strict >/dev/null 2>&1
+RC_CLEAN=$?
+BROOMVA_WORKSPACE="$GAPPY" BSTACK_FLEET_STATE_DIR="$TMP/live" bash "$DOCTOR" --quiet --strict >/dev/null 2>&1
+RC_DIRTY=$?
+if [ "$RC_CLEAN" -eq "$RC_DIRTY" ]; then
+    assert_pass "an unreclaimed fleet does not change the --strict verdict (rc=$RC_DIRTY both ways)"
+else
+    assert_fail "an unreclaimed fleet does not change the --strict verdict" "clean rc=$RC_CLEAN dirty rc=$RC_DIRTY"
 fi
 
 echo ""
