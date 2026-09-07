@@ -191,6 +191,28 @@ for bad in '[]' '{"peers":{}}' '{"peers":["x"]}'; do
     fi
 done
 
+# 5b-ter. A fleet.json that is not valid UTF-8 raises in read_text — before
+#     json.loads, so the shape guard cannot see it. This is the input that
+#     reaches the per-entry handler, and it proves the ISOLATION property: the
+#     orphan sorting after it must still be named.
+BINROOT="$TMP/binjson"
+mkdir -p "$BINROOT/fleet_1000000000_aaaa" "$BINROOT/fleet_2000000000_zzzz"
+printf '{"peers":[{"name":"\xff\xfe"}]}' > "$BINROOT/fleet_1000000000_aaaa/fleet.json"
+cat > "$BINROOT/fleet_2000000000_zzzz/fleet.json" <<'EOF'
+{"schema_version":1,"peers":[{"name":"wt-a","session_id":"a1","removed":null}]}
+EOF
+OUT="$(section28 "$BINROOT")"
+if grep -q "fleet_1000000000_aaaa" <<< "$OUT"; then
+    assert_pass "a non-UTF-8 fleet.json is reported"
+else
+    assert_fail "a non-UTF-8 fleet.json is reported" "$OUT"
+fi
+if grep -q "fleet_2000000000_zzzz" <<< "$OUT"; then
+    assert_pass "a non-UTF-8 record does not suppress the fleet sorting after it"
+else
+    assert_fail "a non-UTF-8 record does not suppress the fleet sorting after it" "$OUT"
+fi
+
 # 5c. UNREADABLE ROOT. pathlib.glob swallows PermissionError, which would render
 #     the most confident clean line the section can print. It must say unknown.
 if [ "$(id -u)" -ne 0 ]; then
@@ -249,6 +271,11 @@ FORGE=$'\n'"FLEET"$'\t'"fleet_FORGED_0001"$'\t'"99/99 peer(s) unreclaimed"$'\t'"
 EMPTY_FORGE="$TMP/base$FORGE"
 mkdir -p "$EMPTY_FORGE"
 OUT="$(section28 "$EMPTY_FORGE")"
+if grep -q "nothing outstanding here" <<< "$OUT"; then
+    assert_pass "the CLEAN forge fixture actually reaches the clean branch"
+else
+    assert_fail "the CLEAN forge fixture actually reaches the clean branch" "$OUT"
+fi
 if grep -qE '^[[:space:]]*\[info\] fleet_FORGED_0001' <<< "$OUT"; then
     assert_fail "the CLEAN branch cannot forge a fleet row" "$OUT"
 else
@@ -261,6 +288,11 @@ if [ "$(id -u)" -ne 0 ]; then
     mkdir -p "$UNREAD_FORGE"; chmod 000 "$UNREAD_FORGE"
     OUT="$(section28 "$UNREAD_FORGE")"
     chmod 755 "$UNREAD_FORGE"
+    if grep -q "not readable" <<< "$OUT"; then
+        assert_pass "the unreadable-root forge fixture actually reaches its branch"
+    else
+        assert_fail "the unreadable-root forge fixture actually reaches its branch" "$OUT"
+    fi
     if grep -qE '^[[:space:]]*\[info\] fleet_FORGED_0001' <<< "$OUT"; then
         assert_fail "the unreadable-root branch cannot forge a fleet row" "$OUT"
     else
@@ -281,6 +313,11 @@ if [ "$(id -u)" -ne 0 ]; then
     LP="$TMP/lockedparent2"; mkdir -p "$LP"; chmod 000 "$LP"
     OUT="$(section28 "$LP/root$FORGE")"
     chmod 755 "$LP"
+    if grep -q "cannot be read" <<< "$OUT"; then
+        assert_pass "the stat-unreadable forge fixture actually reaches its branch"
+    else
+        assert_fail "the stat-unreadable forge fixture actually reaches its branch" "$OUT"
+    fi
     if grep -qE '^[[:space:]]*\[info\] fleet_FORGED_0001' <<< "$OUT"; then
         assert_fail "the stat-unreadable branch cannot forge a fleet row" "$OUT"
     else
@@ -345,6 +382,77 @@ if grep -q "not a directory" <<< "$OUT"; then
     assert_pass "a state root that is a file reports unknown"
 else
     assert_fail "a state root that is a file reports unknown" "$OUT"
+fi
+
+# 5f. TOTALITY. The section's headline promise is that no input empties the
+#     report, because an empty body reads as clean. Four review rounds each
+#     found one more input that broke it, so these assert the PROPERTY, on both
+#     of the two surfaces a root can arrive from.
+#
+#     (i) an undecodable byte in the state-root path. Env vars decode with
+#     surrogateescape, so a lone surrogate reaches print and raises
+#     UnicodeEncodeError — and the handler's own print raised again, so the
+#     exception escaped the loop entirely.
+NONUTF8=$'/tmp/bstack-p28-nonutf8-\xff/fleet'
+OUT="$(section28 "$NONUTF8")"
+if [ "$(grep -c '\[info\]' <<< "$OUT")" -ge 1 ]; then
+    assert_pass "an undecodable byte in the root path still renders a body"
+else
+    assert_fail "an undecodable byte in the root path still renders a body" "EMPTY BODY"
+fi
+# Content, not just presence: without the stdout reconfigure the print raises
+# and the OUTER guard emits a generic "the fleet scan failed" row — also a
+# body. Only naming the root proves the encoding fix itself is doing the work.
+if grep -q "no fleet state root at" <<< "$OUT"; then
+    assert_pass "the undecodable root is classified, not swallowed by the outer guard"
+else
+    assert_fail "the undecodable root is classified, not swallowed by the outer guard" "$OUT"
+fi
+ERR="$(BSTACK_FLEET_STATE_DIR="$NONUTF8" bash "$DOCTOR" --quiet 2>&1 >/dev/null)"
+if grep -q "Traceback" <<< "$ERR"; then
+    assert_fail "no traceback leaks to stderr under --quiet (undecodable root)" "$ERR"
+else
+    assert_pass "no traceback leaks to stderr under --quiet (undecodable root)"
+fi
+
+#     (ii) a NUL byte in the CONFIG's fleet_state_dir. os.stat raises
+#     ValueError, which is not an OSError, so an OSError-only handler missed it.
+#     This route needs BSTACK_STATE_DIR + BROOMVA_WORKSPACE, which section28()
+#     does not set — so it gets its own invocation rather than being skipped.
+NULSD="$TMP/nulstate"; mkdir -p "$NULSD"
+printf 'fleet_state_dir: /tmp/bstack-p28-nul-\000-root\n' > "$NULSD/config.yaml"
+NULWS="$TMP/nulws"; mkdir -p "$NULWS/.control" "$NULWS/.git"
+OUT="$(BROOMVA_WORKSPACE="$NULWS" BSTACK_STATE_DIR="$NULSD" bash "$DOCTOR" 2>/dev/null \
+        | sed -n '/28. Unreclaimed fleets/,/^$/p')"
+if [ "$(grep -c '\[info\]' <<< "$OUT")" -ge 1 ]; then
+    assert_pass "a NUL in the config state-dir still renders a body"
+else
+    assert_fail "a NUL in the config state-dir still renders a body" "EMPTY BODY"
+fi
+if grep -q "unknown, not clean" <<< "$OUT"; then
+    assert_pass "a NUL in the config state-dir reports unknown, not clean"
+else
+    assert_fail "a NUL in the config state-dir reports unknown, not clean" "$OUT"
+fi
+# The SPECIFIC branch: os.stat raises ValueError on an embedded NUL, which is
+# not an OSError. Narrowing that handler back to OSError still renders a body
+# (the outer guard catches it), so only the branch text discriminates.
+if grep -q "state root cannot be read" <<< "$OUT"; then
+    assert_pass "the NUL root is classified by the stat handler, not the outer guard"
+else
+    assert_fail "the NUL root is classified by the stat handler, not the outer guard" "$OUT"
+fi
+# And the NUL itself must be neutralised in the emitted line.
+if grep -q 'p28-nul-?-root' <<< "$OUT"; then
+    assert_pass "the NUL byte is sanitised out of the emitted record"
+else
+    assert_fail "the NUL byte is sanitised out of the emitted record" "$OUT"
+fi
+ERR="$(BROOMVA_WORKSPACE="$NULWS" BSTACK_STATE_DIR="$NULSD" bash "$DOCTOR" --quiet 2>&1 >/dev/null)"
+if grep -q "Traceback" <<< "$ERR"; then
+    assert_fail "no traceback leaks to stderr under --quiet (NUL config root)" "$ERR"
+else
+    assert_pass "no traceback leaks to stderr under --quiet (NUL config root)"
 fi
 
 # 5e. IMPORT HYGIENE (security). `python3 -` puts the CWD at sys.path[0], and
@@ -426,11 +534,22 @@ fi
 SECTION_SRC="$(sed -n '/^section "28\./,/^# ── /p' "$BSTACK_REPO/scripts/doctor.sh" | grep -v '^[[:space:]]*#')"
 if [ -z "$SECTION_SRC" ]; then
     assert_fail "§28 source range is extractable" "sed range matched nothing"
-elif grep -qE '(^|[^_[:alnum:]])(gap|ok)[[:space:]]' <<< "$SECTION_SRC"; then
+elif grep -qE '(^|[^_[:alnum:]])(gap|ok)[[:space:]]|^[[:space:]]*(GAPS|PASSES)=' <<< "$SECTION_SRC"; then
     assert_fail "§28 calls neither gap() nor ok() — it cannot move the totals" \
-        "$(grep -nE '(^|[^_[:alnum:]])(gap|ok)[[:space:]]' <<< "$SECTION_SRC" | head -2)"
+        "$(grep -nE '(^|[^_[:alnum:]])(gap|ok)[[:space:]]|^[[:space:]]*(GAPS|PASSES)=' <<< "$SECTION_SRC" | head -2)"
 else
     assert_pass "§28 calls neither gap() nor ok() — it cannot move the totals"
+fi
+
+# The outer scan guard is the backstop for inputs nobody anticipated. Every
+# input this suite can construct is already classified by an inner guard, so it
+# is deliberately unreachable by black-box test — and an unreachable guard is
+# exactly the kind that gets deleted in a refactor. Assert it structurally, and
+# declare the remainder rather than implying coverage that does not exist.
+if grep -qE '^\s*except Exception as exc:.*last line of defence' "$BSTACK_REPO/scripts/doctor.sh"; then
+    assert_pass "the outer scan guard is present (structural; not reachable by any constructible input)"
+else
+    assert_fail "the outer scan guard is present (structural; not reachable by any constructible input)"
 fi
 
 echo ""

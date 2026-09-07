@@ -39,6 +39,16 @@ subprocess, no network, no `claude agents` call.
   report **unknown**. An absent root reports that there is nothing to check
   *here*, since a `--state-dir` flag is invisible to doctor. Only an existing,
   readable, empty root is clean.
+- Totality is structural, not enumerated. Four review rounds each found one
+  more input that emptied the report — a wrong-shape record, an untraversable
+  parent, an undecodable byte, a NUL in a config path — and each was closed by
+  adding a guard at one more print site, which trades a round per hazard. Three
+  properties now hold for any input, each provable by deleting one thing:
+  stdout cannot raise on an unencodable character; every record goes through a
+  single `emit()` that sanitises every field, so no value can shift a column or
+  forge a row; and anything still escaping lands in one outer handler that
+  emits a single honest `UNKNOWN` row. An empty body is the signature that
+  reads as clean, and it is now unreachable.
 - Every per-directory body is total: a raise would empty the whole report, and
   an empty report renders as a header with no body — the most confident clean
   signal an advisory section can emit. One malformed directory must never
@@ -53,7 +63,7 @@ subprocess, no network, no `claude agents` call.
   a GAP here would fire on healthy work and teach the operator to skip the
   section.
 
-`tests/doctor-fleet-orphans.test.sh` pins all of it in 55 cases, and every hand
+`tests/doctor-fleet-orphans.test.sh` pins all of it in 69 cases, and every hand
 mutant dies: the inverted predicate, silence on a surviving directory, an
 unreadable root falling back to `pathlib.glob` (which swallows
 `PermissionError`), a non-directory entry skipped into clean, the shape guard

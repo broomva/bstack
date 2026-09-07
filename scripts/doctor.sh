@@ -1605,6 +1605,24 @@ else
 import json, os, stat, sys, time
 from pathlib import Path
 
+# TOTALITY BY STRUCTURE, not by enumeration. Four review rounds each found one
+# more input that emptied this report — a wrong-shape record, an untraversable
+# parent, an undecodable byte, a NUL in a config path — and each was closed by
+# adding one more guard at one more print site. That trades a round per hazard,
+# so the shape is wrong, not the guards. Three properties now hold for ANY
+# input, and each is provable by deleting one thing:
+#   1. stdout cannot raise on an unencodable character (reconfigure below);
+#   2. every record goes through emit(), which sanitises EVERY field, so no
+#      value can shift a column or forge a row;
+#   3. anything that still escapes lands in one outer handler that emits a
+#      single honest UNKNOWN row. SystemExit is a BaseException, so the early
+#      returns below are unaffected.
+# An empty body is the signature that reads as clean, and it is now unreachable.
+try:
+    sys.stdout.reconfigure(errors="backslashreplace")
+except Exception:                         # noqa: BLE001 - older/odd streams
+    pass
+
 # python3 - puts '' (the CWD) at sys.path[0], and fleet.py's own
 # "from scripts import peer" finds no scripts package beside it — so without
 # this, resolution falls through to the audited workspace's cwd and doctor would
@@ -1612,95 +1630,110 @@ from pathlib import Path
 # an arbitrary directory, so that cwd is not trusted input.
 sys.path[:] = [q for q in sys.path if q not in ("", ".", os.getcwd())]
 sys.path.insert(0, sys.argv[1])
-try:
-    from fleet import state_root          # one source of truth for the ontology
-except Exception as exc:                  # noqa: BLE001 - report, never guess
-    print(f"UNKNOWN\t-\tcannot import fleet.state_root ({type(exc).__name__})\t")
-    raise SystemExit(0)
 
-try:
-    root = state_root()
-except Exception as exc:                  # noqa: BLE001
-    print(f"UNKNOWN\t-\tcannot resolve the fleet state root ({type(exc).__name__})\t")
-    raise SystemExit(0)
-
-def clean(text: str) -> str:
-    """A record is tab-delimited and line-based; a tab or newline in a fleet id
-    would shift every field and truncate the remedy into an id that resolves to
-    nothing. The --fleet id is unvalidated, so sanitise rather than trust."""
-    return str(text).replace("\t", "?").replace("\n", "?").replace("\r", "?")
+_BAD = ("\t", "\n", "\r", "\x00")
 
 
-# os.stat, not Path.is_dir(). is_dir() only became total in CPython 3.13: on
-# 3.12 and earlier it RE-RAISES PermissionError, and this statement sits
-# upstream of every per-entry guard — so a root whose PARENT is not traversable
-# killed the interpreter and rendered the section as a header with no body, the
-# exact failure this section exists to prevent. On 3.13+ the same input silently
-# returned False and reported the root as absent, which is a different wrong
-# answer. os.stat raises on every version, so one code path classifies the same
-# way everywhere: absent is absent, unreadable is unknown.
-try:
-    st = os.stat(root)
-except (FileNotFoundError, NotADirectoryError):
-    print(f"NOROOT\t{clean(root)}\t\t")
-    raise SystemExit(0)
-except OSError as exc:
-    print(f"UNKNOWN\t{clean(root)}\tstate root cannot be read ({type(exc).__name__})\t")
-    raise SystemExit(0)
-if not stat.S_ISDIR(st.st_mode):
-    print(f"UNKNOWN\t{clean(root)}\tstate root is not a directory\t")
-    raise SystemExit(0)
+def clean(text):
+    """A record is tab-delimited and line-based, so a tab, newline or NUL in a
+    path or a fleet id would shift every column or forge an entire row. The
+    --fleet id is unvalidated and a state root comes from env or config, so
+    sanitise rather than trust."""
+    out = str(text)
+    for ch in _BAD:
+        out = out.replace(ch, "?")
+    return out
 
 
-# pathlib.glob SWALLOWS PermissionError: an unreadable root would yield zero
-# entries and render as the most confident clean line the section can print.
-# scandir surfaces it, so an unreadable root reports unknown instead.
-try:
-    entries = sorted(os.scandir(root), key=lambda e: e.name)
-except OSError as exc:
-    print(f"UNKNOWN\t{clean(root)}\tstate root is not readable ({type(exc).__name__})\t")
-    raise SystemExit(0)
+def emit(kind, name="-", detail="", age=""):
+    """The ONLY way this section prints. One choke point means a new field or a
+    new branch cannot forget the sanitiser."""
+    print(clean(kind) + "\t" + clean(name) + "\t" + clean(detail) + "\t" + clean(age))
 
-found = False
-for e in entries:
-    if not e.name.startswith("fleet_"):
-        continue
-    found = True
-    name = clean(e.name)
-    # EVERY per-directory body is total: a raise here would empty the whole
-    # report, and the shell loop prints nothing for an empty report — a header
-    # with no body, which reads as clean. One malformed directory must never
-    # suppress the fleets that sort after it.
+
+def scan():
     try:
-        if not e.is_dir():
-            print(f"UNKNOWN\t{name}\ta fleet_* entry that is not a directory\t")
-            continue
-        d = Path(e.path)
-        f = d / "fleet.json"
-        if not f.exists():
-            print(f"UNKNOWN\t{name}\tno fleet.json in the directory\t")
-            continue
-        data = json.loads(f.read_text(encoding="utf-8"))
-        # Valid JSON of the wrong SHAPE is the trap: a peers list of strings,
-        # or a bare [], parses fine and then raises on .get(). Coerce, never assume.
-        peers = data.get("peers") if isinstance(data, dict) else None
-        if not isinstance(peers, list) or not all(isinstance(q, dict) for q in peers):
-            # A list whose entries are not peer records is malformed too. Counting
-            # a bare string as an unreclaimed peer would surface the directory,
-            # but under a number that means nothing — say unknown instead.
-            print(f"UNKNOWN\t{name}\tfleet.json is not a fleet record\t")
-            continue
-        open_peers = [q for q in peers if not q.get("removed")]
-        try:
-            age_h = f"{(time.time() - d.stat().st_mtime) / 3600.0:.1f}"
-        except OSError:
-            age_h = "?"
-        print(f"FLEET\t{name}\t{len(open_peers)}/{len(peers)} peer(s) unreclaimed\t{age_h}")
-    except Exception as exc:              # noqa: BLE001 - report, never die
-        print(f"UNKNOWN\t{name}\tunreadable fleet record ({type(exc).__name__})\t")
+        from fleet import state_root      # one source of truth for the ontology
+    except Exception as exc:              # noqa: BLE001 - report, never guess
+        emit("UNKNOWN", "-", "cannot import fleet.state_root (" + type(exc).__name__ + ")")
+        return
 
-if not found:
-    print(f"CLEAN\t{clean(root)}\t\t")
+    try:
+        root = state_root()
+    except Exception as exc:              # noqa: BLE001
+        emit("UNKNOWN", "-", "cannot resolve the fleet state root (" + type(exc).__name__ + ")")
+        return
+
+    # os.stat, not Path.is_dir(). is_dir() only became total in CPython 3.13: on
+    # 3.12 and earlier it RE-RAISES PermissionError, and this sits upstream of
+    # every per-entry guard, so a root whose PARENT is not traversable killed the
+    # interpreter. On 3.13+ the same input silently returned False and reported
+    # the root absent, a different wrong answer. os.stat raises on every version,
+    # so one code path classifies the same way everywhere. The handler is
+    # Exception, not OSError: a NUL in a config path raises ValueError here.
+    try:
+        st = os.stat(root)
+    except (FileNotFoundError, NotADirectoryError):
+        emit("NOROOT", root)
+        return
+    except Exception as exc:              # noqa: BLE001
+        emit("UNKNOWN", root, "state root cannot be read (" + type(exc).__name__ + ")")
+        return
+    if not stat.S_ISDIR(st.st_mode):
+        emit("UNKNOWN", root, "state root is not a directory")
+        return
+
+    # pathlib.glob SWALLOWS PermissionError: an unreadable root would yield zero
+    # entries and render as the most confident clean line the section can print.
+    # scandir surfaces it, so an unreadable root reports unknown instead.
+    try:
+        entries = sorted(os.scandir(root), key=lambda e: e.name)
+    except Exception as exc:              # noqa: BLE001
+        emit("UNKNOWN", root, "state root is not readable (" + type(exc).__name__ + ")")
+        return
+
+    found = False
+    for e in entries:
+        if not e.name.startswith("fleet_"):
+            continue
+        found = True
+        # Per-entry isolation, on top of the outer guard: one malformed
+        # directory must never suppress the fleets that sort after it.
+        try:
+            if not e.is_dir():
+                emit("UNKNOWN", e.name, "a fleet_* entry that is not a directory")
+                continue
+            d = Path(e.path)
+            f = d / "fleet.json"
+            if not f.exists():
+                emit("UNKNOWN", e.name, "no fleet.json in the directory")
+                continue
+            data = json.loads(f.read_text(encoding="utf-8"))
+            # Valid JSON of the wrong SHAPE is the trap: a peers list of strings,
+            # or a bare [], parses fine and then raises on .get(). Coerce.
+            peers = data.get("peers") if isinstance(data, dict) else None
+            if not isinstance(peers, list) or not all(isinstance(q, dict) for q in peers):
+                emit("UNKNOWN", e.name, "fleet.json is not a fleet record")
+                continue
+            open_peers = [q for q in peers if not q.get("removed")]
+            try:
+                age_h = "%.1f" % ((time.time() - d.stat().st_mtime) / 3600.0)
+            except Exception:             # noqa: BLE001
+                age_h = "?"
+            emit("FLEET", e.name,
+                 str(len(open_peers)) + "/" + str(len(peers)) + " peer(s) unreclaimed",
+                 age_h)
+        except Exception as exc:          # noqa: BLE001 - report, never die
+            emit("UNKNOWN", e.name, "unreadable fleet record (" + type(exc).__name__ + ")")
+
+    if not found:
+        emit("CLEAN", root)
+
+
+try:
+    scan()
+except Exception as exc:                  # noqa: BLE001 - the last line of defence
+    emit("UNKNOWN", "-", "the fleet scan failed (" + type(exc).__name__ + ")")
 PY
 )"
     while IFS=$'\t' read -r _k _name _detail _age; do
