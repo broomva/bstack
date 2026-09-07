@@ -49,6 +49,17 @@ subprocess, no network, no `claude agents` call.
   forge a row; and anything still escaping lands in one outer handler that
   emits a single honest `UNKNOWN` row. An empty body is the signature that
   reads as clean, and it is now unreachable.
+- The trust boundary is stated rather than a totality claim. Everything inside
+  the python process is total; the process itself is guarded at the shell layer,
+  because `command -v python3` proves presence and not that the interpreter
+  runs — a pyenv shim for an uninstalled version is executable and exits 127,
+  and the substitution used to discard that status and leak stderr, rendering a
+  header with no body while an orphan sat on disk. The exit status is captured,
+  stderr is redirected as every other python block in the file already does, and
+  an empty or failed run becomes an honest row.
+- A `fleet.json` whose `schema_version` this check does not read reports unknown
+  instead of applying v1 field semantics to it and printing a count under a
+  remedy that would error.
 - Nothing outside the guarded region touches the filesystem or the environment.
   The `sys.path` prologue used to run at module level, and `os.getcwd()` raises
   `FileNotFoundError` when the invoking directory has been deleted — routine
@@ -77,7 +88,7 @@ subprocess, no network, no `claude agents` call.
   a GAP here would fire on healthy work and teach the operator to skip the
   section.
 
-`tests/doctor-fleet-orphans.test.sh` pins all of it in 77 cases, and every hand
+`tests/doctor-fleet-orphans.test.sh` pins all of it in 84 cases, and every hand
 mutant dies: the inverted predicate, silence on a surviving directory, an
 unreadable root falling back to `pathlib.glob` (which swallows
 `PermissionError`), a non-directory entry skipped into clean, the shape guard

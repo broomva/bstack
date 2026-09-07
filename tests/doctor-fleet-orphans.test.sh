@@ -16,6 +16,8 @@ FAIL=0
 FAILED_TESTS=()
 
 assert_pass() { PASS=$((PASS + 1)); echo "  ✓ $1"; }
+SKIP=0
+skip() { SKIP=$((SKIP + 1)); echo "  ~ SKIPPED (not run here): $1"; }
 assert_fail() {
     FAIL=$((FAIL + 1))
     FAILED_TESTS+=("$1")
@@ -227,7 +229,7 @@ if [ "$(id -u)" -ne 0 ]; then
         assert_fail "an unreadable state root reports unknown, never clean" "$OUT"
     fi
 else
-    assert_pass "unreadable-root case skipped (running as root)"
+    skip "unreadable root (running as root)"
 fi
 
 # 5d. A fleet_* entry that is not a directory must not be skipped into clean.
@@ -299,7 +301,7 @@ if [ "$(id -u)" -ne 0 ]; then
         assert_pass "the unreadable-root branch cannot forge a fleet row"
     fi
 else
-    assert_pass "unreadable-root forge case skipped (running as root)"
+    skip "unreadable-root forge (running as root)"
 fi
 
 # 5d-quinquies. The os.stat fix ADDED two root-echoing branches ("cannot be
@@ -324,7 +326,7 @@ if [ "$(id -u)" -ne 0 ]; then
         assert_pass "the stat-unreadable branch cannot forge a fleet row"
     fi
 else
-    assert_pass "stat-unreadable forge case skipped (running as root)"
+    skip "stat-unreadable forge (running as root)"
 fi
 
 # (d) not-a-directory branch: a FILE at a path carrying the payload. The payload
@@ -372,7 +374,7 @@ if [ "$(id -u)" -ne 0 ]; then
         assert_fail "the section still renders a body (no interpreter crash)" "$OUT"
     fi
 else
-    assert_pass "untraversable-parent case skipped (running as root)"
+    skip "untraversable parent (running as root)"
 fi
 
 # A file where a directory is expected is also not clean.
@@ -520,7 +522,7 @@ if command -v mkfifo >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1; then
     fi
     rm -f "$FIFOROOT/fleet_1788000000_fff/fleet.json"
 else
-    assert_pass "FIFO case skipped (mkfifo or timeout unavailable)"
+    skip "FIFO non-termination guard (mkfifo or timeout unavailable)"
 fi
 
 # 5i. ESCAPE SEQUENCES. clean() keeps only printable characters, so a name
@@ -579,6 +581,77 @@ if grep -qE '— 1/1 peer\(s\) unreclaimed, [0-9?.]+h since last write' <<< "$OU
     assert_pass "a tab in a fleet id does not shift the record's fields"
 else
     assert_fail "a tab in a fleet id does not shift the record's fields" "$OUT"
+fi
+
+# 5j. THE PROCESS BOUNDARY. `command -v python3` proves presence, not that the
+#     interpreter runs: a pyenv shim for an uninstalled version is +x and exits
+#     127. The substitution used to discard the status and leak stderr, so §28
+#     rendered a header with no body while an orphan sat on disk — the same
+#     class as every prior round, one scope wider.
+BADPY="$TMP/badpy"; mkdir -p "$BADPY"
+printf '#!/bin/sh\necho "pyenv: version 3.99.0 is not installed" >&2\nexit 127\n' > "$BADPY/python3"
+chmod +x "$BADPY/python3"
+OUT="$(PATH="$BADPY:$PATH" BSTACK_FLEET_STATE_DIR="$TMP/live" bash "$DOCTOR" 2>/dev/null \
+        | sed -n '/28. Unreclaimed fleets/,/^$/p')"
+if [ "$(grep -c '\[info\]' <<< "$OUT")" -ge 1 ]; then
+    assert_pass "a broken python3 still renders a body"
+else
+    assert_fail "a broken python3 still renders a body" "EMPTY BODY"
+fi
+if grep -q "the fleet probe did not run" <<< "$OUT"; then
+    assert_pass "a broken python3 is reported as a probe failure, not as clean"
+else
+    assert_fail "a broken python3 is reported as a probe failure, not as clean" "$OUT"
+fi
+# The stderr axis, asserted against the REAL line. A behavioural check cannot
+# isolate it — other sections call python3 too, and with a broken interpreter
+# their noise is pre-existing and swamps the measurement — and the first
+# version of this assertion ran the pattern in a standalone shell, so it tested
+# a copy of the code rather than the code and survived mutation. Source-level
+# is the honest form here.
+if grep -qE 'python3 - "\$BSTACK_REPO/scripts" +2>/dev/null <<' "$BSTACK_REPO/scripts/doctor.sh"; then
+    assert_pass "§28's own python invocation redirects its stderr"
+else
+    assert_fail "§28's own python invocation redirects its stderr" \
+        "$(grep -n 'python3 - "\$BSTACK_REPO/scripts"' "$BSTACK_REPO/scripts/doctor.sh")"
+fi
+
+# 5k. ENCODING. sys.stdout.reconfigure was unpinned once clean() became
+#     printable-only: a printable non-ASCII id survives clean() and then fails
+#     to encode under an ASCII stdout. Without reconfigure the outer guard fires
+#     and the body is non-empty — but the ORPHAN IS NOT NAMED, which is the
+#     discriminating property, not "a body rendered".
+ACCROOT="$TMP/accented"; mkdir -p "$ACCROOT/fleet_1788000000_caf$(printf '\303\251')"
+printf '{"schema_version":1,"peers":[{"name":"a","removed":null}]}' \
+    > "$ACCROOT/fleet_1788000000_caf$(printf '\303\251')/fleet.json"
+OUT="$(PYTHONIOENCODING=ascii BSTACK_FLEET_STATE_DIR="$ACCROOT" bash "$DOCTOR" 2>/dev/null \
+        | sed -n '/28. Unreclaimed fleets/,/^$/p')"
+if grep -q "fleet_1788000000_caf" <<< "$OUT"; then
+    assert_pass "an ASCII stdout still names a non-ASCII fleet id"
+else
+    assert_fail "an ASCII stdout still names a non-ASCII fleet id" "$OUT"
+fi
+if grep -q "the fleet scan failed" <<< "$OUT"; then
+    assert_fail "an ASCII stdout does not fall through to the outer guard" "$OUT"
+else
+    assert_pass "an ASCII stdout does not fall through to the outer guard"
+fi
+
+# 5l. SCHEMA. fleet.py refuses a schema_version it does not know; reading v1
+#     fields out of such a record and printing a count is guessing, and the
+#     remedy would name a command that errors.
+V9="$TMP/schema9"; mkdir -p "$V9/fleet_1788000000_v99"
+printf '{"schema_version":999,"peers":[{"name":"a"},{"name":"b"}]}' > "$V9/fleet_1788000000_v99/fleet.json"
+OUT="$(section28 "$V9")"
+if grep -q "schema_version=999" <<< "$OUT"; then
+    assert_pass "an unknown schema_version reports unknown, not a peer count"
+else
+    assert_fail "an unknown schema_version reports unknown, not a peer count" "$OUT"
+fi
+if grep -q "peer(s) unreclaimed" <<< "$OUT"; then
+    assert_fail "an unknown schema_version does not print a fabricated count" "$OUT"
+else
+    assert_pass "an unknown schema_version does not print a fabricated count"
 fi
 
 # 6. ADVISORY NEUTRALITY, pinned to a workspace with KNOWN gaps.
@@ -645,8 +718,8 @@ fi
 # read loop's catch-all arm cannot be reached by any input either. A read side
 # that enumerates four kinds and silently drops the rest is the same silence
 # this section exists to prevent, so its presence is asserted structurally too.
-if awk '/^section "28\./{f=1} f && /^ *\*\)$/{print "HASDEFAULT"} /^# \xe2\x94\x80\xe2\x94\x80 summary/{exit}' \
-        "$BSTACK_REPO/scripts/doctor.sh" | grep -q HASDEFAULT; then
+if awk '/^section "28\./{f=1} f && /^ *\*\)$/{d=1} d && /echo/ && /\$_k/{print "EMITS"} /^# \xe2\x94\x80\xe2\x94\x80 summary/{exit}' \
+        "$BSTACK_REPO/scripts/doctor.sh" | grep -q EMITS; then
     assert_pass "the shell read loop has a catch-all arm (structural; unreachable while emit() is total)"
 else
     assert_fail "the shell read loop has a catch-all arm (structural; unreachable while emit() is total)"
@@ -654,7 +727,7 @@ fi
 
 echo ""
 if [ "$FAIL" -eq 0 ]; then
-    echo "  ✓ doctor §28: $PASS/$PASS passed"
+    echo "  ✓ doctor §28: $PASS/$PASS passed${SKIP:+ ($SKIP skipped — not coverage)}"
     exit 0
 fi
 echo "  ✗ doctor §28: $FAIL failed, $PASS passed"

@@ -1601,7 +1601,16 @@ if ! command -v python3 >/dev/null 2>&1; then
 elif [ ! -f "$BSTACK_REPO/scripts/fleet.py" ]; then
     [ "$QUIET" = "0" ] && echo "  [info] scripts/fleet.py absent (bstack < 0.40.0) — no fleet mechanism to check"
 else
-    _FLEET_REPORT="$(python3 - "$BSTACK_REPO/scripts" <<'PY'
+    # The trust boundary, stated: everything INSIDE the python process is total
+    # (see the header there), and the process ITSELF is guarded here. The
+    # command -v test above proves presence, not that it runs — a pyenv shim for an
+    # uninstalled version is +x and exits 127, and a broken PYTHONHOME aborts
+    # before the first line executes. Either way the substitution used to yield
+    # nothing, and nothing is the empty body that reads as clean. So: stderr is
+    # redirected (every other python block in this file already does that), the
+    # exit status is captured, and an empty or failed run is turned into an
+    # honest row rather than silence.
+    _FLEET_REPORT="$(python3 - "$BSTACK_REPO/scripts" 2>/dev/null <<'PY'
 import json, os, stat, sys, time
 from pathlib import Path
 
@@ -1617,7 +1626,11 @@ from pathlib import Path
 #   3. anything that still escapes lands in one outer handler that emits a
 #      single honest UNKNOWN row. SystemExit is a BaseException, so the early
 #      returns below are unaffected.
-# An empty body is the signature that reads as clean, and it is now unreachable.
+# An empty body is the signature that reads as clean. Inside this process it is
+# unreachable; the process itself is guarded at the shell layer above, because a
+# claim of totality is only as wide as the scope it names — and this one was
+# asserted three times at a scope narrower than the failure surface before that
+# was true.
 try:
     sys.stdout.reconfigure(errors="backslashreplace")
 except Exception:                         # noqa: BLE001 - older/odd streams
@@ -1732,6 +1745,14 @@ def scan():
             data = json.loads(f.read_text(encoding="utf-8"))
             # Valid JSON of the wrong SHAPE is the trap: a peers list of strings,
             # or a bare [], parses fine and then raises on .get(). Coerce.
+            # fleet.py refuses a schema it does not know; reading v1 fields out of
+            # it and printing a count would be guessing, and the remedy line
+            # would name a command that errors. It can tell, so it says.
+            if isinstance(data, dict) and data.get("schema_version") not in (1, None):
+                emit("UNKNOWN", e.name,
+                     "fleet.json schema_version=" + str(data.get("schema_version"))
+                     + " is not one this check reads")
+                continue
             peers = data.get("peers") if isinstance(data, dict) else None
             if not isinstance(peers, list) or not all(isinstance(q, dict) for q in peers):
                 emit("UNKNOWN", e.name, "fleet.json is not a fleet record")
@@ -1757,6 +1778,10 @@ except Exception as exc:                  # noqa: BLE001 - the last line of defe
     emit("UNKNOWN", "-", "the fleet scan failed (" + type(exc).__name__ + ")")
 PY
 )"
+    _FLEET_RC=$?
+    if [ "$_FLEET_RC" != "0" ] || [ -z "$_FLEET_REPORT" ]; then
+        _FLEET_REPORT="$(printf 'UNKNOWN\t-\tthe fleet probe did not run (python3 exited %s)\t' "$_FLEET_RC")"
+    fi
     while IFS=$'\t' read -r _k _name _detail _age; do
         [ -z "$_k" ] && continue
         case "$_k" in
@@ -1770,7 +1795,7 @@ PY
                 [ "$QUIET" = "0" ] && echo "  [info] $_name — $_detail; state is unknown, not clean"
                 ;;
             FLEET)
-                [ "$QUIET" = "0" ] && echo "  [info] $_name — $_detail, ${_age}h since last write; if it is not in flight: bstack fleet status --fleet $_name, then bstack fleet down --fleet $_name (--force if a peer's id was never captured)"
+                [ "$QUIET" = "0" ] && echo "  [info] $_name — $_detail, ${_age}h since last write; if it is not in flight: bstack fleet status --fleet $_name, then bstack fleet down --fleet $_name (the id is shown sanitised, so copy it from the state dir if it does not resolve; --force if a peer's id was never captured)"
                 ;;
             *)
                 # emit() is total on the python side, so this is unreachable
