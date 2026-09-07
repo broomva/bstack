@@ -461,10 +461,25 @@ fi
 #     hook in an arbitrary directory. The prologue used to run OUTSIDE the
 #     scan guard, so this emptied the section and leaked a traceback while
 #     doctor still reported the workspace fully compliant.
+#     BROOMVA_WORKSPACE is pinned here on purpose. With a deleted cwd, doctor's
+#     OWN bootstrap cannot resolve a workspace on Linux and exits before any
+#     section runs — so without the pin this case tests doctor's bootstrap, not
+#     §28, and it passed on macOS while failing on Linux for a reason that had
+#     nothing to do with the fix. Whether doctor itself should survive a deleted
+#     cwd is a separate question, outside this section's scope.
 DEADCWD="$TMP/deadcwd"
+DEADWS="$TMP/deadws"; mkdir -p "$DEADWS/.control" "$DEADWS/.git"
 mkdir -p "$DEADCWD"
-OUT="$(cd "$DEADCWD" && rmdir "$DEADCWD" && BSTACK_FLEET_STATE_DIR="$TMP/live" bash "$DOCTOR" 2>/dev/null \
+OUT="$(cd "$DEADCWD" && rmdir "$DEADCWD" \
+        && BROOMVA_WORKSPACE="$DEADWS" BSTACK_FLEET_STATE_DIR="$TMP/live" bash "$DOCTOR" 2>/dev/null \
         | sed -n '/28. Unreclaimed fleets/,/^$/p')"
+# Guard first: if doctor never reached §28 the assertions below would be
+# testing nothing, which is how this case failed in CI while passing locally.
+if grep -q "28. Unreclaimed fleets" <<< "$OUT"; then
+    assert_pass "doctor reaches §28 with a deleted cwd (the case is not vacuous)"
+else
+    assert_fail "doctor reaches §28 with a deleted cwd (the case is not vacuous)" "section never rendered"
+fi
 if [ "$(grep -c '\[info\]' <<< "$OUT")" -ge 1 ]; then
     assert_pass "a deleted working directory still renders a body"
 else
@@ -476,7 +491,8 @@ else
     assert_fail "a deleted working directory still names the orphan" "$OUT"
 fi
 mkdir -p "$DEADCWD"
-ERR="$(cd "$DEADCWD" && rmdir "$DEADCWD" && BSTACK_FLEET_STATE_DIR="$TMP/live" bash "$DOCTOR" --quiet 2>&1 >/dev/null)"
+ERR="$(cd "$DEADCWD" && rmdir "$DEADCWD" \
+        && BROOMVA_WORKSPACE="$DEADWS" BSTACK_FLEET_STATE_DIR="$TMP/live" bash "$DOCTOR" --quiet 2>&1 >/dev/null)"
 if grep -q "Traceback" <<< "$ERR"; then
     assert_fail "no traceback leaks under --quiet with a deleted cwd" "$ERR"
 else

@@ -77,7 +77,7 @@ subprocess, no network, no `claude agents` call.
   a GAP here would fire on healthy work and teach the operator to skip the
   section.
 
-`tests/doctor-fleet-orphans.test.sh` pins all of it in 76 cases, and every hand
+`tests/doctor-fleet-orphans.test.sh` pins all of it in 77 cases, and every hand
 mutant dies: the inverted predicate, silence on a surviving directory, an
 unreadable root falling back to `pathlib.glob` (which swallows
 `PermissionError`), a non-directory entry skipped into clean, the shape guard
