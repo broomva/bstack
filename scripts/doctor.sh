@@ -1566,10 +1566,14 @@ else
 fi
 
 # ── Section 28: Unreclaimed fleets (BRO-2473) ──────────────────────────────
-# `bstack fleet down` deletes a fleet's state directory ONLY when every peer was
-# removed or was already gone (scripts/fleet.py — the no-orphan invariant its
-# P20 rounds mutation-proved). The contrapositive is the entire check: a
-# surviving fleet_* directory is exactly a fleet that was never fully reclaimed
+# `bstack fleet down` deletes a fleet's state directory only when every peer was
+# removed or was already gone — UNLESS `--force` was passed, which deletes the
+# record regardless (scripts/fleet.py `deleted = (not remaining) or force`). So
+# the contrapositive holds in one direction only, and that is the direction this
+# section uses: a surviving fleet_* directory is a fleet that was never fully
+# reclaimed. The converse does NOT hold — a forced teardown leaves nothing to
+# find, so absence of a record is not proof of reclamation, and the clean line
+# says so rather than claiming every fleet was reclaimed
 # — one still in flight, or an orphan whose peers keep burning budget with
 # nothing watching them.
 #
@@ -1598,9 +1602,15 @@ elif [ ! -f "$BSTACK_REPO/scripts/fleet.py" ]; then
     [ "$QUIET" = "0" ] && echo "  [info] scripts/fleet.py absent (bstack < 0.40.0) — no fleet mechanism to check"
 else
     _FLEET_REPORT="$(python3 - "$BSTACK_REPO/scripts" <<'PY'
-import json, sys, time
+import json, os, sys, time
 from pathlib import Path
 
+# `python3 -` puts '' (the CWD) at sys.path[0], and fleet.py's own
+# `from scripts import peer` finds no `scripts` package beside it — so without
+# this, resolution falls through to the audited workspace's cwd and doctor would
+# EXECUTE a foreign scripts/peer.py. `bstack doctor` is documented to run from
+# an arbitrary directory, so that cwd is not trusted input.
+sys.path[:] = [q for q in sys.path if q not in ("", ".", os.getcwd())]
 sys.path.insert(0, sys.argv[1])
 try:
     from fleet import state_root          # one source of truth for the ontology
@@ -1618,40 +1628,73 @@ if not root.is_dir():
     print(f"NOROOT\t{root}\t\t")
     raise SystemExit(0)
 
+
+def clean(text: str) -> str:
+    """A record is tab-delimited and line-based; a tab or newline in a fleet id
+    would shift every field and truncate the remedy into an id that resolves to
+    nothing. `--fleet <id>` is unvalidated, so sanitise rather than trust."""
+    return str(text).replace("\t", "?").replace("\n", "?").replace("\r", "?")
+
+
+# pathlib.glob SWALLOWS PermissionError: an unreadable root would yield zero
+# entries and render as the most confident clean line the section can print.
+# scandir surfaces it, so an unreadable root reports unknown instead.
+try:
+    entries = sorted(os.scandir(root), key=lambda e: e.name)
+except OSError as exc:
+    print(f"UNKNOWN\t{clean(root)}\tstate root is not readable ({type(exc).__name__})\t")
+    raise SystemExit(0)
+
 found = False
-for d in sorted(root.glob("fleet_*")):
-    if not d.is_dir():
+for e in entries:
+    if not e.name.startswith("fleet_"):
         continue
     found = True
-    f = d / "fleet.json"
-    if not f.exists():
-        print(f"UNKNOWN\t{d.name}\tno fleet.json in the directory\t")
-        continue
+    name = clean(e.name)
+    # EVERY per-directory body is total: a raise here would empty the whole
+    # report, and the shell loop prints nothing for an empty report — a header
+    # with no body, which reads as clean. One malformed directory must never
+    # suppress the fleets that sort after it.
     try:
+        if not e.is_dir():
+            print(f"UNKNOWN\t{name}\ta fleet_* entry that is not a directory\t")
+            continue
+        d = Path(e.path)
+        f = d / "fleet.json"
+        if not f.exists():
+            print(f"UNKNOWN\t{name}\tno fleet.json in the directory\t")
+            continue
         data = json.loads(f.read_text(encoding="utf-8"))
-    except Exception as exc:              # noqa: BLE001
-        print(f"UNKNOWN\t{d.name}\tunreadable fleet.json ({type(exc).__name__})\t")
-        continue
-    peers = data.get("peers") or []
-    open_peers = [p for p in peers if not p.get("removed")]
-    try:
-        age_h = f"{(time.time() - d.stat().st_mtime) / 3600.0:.1f}"
-    except OSError:
-        age_h = "?"
-    print(f"FLEET\t{d.name}\t{len(open_peers)}/{len(peers)} peer(s) unreclaimed\t{age_h}")
+        # Valid JSON of the wrong SHAPE is the trap: `{"peers": ["x"]}` or a
+        # bare `[]` parses fine and then raises on .get(). Coerce, never assume.
+        peers = data.get("peers") if isinstance(data, dict) else None
+        if not isinstance(peers, list) or not all(isinstance(q, dict) for q in peers):
+            # A list whose entries are not peer records is malformed too. Counting
+            # a bare string as an unreclaimed peer would surface the directory,
+            # but under a number that means nothing — say unknown instead.
+            print(f"UNKNOWN\t{name}\tfleet.json is not a fleet record\t")
+            continue
+        open_peers = [q for q in peers if not q.get("removed")]
+        try:
+            age_h = f"{(time.time() - d.stat().st_mtime) / 3600.0:.1f}"
+        except OSError:
+            age_h = "?"
+        print(f"FLEET\t{name}\t{len(open_peers)}/{len(peers)} peer(s) unreclaimed\t{age_h}")
+    except Exception as exc:              # noqa: BLE001 - report, never die
+        print(f"UNKNOWN\t{name}\tunreadable fleet record ({type(exc).__name__})\t")
 
 if not found:
-    print(f"CLEAN\t{root}\t\t")
+    print(f"CLEAN\t{clean(root)}\t\t")
 PY
 )"
     while IFS=$'\t' read -r _k _name _detail _age; do
         [ -z "$_k" ] && continue
         case "$_k" in
             NOROOT)
-                [ "$QUIET" = "0" ] && echo "  [info] no fleet state root at $_name — no fleet has been raised on this machine"
+                [ "$QUIET" = "0" ] && echo "  [info] no fleet state root at $_name — nothing to check here (a --state-dir flag doctor cannot see would live elsewhere)"
                 ;;
             CLEAN)
-                [ "$QUIET" = "0" ] && echo "  [info] no fleet directories under $_name — every fleet raised here was reclaimed"
+                [ "$QUIET" = "0" ] && echo "  [info] no fleet record survives under $_name — nothing outstanding here (note: bstack fleet down --force deletes the record even with peers unreclaimed, and leaves nothing to find)"
                 ;;
             UNKNOWN)
                 [ "$QUIET" = "0" ] && echo "  [info] $_name — $_detail; state is unknown, not clean"

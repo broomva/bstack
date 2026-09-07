@@ -11,30 +11,50 @@ in `scripts/doctor.sh`. The `tests/fleet/` suite gates the *tool's* correctness,
 never the *agent's* cleanup, so an orphaned fleet was invisible: its peers keep
 consuming budget and its state directory survives with nothing reporting it.
 
-The check leans on an invariant `fleet down` already guarantees: a fleet's state
-directory is deleted **only** when every peer was removed or was already gone.
-The contrapositive is the whole section — a surviving `fleet_*` directory is
-exactly a fleet that was never fully reclaimed. That makes it a filesystem read:
-no subprocess, no network, no `claude agents` call.
+The check leans on what `fleet down` guarantees: a fleet's state directory is
+deleted only when every peer was removed or was already gone — **unless
+`--force` was passed**, which deletes the record regardless. So the implication
+holds in one direction, and that is the direction the section uses: a surviving
+`fleet_*` directory is a fleet that was never fully reclaimed. The converse does
+not hold, so the clean line reports "nothing outstanding here" and names
+`--force` rather than claiming everything was reclaimed. A filesystem read: no
+subprocess, no network, no `claude agents` call.
 
 - The state root is resolved by importing `fleet.state_root()` rather than
   re-deriving `~/.cache/bstack/fleet`, so the section cannot drift from the
   ontology (flag > `BSTACK_FLEET_STATE_DIR` > config `fleet_state_dir` >
   default) the day someone sets the config key.
-- Three answers, and only one of them is clean: a surviving directory is named
-  with its unreclaimed-peer count, its age, and the remedy (`fleet status`, then
-  `fleet down`, `--force` when a peer's id was never captured); an absent root
-  or an unreadable `fleet.json` reports **unknown**, never clean — the rule
-  `fleet status` already follows for an unreadable agent listing.
+- Every answer that is not a positive finding says which kind of not-finding it
+  is. A surviving directory is named with its unreclaimed-peer count, age and
+  remedy. An unreadable state root, a `fleet_*` entry that is not a directory, a
+  missing or unreadable `fleet.json`, and valid JSON of the wrong shape all
+  report **unknown**. An absent root reports that there is nothing to check
+  *here*, since a `--state-dir` flag is invisible to doctor. Only an existing,
+  readable, empty root is clean.
+- Every per-directory body is total: a raise would empty the whole report, and
+  an empty report renders as a header with no body — the most confident clean
+  signal an advisory section can emit. One malformed directory must never
+  suppress the fleets that sort after it.
+- The import strips the CWD from `sys.path` first. `python3 -` puts the invoking
+  directory at `sys.path[0]`, and `fleet.py`'s own `from scripts import peer`
+  would otherwise resolve there — executing a foreign `scripts/peer.py` from the
+  audited workspace. `bstack doctor` is documented to run from an arbitrary
+  directory, so that path is untrusted input.
 - Advisory only, deliberately: a fleet mid-flight is the expected state during
   an arc. It never moves the pass/gap totals and never fails `--strict`, because
   a GAP here would fire on healthy work and teach the operator to skip the
   section.
 
-`tests/doctor-fleet-orphans.test.sh` pins all of it (10 cases: positive,
-negative, empty, two unknown shapes, all-removed, and the two neutrality
-assertions); 6/6 hand mutants killed, including the inverted predicate and the
-advisory-becomes-a-GAP regression. §27 is left free for the open PR #105.
+`tests/doctor-fleet-orphans.test.sh` pins all of it in 34 cases, and every hand
+mutant dies: the inverted predicate, silence on a surviving directory, an
+unreadable root falling back to `pathlib.glob` (which swallows
+`PermissionError`), a non-directory entry skipped into clean, the shape guard
+and the total-body `except` dropped independently *and* together, the clean line
+claiming reclamation, the advisory becoming a GAP, the CWD left on `sys.path`,
+and the field sanitiser removed. Neutrality is asserted at the source (§28 calls
+neither `ok()` nor `gap()`), because a runtime `--strict` assertion cannot
+discriminate — it passes on the mutant in a gappy workspace and in a clean one
+alike. §27 is left free for the open PR #105.
 
 ## 0.40.0 — 2026-09-06
 
