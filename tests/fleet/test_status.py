@@ -1,21 +1,35 @@
 """`fleet status` — liveness read once, and never reported clean when unread.
 
+The fixture here is not invented: it is CLONED from the one committed real
+`claude agents --json --all` capture (`tests/wave/fixtures/claude-agents-2.1.258.json`),
+with only the `id`/`name` remapped onto the fleet's peers. An earlier draft used
+a made-up schema (`needs`, `state: running`) and passed against nothing the real
+`scripts/peer.py` classifier ever sees. The classes asserted below are the
+`peer.*` constants, so the test tracks the real classifier rather than a string.
+
 A dead session keeps listing as `blocked`; only a `pid` proves a live process.
 The case that matters most is the one where the instrument itself fails: an
-unreadable `claude agents --json --all` must render `unknown` and say so, never
-render a fleet as healthy because nothing contradicted it.
+unreadable listing must render `unknown` and say so, never render a fleet as
+healthy because nothing contradicted it.
 """
 import contextlib
+import copy
 import io
 import json
 import re
 import unittest
+from pathlib import Path
 
-from scripts import fleet
+from scripts import fleet, peer
 from tests.fleet.helpers import (only_fleet_dir, plain_worktree, sandbox,
                                  write_roster, write_stub)
 
 PEERS = ["alpha", "bravo", "charlie", "delta", "echo"]
+
+# The one committed real capture, reached relative to THIS file — it lives at
+# ../wave/fixtures/ from tests/fleet/.
+_REAL_AGENTS = (Path(__file__).resolve().parent.parent / "wave" / "fixtures"
+                / "claude-agents-2.1.258.json")
 
 
 def _run(argv) -> tuple[int, str]:
@@ -44,15 +58,61 @@ def _rows(out: str) -> dict:
     return rows
 
 
+def _real_of(classification: str) -> dict:
+    """The first real fixture entry `peer.classify` puts in `classification`.
+
+    This is what pins the test to the real schema: if a future client build
+    changes the fields, the class this returns changes with it, not a literal.
+    """
+    for entry in json.loads(_REAL_AGENTS.read_text(encoding="utf-8")):
+        if peer.classify(entry) == classification:
+            return entry
+    raise AssertionError(f"no real fixture entry classifies as {classification}")
+
+
+def _as(classification: str, *, name: str, sid: str, pid: int | None = None) -> dict:
+    """Clone a real entry of the wanted class and remap it onto a fleet peer."""
+    entry = copy.deepcopy(_real_of(classification))
+    entry["id"] = sid                 # fleet joins by the short id it recorded
+    entry["name"] = name
+    if pid is not None and "pid" in entry:
+        entry["pid"] = pid
+    return entry
+
+
 def _agents_fixture(td):
-    """alpha live · bravo idle-start · charlie done · delta listed without a
-    pid · echo not listed at all."""
+    """alpha live · bravo waiting (a real `waitingFor`) · charlie done · delta
+    listed but gone (a real failed/stopped shape, no pid) · echo not listed.
+
+    Every entry is a clone of a real capture, so `peer.classify` sees exactly
+    the fields the client emits."""
     (td / "agents.json").write_text(json.dumps([
-        {"id": "abc120", "name": "wt-bro-1-alpha", "pid": 4242, "state": "running"},
-        {"id": "abc121", "name": "wt-bro-1-bravo", "needs": "prompt", "state": "idle"},
-        {"id": "abc122", "name": "wt-bro-1-charlie", "state": "done"},
-        {"id": "abc123", "name": "wt-bro-1-delta", "state": "blocked"},
+        _as(peer.LIVE, name="wt-bro-1-alpha", sid="abc120", pid=4242),
+        _as(peer.WAITING, name="wt-bro-1-bravo", sid="abc121"),
+        _as(peer.DONE, name="wt-bro-1-charlie", sid="abc122"),
+        _as(peer.GONE, name="wt-bro-1-delta", sid="abc123"),
+        # echo (abc124) is deliberately absent → GONE by omission.
     ]), encoding="utf-8")
+
+
+class ClassifyShapeTest(unittest.TestCase):
+    """The shapes the real classifier reaches, straight from the fixture — the
+    guardrail the invented schema tripped over."""
+
+    def test_background_blocked_with_a_pid_is_live_not_gone(self):
+        # The shape a healthy background fleet peer sits in between turns:
+        # `state: blocked`, `status: idle`, and a live `pid`. Only the pid
+        # decides — this is LIVE. (A `blocked` WITHOUT a pid is the dead-session
+        # shape and classifies GONE; see `delta` below.)
+        blocked = next(e for e in json.loads(_REAL_AGENTS.read_text())
+                       if e.get("kind") == "background"
+                       and e.get("state") == "blocked" and e.get("pid"))
+        self.assertEqual(peer.classify(blocked), peer.LIVE)
+
+    def test_waiting_entry_carries_a_reason(self):
+        waiting = _real_of(peer.WAITING)
+        self.assertEqual(peer.classify(waiting), peer.WAITING)
+        self.assertTrue(peer.waiting_for(waiting))          # a real `waitingFor`
 
 
 class StatusTest(unittest.TestCase):
@@ -63,20 +123,24 @@ class StatusTest(unittest.TestCase):
             rc, out = _run(["status", "--fleet", fd.name])
             self.assertEqual(rc, 0)
             rows = _rows(out)
-            self.assertIn("live", rows["wt-bro-1-alpha"])
+            self.assertIn(peer.LIVE, rows["wt-bro-1-alpha"])
             self.assertIn("4242", rows["wt-bro-1-alpha"])
-            self.assertIn("idle-start", rows["wt-bro-1-bravo"])
-            self.assertIn("done", rows["wt-bro-1-charlie"])
-            self.assertIn("gone", rows["wt-bro-1-delta"])     # listed, no pid
-            self.assertIn("gone", rows["wt-bro-1-echo"])      # not listed at all
+            self.assertIn(peer.WAITING, rows["wt-bro-1-bravo"])
+            self.assertIn(peer.DONE, rows["wt-bro-1-charlie"])
+            self.assertIn(peer.GONE, rows["wt-bro-1-delta"])   # listed, no pid
+            self.assertIn(peer.GONE, rows["wt-bro-1-echo"])    # not listed at all
             self.assertIn("abc120", rows["wt-bro-1-alpha"])
+            # The invented schema's vocabulary must never appear.
+            self.assertNotIn("idle-start", out)
+            self.assertNotIn("needs", out)
 
     def test_suggestions_name_the_action_per_class(self):
         with sandbox() as td:
             fd = _launch(td)
             _agents_fixture(td)
             _, out = _run(["status", "--fleet", fd.name])
-            self.assertIn("SendMessage wt-bro-1-bravo its brief pointer", out)
+            # A waiting peer can only be answered or restarted.
+            self.assertIn("wt-bro-1-bravo", out)
             self.assertIn("claude attach abc121", out)
             self.assertIn("wt-bro-1-delta is gone (no pid): claude logs abc123", out)
             self.assertIn("re-dispatch with `fleet up`", out)
@@ -91,7 +155,7 @@ class StatusTest(unittest.TestCase):
             self.assertEqual(rc, 0)
             self.assertIn("liveness unavailable", out)
             self.assertIn("claude agents --json --all could not be read", out)
-            self.assertEqual(out.count("unknown"), len(PEERS))
+            self.assertEqual(out.count(peer.UNKNOWN), len(PEERS))
             # Not one row may claim a live peer. `liveness` in the unavailable
             # line does not match \blive\b; a rendered class would.
             self.assertIsNone(re.search(r"\blive\b", out), out)
@@ -124,15 +188,16 @@ class StatusTest(unittest.TestCase):
             payload = json.loads(out)
             self.assertTrue(payload["liveness_available"])
             by_name = {p["name"]: p for p in payload["fleets"][0]["peers"]}
-            self.assertEqual(by_name["wt-bro-1-alpha"]["live"], "live")
+            self.assertEqual(by_name["wt-bro-1-alpha"]["live"], peer.LIVE)
             self.assertEqual(by_name["wt-bro-1-alpha"]["pid"], 4242)
-            self.assertEqual(by_name["wt-bro-1-echo"]["live"], "gone")
+            self.assertEqual(by_name["wt-bro-1-bravo"]["live"], peer.WAITING)
+            self.assertEqual(by_name["wt-bro-1-echo"]["live"], peer.GONE)
 
             (td / "agents.fail").write_text("1")
             _, out2 = _run(["status", "--fleet", fd.name, "--json"])
             payload2 = json.loads(out2)
             self.assertFalse(payload2["liveness_available"])
-            self.assertTrue(all(p["live"] == "unknown"
+            self.assertTrue(all(p["live"] == peer.UNKNOWN
                                 for p in payload2["fleets"][0]["peers"]))
 
     def test_unknown_fleet_id_is_an_error(self):
@@ -150,10 +215,10 @@ class ListTest(unittest.TestCase):
             rc, out = _run(["list"])
             self.assertEqual(rc, 0)
             self.assertIn("5 peer(s)", out)
-            self.assertIn("1 live", out)
-            self.assertIn("1 idle-start", out)
-            self.assertIn("1 done", out)
-            self.assertIn("2 gone", out)
+            self.assertIn(f"1 {peer.LIVE}", out)
+            self.assertIn(f"1 {peer.WAITING}", out)
+            self.assertIn(f"1 {peer.DONE}", out)
+            self.assertIn(f"2 {peer.GONE}", out)
 
     def test_no_fleets_says_so(self):
         with sandbox():
