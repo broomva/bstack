@@ -45,14 +45,21 @@ class DispatchTest(unittest.TestCase):
             self.assertFalse((Path(td) / "wt-a").exists())
 
     def test_dispatch_with_stub_creates_manifest_and_worktrees(self):
+        """The stub records the exact argv it was called with and answers like
+        the real binary (ANSI-coloured `backgrounded · <id>`). The assertions
+        are the P5 spawn contract: named, unattended-safe, prompt last, id
+        recorded in the manifest."""
+        import json
         from scripts.wave import main
         with tempfile.TemporaryDirectory() as td:
             os.environ["BSTACK_WAVE_CACHE_DIR"] = td + "/cache"
             stub = Path(td) / "fake-claude.sh"
             stub.write_text(
                 "#!/bin/sh\n"
-                "if [ \"$1\" = --bg ]; then flag=1; else flag=0; fi\n"
-                "echo \"CALLED bg=$flag\" >> " + td + "/fake-calls.log\n"
+                "if [ \"$1\" = agents ]; then echo '[]'; exit 0; fi\n"
+                "n=$(ls " + td + "/argv-*.log 2>/dev/null | wc -l | tr -d ' ')\n"
+                "printf '%s\\0' \"$@\" > " + td + "/argv-$n.log\n"
+                "printf '\\033[1mbackgrounded\\033[0m · \\033[36mabc12%s\\033[0m\\n' \"$n\"\n"
                 "exit 0\n"
             )
             stub.chmod(0o755)
@@ -64,27 +71,65 @@ class DispatchTest(unittest.TestCase):
                 main(["dispatch", "--name", "test-wave", str(pa), str(pb)])
             self.assertEqual(ctx.exception.code, 0)
             cache = Path(td) / "cache"
-            self.assertTrue(cache.exists())
             wave_dirs = [d for d in cache.iterdir() if d.name.startswith("wave_")]
             self.assertEqual(len(wave_dirs), 1)
-            self.assertTrue((wave_dirs[0] / "manifest.json").exists())
             self.assertTrue((Path(td) / "wt-a").exists())
             self.assertTrue((Path(td) / "wt-b").exists())
-            # Poll for the stubs to flush their log (fire-and-forget Popen +
-            # DEVNULL stdio means OS scheduling decides when the child starts).
-            import time
-            log_path = Path(td + "/fake-calls.log")
-            deadline = time.time() + 5.0
-            while time.time() < deadline:
-                if log_path.exists():
-                    content = log_path.read_text()
-                    if len(content.strip().splitlines()) >= 2:
-                        break
-                time.sleep(0.05)
-            calls = log_path.read_text().strip().splitlines()
-            self.assertEqual(len(calls), 2)
-            self.assertIn("bg=1", calls[0])
-            self.assertIn("bg=1", calls[1])
+
+            logs = sorted(Path(td).glob("argv-*.log"))
+            self.assertEqual(len(logs), 2)
+            for log, slug in zip(logs, ("a", "b")):
+                argv = log.read_text().split("\0")[:-1]   # NUL-separated: the prompt is multi-line
+                self.assertEqual(argv[0], "--bg")
+                self.assertEqual(argv[1], "--name")
+                self.assertEqual(argv[2], f"wt-{slug}-{slug}")           # <worktree>-<slug>, no ticket
+                self.assertIn("--strict-mcp-config", argv)
+                self.assertIn("--settings", argv)
+                self.assertIn('{"crossSessionInbound":"accept"}', argv)
+                self.assertTrue(argv[-1].startswith("Session: wt-"), argv[-1])   # prompt is last
+                self.assertIn(f"Plan-slug: {slug}", argv[-1])
+
+            manifest = json.loads((wave_dirs[0] / "manifest.json").read_text())
+            by_slug = {p["slug"]: p for p in manifest["plans"]}
+            self.assertEqual(by_slug["a"]["session_name"], "wt-a-a")
+            self.assertEqual(by_slug["a"]["session_id"], "abc120")
+            self.assertEqual(by_slug["b"]["session_id"], "abc121")
+            self.assertIsNone(by_slug["a"]["agent_pid"])
+
+    def test_dispatch_reports_a_spawn_that_returned_no_id(self):
+        from scripts.wave import main, read_manifest, wave_dir
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["BSTACK_WAVE_CACHE_DIR"] = td + "/cache"
+            stub = Path(td) / "fake-claude.sh"
+            stub.write_text("#!/bin/sh\nif [ \"$1\" = agents ]; then echo '[]'; exit 0; fi\n"
+                            "echo 'Login expired · Please run /login' >&2\nexit 1\n")
+            stub.chmod(0o755)
+            os.environ["BSTACK_WAVE_CLAUDE_BIN"] = str(stub)
+            repo = _init_repo(Path(td))
+            pa = _put_plan(repo, "a")
+            with self.assertRaises(SystemExit) as ctx:
+                main(["dispatch", str(pa)])
+            self.assertEqual(ctx.exception.code, 1)          # a failed spawn is not a launched wave
+            cache = Path(td) / "cache"
+            wd = [d for d in cache.iterdir() if d.name.startswith("wave_")][0]
+            m = read_manifest(wd)
+            self.assertIsNone(m.plans[0].session_id)         # recorded as unknown, never invented
+            self.assertEqual(m.plans[0].session_name, "wt-a-a")
+
+    def test_dry_run_prints_the_spawn_argv(self):
+        import contextlib, io
+        from scripts.wave import main
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["BSTACK_WAVE_CACHE_DIR"] = td + "/cache"
+            repo = _init_repo(Path(td))
+            pa = _put_plan(repo, "a")
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf), self.assertRaises(SystemExit):
+                main(["dispatch", "--dry-run", str(pa)])
+            out = buf.getvalue()
+            self.assertIn("--name wt-a-a", out)
+            self.assertIn("--strict-mcp-config", out)
+            self.assertIn("crossSessionInbound", out)
 
     def test_validation_failure_aborts_pre_worktree(self):
         from scripts.wave import main

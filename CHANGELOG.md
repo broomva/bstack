@@ -1,3 +1,52 @@
+## 0.39.1 — 2026-09-06
+
+### fix(wave): peers are named, spawned unattended-safe, and joined to their live session (BRO-2453)
+
+0.39.0 made the contract explicit — Fanout (P5): every session is
+`<worktree>-<ticket>-<slug>` so a peer can address it — and `bstack wave`, the one
+spawner bstack ships, did not meet it. `scripts/wave.py` launched each plan as
+`claude --bg <prompt>` and nothing else.
+
+**Measured** (2026-09-06, Claude Code 2.1.258, two scratch spawns read back through
+`claude agents --json --all` and `claude logs`): the positional prompt *does* run as
+the first turn on this build (an SRI note from the day before had recorded an idle
+start; it did not reproduce), so dispatch was not the defect. What was: a peer spawned
+without `--name` is displayed under its **prompt text**; no `--strict-mcp-config`
+(an unattended peer in a project with unapproved `.mcp.json` servers stalls on the
+trust dialog) and no `--settings '{"crossSessionInbound":"accept"}'` (it cannot take
+a `SendMessage`) — zero occurrences of either flag anywhere in the repo; the manifest
+kept only the launcher's `Popen` pid, so `wave status` could not join a plan to its
+session and had no liveness read at all; and the python suite under `tests/wave/`
+was not run by CI (`ci.yml` runs `tests/*.test.sh` only), so none of this had a gate.
+
+**Now**
+
+- New `scripts/peer.py` — the spawn contract as code, shared with the coming
+  `bstack fleet`: `compose_name` (the P5 grammar), `build_spawn_argv` (`--bg --name
+  <n> [--strict-mcp-config] --settings <accept> … <prompt>`, prompt last), `spawn`
+  (synchronous, stdin `/dev/null`, ANSI-stripped `backgrounded · <id>` capture — an
+  un-stripped regex reports every spawn failed and a later teardown removes nothing),
+  `list_agents` / `liveness` (keyed on `pid`; `needs` set = idle start, dispatch by
+  message; listed without a pid = gone even if the state says `blocked`; unreadable
+  listing = `unknown`, never clean).
+- `wave dispatch` names each peer from its worktree, `linear` ticket and slug, prints
+  the full argv under `--dry-run`, writes the manifest **before** the first launch (a
+  peer's first act is `wave report --event started`, which validates its slug against
+  the manifest), records `session_id` + `session_name` per plan as each spawn returns,
+  and exits 1 when any spawn returned no id. Per-plan `mcp: inherit` in the `wave:`
+  frontmatter (or `BSTACK_PEER_MCP=inherit`) keeps the project's MCP servers for
+  peers that need them; strict is the unattended-safe default.
+- `wave status` gains `SESSION` and `LIVE` columns and two suggestions: a peer
+  waiting for a prompt, and a peer gone before its plan finished.
+- `tests/wave.test.sh` runs the python suite under the existing `tests/*.test.sh` CI
+  job; `tests/wave/test_peer.py` pins every clause above (each flag individually,
+  the grammar, the ANSI fixture, the liveness classes); `fake_claude.sh` now answers
+  like the real binary and takes the prompt as the last argument.
+
+Patch bump: additive flags on an existing command, no default flip for anyone not
+running wave. Manifest schema unchanged (new fields default to `null`; old
+manifests still read).
+
 # Changelog
 
 ## 0.39.0 — 2026-09-05
