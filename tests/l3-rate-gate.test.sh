@@ -128,6 +128,87 @@ else
   echo "  [FAIL] J: JSON names the exhausted lane — got: $lane"; fail=$((fail + 1))
 fi
 
+# A workspace of its own, so the verdict is decided ONLY by the thing under test.
+# The first version of K and L reused the shared $WS, whose budget was already
+# blown by earlier cases; both passed in BOTH worlds and proved nothing. Caught
+# by reverting each fix and seeing the suite stay green.
+fresh_ws() {
+  local d; d="$(mktemp -d)"
+  git -C "$d" init -q; git -C "$d" config user.email t@t; git -C "$d" config user.name t
+  mkdir -p "$d/.control"
+  cp "$SCRIPT_DIR/assets/templates/rcs-parameters.toml.template" "$d/.control/rcs-parameters.toml"
+  printf '# gov\n' > "$d/CLAUDE.md"; printf '# gov\n' > "$d/AGENTS.md"
+  printf '# gov\n' > "$d/METALAYER.md"; printf 'version: "1.0"\n' > "$d/.control/policy.yaml"
+  git -C "$d" add -A; git -C "$d" commit -q -m "create governance"
+  echo "$d"
+}
+
+# K — a line starting with the trailer key in a MIDDLE paragraph is prose, not a
+# declaration. git treats only the final paragraph as trailers. Discriminating
+# because the window then holds exactly one MUTATION: if the pseudo-trailer were
+# counted as a correction the staged change would be 1/1 and pass, and if it is
+# correctly read as prose the staged change is 2/1 and is refused.
+K="$(fresh_ws)"
+printf '# k\n' >> "$K/AGENTS.md"; git -C "$K" add AGENTS.md
+git -C "$K" commit -q -m "not actually a correction
+
+L3-Correction: this sits in a middle paragraph
+
+and this trailing prose is what stops git treating the line above as a trailer."
+printf '# k2\n' >> "$K/METALAYER.md"; git -C "$K" add METALAYER.md
+BROOMVA_WORKSPACE="$K" bash "$GATE" --staged >/dev/null 2>&1
+check "K: a mid-body line is prose, not a trailer (exit 1)" 1 $?
+
+# K2 — POSITIVE CONTROL for K. Same setup, the key in the FINAL paragraph, which
+# is a real trailer. Without this, K would also pass against a gate that never
+# recognised any trailer at all.
+K2="$(fresh_ws)"
+printf '# k\n' >> "$K2/AGENTS.md"; git -C "$K2" add AGENTS.md
+git -C "$K2" commit -q -m "a real correction
+
+L3-Correction: stated in the trailer block where git can see it"
+printf '# k2\n' >> "$K2/METALAYER.md"; git -C "$K2" add METALAYER.md
+BROOMVA_WORKSPACE="$K2" bash "$GATE" --staged >/dev/null 2>&1
+check "K2: a real trailer IS recognised, so K is not vacuous (exit 0)" 0 $?
+
+# L — bool is a subclass of int in Python, so `correction_budget = true` was
+# emitted as CORRECTION_BUDGET=True and every [ n -gt True ] then errored.
+# Edited IN the existing [gates.l3_paths] table: the first version appended a
+# second one, which is a TOML duplicate-key error, so the whole config was
+# discarded and the default appeared for the wrong reason.
+budget_json() {
+  local d="$1" val="$2"
+  python3 - "$d/.control/rcs-parameters.toml" "$val" <<'PY'
+import re, sys
+path, val = sys.argv[1], sys.argv[2]
+src = open(path).read()
+src = re.sub(r"(?m)^correction_budget\s*=.*$", "", src)
+src = src.replace("[gates.l3_paths]", f"[gates.l3_paths]\ncorrection_budget = {val}", 1)
+open(path, "w").write(src)
+PY
+  BSTACK_L3_CORRECTION="c" BROOMVA_WORKSPACE="$d" bash "$GATE" --staged --json 2>&1 \
+    | grep -o '"correction_budget": [A-Za-z0-9]*'
+}
+
+# L1 — POSITIVE CONTROL: a valid integer must actually reach the gate, or L2
+# below is satisfied by a default that was never configurable in the first place.
+L1="$(fresh_ws)"
+got="$(budget_json "$L1" 5)"
+if [ "$got" = '"correction_budget": 5' ]; then
+  echo "  [pass] L1: an integer correction_budget is read from config"; pass=$((pass + 1))
+else
+  echo "  [FAIL] L1: an integer correction_budget is read from config — got: $got"; fail=$((fail + 1))
+fi
+
+# L2 — a bool must be REJECTED, leaving the default.
+L2="$(fresh_ws)"
+got="$(budget_json "$L2" true)"
+if [ "$got" = '"correction_budget": 3' ]; then
+  echo "  [pass] L2: a boolean correction_budget is rejected for the default"; pass=$((pass + 1))
+else
+  echo "  [FAIL] L2: a boolean correction_budget is rejected for the default — got: $got"; fail=$((fail + 1))
+fi
+
 echo "─────────────────────────────────────"
 echo "Passed: $pass  Failed: $fail"
 [ "$fail" -eq 0 ] && echo "All tests passed." || exit 1

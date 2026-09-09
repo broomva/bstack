@@ -134,7 +134,14 @@ for lvl in data.get("levels", []):
 # Emit bash-eval lines
 if l3_paths:
     print("L3_PATHS=(" + " ".join(f'"{p}"' for p in l3_paths) + ")")
-if isinstance(correction_budget, int) and correction_budget >= 0:
+# bool is a subclass of int in Python, so `correction_budget = true` in TOML
+# passed an isinstance(..., int) check and emitted CORRECTION_BUDGET=True —
+# a non-numeric value that makes every later [ n -gt ... ] comparison error.
+if (
+    isinstance(correction_budget, int)
+    and not isinstance(correction_budget, bool)
+    and correction_budget >= 0
+):
     print(f"CORRECTION_BUDGET={correction_budget}")
 if tau_a_l3 is not None:
     print(f"TAU_A_L3={tau_a_l3}")
@@ -185,8 +192,15 @@ COUNT_COMMITTED=0
 COUNT_CORRECTIONS=0
 while IFS= read -r sha; do
     [ -n "$sha" ] || continue
+    # `git interpret-trailers --parse` rather than a grep over the body: git
+    # treats only the final paragraph as trailers, so a line starting with the
+    # key in a MIDDLE paragraph is prose, not a declaration. A grep counted it
+    # and handed out a free correction. Delegating the definition to git also
+    # means folded and multi-line trailers behave the way every other tool here
+    # already assumes.
     if git log -1 --format='%B' "$sha" 2>/dev/null \
-        | grep -qiE '^[[:space:]]*L3-Correction:[[:space:]]*[^[:space:]]'; then
+        | git interpret-trailers --parse 2>/dev/null \
+        | grep -qiE '^L3-Correction:[[:space:]]*[^[:space:]]'; then
         COUNT_CORRECTIONS=$((COUNT_CORRECTIONS + 1))
     else
         COUNT_COMMITTED=$((COUNT_COMMITTED + 1))
