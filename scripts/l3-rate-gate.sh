@@ -134,9 +134,11 @@ for lvl in data.get("levels", []):
 # Emit bash-eval lines
 if l3_paths:
     print("L3_PATHS=(" + " ".join(f'"{p}"' for p in l3_paths) + ")")
-# bool is a subclass of int in Python, so `correction_budget = true` in TOML
-# passed an isinstance(..., int) check and emitted CORRECTION_BUDGET=True —
+# bool is a subclass of int in Python, so a TOML correction_budget of true
+# passed an isinstance(..., int) check and emitted CORRECTION_BUDGET=True --
 # a non-numeric value that makes every later [ n -gt ... ] comparison error.
+# Quoting note: no backticks in this heredoc. It is nested inside $(), where a
+# literal backtick is a bash-3.2 parse hazard (tests/bash32-parse-safety.test.sh).
 if (
     isinstance(correction_budget, int)
     and not isinstance(correction_budget, bool)
