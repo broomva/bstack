@@ -96,6 +96,29 @@ NUDGE_RE = re.compile(
 # a carrier-state false-0.0. Path fragments are configurable via setpoints.knowledge_paths.
 DEFAULT_KG_READ = r"research/entities|research/notes|docs/knowledge-index|knowledge"
 KG_SKILLS = {"kg", "checkit"}
+
+# Shell-mediated reads. Every instrument that watches agent work keys on NAMED
+# STRUCTURED TOOLS and is blind on the shell; this sensor was no exception, and a
+# harness that tells its agent to prefer Bash over Read moves the whole population
+# into the blind spot. Measured 2026-09-11 in work/stimulus/sri: m5 read 0.0 over
+# 31 sessions while entity files were being read all along, through `sed` and
+# `grep`. Same class as the governance-side misses (bash defeats the write fence;
+# the L3 governor cannot see a Bash-authored edit).
+#
+# The command string is agent-authored free text, so matching it WHOLE would break
+# h ⟂ U exactly as matching Grep's `pattern` would. Two reductions keep this
+# structural: drop quoted segments (a path inside quotes is a SEARCH TERM, not a
+# target — `grep "research/entities" notes.md` reads no entity), then keep only
+# slash-bearing tokens, which is the same "paths, not prose" rule the
+# Read/Grep/Glob branch applies.
+_QUOTED_RE = re.compile(r"'[^']*'|\"[^\"]*\"")
+_TOKEN_SPLIT_RE = re.compile(r"[\s;|&()<>]+")
+
+
+def bash_path_tokens(cmd):
+    """Slash-bearing, unquoted tokens of a shell command — its structural targets."""
+    return [tok for tok in _TOKEN_SPLIT_RE.split(_QUOTED_RE.sub(" ", cmd)) if "/" in tok]
+
 PRODUCT_EDIT_RE = re.compile(r"/(apps|core|work|freelance|crm|packages|services)/", re.IGNORECASE)
 META_EDIT_RE = re.compile(
     r"/(research|docs|\.control|\.claude|skills|scripts|bstack)/|"
@@ -328,6 +351,12 @@ def analyze(glob_pat, window_days, kg_read_re):
                             kg_target = str(inp.get("pattern", "")) + " " + str(inp.get("path", ""))
                         kt = kg_target.lower()
                         if kg_read_re.search(kt) or "kg load" in kt:
+                            used_kg = True
+                    elif name == "Bash":
+                        # A shell read of the entity store counts exactly as a Read
+                        # of it would. Tokens only — see bash_path_tokens above.
+                        cmd = str(inp.get("command", "")).lower()
+                        if any(kg_read_re.search(tok) for tok in bash_path_tokens(cmd)):
                             used_kg = True
             elif t == "user":
                 content = obj.get("message", {}).get("content")
