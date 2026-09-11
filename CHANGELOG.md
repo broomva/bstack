@@ -38,7 +38,55 @@ refuted draft.
 
 ### fix(l3): a correction spends its own budget, not the mutation budget
 
-See #111.
+Correcting a governance claim the tree has already falsified used to cost the
+same as adding a new rule, which is backwards on the gate's own theory: churn is
+penalised because L2/L1 must re-converge against a moved rule, and a correction
+moves the rule back toward the tree it describes.
+
+Declared corrections now spend a **separate, smaller budget** rather than the
+mutation budget. Opt-in; an install that adopts nothing sees no change.
+
+Declare a correction either way, because the two readers see different things:
+
+| surface | how |
+|---|---|
+| counting history | an `L3-Correction: <reason>` trailer in the commit message |
+| counting staged | `BSTACK_L3_CORRECTION="<reason>"` in the environment — `pre-commit` runs *before* a commit message exists and cannot read a trailer |
+
+Budget: `gates.l3_paths.correction_budget` in `.control/rcs-parameters.toml`,
+default **3** per window. Not shipped in the template, so absent by default.
+
+**Read the declaration as attribution, not authorization.** It is self-asserted
+and nothing verifies it. Three things bound it: the budget is finite, the reason
+is required and non-empty, and every claim is permanent in the commit message
+where a pattern of abuse is greppable.
+
+One behaviour delta, and it only ever loosens: a commit carrying the trailer no
+longer counts toward the mutation lane, so an *undeclared* commit can now pass
+where it previously failed. That requires such a trailer to already exist in the
+window, which cannot happen on an install that has not adopted the convention.
+
+### fix(l3): the correction budget is no longer settable from the environment
+
+Found reviewing this release, in code already merged. The budget was read as
+`CORRECTION_BUDGET="${CORRECTION_BUDGET:-3}"`, and the TOML reader only *emits*
+that variable when the config sets it — which it does not by default, since the
+template does not ship the key. So an **ambient `CORRECTION_BUDGET=999` reached
+the comparison directly**, buying unlimited declared corrections with no config
+edit, no bypass flag, and no trace in any commit message.
+
+That defeats the first of the three bounds above. A lane whose only real limit
+can be lifted by one environment variable is an unbounded self-granted exemption,
+which is precisely what the lane was designed not to be.
+
+The variable is now cleared before the config is read, so the value comes from
+the config or from the documented default and never from the caller. `TAU_A_L3`
+was never exposed this way only because the config always emits it — the hole is
+a property of being *optional*, so any future optional key needs the same reset.
+
+Tests M1/M2 pin both directions: an ambient value cannot raise the lane, and a
+configured budget still wins. M1 reproduces `"correction_budget": 999` against
+the pre-fix gate.
 
 
 ## 0.40.1 — 2026-09-07

@@ -109,6 +109,17 @@ DEFAULT_L3_PATHS=(
 
 # Read L3 paths + tau_a from config (via Python for robust TOML parsing)
 if [ -f "$CONFIG" ] && command -v python3 >/dev/null 2>&1; then
+    # Governance values come from the config or from the documented default --
+    # never from the caller's environment. The python below emits
+    # CORRECTION_BUDGET only when the config SETS it, so without this reset an
+    # ambient `CORRECTION_BUDGET=999` survives into `${CORRECTION_BUDGET:-3}`
+    # and the correction lane becomes unbounded: no config edit, no --no-verify,
+    # no trace in the commit message. That defeats the first of the three bounds
+    # this lane's own header claims ("the budget is finite, so a false claim
+    # buys 3 and not infinity"). TAU_A_L3 is not exposed the same way only
+    # because the config always emits it -- the hole is a property of being
+    # OPTIONAL, so any future optional key must be reset here too.
+    CORRECTION_BUDGET=
     eval "$(python3 - "$CONFIG" <<'PYEOF'
 import sys
 try:

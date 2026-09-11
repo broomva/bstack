@@ -210,5 +210,54 @@ else
 fi
 
 echo "─────────────────────────────────────"
+# -- M: the correction budget must not be settable from the environment -------
+#
+# `CORRECTION_BUDGET="${CORRECTION_BUDGET:-3}"` reads an ambient variable of that
+# plain, unnamespaced name. The TOML reader only EMITS CORRECTION_BUDGET when the
+# config sets it, so with the key absent -- the default for every install, since
+# rcs-parameters.toml.template does not ship it -- nothing defined the variable
+# and the caller's environment reached the comparison.
+#
+# Not a cosmetic precedence nit: it is the difference between a bounded
+# self-asserted exemption and an unbounded one. `CORRECTION_BUDGET=999` buys
+# unlimited declared L3 corrections with no config edit, no bypass flag, and no
+# trace in any commit message. This lane's own header names finiteness as the
+# first of three things that make a self-asserted declaration acceptable ("the
+# budget is finite, so a false claim buys 3 and not infinity"). L1 and L2 cover
+# config VALUES; nothing covered where a value may come FROM.
+#
+# TAU_A_L3 is not exposed this way only because the config always emits it, so
+# the hole is a property of being OPTIONAL. M2 pins the config path as well: the
+# reset must not make a legitimately configured budget unreachable.
+env_budget() { # env_budget <workspace> <ambient-value>
+  local d="$1" amb="$2"
+  CORRECTION_BUDGET="$amb" BSTACK_L3_CORRECTION="c" BROOMVA_WORKSPACE="$d" \
+    bash "$GATE" --staged --json 2>&1 | grep -o '"correction_budget": [A-Za-z0-9]*'
+}
+
+strip_budget_key() {
+  python3 -c 'import re,sys; p=sys.argv[1]; s=open(p).read(); open(p,"w").write(re.sub(r"(?m)^correction_budget\s*=.*$","",s))' "$1"
+}
+
+# M1 -- key ABSENT from config: an ambient value must be ignored.
+M1="$(fresh_ws)"
+strip_budget_key "$M1/.control/rcs-parameters.toml"
+got="$(env_budget "$M1" 999)"
+if [ "$got" = '"correction_budget": 3' ]; then
+  echo "  [pass] M1: an ambient CORRECTION_BUDGET cannot raise the lane"; pass=$((pass + 1))
+else
+  echo "  [FAIL] M1: ambient CORRECTION_BUDGET reached the gate -- got: $got"; fail=$((fail + 1))
+fi
+
+# M2 -- key PRESENT in config: config wins, and the reset did not sever it.
+M2="$(fresh_ws)"
+budget_json "$M2" 7 >/dev/null
+got="$(env_budget "$M2" 999)"
+if [ "$got" = '"correction_budget": 7' ]; then
+  echo "  [pass] M2: config wins over a hostile ambient value"; pass=$((pass + 1))
+else
+  echo "  [FAIL] M2: configured budget not honoured alongside an ambient var -- got: $got"; fail=$((fail + 1))
+fi
+
 echo "Passed: $pass  Failed: $fail"
 [ "$fail" -eq 0 ] && echo "All tests passed." || exit 1
