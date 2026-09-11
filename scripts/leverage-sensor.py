@@ -96,6 +96,77 @@ NUDGE_RE = re.compile(
 # a carrier-state false-0.0. Path fragments are configurable via setpoints.knowledge_paths.
 DEFAULT_KG_READ = r"research/entities|research/notes|docs/knowledge-index|knowledge"
 KG_SKILLS = {"kg", "checkit"}
+
+# Shell-mediated reads. Every instrument that watches agent work keys on NAMED
+# STRUCTURED TOOLS and is blind on the shell; this sensor was no exception, and a
+# harness that tells its agent to prefer Bash over Read moves the whole population
+# into the blind spot. Same class as the governance-side misses (bash defeats the
+# write fence; the L3 governor cannot see a Bash-authored edit).
+#
+# The hard part is not FINDING the path, it is deciding the path was READ. m5 makes
+# knowledge PRODUCTION conditional on CONSUMPTION, so a detector that fires on
+# production inverts the control loop: `git add docs/research/knowledge-index.md`
+# is the canonical last step of an authoring session, and scoring it as a read
+# makes the "stop authoring" governor read greener the more you author. A first
+# draft of this did exactly that -- 8 of 15 sessions it newly counted were writes,
+# `ls`, or a CI script whose FILENAME contains "knowledge".
+#
+# So this is an ALLOWLIST of read verbs, not a denylist of write verbs. Enumerating
+# write syntax over arbitrary program text does not converge (STI-2422 closed three
+# rounds of it and kept finding more); enumerating the handful of ways an agent
+# spells "show me this file" does. The failure direction is therefore UNDER-count:
+# `awk '/x/' $F`, a path in a variable, or `find -exec cat` are all missed. That is
+# the correct direction for a floor that gates a destructive actuator -- a false
+# 1.0 is worse than a false 0.0 here, because the actuator fires on low readings
+# and the remedy for a high one is to do nothing.
+_READ_VERBS = {"cat", "bat", "head", "tail", "sed", "less", "more", "view",
+               "grep", "egrep", "fgrep", "rg", "ag", "nl", "wc", "diff", "md5sum"}
+# `git` only in its read subcommands: `git show <ref>:<path>`, `git diff -- <path>`,
+# `git log -- <path>`, `git cat-file`. `git add` is the write this exists to exclude.
+_GIT_READ_SUBS = {"show", "diff", "log", "cat-file", "blame"}
+_SEGMENT_SPLIT_RE = re.compile(r"(?:\|\||&&|[;|\n])")
+_HEREDOC_RE = re.compile(r"<<-?\s*['\"]?\w+['\"]?[\s\S]*", re.MULTILINE)
+_REDIRECT_RE = re.compile(r"\d?>>?\s*\S+")
+_STRIP_QUOTES_RE = re.compile(r"^['\"]|['\"]$")
+
+
+def _segment_read_targets(seg):
+    """Path-ish arguments of ONE command segment, if that segment is a read."""
+    # A heredoc body is authored prose, not a target list -- a brief that merely
+    # NAMES the catalog is not a read of it. Drop the body and everything after.
+    seg = _HEREDOC_RE.sub(" ", seg)
+    # `cmd > path` writes to path even when cmd is a read verb (`cat a > b`).
+    seg = _REDIRECT_RE.sub(" ", seg)
+    words = [w for w in seg.split() if w]
+    if not words:
+        return []
+    verb = os.path.basename(words[0])
+    if verb == "sudo" and len(words) > 1:
+        words = words[1:]
+        verb = os.path.basename(words[0])
+    if verb == "git":
+        subs = [w for w in words[1:] if not w.startswith("-")]
+        if not subs or subs[0] not in _GIT_READ_SUBS:
+            return []
+    elif verb not in _READ_VERBS:
+        return []
+    # Quotes are stripped from ARGUMENTS here rather than deleted from the command:
+    # for a read verb, `cat "docs/research/entities/x.md"` is an ordinary read, and
+    # the earlier draft dropped it. The search-term risk the quote rule guarded
+    # against is already gone -- a `grep PATTERN path` pattern is only counted when
+    # it is itself a knowledge path, and grep's own target is the path that follows.
+    return [_STRIP_QUOTES_RE.sub("", _STRIP_QUOTES_RE.sub("", w))
+            for w in words[1:] if "/" in w]
+
+
+def bash_read_targets(cmd):
+    """Read targets of a shell command: allowlisted verbs only, writes excluded."""
+    out = []
+    for seg in _SEGMENT_SPLIT_RE.split(cmd):
+        out.extend(_segment_read_targets(seg))
+    return out
+
+
 PRODUCT_EDIT_RE = re.compile(r"/(apps|core|work|freelance|crm|packages|services)/", re.IGNORECASE)
 META_EDIT_RE = re.compile(
     r"/(research|docs|\.control|\.claude|skills|scripts|bstack)/|"
@@ -328,6 +399,14 @@ def analyze(glob_pat, window_days, kg_read_re):
                             kg_target = str(inp.get("pattern", "")) + " " + str(inp.get("path", ""))
                         kt = kg_target.lower()
                         if kg_read_re.search(kt) or "kg load" in kt:
+                            used_kg = True
+                    elif name == "Bash":
+                        # A shell read of the entity store counts exactly as a Read
+                        # of it would — but ONLY a read. See bash_read_targets above:
+                        # allowlisted verbs, heredoc bodies and redirect targets
+                        # removed, so a write to the store can never score as a read.
+                        cmd = str(inp.get("command", "")).lower()
+                        if any(kg_read_re.search(t) for t in bash_read_targets(cmd)):
                             used_kg = True
             elif t == "user":
                 content = obj.get("message", {}).get("content")
