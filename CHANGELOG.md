@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.40.2 — 2026-09-11
+
+### fix(m5): the kg_load_rate sensor was blind to the shell, and told every session to prune
+
+`m5_kg_load_rate` counted `Skill(kg|checkit)` and a `Read`/`Grep`/`Glob` whose
+**path field** named a knowledge path. `Bash` was inspected for one field only
+(`dangerouslyDisableSandbox`), so the ordinary shell read of an entity — `sed`,
+`cat`, `head`, `git show` — scored zero. Under a harness whose standing
+instruction is to prefer the shell, that is most of the population.
+
+Measured over a 7-day window in a live workspace: `0.031` (1/32) before,
+**`0.25` (8/32)** after. m5 had been the only red metric on the board across the
+whole series while its corrective actuator — *"the knowledge substrate is
+written but not read — PRUNE production, do not add"* — was injected into every
+session start. The instruction was being driven by a number that could not see
+the thing it measured.
+
+**The trap, for anyone extending this.** A first attempt matched any
+slash-bearing token in the command and was refuted in review: 8 of the 15
+sessions it newly counted had never read anything — four were `git add` of the
+regenerated catalog, two were heredocs whose *body prose* named it, one was a CI
+script whose *filename* contains `knowledge`. That error is worse than the one
+it replaced, and not because it is larger: **m5 makes knowledge production
+conditional on consumption, so a detector that fires on production inverts the
+control loop** — committing the catalog is the last step of an authoring
+session, so the "stop authoring, start reading" governor reads greener the more
+you author.
+
+The shipped mechanism is therefore an **allowlist of read verbs**, not a
+denylist of write syntax; heredoc bodies and redirect targets are stripped
+before matching. It deliberately **under**-counts (`awk '/x/' $F`, a path held in
+a variable), which is the correct direction for a floor gating an actuator that
+fires on *low* readings. `tests/kg-bash-read-detection.test.sh` carries 16 cases
+and two negative controls — one against the pre-fix sensor, one against the
+refuted draft.
+
+### fix(l3): a correction spends its own budget, not the mutation budget
+
+See #111.
+
+
 ## 0.40.1 — 2026-09-07
 
 ### feat(doctor): §28 reports unreclaimed fleets (BRO-2473)
