@@ -7,7 +7,7 @@ Meta Llama, and others via an **OpenAI-compatible** endpoint at:
 
 This module wraps the OpenAI Python SDK with that base URL so callers get
 identical request/response semantics as direct OpenAI calls. The same
-pattern Stimulus's `apps/api/src/utils/databricks_openai.py` ships with.
+pattern a downstream production service ships with.
 
 Credentials are read from environment variables (production canonical):
 
@@ -21,7 +21,7 @@ Recommended invocation patterns:
     bstack bench run --runner live --provider databricks --model ...
 
     # Railway as credential broker (recommended for shared dev envs)
-    railway run --service stimulus-api -- bstack bench run --runner live \\
+    railway run --service <your-api-service> -- bstack bench run --runner live \\
         --provider databricks --model databricks-claude-haiku-4-5 ...
 
     # 1Password / sops / direnv / etc — any tool that exports env vars works.
@@ -54,7 +54,7 @@ from bench.providers.base import (
 )
 
 
-# Known Databricks-served models. Mirrors Stimulus's `DATABRICKS_CLAUDE_*`
+# Known Databricks-served models. Mirrors a downstream service's `DATABRICKS_CLAUDE_*`
 # constants in apps/api/src/utils/databricks_openai.py.
 KNOWN_MODELS: list[str] = [
     "databricks-claude-haiku-4-5",
@@ -67,9 +67,9 @@ KNOWN_MODELS: list[str] = [
 def _serving_endpoint_url(host: str) -> str:
     """Construct the OpenAI-compatible serving endpoint base URL.
 
-    Matches Stimulus's `databricks_serving_endpoint_url()` in
-    apps/api/src/utils/databricks_config.py — host can be bare hostname or
-    full URL; trailing slash is stripped.
+    Matches the equivalent serving-endpoint URL builder in a downstream
+    production service — host can be a bare hostname or a full URL; a
+    trailing slash is stripped.
     """
 
     host = host.strip()

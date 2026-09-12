@@ -132,10 +132,10 @@ bstack bench run --runner live --provider databricks \
 
 ### Railway as credential broker (recommended for shared dev envs)
 
-When credentials live in Railway (the bstack-broomva-stimulus convention), use `railway run` to inject env vars without writing them to disk:
+When credentials live in Railway (the credential-broker convention), use `railway run` to inject env vars without writing them to disk:
 
 ```bash
-railway run --service stimulus-api -- bstack bench run \
+railway run --service <your-api-service> -- bstack bench run \
     --runner live --provider databricks \
     --model databricks-claude-haiku-4-5 \
     --judge-model databricks-claude-opus-4-5 \
@@ -186,6 +186,6 @@ Same-provider, different-model is the cheapest path to compliance. Cross-provide
 
 - OpenAI Chat Completions API: https://platform.openai.com/docs/api-reference/chat
 - Databricks Foundation Model APIs: https://docs.databricks.com/en/machine-learning/foundation-models/index.html
-- Stimulus reference implementation: `apps/api/src/utils/databricks_openai.py` (in the stimulus repo)
+- Reference implementation: the equivalent Databricks/OpenAI wrapper in a downstream production service
 - bstack bench spec: `specs/bench-skill-evolution.md`
 - P20 Cross-Review primitive: `SKILL.md` § Bstack Core Automation Primitives

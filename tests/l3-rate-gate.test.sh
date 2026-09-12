@@ -9,7 +9,7 @@
 #   C. block the 2nd L3 modification in the same window,
 #   D. ignore non-governance changes.
 #
-# Cases E-J cover the declared-correction lane (GetStimulus/sri STI-2767): a change that restores
+# Cases E-J cover the declared-correction lane: a change that restores
 # correspondence between an L3 rule and the tree spends a separate, smaller
 # budget instead of the mutation budget. The lane is DECLARED, not detected, so
 # the cases that matter most are the ones proving it is bounded — F (the lane
@@ -59,7 +59,7 @@ git checkout -q -- CLAUDE.md 2>/dev/null || true
 printf 'y\n' >> app.py; git add app.py
 BROOMVA_WORKSPACE="$WS" bash "$GATE" --staged >/dev/null 2>&1; check "D: non-governance change ignored (exit 0)" 0 $?
 
-echo "L3 rate gate — the declared-correction lane (GetStimulus/sri STI-2767)"
+echo "L3 rate gate — the declared-correction lane"
 
 # Reset to a clean window boundary: a fresh workspace, one governance mutation
 # already spent, so every case below starts from "the mutation budget is gone".

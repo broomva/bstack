@@ -112,7 +112,8 @@ KG_SKILLS = {"kg", "checkit"}
 # `ls`, or a CI script whose FILENAME contains "knowledge".
 #
 # So this is an ALLOWLIST of read verbs, not a denylist of write verbs. Enumerating
-# write syntax over arbitrary program text does not converge (STI-2422 closed three
+# write syntax over arbitrary program text does not converge (a downstream workspace
+# closed three
 # rounds of it and kept finding more); enumerating the handful of ways an agent
 # spells "show me this file" does. The failure direction is therefore UNDER-count:
 # `awk '/x/' $F`, a path in a variable, or `find -exec cat` are all missed. That is
@@ -697,7 +698,7 @@ def evaluate(metrics, setpoints):
 def sensor_is_live(raw):
     """A sensor that opened session files but extracted zero structural events is
     blind, not live. Single definition, used both to blind the metrics before
-    grading and to report closure -- so the two can never disagree. (STI-1919)"""
+    grading and to report closure -- so the two can never disagree."""
     return raw.get("sessions_analyzed", 0) > 0 and (
         raw.get("tool_results", 0) > 0 or raw.get("edits", 0) > 0
     )
@@ -736,7 +737,7 @@ def closure_verdict(record, setpoints):
         if level_evidence.get(lv, False):
             e["live"] = True
     # a sensor that opened files but extracted zero structural events is blind, not live
-    sensor_live = sensor_is_live(raw)  # STI-1919: one definition, shared with main()
+    sensor_live = sensor_is_live(raw)  # one definition, shared with main()
     expected = ["L0", "L1", "L2", "L3"]
     levels_closed = all(levels.get(lv, {}).get("live") for lv in expected)
     authored_by = _clip(setpoints.get("authored_by", "unknown"), MAX_ACTUATOR_CHARS)
@@ -867,7 +868,7 @@ def render_brief(record):
             # rest exist nowhere. Disclose that they were dropped, not where to find them.
             lines.append(f"⚠ policy degraded: … and {len(pw) - 3} more not shown")
     if not worst:
-        # STI-1919 + BRO-2168: with no worst gap, "within target" is only true if
+        # BRO-2168: with no worst gap, "within target" is only true if
         # something was actually graded. no_worst_line() decides on the graded rows.
         lines.append(no_worst_line(record))
         lines.extend(shadow_notes(record))
@@ -1053,7 +1054,7 @@ def main():
               "— using the default")
         kg_read_re = re.compile(DEFAULT_KG_READ, re.IGNORECASE)
     metrics, raw = analyze(glob_pat, window, kg_read_re)
-    # STI-1919: a blind read must not emit a row that reads as a measurement.
+    # A blind read must not emit a row that reads as a measurement.
     # With no structural events every metric computes to 0.0 from an empty
     # numerator -- at or better than every target -- and only closure.sensor_live
     # says otherwise. Null the graded values instead: a null cannot be compared to

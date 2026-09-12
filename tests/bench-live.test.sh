@@ -15,7 +15,7 @@
 #   BSTACK_BENCH_LIVE=1 bash tests/bench-live.test.sh
 #
 #   # Railway credential broker (recommended for shared dev envs):
-#   BSTACK_BENCH_LIVE=1 railway run --service stimulus-api -- \\
+#   BSTACK_BENCH_LIVE=1 railway run --service <your-api-service> -- \\
 #       bash tests/bench-live.test.sh
 #
 # Assertions (when LIVE):
@@ -36,12 +36,12 @@ BSTACK_BENCH="$BSTACK_REPO/bin/bstack-bench"
 if [ "${BSTACK_BENCH_LIVE:-}" != "1" ]; then
     echo "tests/bench-live.test.sh: BSTACK_BENCH_LIVE=1 not set; SKIPPING."
     echo "  To run: BSTACK_BENCH_LIVE=1 bash tests/bench-live.test.sh"
-    echo "  Or:     BSTACK_BENCH_LIVE=1 railway run --service stimulus-api -- bash tests/bench-live.test.sh"
+    echo "  Or:     BSTACK_BENCH_LIVE=1 railway run --service <your-api-service> -- bash tests/bench-live.test.sh"
     exit 0
 fi
 if [ -z "${DATABRICKS_HOST:-}" ] || [ -z "${DATABRICKS_TOKEN:-}" ]; then
     echo "tests/bench-live.test.sh: BSTACK_BENCH_LIVE=1 set but DATABRICKS_HOST/_TOKEN missing; SKIPPING."
-    echo "  Provide via shell export, .env, or `railway run --service stimulus-api --`."
+    echo "  Provide via shell export, .env, or `railway run --service <your-api-service> --`."
     exit 0
 fi
 

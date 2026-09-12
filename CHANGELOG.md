@@ -389,7 +389,7 @@ manifests still read).
 
 ## 0.39.0 — 2026-09-05
 
-### feat(primitives): Snapshot (P15) sees the fleet; Fanout (P5) names the session (STI-2669)
+### feat(primitives): Snapshot (P15) sees the fleet; Fanout (P5) names the session
 
 Snapshot (P15) was written for one agent: `git status`, branch, ahead/behind, in-flight PRs,
 ticket state, deploy state. Every field is about the session's own worktree. That was the
@@ -433,7 +433,7 @@ invariant / failure mode; a second rule-of-three citation on P15), `SKILL.md` pr
 `scripts/doctor.sh` lints section presence, which is unchanged. Minor bump because the
 definition of what a compliant snapshot contains widened.
 
-Originating ticket: GetStimulus/sri STI-2669 (owner-directed). The SRI-side counterpart lands
+Originating ticket: a downstream workspace (owner-directed). The downstream counterpart lands
 the same contract in the `autonomous-maintainer` skill and the workspace `CLAUDE.md`.
 
 ## 0.38.0 — 2026-07-29
@@ -1430,7 +1430,7 @@ Statement-tightening of P6, **not** a new primitive (same failure-mode class; re
 
 ### fix+feat: gitignore-aware, public-repo-aware, non-destructive bootstrap (issue #67)
 
-Found dogfooding v0.22.0 on existing real repos (stimulus, broomva.tech): bootstrap is built for *fresh* workspaces and did two unsafe things + lacked one needed capability on repos with their own hooks/CI/gitignore.
+Found dogfooding v0.22.0 on existing real repos (a downstream workspace, broomva.tech): bootstrap is built for *fresh* workspaces and did two unsafe things + lacked one needed capability on repos with their own hooks/CI/gitignore.
 
 ### Fixed
 
@@ -1447,7 +1447,7 @@ Found dogfooding v0.22.0 on existing real repos (stimulus, broomva.tech): bootst
 ### Notes
 
 - Additive + non-blocking: Phase 2.6 skips gracefully on a non-git workspace; canary 14/14 unaffected.
-- The manual handling on stimulus (#1811) + broomva.tech (broomva.tech#211) is the spec this automates.
+- The manual handling on a downstream workspace + broomva.tech (broomva.tech#211) is the spec this automates.
 - `VERSION` 0.22.0 → 0.23.0.
 
 ## 0.22.0 — 2026-05-28
@@ -1462,7 +1462,7 @@ This release makes `/bstack bootstrap` wire the loop, scaffold the loop definiti
 
 - **`bootstrap.sh` Phase 3.5 — RCS loop wiring.** Bootstrap now calls `install-rcs-stability.sh` (L0 PostToolUse + L1 Stop audit hooks + `.control/audit/` + L3 gates), reusing the same idempotent installer the wizard uses. Guarded by `BSTACK_SKIP_RCS=1` (mirrors `BSTACK_SKIP_SKILLS=1`) for governance-only bootstrap. The `|| true` guard preserves bootstrap's non-blocking contract under `set -e`.
 - **`bootstrap.sh` Phase 2 — `.control/arcs.yaml` scaffold.** The closure-contract arcs (the workspace's own editable loop definitions) are now scaffolded from `arcs.yaml.template` alongside CLAUDE.md / AGENTS.md / policy.yaml. (`compute-arc-status.sh` already fell back to the bundled template; scaffolding gives the workspace an editable copy.)
-- **`doctor.sh` §23 — Control-loop closure verdict.** The single verdict answering "is the loop wired + connected + running?" — three states: (a) substrate absent, (b) wired-but-idle, (c) wired + running + closing. Composes W (audit hooks + dir) / R (audit logs fresh < 7d) / C (arcs + composite-ω resolvable). The W check reads **both** `settings.json` and `settings.local.json` — Claude Code merges them at runtime, and shared repos legitimately keep machine-local hook paths in the gitignored `settings.local.json` (surfaced by dogfooding on the stimulus repo, whose tracked `settings.json` uses repo-relative vendored hooks). **Soft by default** (audit logs are empty until the first hook fires; a hard default would redden every fresh bootstrap for purely temporal reasons); `BSTACK_LOOP_STRICT=1` promotes "wired-but-idle" to a hard `--strict` gap for CI lanes. §19 already hard-gates the case that matters (a wired loop genuinely diverging), so §23 doesn't double-count it.
+- **`doctor.sh` §23 — Control-loop closure verdict.** The single verdict answering "is the loop wired + connected + running?" — three states: (a) substrate absent, (b) wired-but-idle, (c) wired + running + closing. Composes W (audit hooks + dir) / R (audit logs fresh < 7d) / C (arcs + composite-ω resolvable). The W check reads **both** `settings.json` and `settings.local.json` — Claude Code merges them at runtime, and shared repos legitimately keep machine-local hook paths in the gitignored `settings.local.json` (surfaced by dogfooding on a downstream repo, whose tracked `settings.json` uses repo-relative vendored hooks). **Soft by default** (audit logs are empty until the first hook fires; a hard default would redden every fresh bootstrap for purely temporal reasons); `BSTACK_LOOP_STRICT=1` promotes "wired-but-idle" to a hard `--strict` gap for CI lanes. §19 already hard-gates the case that matters (a wired loop genuinely diverging), so §23 doesn't double-count it.
 
 ### Changed
 
@@ -2077,7 +2077,7 @@ to N user-declared domain arcs.
 
 ### Spec doc + cross-references
 
-- Linear ticket: [BRO-47](https://linear.app/stimulus/issue/BRO-47)
+- Linear ticket: BRO-47
 - Prior release: v0.17.0 (BROOMVA_ROOT convention, #47, BRO-1223 follow-up)
 - Next release: v0.19.0 (Closure Contract — arcs.yaml + composite-ω drift trend,
   BRO-48) builds on this substrate.
@@ -2366,7 +2366,7 @@ The contract bstack adopts is **OpenAI Chat Completions API v1** — the de fact
 
 - **NEW** `scripts/bench/providers/` package (stdlib + optional `openai` SDK):
   - `base.py` — `Provider` ABC + OpenAI-compatible `ChatMessage` / `Usage` / `ChatCompletion` types + `ProviderError` / `ProviderNotConfigured` / `ProviderNotInstalled` taxonomy + `estimate_cost_usd()` with per-model pricing table.
-  - `databricks.py` — `DatabricksGatewayProvider`: wraps the OpenAI SDK with `base_url = {DATABRICKS_HOST}/serving-endpoints` + `api_key = DATABRICKS_TOKEN`. Mirrors Stimulus's `apps/api/src/utils/databricks_openai.py` pattern. Known models hardcoded: `databricks-claude-{haiku-4-5, sonnet-4, opus-4-5}` + `databricks-meta-llama-4-maverick`.
+  - `databricks.py` — `DatabricksGatewayProvider`: wraps the OpenAI SDK with `base_url = {DATABRICKS_HOST}/serving-endpoints` + `api_key = DATABRICKS_TOKEN`. Mirrors a downstream service's Databricks/OpenAI wrapper pattern. Known models hardcoded: `databricks-claude-{haiku-4-5, sonnet-4, opus-4-5}` + `databricks-meta-llama-4-maverick`.
   - `registry.py` — `get_provider(name, **kwargs)` factory with lazy module loading. Built-in providers: `databricks`, `mock`. Runtime extension via `register_provider()`.
   - `__init__.py` — public API exports.
 - **NEW** `references/provider-standards.md` — documents OpenAI-compatible contract bstack adopts, how to add a new provider, P20 model-isolation enforcement rules, and Railway credential-broker invocation pattern.
@@ -2382,11 +2382,11 @@ The contract bstack adopts is **OpenAI Chat Completions API v1** — the de fact
 
 - **OpenAI Chat Completions API is the contract.** Picked because Databricks, OpenAI, vLLM, Together, Fireworks, Anyscale, llama.cpp, and Anthropic-via-Bedrock all serve identical request/response JSON. Choosing the same shape means new providers ship with zero translation layer.
 - **`openai` SDK is a soft dependency.** Imported lazily inside `DatabricksGatewayProvider.__init__`; raises `ProviderNotInstalled` with install hint when missing. CI doesn't install it (mock provider covers offline tests). Live runs need it.
-- **Railway as credential broker.** Recommended invocation: `railway run --service stimulus-api -- bstack bench run ...`. Credentials never written to disk in the bstack tree. Direct env export works identically.
+- **Railway as credential broker.** Recommended invocation: `railway run --service <your-api-service> -- bstack bench run ...`. Credentials never written to disk in the bstack tree. Direct env export works identically.
 - **P20 enforcement at CLI layer.** Same model for agent + judge is the same-model-echo-chamber failure mode P20 exists for. Rejected with rc=8 unless `--allow-same-judge-model "rationale"` is passed; rationale is captured in `config.json` for audit.
 - **Mock provider is built in.** Deterministic in-process provider; tests + CI never need network or credentials. Same registry, same factory, same API as `databricks`.
 - **No `.env` file loading at runtime.** Bstack reads `os.environ`; how vars get there is the caller's concern (Railway, direnv, sops, 1Password, manual export — all work).
-- **Stimulus pattern mirrored.** `DatabricksGatewayProvider` directly mirrors `apps/api/src/utils/databricks_openai.py` — same base_url construction (`{HOST}/serving-endpoints`), same auth (token as `api_key`), same model name conventions.
+- **Downstream pattern mirrored.** `DatabricksGatewayProvider` directly mirrors that service's Databricks/OpenAI wrapper — same base_url construction (`{HOST}/serving-endpoints`), same auth (token as `api_key`), same model name conventions.
 
 ### What this enables (next BRO-1205 followups, now unblocked)
 
@@ -2407,7 +2407,7 @@ The contract bstack adopts is **OpenAI Chat Completions API v1** — the de fact
 - Linear: BRO-1211 (this PR); BRO-1205 (predecessor — MVP)
 - Spec: `specs/bench-skill-evolution.md` (updated)
 - Reference: `references/provider-standards.md` (NEW)
-- Stimulus mirror: `apps/api/src/utils/databricks_openai.py` (reference implementation)
+- Downstream mirror: the equivalent Databricks/OpenAI wrapper (reference implementation)
 
 ### Cross-Review (P20) round-1 fixes (applied before merge)
 

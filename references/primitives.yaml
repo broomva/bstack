@@ -183,7 +183,7 @@ primitives:
     rule_of_three:
       - citation: research/notes/2026-05-12-prompt-patterns-raw.md
         summary: "10+ instances of 'help me understand where we stand' / 'is everything committed' in the prompt-pattern dump"
-      - citation: "GetStimulus/sri STI-2669 (2026-09-05)"
+      - citation: "downstream workspace, 2026-09-05"
         summary: "one maintainer loop beside 13 linked worktrees and 14 peer sessions, 13 of them under auto-generated names carrying only a directory basename in a listing with no working-directory column; the single-session snapshot could see none of it, and its first command (git status) was dead in the worktree"
     introduced_in: 0.1.0
 

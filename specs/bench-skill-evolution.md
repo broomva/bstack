@@ -122,7 +122,7 @@ bstack bench run --runner live --evaluator llm-judge \
     --phase 1 --budget-usd 0.50
 
 # Railway as credential broker (recommended for shared dev envs)
-railway run --service stimulus-api -- bstack bench run --runner live \
+railway run --service <your-api-service> -- bstack bench run --runner live \
     --provider databricks --model databricks-claude-haiku-4-5 \
     --phase 1 --no-dry-run --budget-usd 0.10
 ```

@@ -20,7 +20,7 @@
 #   bash scripts/l3-rate-gate.sh --warn-only     # always exit 0, only print warning
 #   bash scripts/l3-rate-gate.sh --window=3600   # override τ_a₃ in seconds
 #
-# ── The correction lane (GetStimulus/sri STI-2767) ───────────────────────────
+# ── The correction lane ──────────────────────────────────────────────────────
 #
 # The budget above counts every L3 modification the same way, and its only
 # exemption is CREATION (BRO-1435). That makes correcting a claim the tree has
@@ -29,10 +29,10 @@
 # against a moved rule, and a correction MOVES THE RULE BACK toward the tree it
 # describes. It reduces divergence rather than adding surface.
 #
-# Observed cost of not having this, in GetStimulus/sri on 2026-09-09: STI-2217
-# measured that `web_search` cannot be enabled on that arm and could not commit
-# the correction to `apps/eve/CLAUDE.md`, because STI-2214 and STI-2751 had spent
-# the window hours earlier. The repository therefore carried a statement its own
+# Observed cost of not having this, measured in a downstream workspace on
+# 2026-09-09: a session established that a provider feature could not be enabled
+# on that arm, and could not commit the correction to the governance file saying
+# otherwise, because two earlier changes had spent the window hours earlier. The repository therefore carried a statement its own
 # code had disproved, with the fix queued behind a clock.
 #
 # A correction is DECLARED, two ways, because the two readers see different things:
@@ -261,7 +261,7 @@ if [ "$STAGED_IS_CORRECTION" = "1" ]; then
     # mutations already spent in this window are historical and must not block
     # it. The first cut tested (committed_mutations + staged) here, which reads
     # plausible and reproduces the exact failure this change exists to remove —
-    # in GetStimulus/sri on 2026-09-09 the window held two committed mutations,
+    # in that workspace the window held two committed mutations,
     # so a correction would still have been refused and nothing would have
     # changed. Test E is the regression guard for that mistake specifically.
     COUNT_CORRECTIONS=$((COUNT_CORRECTIONS + COUNT_STAGED))
