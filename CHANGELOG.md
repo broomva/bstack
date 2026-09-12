@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.40.3 — 2026-09-12
+
+### feat(asks): the ask ledger ships with the skill that requires it, and one command sees every arc
+
+`ask_ledger.py` is the mechanism behind the `handback` ask block and the `arc`
+decisions list — 670 lines, 95 tests, and until now it lived in a single
+workspace's `scripts/`, reachable by exactly one machine. The skills that depend
+on it shipped without it, so every consuming repo accumulated `.control/asks/`
+ledgers that nothing could read. It now lives here, in the repo that already owns
+the handback Stop hook and its contract test.
+
+**The ledgers were never swept.** Every subcommand took exactly one path, so
+"did this ask earn its place?" could only ever be asked one file at a time — and
+nobody runs that loop. Measured in a consuming repo on 2026-09-11: six ledgers,
+four schema-invalid and two unparseable, undetected since 2026-09-08. Not one
+check had failed; no check had ever run over more than a single ledger.
+
+- `validate <dir> --all` and `open <dir> --all` sweep a directory. A broken
+  ledger is **reported and the sweep continues** — the single-file path exits 2
+  on unparseable YAML, which is right for one arc and wrong for a sweep, where
+  the first bad file would hide every ledger sorted after it.
+- Sweep exit codes preserve the single-file contract: `0` clean, `1` schema
+  errors, `2` at least one ledger did not parse. `2` outranks `1` because a file
+  that did not parse is the only failure that hides content rather than
+  describing it.
+- `bstack asks validate|open|lanes|decisions` — the CLI surface. `validate` and
+  `open` default their path to `$BSTACK_ASKS_DIR`, else `./.control/asks`.
+- `references/preauth.example.yaml` — the rung-2 template a consuming repo copies
+  to `.control/preauth.yaml`. It ships a `granted: false` row deliberately: a
+  template whose first example widens authority teaches the wrong copy-paste.
+- `tests/ask-ledger.test.sh` runs the suite under bstack CI, which discovers
+  `tests/*.test.sh` and knows nothing about pytest. It has **no skip path** — a
+  wrapper that warns and exits 0 when pytest is missing reports green for a suite
+  that never ran. It also fails on a skipped/xfailed test and on a passing count
+  below 100, because `pytest -q` exits 0 when collection finds nothing.
+
+`scripts/arc-continuation-hook.sh` is deliberately untouched. It reads the turn
+text, not the ledger, and it is the Stop hook for every session in the fleet;
+teaching it a second input belongs in its own change, not this one.
+
 ## 0.40.2 — 2026-09-11
 
 ### fix(m5): the kg_load_rate sensor was blind to the shell, and told every session to prune

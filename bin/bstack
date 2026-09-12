@@ -60,6 +60,13 @@ Review:
                                   P20 cross-model adversarial review via remote
                                   git fetch — invokes codex exec (≥ 0.20.0).
 
+Asks (BRO-2179):
+  asks validate [<path>] [--all]  Did every ask earn its place? --all sweeps a
+                                  directory; one broken ledger cannot hide the rest.
+  asks open [<path>] [--all]      Open asks across every arc, most leverage first.
+  asks lanes <ledger> --runnable  What can still run with no human input (exit 3
+                                  while any lane can, so an arc must not stop).
+
 Release (maintainers):
   release tag                     Tag the current VERSION and create the
                                   matching GitHub Release from CHANGELOG.
@@ -74,6 +81,7 @@ Examples:
   bstack wave dispatch plans/sub-a.md plans/sub-b.md
   bstack fleet up roster.jsonl --dry-run
   bstack cross-review 195 --repo broomva/broomva.tech --post-comment
+  bstack asks open --all
   bstack release tag
 EOF
 }
@@ -346,6 +354,7 @@ case "$cmd" in
     bench)                  exec "$BIN_DIR/bstack-bench" "$@" ;;
     workspace)              exec "$BIN_DIR/bstack-workspace" "$@" ;;
     cross-review)           exec "$BIN_DIR/bstack-cross-review" "$@" ;;
+    asks)                   exec "$BIN_DIR/bstack-asks" "$@" ;;
     release)
         sub="${1:-}"
         [ $# -gt 0 ] && shift
