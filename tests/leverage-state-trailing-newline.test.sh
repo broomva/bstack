@@ -5,7 +5,7 @@
 # repo may TRACK those files, so an emitted file without a POSIX trailing newline
 # leaves the workspace git-dirty after every session and fails formatter gates
 # (biome / ultracite / prettier) on a repo that is otherwise green — observed live in
-# work/stimulus/sri, where `bun run lint` failed on nothing but the missing byte.
+# a downstream workspace, where `bun run lint` failed on nothing but the missing byte.
 #
 # The invariant asserted here: every file either sensor emits into .control/ ends
 # with "\n". Reverting either `f.write("\n")` must turn this test red.

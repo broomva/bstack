@@ -95,7 +95,7 @@ Live mode (v0.11.0+):
       --model databricks-claude-haiku-4-5 \\
       --judge-model databricks-claude-opus-4-5
   # Or, with Railway as credential broker:
-  railway run --service stimulus-api -- bstack bench run --runner live ...
+  railway run --service <your-api-service> -- bstack bench run --runner live ...
 
 State:
   ~/.config/bstack/bench/runs/<run-id>/  (override via BSTACK_BENCH_HOME)

@@ -91,7 +91,7 @@ metrics:
 ship_signal:
   shadow: true
   repos:              # allowlist — ONLY these are scanned; teammate/upstream repos
-    - broomva/genesis        # (houston, code-graph-rag, stimulus-*) are omitted → h ⟂ U
+    - broomva/genesis        # (unrelated repos) are omitted → h ⟂ U
     - broomva/bstack
     - broomva/broomva.tech
   author_allowlist:   # count only the agent's own merged PRs, never a teammate's

@@ -154,7 +154,7 @@ Stopping here — three lanes are blocked and one needs access I cannot hold.
 
 | # | Ticket | The question | Unblocks |
 |---|---|---|---|
-| 1 | **STI-1987** | Should publishing be open to any member, or approver-gated? | PR #630 |
+| 1 | **PROJ-1987** | Should publishing be open to any member, or approver-gated? | PR #630 |
 
 If you answer nothing, I run the other lane.
 EOF

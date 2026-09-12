@@ -15,8 +15,8 @@ ANSI_BG = ("\x1b[1mbackgrounded\x1b[0m \x1b[2m·\x1b[0m \x1b[36m0f29e602\x1b[0m\
 
 class NameGrammarTest(unittest.TestCase):
     def test_canonical_shape(self):
-        self.assertEqual(peer.compose_name("/x/wt/cusk", "STI-2669", "fleet-aware"),
-                         "cusk-sti-2669-fleet-aware")
+        self.assertEqual(peer.compose_name("/x/wt/cusk", "ENG-2669", "fleet-aware"),
+                         "cusk-eng-2669-fleet-aware")
 
     def test_ticketless_arc_omits_the_ticket_part(self):
         self.assertEqual(peer.compose_name("/x/cusk", None, "flaky-test"),
