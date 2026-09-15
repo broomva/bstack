@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# bstack-asks — the human dependency chain, made queryable (BRO-2179).
+#
+# Thin bash wrapper that delegates to scripts/ask_ledger.py. Dep-Chain (P14) makes
+# an agent enumerate what the CODE depends on before writing; this does the same for
+# what the ARC depends on a HUMAN for, and turns two prose disciplines into queries:
+#
+#   "did this ask earn the right to exist?"   -> validate
+#   "which lanes can still run without you?"  -> lanes --runnable
+#   "what is this whole repo waiting on?"     -> open <dir> --all
+#
+# Subcommands (passed through verbatim to ask_ledger.py):
+#   validate <path> [--all] [--preauth <f>] [--require-decisions]
+#   lanes    <ledger> [--runnable] [--parked]
+#   open     <path> [--all]
+#   decisions <ledger> [--render-handback] [--cap N] [--flat]
+#   help | --help                This message
+#
+# Env overrides:
+#   BSTACK_ASKS_DIR              Default ledger directory when no path is given.
+#                                Lookup order:
+#                                  1. <path> on the command line
+#                                  2. BSTACK_ASKS_DIR env var
+#                                  3. $PWD/.control/asks
+#   BSTACK_ASKS_PYTHON           Interpreter to run the script with (default python3).
+#
+# Exit codes (ask_ledger.py's contract, preserved):
+#   0  clean
+#   1  schema errors, or (lanes) nothing runnable
+#   2  a ledger did not parse, or bad arguments
+#   3  lanes --runnable: at least one lane can still run, so the arc must NOT stop
+set -euo pipefail
+
+BSTACK_DIR="${BSTACK_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
+LEDGER_PY="$BSTACK_DIR/scripts/ask_ledger.py"
+PY="${BSTACK_ASKS_PYTHON:-python3}"
+
+usage() {
+    cat <<'EOF'
+bstack-asks — ask-ledger queries (BRO-2179)
+
+Usage:
+  bstack asks validate [<path>] [--all]        Did every ask earn its place?
+  bstack asks lanes <ledger> --runnable        What can still run with no human?
+  bstack asks open [<path>] [--all]            Open asks, most leverage first
+  bstack asks decisions <ledger> --render-handback
+                                               The rung-6 record, as a handback block
+
+<path> defaults to $BSTACK_ASKS_DIR, else ./.control/asks
+--all treats <path> as a directory and sweeps every *.yaml in it: a broken ledger
+is reported and the sweep CONTINUES, so one unparseable file cannot hide the rest.
+
+Examples:
+  bstack asks validate --all                   # gate a repo's whole ledger set
+  bstack asks open --all                       # everything waiting on a human
+  bstack asks lanes .control/asks/my-arc.yaml --runnable
+EOF
+}
+
+[ -f "$LEDGER_PY" ] || { echo "bstack-asks: missing $LEDGER_PY" >&2; exit 2; }
+
+cmd="${1:-}"
+case "$cmd" in
+    ""|help|-h|--help) usage; exit 0 ;;
+    validate|lanes|open|decisions) shift ;;
+    *) echo "bstack-asks: unknown subcommand '$cmd'" >&2; usage >&2; exit 2 ;;
+esac
+
+# Default the path only when the first remaining argument is a flag (or absent).
+# `lanes` and `decisions` are per-arc and have no sensible directory default, so
+# they are left to ask_ledger.py's own "missing argument" error rather than being
+# silently pointed at a directory that cannot parse as one ledger.
+if [ "$cmd" = "validate" ] || [ "$cmd" = "open" ]; then
+    if [ $# -eq 0 ] || [ "${1#-}" != "$1" ]; then
+        set -- "${BSTACK_ASKS_DIR:-$PWD/.control/asks}" "$@"
+    fi
+fi
+
+exec "$PY" "$LEDGER_PY" "$cmd" "$@"

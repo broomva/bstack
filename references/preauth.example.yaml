@@ -1,0 +1,36 @@
+# preauth.example.yaml — the template a consuming repo copies to
+# `.control/preauth.yaml`. Standing answers to questions the operator has already
+# settled, consulted BEFORE any ask is raised (autonomy ladder, rung 2). BRO-2179.
+#
+# A grant is written here ONLY from an ask a human actually answered. Nothing is
+# seeded on the agent's own judgement: writing `granted: true` for a permission
+# nobody gave is manufacturing authorization, which is the failure this file is
+# meant to prevent, not cause. That is also why this example ships with a
+# `granted: false` row rather than a permissive one — a template whose first
+# example widens authority teaches the wrong copy-paste.
+#
+# Shape:
+#   - match:   {class: <credential|authority|decision|artifact|scope|external>,
+#               branch: <glob>, paths: [<glob>...], action: <substring of the ask>}
+#     granted: true | false
+#     note:    why, in one line
+#     since:   YYYY-MM-DD
+#
+# `granted: false` is as useful as `true`: it records that the question is settled
+# as "always ask", so the agent stops re-deriving whether it needs to.
+# An empty `match:` is ignored rather than treated as a wildcard.
+#
+# `ask_ledger.py validate` errors when an ask is already covered by a grant here:
+# re-asking a settled question is the cheapest failure to eliminate.
+
+grants:
+  - match:
+      class: authority
+      action: "publish artifacts to a public URL"
+    granted: false
+    note: >-
+      Always ask. Precedent 2026-07-29: an agent correctly refused to run a
+      public release upload for 6 MB of scrubbed agent transcripts even after two
+      differently-aimed blocklists and a hand audit came back clean — "a blocklist
+      is still a blocklist, and that is your name on it."
+    since: 2026-08-18
