@@ -2422,7 +2422,7 @@ The contract bstack adopts is **OpenAI Chat Completions API v1** — the de fact
 
 - **OpenAI Chat Completions API is the contract.** Picked because Databricks, OpenAI, vLLM, Together, Fireworks, Anyscale, llama.cpp, and Anthropic-via-Bedrock all serve identical request/response JSON. Choosing the same shape means new providers ship with zero translation layer.
 - **`openai` SDK is a soft dependency.** Imported lazily inside `DatabricksGatewayProvider.__init__`; raises `ProviderNotInstalled` with install hint when missing. CI doesn't install it (mock provider covers offline tests). Live runs need it.
-- **Railway as credential broker.** Recommended invocation: `railway run --service <your-api-service> -- bstack bench run ...`. Credentials never written to disk in the bstack tree. Direct env export works identically.
+- **Railway as credential broker.** Recommended invocation: `railway run --service YOUR_API_SERVICE -- bstack bench run ...`. Credentials never written to disk in the bstack tree. Direct env export works identically.
 - **P20 enforcement at CLI layer.** Same model for agent + judge is the same-model-echo-chamber failure mode P20 exists for. Rejected with rc=8 unless `--allow-same-judge-model "rationale"` is passed; rationale is captured in `config.json` for audit.
 - **Mock provider is built in.** Deterministic in-process provider; tests + CI never need network or credentials. Same registry, same factory, same API as `databricks`.
 - **No `.env` file loading at runtime.** Bstack reads `os.environ`; how vars get there is the caller's concern (Railway, direnv, sops, 1Password, manual export — all work).

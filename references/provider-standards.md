@@ -135,7 +135,7 @@ bstack bench run --runner live --provider databricks \
 When credentials live in Railway (the credential-broker convention), use `railway run` to inject env vars without writing them to disk:
 
 ```bash
-railway run --service <your-api-service> -- bstack bench run \
+railway run --service YOUR_API_SERVICE -- bstack bench run \
     --runner live --provider databricks \
     --model databricks-claude-haiku-4-5 \
     --judge-model databricks-claude-opus-4-5 \
