@@ -30,6 +30,14 @@ bad() { echo "  FAIL $1"; FAIL=$((FAIL+1)); }
 
 WS="$(mktemp -d)"
 trap 'rm -rf "$WS"' EXIT
+
+# The hook keys its stamp under $HOME/.cache. Point HOME at the sandbox for
+# every invocation below, so this test never deletes a real session's cooldown
+# state -- the hook runs concurrently in other sessions on the same machine and
+# clearing their stamps would silently change their behaviour while the suite
+# runs. Exporting it also means clear_stamps only ever reaches the sandbox.
+export HOME="$WS/home"
+mkdir -p "$HOME/.cache"
 CONV="$WS/docs/conversations/Conversations.md"
 
 clear_stamps() { rm -f "$HOME"/.cache/bstack-bridge-stamp*; }

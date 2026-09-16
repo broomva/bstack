@@ -237,35 +237,26 @@ else
   PASS=$((PASS + 1))
 fi
 
-# Create conversation bridge hook if missing
+# Deploy the conversation bridge hook if missing. COPY the canonical script --
+# never re-emit one here. This used to write its own heredoc version, and that
+# copy drifted: it did `cat > /dev/null` (discarding the payload, so it could
+# never key anything on hook_event_name), used a single ${HOME}/.cache stamp,
+# and registered for Stop AND Notification. The result was that bootstrap.sh
+# deployed the fixed hook while revamp.sh -> postinstall.sh reinstated the
+# broken one, so whether a workspace had the per-event cooldown depended on
+# which entry point last touched it. Two writers of one file is the same
+# two-sources-that-disagree failure this repo refuses everywhere else; the fix
+# is to have one writer, not two that are kept in sync by hand.
 if [ ! -f "$TARGET/scripts/conversation-bridge-hook.sh" ]; then
-  cat > "$TARGET/scripts/conversation-bridge-hook.sh" << 'BRIDGE'
-#!/bin/bash
-# conversation-bridge-hook.sh — Claude Code Stop hook for conversation tracing
-set -e
-cat > /dev/null 2>&1 || true
-STAMP_FILE="${HOME}/.cache/broomva-bridge-stamp"
-COOLDOWN=120
-if [ -f "$STAMP_FILE" ]; then
-  if [ "$(uname)" = "Darwin" ]; then
-    last_run=$(stat -f %m "$STAMP_FILE" 2>/dev/null || echo 0)
+  _canonical="$(cd "$(dirname "$0")" && pwd)/conversation-bridge-hook.sh"
+  if [ -f "$_canonical" ]; then
+    mkdir -p "$TARGET/scripts"
+    cp "$_canonical" "$TARGET/scripts/conversation-bridge-hook.sh"
+    chmod +x "$TARGET/scripts/conversation-bridge-hook.sh"
+    echo "  [create] scripts/conversation-bridge-hook.sh (copied from bstack)"
   else
-    last_run=$(stat -c %Y "$STAMP_FILE" 2>/dev/null || echo 0)
+    echo "  [skip]   scripts/conversation-bridge-hook.sh — canonical copy not found at $_canonical" >&2
   fi
-  elapsed=$(( $(date +%s) - last_run ))
-  [ "$elapsed" -lt "$COOLDOWN" ] && exit 0
-fi
-mkdir -p "$(dirname "$STAMP_FILE")"
-touch "$STAMP_FILE"
-REPO="$(git rev-parse --show-toplevel 2>/dev/null || echo "")"
-if [ -n "$REPO" ] && [ -f "$REPO/scripts/conversation-history.py" ] && command -v python3 >/dev/null 2>&1; then
-  (cd "$REPO" && python3 scripts/conversation-history.py >> "${HOME}/.cache/broomva-bridge.log" 2>&1) &
-  disown
-fi
-exit 0
-BRIDGE
-  chmod +x "$TARGET/scripts/conversation-bridge-hook.sh"
-  echo "  [create] scripts/conversation-bridge-hook.sh"
   CREATED=$((CREATED + 1))
 else
   echo "  [ok] scripts/conversation-bridge-hook.sh (exists)"

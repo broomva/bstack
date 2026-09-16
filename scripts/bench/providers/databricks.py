@@ -21,7 +21,7 @@ Recommended invocation patterns:
     bstack bench run --runner live --provider databricks --model ...
 
     # Railway as credential broker (recommended for shared dev envs)
-    railway run --service <your-api-service> -- bstack bench run --runner live \\
+    railway run --service YOUR_API_SERVICE -- bstack bench run --runner live \\
         --provider databricks --model databricks-claude-haiku-4-5 ...
 
     # 1Password / sops / direnv / etc — any tool that exports env vars works.
