@@ -22,8 +22,29 @@
 set -uo pipefail
 
 REPO_ROOT="${CLAUDE_PROJECT_DIR:-${BROOMVA_WORKSPACE:-$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")}}"
-STAMP="${HOME}/.cache/bstack-bridge-stamp"
 COOLDOWN="${BSTACK_BRIDGE_COOLDOWN:-120}"
+
+# Read the payload BEFORE the cooldown, because the stamp is keyed on the event
+# and stdin can only be consumed once.
+INPUT="$(cat 2>/dev/null || echo '{}')"
+
+# ONE STAMP PER EVENT. A single shared stamp made the throttle first-come across
+# DIFFERENT events: Stop, SubagentStop and PreCompact all fire within seconds of
+# each other, so whichever arrived first silently suppressed the rest. Measured
+# on a workspace that wired SubagentStop -- a subagent finishing displaced the
+# session's own Stop receipt, which is P1's primary artifact and the record
+# doctor reads to decide the loop is live. The event that mattered least won on
+# timing alone, and because the hook exits 0 at the throttle it left no trace,
+# which reads exactly like "the hook never fired".
+#
+# Keyed per event the throttle keeps its actual purpose -- one record per event
+# type per window, which is what it was protecting against -- while letting a
+# session record both its subagent completions and its own stop. sed rather than
+# python3 so the throttle stays a couple of syscalls; the character class is
+# POSIX because BSD sed has no \s.
+EVENT="$(printf '%s' "$INPUT" | sed -n 's/.*"hook_event_name"[[:space:]]*:[[:space:]]*"\([A-Za-z]*\)".*/\1/p' | head -1)"
+case "$EVENT" in ''|*[!A-Za-z]*) EVENT="Stop" ;; esac
+STAMP="${HOME}/.cache/bstack-bridge-stamp-${EVENT}"
 
 # cooldown
 now=$(date +%s)
@@ -60,7 +81,7 @@ if [ -f "$BRIDGE" ] && command -v python3 >/dev/null 2>&1; then
 fi
 
 # Minimal fallback: append a session stamp to docs/conversations/Conversations.md
-INPUT="$(cat 2>/dev/null || echo '{}')"
+# (INPUT was already read above -- stdin cannot be consumed twice.)
 CONV_DIR="$REPO_ROOT/docs/conversations"
 mkdir -p "$CONV_DIR" 2>/dev/null || exit 0
 if command -v python3 >/dev/null 2>&1; then
