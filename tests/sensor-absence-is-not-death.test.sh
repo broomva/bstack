@@ -30,12 +30,29 @@
 #   T6  a closure block with NO "blindness" key (a state file written before this
 #       existed; --cached reads exactly those) still renders a reason, never
 #       "(None)" and never a blank.
+#   T7  no_worst_line() -- the SECOND renderer path -- makes the same distinction.
+#   T8  doctor surfaces the derived transcript glob, and does NOT certify the
+#       benign cause. `sessions_analyzed == 0` means "this glob matched nothing",
+#       which is benign only if the glob is right; bstack 0.30.0 shipped a path
+#       mangle that made `sde_vault` glob 0 files forever, and that bug was caught
+#       precisely because zero files was loud. Reporting must stay falsifiable.
+#   T9  under BSTACK_LOOP_STRICT the zero-session case is a hard gap and survives
+#       --quiet. Info lines are QUIET-gated, so without this a CI lane on a
+#       mis-derived glob turns FAIL into PASS.
+#
+# T7-T9 exist because P20 Stratum B found the first version of this fix had
+# demoted the only automated detector of the path-derivation bug class.
 #
 # Mutation proof — each must turn this file red:
 #   * `return "no_data" if ... else "blind"` -> `return "blind"`   kills T1,T5a,T5
 #   * `... <= 0` -> `... < 0`                                      kills T1,T5a,T5
 #   * sensor_is_live gaining `or sessions == 0`                         kills T4
 #   * the `.get(..., "sensor dead")` default dropped to `.get(...)`     kills T6
+#   * delete no_worst_line()'s no_data branch                           kills T7
+#   * no_worst_line no_data wording back to "nothing to read"           kills T7b
+#   * drop "transcript_glob" from the record                            kills T8
+#   * doctor's no_data copy back to "not a defect"                      kills T8b
+#   * doctor's LOOP_STRICT gap branch collapsed to the info line        kills T9
 set -uo pipefail
 
 BSTACK_REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -92,6 +109,14 @@ out["t5"] = brief_for(dict(t5_closure, sessions=0))
 # no "blindness" key at all — the pre-existing-state-file case
 out["t6"] = brief_for({"closed": False, "sensor_live": False,
                        "levels": {}, "sessions": 0, "reference_authored": True})
+
+# T7 — no_worst_line() has its OWN no_data branch, on a second renderer path
+# (render_human as well as the brief). P20 Stratum B found that deleting it left the
+# whole suite green, because T5 only ever exercised render_brief's `why` mapping.
+out["t7_no_data"] = lev.no_worst_line(
+    {"results": [], "closure": {"sensor_live": False, "blindness": "no_data"}})
+out["t7_blind"] = lev.no_worst_line(
+    {"results": [], "closure": {"sensor_live": False, "blindness": "blind"}})
 print(json.dumps(out))
 PY
 )
@@ -149,6 +174,66 @@ elif printf '%s' "$T6" | grep -q "loop NOT closed (sensor dead)"; then
   ok "T6 pre-existing state file degrades to the old wording, not to a blank"
 else
   bad "T6 unexpected fallback rendering: $(printf '%s' "$T6" | tr '\n' '|')"
+fi
+
+# --- T7: the SECOND renderer path (no_worst_line), which T5 does not reach --------
+T7N=$(jget t7_no_data); T7B=$(jget t7_blind)
+if printf '%s' "$T7N" | grep -q "no session file matched this window" \
+   && [ "$T7N" != "$T7B" ]; then
+  ok "T7 no_worst_line() distinguishes no_data from blind on its own path"
+else
+  bad "T7 no_worst_line() collapsed the two: no_data='$T7N' blind='$T7B'"
+fi
+printf '%s' "$T7N" | grep -qi "nothing to read" \
+  && bad "T7b no_worst_line() still certifies the benign cause ('nothing to read')" \
+  || ok "T7b no_worst_line() names the observation, not the conclusion"
+
+# --- T8/T9: doctor §23 must not certify, and must not go silent on a CI lane ------
+# P20 Stratum B, F1: `no_data` as a QUIET-gated info line turned `--quiet --strict`
+# from FAIL into PASS on a workspace whose transcript glob was mis-derived - the
+# exact bug bstack 0.30.0 shipped (`sde_vault` globbed 0 files forever). These pin
+# both halves: the glob is surfaced, and BSTACK_LOOP_STRICT makes it a hard gap.
+DOCTOR="$BSTACK_REPO/scripts/doctor.sh"
+if [ ! -f "$DOCTOR" ]; then
+  bad "T8 doctor.sh not found; assertion is vacuous, fix the test"
+else
+  _W=$(mktemp -d); mkdir -p "$_W/.control"
+  MARKER="/sentinel-glob-marker/*.jsonl"
+  python3 -c "
+import json,sys
+json.dump({'closure':{'closed':False,'sensor_live':False,'blindness':'no_data',
+                      'levels_closed':False,'reference_authored':True,
+                      'levels':{'L0':{'live':False}}},
+           'sessions_analyzed':0,'transcript_glob':sys.argv[2]},
+          open(sys.argv[1]+'/.control/leverage-state.json','w'))
+" "$_W" "$MARKER"
+
+  D_SOFT=$(BROOMVA_WORKSPACE="$_W" bash "$DOCTOR" 2>&1)
+  # -F, not a regex: the glob contains `*`, and as a BRE `/*` means "zero or more
+  # slashes", which does NOT match the literal text. That mismatch is what made the
+  # first version of T8 fail against a doctor that was printing the glob correctly.
+  if printf '%s' "$D_SOFT" | grep -qF -- "$MARKER"; then
+    ok "T8 doctor prints the derived glob, so 'no data' is falsifiable"
+  else
+    bad "T8 doctor did not surface the transcript glob — 'no data' is unverifiable"
+  fi
+  # T8b asserts an ABSENCE, so it needs a positive control: doctor producing no
+  # output at all would otherwise satisfy it.
+  if ! printf '%s' "$D_SOFT" | grep -qi "zero sessions"; then
+    bad "T8b positive control failed — doctor never reached the no_data branch; the absence assertion below would be vacuous"
+  elif printf '%s' "$D_SOFT" | grep -qi "not a defect"; then
+    bad "T8b doctor certifies 'not a defect' for a cause it never checked"
+  else
+    ok "T8b doctor does not certify the benign cause (positive control held)"
+  fi
+
+  D_STRICT=$(BSTACK_LOOP_STRICT=1 BROOMVA_WORKSPACE="$_W" bash "$DOCTOR" --quiet 2>&1)
+  if printf '%s' "$D_STRICT" | grep -qi "zero sessions"; then
+    ok "T9 BSTACK_LOOP_STRICT + --quiet still reports zero sessions (CI lane cannot go silent)"
+  else
+    bad "T9 --quiet --strict suppressed the zero-session signal — FAIL silently becomes PASS"
+  fi
+  rm -rf "$_W"
 fi
 
 echo

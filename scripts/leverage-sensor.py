@@ -837,7 +837,9 @@ def no_worst_line(record):
     closure = record.get("closure")
     if isinstance(closure, dict) and closure.get("sensor_live") is False:
         if closure.get("blindness") == "no_data":
-            return "No setpoint graded — no session file matched this window (nothing to read)."
+            # Names what was observed (the glob matched nothing), never that the
+            # glob was right. "nothing to read" would be the second claim.
+            return "No setpoint graded — no session file matched this window (verify the transcript glob)."
         return "No setpoint graded — the sensor read no structural events this window."
     return "No setpoint graded — no metric matched a live setpoint this window."
 
@@ -1107,6 +1109,13 @@ def main():
     record = {
         "measured_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "workspace": workspace, "window_days": window,
+        # The pattern sessions were counted from. sessions_analyzed == 0 means "this
+        # glob matched nothing", which is benign ONLY if the glob is right -- a
+        # mis-derived transcript path produces the identical count (bstack 0.30.0
+        # shipped exactly that: a path mangle kept `_`, so `sde_vault` globbed 0
+        # files forever). Emitting it is what lets a reader falsify "no data"
+        # instead of taking it on faith.
+        "transcript_glob": glob_pat,
         "sessions_analyzed": raw["sessions_analyzed"],
         "metrics": metrics, "raw": raw, "policy_warnings": policy_warnings, "results": results, "worst": worst,
     }

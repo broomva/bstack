@@ -1298,11 +1298,30 @@ EOF_V
         gap "control loop state unreadable ($STATE_FILE has no closure block)" \
             "re-run the sensor: python3 $BSTACK_REPO/scripts/leverage-sensor.py"
     elif [ "$_sensor_live" != "1" ] && [ "$_blindness" = "no_data" ]; then
-        # Nothing was read, so nothing is wrong yet. Claude Code keys transcripts on the
-        # project directory, so a git worktree has its own near-empty history — calling
-        # that DEAD sent every worktree session to debug a parser that is fine.
-        [ "$QUIET" = "0" ] && echo "  [info] control loop sensor has NO DATA — no session file matched the window (normal in a fresh worktree or a quiet week)"
-        [ "$QUIET" = "0" ] && echo "         → not a defect; run a session here, or read the loop from the main checkout"
+        # Zero sessions means THIS GLOB matched nothing. Benign in a fresh worktree
+        # (Claude Code keys transcripts on the project directory) or a quiet week —
+        # but a mis-derived transcript path produces the identical count, and bstack
+        # 0.30.0 shipped exactly that (a mangle keeping `_` globbed 0 files forever).
+        # So this branch must NOT certify the benign cause: it reports what was
+        # observed, prints the glob so the reader can falsify it, and keeps the
+        # path-resolution hint reachable — a path failure always lands HERE, never in
+        # the DEAD branch below. Under BSTACK_LOOP_STRICT it is a hard gap, mirroring
+        # the wired-but-idle branch above: on a CI lane, zero transcripts is a
+        # misconfiguration until proven otherwise, and an info line is QUIET-gated
+        # (so `--quiet --strict` would otherwise silently turn FAIL into PASS).
+        _glob=$(python3 -c "
+import json
+print(json.load(open('$STATE_FILE')).get('transcript_glob') or '(not recorded)')
+" 2>/dev/null || echo "(not recorded)")
+        if [ "$LOOP_STRICT" = "1" ]; then
+            gap "control loop sensor read ZERO sessions — the transcript glob matched no file: $_glob" \
+                "confirm the glob is right (a mis-derived path reads identically to an empty one); if it is, exercise a session so the Stop sensor fires, or unset BSTACK_LOOP_STRICT"
+        else
+            [ "$QUIET" = "0" ] && echo "  [info] control loop sensor read ZERO sessions — the transcript glob matched no file"
+            [ "$QUIET" = "0" ] && echo "         glob: $_glob"
+            [ "$QUIET" = "0" ] && echo "         → expected in a fresh worktree or a quiet week. If unexpected, the glob is the suspect:"
+            [ "$QUIET" = "0" ] && echo "           verify leverage-sensor.py resolves the transcript path for THIS workspace. CI lanes: BSTACK_LOOP_STRICT=1 makes this a gap"
+        fi
     elif [ "$_sensor_live" != "1" ]; then
         # THE un-blinding: a fake/dead sensor (metrics null/zero over sessions that WERE
         # read) now FAILS. Reaching here means files were opened and yielded no structure.
