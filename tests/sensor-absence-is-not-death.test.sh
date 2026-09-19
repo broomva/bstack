@@ -112,7 +112,9 @@ out["t6"] = brief_for({"closed": False, "sensor_live": False,
 
 # T7 — no_worst_line() has its OWN no_data branch, on a second renderer path
 # (render_human as well as the brief). P20 Stratum B found that deleting it left the
-# whole suite green, because T5 only ever exercised render_brief's `why` mapping.
+# whole suite green, because T5 only ever exercised render_brief's 'why' mapping.
+# (No backticks in this heredoc: bash32-parse-safety.test.sh flags a literal
+# backtick inside a $()-nested quoted heredoc as a bash-3.2 parse hazard.)
 out["t7_no_data"] = lev.no_worst_line(
     {"results": [], "closure": {"sensor_live": False, "blindness": "no_data"}})
 out["t7_blind"] = lev.no_worst_line(
