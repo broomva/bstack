@@ -50,7 +50,7 @@
 #   * the `.get(..., "sensor dead")` default dropped to `.get(...)`     kills T6
 #   * delete no_worst_line()'s no_data branch                           kills T7
 #   * no_worst_line no_data wording back to "nothing to read"           kills T7b
-#   * drop "transcript_glob" from the record                            kills T8
+#   * drop "transcript_glob" from the record                           kills T10
 #   * doctor's no_data copy back to "not a defect"                      kills T8b
 #   * doctor's LOOP_STRICT gap branch collapsed to the info line        kills T9
 set -uo pipefail
@@ -234,6 +234,31 @@ json.dump({'closure':{'closed':False,'sensor_live':False,'blindness':'no_data',
     bad "T9 --quiet --strict suppressed the zero-session signal — FAIL silently becomes PASS"
   fi
   rm -rf "$_W"
+fi
+
+# --- T10: the SENSOR must actually emit transcript_glob ---------------------------
+# T8 feeds doctor a SYNTHETIC state file, so it proves doctor can print the field,
+# never that anything writes it. Measured: deleting `"transcript_glob": glob_pat`
+# from the record left T8 green. This closes that gap by reading the real emitter.
+_W2=$(mktemp -d)
+_JSON=$(timeout 120 python3 "$SENSOR" --workspace "$_W2" \
+          --transcripts "$_W2/none/*.jsonl" --window 7 --json --no-store 2>/dev/null)
+rm -rf "$_W2"
+if [ -z "$_JSON" ]; then
+  bad "T10 sensor --json produced nothing; assertion is vacuous, fix the test"
+else
+  _HASGLOB=$(printf '%s' "$_JSON" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print('PARSE_FAIL'); raise SystemExit
+print('YES' if d.get('transcript_glob') else 'NO')" 2>/dev/null)
+  case "$_HASGLOB" in
+    YES) ok "T10 the sensor records transcript_glob (doctor has something real to print)" ;;
+    NO)  bad "T10 sensor record carries no transcript_glob — doctor's glob line can only ever print a synthetic value" ;;
+    *)   bad "T10 sensor --json was unparseable ($_HASGLOB); assertion is vacuous" ;;
+  esac
 fi
 
 echo
