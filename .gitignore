@@ -15,4 +15,14 @@ __pycache__/
 .control/
 .claude/
 .githooks/
+
+# Bootstrap OUTPUT, not source. scripts/bootstrap.sh renders these into whatever
+# repo it runs in (assets/templates/METALAYER.md.template + assets/templates/
+# schemas/*.schema.json). They were committed by accident into #116 and removed by
+# #117; the files were deleted but the CAUSE was never closed, so the full test
+# suite regenerated them and a `git add -A` swept the identical 605 lines back in.
+# Anchored at the repo root so the TEMPLATES (assets/templates/...) and the tracked
+# schemas/*.v1.json source files stay tracked.
+/METALAYER.md
+/schemas/*.schema.json
 .github/workflows/l3-stability.yml
