@@ -199,7 +199,14 @@ DOCTOR="$BSTACK_REPO/scripts/doctor.sh"
 if [ ! -f "$DOCTOR" ]; then
   bad "T8 doctor.sh not found; assertion is vacuous, fix the test"
 else
-  _W=$(mktemp -d); mkdir -p "$_W/.control"
+  _W=$(mktemp -d); mkdir -p "$_W/.control" "$_W/.claude"
+  # doctor reaches the closure-verdict block only when the loop sensor is WIRED
+  # (W_OK=1), which it takes from a workspace settings.json naming "loop-sensor" OR
+  # from an ambient bstack plugin. Writing the marker makes this fixture hermetic:
+  # without it the assertions passed on a dev box with the plugin installed and
+  # silently skipped the branch on CI, where T8b's positive control caught them.
+  printf '%s\n' '{"hooks":{"Stop":[{"hooks":[{"command":"loop-sensor"}]}]}}' \
+    > "$_W/.claude/settings.json"
   MARKER="/sentinel-glob-marker/*.jsonl"
   python3 -c "
 import json,sys
