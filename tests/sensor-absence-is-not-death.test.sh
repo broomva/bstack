@@ -32,8 +32,8 @@
 #       "(None)" and never a blank.
 #
 # Mutation proof — each must turn this file red:
-#   * `return "no_data" if ... else "blind"` -> `return "blind"`        kills T1, T5
-#   * `... <= 0` -> `... < 0`                                           kills T1, T5
+#   * `return "no_data" if ... else "blind"` -> `return "blind"`   kills T1,T5a,T5
+#   * `... <= 0` -> `... < 0`                                      kills T1,T5a,T5
 #   * sensor_is_live gaining `or sessions == 0`                         kills T4
 #   * the `.get(..., "sensor dead")` default dropped to `.get(...)`     kills T6
 set -uo pipefail
@@ -69,8 +69,8 @@ out = {
     "t4_live_live":    lev.sensor_is_live(LIVE),
 }
 
-# T5/T6 exercise the brief renderer on a synthetic record, so the assertion is on
-# the shipped string rather than on a copy of it.
+# The brief renderer is driven for real, so the assertion lands on the shipped
+# string rather than on a copy of it.
 def brief_for(closure):
     rec = {"sessions_analyzed": closure.get("sessions", 0), "window_days": 7,
            "closure": closure, "results": [], "raw": {}}
@@ -79,9 +79,16 @@ def brief_for(closure):
     except AttributeError:
         return None
 
-out["t5"] = brief_for({"closed": False, "sensor_live": False,
-                       "blindness": "no_data", "levels": {}, "sessions": 0,
-                       "reference_authored": True})
+# T5 derives the closure from closure_verdict() on a real no-data record rather
+# than hand-writing blindness="no_data". Hand-writing it decouples this assertion
+# from sensor_blindness(), and a mutant collapsing the split then leaves T5 green
+# — measured: it did, until this was changed.
+t5_closure = lev.closure_verdict(
+    {"raw": NO_DATA, "sessions_analyzed": 0, "results": []},
+    {"authored_by": "a-human"},
+)
+out["t5_blindness"] = t5_closure.get("blindness")
+out["t5"] = brief_for(dict(t5_closure, sessions=0))
 # no "blindness" key at all — the pre-existing-state-file case
 out["t6"] = brief_for({"closed": False, "sensor_live": False,
                        "levels": {}, "sessions": 0, "reference_authored": True})
@@ -121,17 +128,21 @@ fi
 
 # --- T5/T6: what the operator actually reads ---------------------------------
 T5=$(jget t5)
+[ "$(jget t5_blindness)" = "no_data" ] \
+  && ok "T5a closure_verdict() carries blindness through to the brief's input" \
+  || bad "T5a closure_verdict() blindness was '$(jget t5_blindness)', expected 'no_data'"
+
 if [ -z "$T5" ]; then
-  bad "T5 brief_lines() not found — render_brief() missing; assertion is vacuous, fix the test"
+  bad "T5 render_brief() missing; assertion is vacuous, fix the test"
 elif printf '%s' "$T5" | grep -q "no sessions read this window"; then
-  ok "T5 brief names absence, not death"
+  ok "T5 brief names absence, not death (end-to-end: raw → closure_verdict → brief)"
 else
   bad "T5 brief did not name absence: $(printf '%s' "$T5" | tr '\n' '|')"
 fi
 
 T6=$(jget t6)
 if [ -z "$T6" ]; then
-  bad "T6 brief_lines() not found — render_brief() missing; assertion is vacuous, fix the test"
+  bad "T6 render_brief() missing; assertion is vacuous, fix the test"
 elif printf '%s' "$T6" | grep -q "(None)"; then
   bad "T6 a closure with no 'blindness' key rendered '(None)' — --cached reads exactly those"
 elif printf '%s' "$T6" | grep -q "loop NOT closed (sensor dead)"; then
