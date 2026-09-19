@@ -698,10 +698,36 @@ def evaluate(metrics, setpoints):
 def sensor_is_live(raw):
     """A sensor that opened session files but extracted zero structural events is
     blind, not live. Single definition, used both to blind the metrics before
-    grading and to report closure -- so the two can never disagree."""
+    grading and to report closure -- so the two can never disagree.
+
+    Deliberately stays False when no session file matched at all: metrics computed
+    from an empty numerator are 0.0, which beats every target, so grading them would
+    certify a workspace that was never measured. Callers that need to REPORT the
+    reason must ask sensor_blindness() -- not-live has two causes and only one is a
+    defect."""
     return raw.get("sessions_analyzed", 0) > 0 and (
         raw.get("tool_results", 0) > 0 or raw.get("edits", 0) > 0
     )
+
+
+def sensor_blindness(raw):
+    """Why sensor_is_live() is False -- or None when it is True.
+
+    "blind"   -- session files WERE read and yielded zero structural events. The
+                 wholesale-misread failure §23 exists to catch: schema drift, a
+                 renamed field, a parser that silently stopped matching.
+    "no_data" -- zero session files matched the window. Nothing was read, so nothing
+                 can be concluded. This is the RESTING state, not a defect: a git
+                 worktree (Claude Code keys transcripts on the project directory, so
+                 a fresh worktree has its own near-empty history), a fresh bootstrap,
+                 or a genuinely quiet window all produce it.
+
+    Collapsing the two reports "sensor dead" at every worktree SessionStart and sends
+    the reader to debug a parser that is fine. Absence is the resting state, so it
+    cannot also be the error signal -- the defect has to be asserted positively."""
+    if sensor_is_live(raw):
+        return None
+    return "no_data" if raw.get("sessions_analyzed", 0) <= 0 else "blind"
 
 
 def closure_verdict(record, setpoints):
@@ -746,6 +772,9 @@ def closure_verdict(record, setpoints):
     return {
         "closed": closed,
         "sensor_live": sensor_live,
+        # Why not live, for consumers that REPORT rather than gate (doctor §23, the
+        # SessionStart brief). None when live. Gating stays keyed on sensor_live.
+        "blindness": sensor_blindness(raw),
         "levels_closed": levels_closed,
         "reference_authored": reference_authored,
         "authored_by": authored_by,
@@ -807,6 +836,8 @@ def no_worst_line(record):
         return "All graded setpoints within target."
     closure = record.get("closure")
     if isinstance(closure, dict) and closure.get("sensor_live") is False:
+        if closure.get("blindness") == "no_data":
+            return "No setpoint graded — no session file matched this window (nothing to read)."
         return "No setpoint graded — the sensor read no structural events this window."
     return "No setpoint graded — no metric matched a live setpoint this window."
 
@@ -848,7 +879,12 @@ def render_brief(record):
     if not isinstance(cl, dict):
         cl = {}
     if cl and not cl.get("closed"):
-        why = "sensor dead" if not cl.get("sensor_live") else \
+        # A state file written before "blindness" existed carries sensor_live=False and
+        # no reason; --cached reads exactly such files, so fall back rather than print
+        # "(None)". Unknown reason degrades to the old wording, never to a blank.
+        why = {"blind": "sensor dead",
+               "no_data": "no sessions read this window"}.get(
+                   cl.get("blindness"), "sensor dead") if not cl.get("sensor_live") else \
               "levels not all live: " + ",".join(
                   str(k) for k, v in (cl.get("levels") if isinstance(cl.get("levels"), dict) else {}).items()
                   if not (isinstance(v, dict) and v.get("live")))

@@ -1286,19 +1286,28 @@ else
 import json
 c=json.load(open('$STATE_FILE')).get('closure',{})
 openlv=','.join(k for k,v in c.get('levels',{}).items() if not v.get('live')) or '-'
-print('%d %d %d %s' % (int(bool(c.get('sensor_live'))), int(bool(c.get('levels_closed'))), int(bool(c.get('reference_authored'))), openlv))
+# 'blindness' distinguishes a misreading sensor from one with nothing to read. A
+# state file written before it existed has no key: '-' keeps the old DEAD wording.
+print('%d %d %d %s %s' % (int(bool(c.get('sensor_live'))), int(bool(c.get('levels_closed'))), int(bool(c.get('reference_authored'))), openlv, c.get('blindness') or '-'))
 " 2>/dev/null)
-    read -r _sensor_live _levels_closed _ref_authored _open_lv <<EOF_V
+    read -r _sensor_live _levels_closed _ref_authored _open_lv _blindness <<EOF_V
 $_verdict
 EOF_V
 
     if [ -z "$_verdict" ]; then
         gap "control loop state unreadable ($STATE_FILE has no closure block)" \
             "re-run the sensor: python3 $BSTACK_REPO/scripts/leverage-sensor.py"
+    elif [ "$_sensor_live" != "1" ] && [ "$_blindness" = "no_data" ]; then
+        # Nothing was read, so nothing is wrong yet. Claude Code keys transcripts on the
+        # project directory, so a git worktree has its own near-empty history — calling
+        # that DEAD sent every worktree session to debug a parser that is fine.
+        [ "$QUIET" = "0" ] && echo "  [info] control loop sensor has NO DATA — no session file matched the window (normal in a fresh worktree or a quiet week)"
+        [ "$QUIET" = "0" ] && echo "         → not a defect; run a session here, or read the loop from the main checkout"
     elif [ "$_sensor_live" != "1" ]; then
-        # THE un-blinding: a fake/dead sensor (all metrics null/zero) now FAILS
-        gap "control loop sensor is DEAD — all metrics null/zero over 0 sessions (a fake sensor certifying itself as running)" \
-            "verify leverage-sensor.py resolves the transcript path; this is exactly the failure §23 used to pass as 'closing'"
+        # THE un-blinding: a fake/dead sensor (metrics null/zero over sessions that WERE
+        # read) now FAILS. Reaching here means files were opened and yielded no structure.
+        gap "control loop sensor is DEAD — sessions were read but yielded zero structural events (a fake sensor certifying itself as running)" \
+            "verify leverage-sensor.py still matches the transcript schema; this is exactly the failure §23 used to pass as 'closing'"
     elif [ "$_levels_closed" != "1" ]; then
         gap "control loop OPEN at RCS level(s): $_open_lv (no live metric there)" \
             "add/verify a metric at each level in .control/leverage-setpoints.yaml"
