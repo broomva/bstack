@@ -25,4 +25,11 @@ __pycache__/
 # schemas/*.v1.json source files stay tracked.
 /METALAYER.md
 /schemas/*.schema.json
+# Same class, and the reason the line above was first written as "exactly six files":
+# these two were invisible on the authoring machine because .git/info/exclude (a
+# file annotated "not committed, not pushed") already hid them, so the measurement
+# was made through a blind spot. On a fresh clone the suite leaves these too.
+# Untracked on main — bootstrap renders them; bstack does not ship them.
+/AGENTS.md
+/CLAUDE.md
 .github/workflows/l3-stability.yml

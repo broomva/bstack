@@ -31,7 +31,8 @@
 #       existed; --cached reads exactly those) still renders a reason, never
 #       "(None)" and never a blank.
 #   T7  no_worst_line() -- the SECOND renderer path -- makes the same distinction.
-#   T10 the sensor RECORDS the derived transcript glob. `sessions_analyzed == 0`
+#   T10 the sensor DERIVES the transcript glob (asserted differentially, across
+#       two workspaces — a single-workspace shape check passes for any constant). `sessions_analyzed == 0`
 #       means "this glob matched nothing", which is benign only if the glob is
 #       right — bstack 0.30.0 shipped a path mangle that made `sde_vault` glob 0
 #       files forever. Nothing previously emitted the pattern on any channel, so
@@ -46,6 +47,8 @@
 #   * delete no_worst_line()'s no_data branch                           kills T7
 #   * no_worst_line no_data wording back to "nothing to read"           kills T7b
 #   * drop "transcript_glob" from the record                           kills T10
+#   * transcript_glob := the workspace path                            kills T10
+#   * glob_pat := a hardcoded $HOME/.claude/projects/X/*.jsonl          kills T10
 set -uo pipefail
 
 BSTACK_REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -183,35 +186,40 @@ printf '%s' "$T7N" | grep -qi "nothing to read" \
   && bad "T7b no_worst_line() still certifies the benign cause ('nothing to read')" \
   || ok "T7b no_worst_line() names the observation, not the conclusion"
 
-# --- T10: the SENSOR must actually emit transcript_glob ---------------------------
-# T8 feeds doctor a SYNTHETIC state file, so it proves doctor can print the field,
-# never that anything writes it. Measured: deleting `"transcript_glob": glob_pat`
-# from the record left T8 green. This closes that gap by reading the real emitter.
-# NO --transcripts here: transcript_glob(workspace, arg) returns `arg` on its first
-# line, so supplying one means the DERIVATION never runs and this would only prove
-# the record echoes back what the test handed it. Letting it derive is the point.
-_W2=$(mktemp -d)
-_JSON=$(timeout 120 python3 "$SENSOR" --workspace "$_W2" --window 7 --json --no-store 2>/dev/null)
-rm -rf "$_W2"
-if [ -z "$_JSON" ]; then
-  bad "T10 sensor --json produced nothing; assertion is vacuous, fix the test"
-else
-  _HASGLOB=$(printf '%s' "$_JSON" | python3 -c "
+# --- T10: the SENSOR must actually DERIVE the transcript glob --------------------
+# Two workspaces, not one. A single-workspace check can only assert the glob "looks
+# like a transcript path", which any hardcoded constant of that shape satisfies —
+# P20 round 3 proved it with two survivors: a hardcoded
+# $HOME/.claude/projects/HARDCODED/*.jsonl, and a literal "/x/.claude/y.jsonl".
+# Running twice makes the assertion differential: a constant cannot vary with its
+# input. Basenames are pure-alphanumeric so they survive any sane path mangle
+# unchanged, which keeps this from reimplementing the mangle (two implementations
+# of one rule is how the 0.30.0 mangle bug hid).
+#
+# NO --transcripts: transcript_glob(workspace, arg) returns `arg` on its first
+# line, so supplying one skips derivation entirely.
+_T=$(mktemp -d); mkdir -p "$_T/wsalpha" "$_T/wsbeta"
+_glob_for() {
+  timeout 120 python3 "$SENSOR" --workspace "$1" --window 7 --json --no-store 2>/dev/null \
+    | python3 -c "
 import sys, json
 try:
-    d = json.load(sys.stdin)
+    print(json.load(sys.stdin).get('transcript_glob') or '')
 except Exception:
-    print('PARSE_FAIL'); raise SystemExit
-g = d.get('transcript_glob') or ''
-# Assert derivation ran, without reimplementing the mangle here (two
-# implementations of one rule is how the mangle bug hid in the first place):
-# a derived glob points into the transcript store and is NOT the workspace path.
-print('YES' if (g and '.claude' in g and g.endswith('.jsonl') and d.get('workspace','') not in g) else 'NO')" 2>/dev/null)
-  case "$_HASGLOB" in
-    YES) ok "T10 the sensor records transcript_glob (doctor has something real to print)" ;;
-    NO)  bad "T10 sensor record carries no transcript_glob — doctor's glob line can only ever print a synthetic value" ;;
-    *)   bad "T10 sensor --json was unparseable ($_HASGLOB); assertion is vacuous" ;;
-  esac
+    print('')"
+}
+_GA=$(_glob_for "$_T/wsalpha")
+_GB=$(_glob_for "$_T/wsbeta")
+rm -rf "$_T"
+
+if [ -z "$_GA" ] || [ -z "$_GB" ]; then
+  bad "T10 sensor emitted no transcript_glob (A='$_GA' B='$_GB') — the record carries nothing for anyone to check the 'no data' verdict against"
+elif [ "$_GA" = "$_GB" ]; then
+  bad "T10 the glob did not vary with the workspace — a constant, not a derivation: '$_GA'"
+elif printf '%s' "$_GA" | grep -qF wsalpha && printf '%s' "$_GB" | grep -qF wsbeta; then
+  ok "T10 the sensor DERIVES transcript_glob per workspace (differential: two inputs, two globs)"
+else
+  bad "T10 globs differ but neither carries its own workspace name: A='$_GA' B='$_GB'"
 fi
 
 echo
