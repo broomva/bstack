@@ -49,6 +49,7 @@
 #   * drop "transcript_glob" from the record                           kills T10
 #   * transcript_glob := the workspace path                            kills T10
 #   * glob_pat := a hardcoded $HOME/.claude/projects/X/*.jsonl          kills T10
+#   * mangle os.path.basename(workspace) instead of abspath              kills T10
 set -uo pipefail
 
 BSTACK_REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -198,9 +199,16 @@ printf '%s' "$T7N" | grep -qi "nothing to read" \
 #
 # NO --transcripts: transcript_glob(workspace, arg) returns `arg` on its first
 # line, so supplying one skips derivation entirely.
-_T=$(mktemp -d); mkdir -p "$_T/wsalpha" "$_T/wsbeta"
+# Same BASENAME under different parents. Different basenames would let a
+# regression deriving from os.path.basename(workspace) still produce two distinct
+# globs and pass — transcript_glob() mangles os.path.abspath(), and two repos
+# sharing a final directory name must not collide (CodeRabbit, c59b5218).
+_T=$(mktemp -d); mkdir -p "$_T/alphaparent/workspace" "$_T/betaparent/workspace"
 _glob_for() {
-  timeout 120 python3 "$SENSOR" --workspace "$1" --window 7 --json --no-store 2>/dev/null \
+  # CLAUDE_TRANSCRIPTS is honoured BEFORE derivation, so a runner that exports it
+  # makes both calls return the same override and fails this test for the wrong
+  # reason. Cleared inline rather than assumed absent.
+  CLAUDE_TRANSCRIPTS= timeout 120 python3 "$SENSOR" --workspace "$1" --window 7 --json --no-store 2>/dev/null \
     | python3 -c "
 import sys, json
 try:
@@ -208,16 +216,16 @@ try:
 except Exception:
     print('')"
 }
-_GA=$(_glob_for "$_T/wsalpha")
-_GB=$(_glob_for "$_T/wsbeta")
+_GA=$(_glob_for "$_T/alphaparent/workspace")
+_GB=$(_glob_for "$_T/betaparent/workspace")
 rm -rf "$_T"
 
 if [ -z "$_GA" ] || [ -z "$_GB" ]; then
   bad "T10 sensor emitted no transcript_glob (A='$_GA' B='$_GB') — the record carries nothing for anyone to check the 'no data' verdict against"
 elif [ "$_GA" = "$_GB" ]; then
   bad "T10 the glob did not vary with the workspace — a constant, not a derivation: '$_GA'"
-elif printf '%s' "$_GA" | grep -qF wsalpha && printf '%s' "$_GB" | grep -qF wsbeta; then
-  ok "T10 the sensor DERIVES transcript_glob per workspace (differential: two inputs, two globs)"
+elif printf '%s' "$_GA" | grep -qF alphaparent && printf '%s' "$_GB" | grep -qF betaparent; then
+  ok "T10 the sensor DERIVES transcript_glob from the FULL path (two workspaces, same basename)"
 else
   bad "T10 globs differ but neither carries its own workspace name: A='$_GA' B='$_GB'"
 fi
