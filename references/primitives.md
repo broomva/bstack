@@ -247,7 +247,7 @@ P11 is a reflex, not a request. Agents must apply the following without being pr
 
 ## P12 — Persistent Loop Discipline
 
-**Closes**: work that must outlive one session losing its state when the conversation ends. METR's Time Horizon 1.1 (Jan 2026) put the 80%-reliability horizon at ~1h on Opus 4.6 — a measurement not repeated on current models (1M context, with automatic compaction in Claude Code), so it is context for the design, not a trigger.
+**Closes**: work that must outlive one session losing its state when the conversation ends. METR's Time Horizon 1.1 suite put Opus 4.6's 80%-reliability horizon at about an hour — a measurement of an older model, sensitive to modelling choices, and current models run a 1M context with automatic compaction in Claude Code, so it is context for the design, not a trigger.
 
 **Skill name note**: P12's skill repo is `broomva/persist` — non-anthropomorphized rename of the pattern Geoffrey Huntley popularized as the "Ralph loop" (Jan 2026).
 
@@ -259,7 +259,7 @@ P11 is a reflex, not a request. Agents must apply the following without being pr
 
 P12 is a reflex, not a request. Apply without being prompted:
 
-1. Before starting work that must outlive this session (an overnight run, or work paused now and resumed in a later session) — write PROMPT.md, call `persist iterate`.
+1. Before starting work that must outlive this session — write PROMPT.md. Call `persist iterate` when it should run unattended (an overnight run); when it is paused for a later session, leave PROMPT.md for the session that resumes it.
 2. When the same fix has been attempted ≥3 times without convergence — stop in-context; spawn fresh persist loop.
 3. When orchestrating long-horizon work — default to persist + periodic checkpoints; compose with P5 (one persist loop per worktree) and P9 (each iteration's PR uses `p9 watch`).
 4. When the user says "run this in the background for an hour" — that's persist territory.

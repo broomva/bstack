@@ -195,7 +195,7 @@ Reference: `bstack/references/dogfood-patterns.md` for the per-stack surfaces ma
 
 **Reflexive Trigger Rule**: P12 is a reflex. Apply without being prompted:
 
-1. Before starting work that must outlive this session (an overnight run, or work paused now and resumed in a later session) — write PROMPT.md, call `persist iterate`.
+1. Before starting work that must outlive this session — write PROMPT.md. Call `persist iterate` when it should run unattended (an overnight run); when it is paused for a later session, leave PROMPT.md for the session that resumes it.
 2. When the same fix has been attempted ≥3 times without convergence — stop in-context; spawn fresh persist loop.
 3. When orchestrating long-horizon work — default to persist + periodic checkpoints; compose with P5 worktrees.
 4. When the user says "run this in the background for an hour" — that's persist territory.
