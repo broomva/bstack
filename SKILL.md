@@ -93,7 +93,7 @@ The twenty primitives. Each closes one specific failure mode that drifts into en
 | **P16** | Crystallization Discipline (the Bstack Engine) | recurring valuable patterns living only in the user's head — never promoted to skill/primitive/policy infrastructure |
 | **P17** | Lens-Routed Request Articulation (`broomva/role-x` skill, planned) | flat-dispatch fan-out failing to load domain context; agents performing tasks without the typed lens (legal review vs design vs research) that shapes the correct quality_bar |
 | **P18** | Format-Follows-Audience Discipline | markdown-by-default for everything regardless of audience; long specs nobody reads; ASCII pseudo-diagrams + unicode-color-approximation when SVG-in-HTML is the correct primitive |
-| **P19** | Orchestration-Mechanism Selection Discipline | implicit between-reflex handoffs ("continue please"); using wrong mechanism for work shape (/goal on >1h work, persist on 30-min task, /loop on event wait); the autonomous arc broken by missing-mechanism failure |
+| **P19** | Orchestration-Mechanism Selection Discipline | implicit between-reflex handoffs ("continue please"); using wrong mechanism for work shape (/goal on work that must outlive the session, persist on work that fits in one session, /loop on event wait); the autonomous arc broken by missing-mechanism failure |
 | **P20** | Cross-Model Adversarial Review Gate (`broomva/cross-review` skill) | same-model echo chamber; writer self-validates own work; AI slop (over-engineered abstractions, template-paste, unnecessary wrappers) merged because no different evaluator scored ≥7/10 |
 
 Full reference: see [references/primitives.md](references/primitives.md).

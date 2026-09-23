@@ -171,6 +171,7 @@ echo '{}' | bash "$POS" >/dev/null 2>&1; [ "$?" = "0" ] && ok "posture exits 0 o
 echo "== posture hook: self-bootstrap + set-if-absent + re-stamp =="
 NS="posture-sid-2"
 echo "{\"session_id\":\"$NS\",\"prompt\":\"/autonomous ship it\"}" | bash "$POS" | grep -q 'sticky posture' && ok "/autonomous → posture line" || bad "no posture line"
+echo "{\"session_id\":\"$NS\",\"prompt\":\"keep going\"}" | bash "$POS" | grep -q 'pause only for a cross-repo, destructive or public-API-breaking decision' && ok "posture line keeps the pause criterion (the Stop hook does not encode it)" || bad "posture line lost the pause criterion"
 [ "$("$ARC" status "$NS")" = "active autonomous" ] && ok "/autonomous self-bootstrapped an arc" || bad "arc not created"
 PM="posture-noprose"
 echo "{\"session_id\":\"$PM\",\"prompt\":\"please do not use /autonomous here\"}" | bash "$POS" >/dev/null

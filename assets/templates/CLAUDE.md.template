@@ -29,7 +29,7 @@ Each primitive carries a **short name** for agent prose. When referencing a prim
 | P9 | **Wait** — Productive Wait (`broomva/p9` skill) | wait-queue drains while a blocking operation runs (PR CI is the reference impl: `gh pr checks --watch` via `run_in_background` → classifier + evaluator self-heal). For non-PR waits (push-triggered deploys, builds), do a single direct check after kicking off next-priority work. | Never `sleep` on a blocking wait; merge defers to control metalayer |
 | P10 | **Hygiene** — Worktree Hygiene Discipline | Reflexive rule: decide worktree-or-not before first file; keep `git status` clean; auto-run P8 janitor after every merge | A clean tree is the only reliable reset point |
 | P11 | **Empirical** — Empirical Feedback Loop | Reflexive rule: validate by *interacting* — log-tails, browser E2E, screenshots, deploy verification, multi-level test composition | Reasoning isn't validation; interaction is |
-| P12 | **Persist** — Persistent Loop Discipline (`broomva/persist` skill) | Reflexive rule: cross-context restart loop — state in filesystem (PROMPT.md + git tree), each iteration spawns a fresh agent context | At long-horizon work (>1h), in-context loops decay; restart fresh, backpressure from compilers/tests |
+| P12 | **Persist** — Persistent Loop Discipline (`broomva/persist` skill) | Reflexive rule: cross-context restart loop — state in filesystem (PROMPT.md + git tree), each iteration spawns a fresh agent context | For work that must outlive the session; restart fresh, backpressure from compilers/tests |
 | P13 | **Dream** — Dream Cycle Discipline | Reflexive rule: any consolidation that crosses a cadence-tier boundary MUST follow the 5-phase shape (gather → replay → prune → consolidate → index) | Replay against frozen substrate is the runtime form of stop-gradient; without it, dense lower-tier signal corrupts sparse upper-tier rules |
 | P14 | **Dep-Chain** — Dependency-Chain Reasoning Discipline | Reflexive rule: before any substantive write, enumerate upstream (files, functions, types, contracts, deployed state this depends on) and downstream (consumers, tests, CI gates, docs, in-flight PRs depending on this). Concrete file paths + function names in the response or PR body — not in the agent's head. | "Think deeply through chain of dependencies" without a concrete enumeration step is ritual. P14 makes it machine-checkable. |
 | P15 | **Snapshot** — State-Snapshot Before Action | Reflexive rule: before any plan, the agent surfaces `git status` + branch + ahead/behind, in-flight PRs (`gh pr list`), Linear ticket state, bookkeeping/bridge freshness, last deploy state. The snapshot is *part of* the planning response — not deferred. | Plans built on stale state fail silently. P15 makes state-checking a cheap reflex, not a request the user has to make. |
@@ -49,7 +49,7 @@ The most common collision: plugin skills that mandate user interaction before ac
 
 1. Before any "interview the user" plugin skill fires, perform **Dep-Chain (P14)** + **Snapshot (P15)** over:
    - Workspace memory files (auto-memory directory)
-   - `research/entities/{concept,pattern,tool,person,project}/` — knowledge graph (grep by topic before asking)
+   - `research/entities/{concept,pattern,tool,person,project}/` — knowledge graph (`/kg load <topic>` before asking)
    - `docs/` (per-project) — architecture, specs, plans, conversations
    - Task-mentioned files (CV, spec, ticket body, PR diff)
 2. Synthesize what's known from those sources.
