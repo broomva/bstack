@@ -259,7 +259,7 @@ P11 is a reflex, not a request. Agents must apply the following without being pr
 
 P12 is a reflex, not a request. Apply without being prompted:
 
-1. Before starting work that must outlive this session (an overnight run, work nobody will resume by hand) — write PROMPT.md, call `persist iterate`.
+1. Before starting work that must outlive this session (an overnight run, or work paused now and resumed in a later session) — write PROMPT.md, call `persist iterate`.
 2. When the same fix has been attempted ≥3 times without convergence — stop in-context; spawn fresh persist loop.
 3. When orchestrating long-horizon work — default to persist + periodic checkpoints; compose with P5 (one persist loop per worktree) and P9 (each iteration's PR uses `p9 watch`).
 4. When the user says "run this in the background for an hour" — that's persist territory.
