@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.40.4 — 2026-09-23
+
+### fix(prompts): what the hooks and primitive text tell the model, re-read for Opus 5.5 (BRO-2536)
+
+A `/claude-api prompt-audit` of the workspace this ships into found text that
+was accurate for older models or older releases and now misleads the current
+one. This release carries the parts that live in bstack.
+
+- **The upgrade nudge pointed at the path that breaks vendored installs.**
+  `bstack-autoupdate-hook.sh` told every session with a vendored install to run
+  `npx skills add -g broomva/bstack`, and `bin/bstack`'s three fallbacks said the
+  same. That command registers bstack in the skills lock, and a later update can
+  replace the vendored install with SKILL.md alone. All four now point at
+  `/bstack-upgrade`, which clones the release.
+- **The posture hook restated pause rules every turn.** The arc-continuation
+  Stop hook already enforces them in code, so the per-turn line keeps what the
+  model needs to act (arc, next slice, how to complete) and drops the list. It
+  still says "sticky posture", because the measured failure it exists for
+  (`/autonomous` re-stamped by hand 143x across 79 sessions) is posture decay.
+- **P12/P19 thresholds were an Opus 4.6 measurement.** "Exceeds ~1h" and
+  "~100K tokens" came from METR's Opus 4.6 horizon and were stated as triggers.
+  Current models run a 1M context with automatic compaction in Claude Code. The
+  triggers now name the work shapes persist exists for, in
+  `references/primitives.md` and both templates; the METR figure stays as dated
+  context.
+- **Four "Mental checklist before declaring done" paragraphs removed** from
+  `references/primitives.md`. Each restated the trigger list above it as
+  self-check questions, which current models over-apply.
+- **Templates:** the scaffolded AGENTS.md no longer claims every rule is
+  hook-enforced; the plugin-precedence step says `/kg load` instead of the grep
+  the P6 retrieval rule forbids.
+- **`scripts/wave.py`:** wave peers are told to execute the plan, not to use a
+  subagent per task. Opus 5 and later delegate readily without being told to.
+
 ## 0.40.3 — 2026-09-12
 
 ### feat(asks): the ask ledger ships with the skill that requires it, and one command sees every arc

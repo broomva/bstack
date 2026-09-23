@@ -48,8 +48,8 @@ NEW=$(echo "$_UPD" | awk '{print $3}')
 
 # Git installs only — vendored upgrade is destructive without user confirm.
 if [ ! -d "$_BSTACK_ROOT/.git" ]; then
-    echo "[bstack] v$NEW available (you're on v$OLD). Vendored install — run /bstack-upgrade or:"
-    echo "         npx skills add -g broomva/bstack"
+    echo "[bstack] v$NEW available (you're on v$OLD). Vendored install: upgrade with /bstack-upgrade or \`bstack upgrade\`."
+    echo "         Not \`npx skills add\`: it registers bstack in the skills lock, and a later update can replace the vendored install with SKILL.md alone."
     exit 0
 fi
 

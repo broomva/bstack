@@ -121,8 +121,6 @@ Bookkeeping — and knowledge capture generally — is a reflex, not a request, 
 
 **Never a question.** The interrogative form — *"do you want me to create an entry / file this into the knowledge graph?"* — is forbidden. Capture is the default action, not an opt-in the user approves; the agent files first and reports after, so the user vetoes *after* (cheap: `git revert` / delete the entity), never gates *before*. Surfacing graph-worthy material and then deferring its capture to a user yes/no is the **permission-to-document anti-pattern**: knowledge that waits for permission is knowledge lost. Two bounds keep this safe rather than spammy: (a) capture is gated by the Nous score (proactive ≠ indiscriminate — low-confidence inferences go to a synthesis note, not a committed entity); (b) an explicit standing instruction not to record, or material the agent treats as sensitive/private, overrides the default — the *only* withholding cases, and the agent withholds *silently* (never by asking permission to document).
 
-Mental checklist before declaring graph-dependent work done: *Did this session produce material that belongs in the graph? Does my feature read graph state? Am I about to commit a snapshot?* — yes to any → file it / run bookkeeping, without asking.
-
 ### P6 Retrieval Discipline (`/kg` for discovery, never substrate grep)
 
 The reflexive trigger rule above is the *write* side of the knowledge graph; this is the *read* side. Knowledge-graph **discovery** — "what do we know about X", "load context for X", finding the relevant entities before reasoning — goes through **`/kg load <topic>`** (add `--terms <synonyms>` for paraphrase/jargon topics; tier-2 body-grep also auto-fires on weak tier-1 hits). Use `Read` directly **only** on a slug confirmed present in the catalog (`docs/knowledge-index.md`).
@@ -184,8 +182,6 @@ P9 is a reflex, not a request. Agents must apply *productive-wait discipline* wi
 4. **When a watcher's bg-task notification reports red CI** — invoke `p9 heal <pr> --classify` *before* re-pushing a fix or asking the user. If classified, apply the heal command (PR-diff scope only) and start a new watch. If unclassified, escalate via Linear and surface the failure.
 5. **When `p9 status` reports `MERGE_READY`** — invoke `p9 auto-merge <pr>` rather than `gh pr merge` directly. The actuator consults `.control/policy.yaml`'s `auto_merge:` block; per the gates-are-trust principle, governance-class paths auto-merge when L3 trust gates pass (no special-case bypass).
 
-Mental checklist before declaring wait-dependent work done: *What blocking operation am I waiting on? Is it a PR (use `p9 watch`) or a non-PR trigger (single direct check + drain queue)? Am I about to `sleep` or poll? Did I drain the wait-queue while waiting?*
-
 ---
 
 ## P10 — Worktree Hygiene Discipline
@@ -204,8 +200,6 @@ P10 is a reflex, not a request. Agents must apply the following without being pr
 2. Before pushing to remote — run `git status` mentally; if dirty with WIP that's not part of the PR, decide: *commit-as-WIP*, *stash with reason*, or *extract to a separate branch*. Don't push past lingering uncommitted state.
 3. After PR merge — immediately run `make janitor` (P8) or `git worktree remove` + `git branch -D` directly. Never start a new work unit on top of a merged-but-uncleaned branch.
 4. At SessionStart — when reviewing prior context, check `git worktree list` and `git branch`. If the previous session left orphan worktrees or stale merged branches, run `make janitor` *before* starting new work.
-
-Mental checklist: *Did I decide on a worktree? Is `git status` clean? Are merged branches gone? Are there orphan worktrees from prior sessions?*
 
 ---
 
@@ -247,15 +241,13 @@ P11 is a reflex, not a request. Agents must apply the following without being pr
 6. At session end — produce a *dogfood receipt*: what was actually exercised vs what was only claimed. The receipt feeds P1 and P6.
 7. **Dogfood Plan keyed to detected stack** — before substantive feature work, produce a Dogfood Plan (entry surface · driver · evidence · smoke · end-to-end · receipt anchor) in the response and PR body, picking the right pattern from [references/dogfood-patterns.md](dogfood-patterns.md) — Tauri+sidecar / Next.js / Expo RN / Rust CLI / REST API / MCP server. The plan IS the agent's "how" for the stack; the receipt (rule 6) is the artifact that proves discipline was applied. The cookbook also names the skill toolkit (Interceptor is mandatory for visual deploy verification; gstack, cliclick, screencapture, curl+jq compose per stack).
 
-Mental checklist: *Did I interact with it? Did I capture evidence? Was the evidence multi-modal? Did I exercise it like a user would? Is the deploy actually correct, or just deployed? Does my Dogfood Plan match the stack I'm actually working on?*
-
 **Companion reference**: [references/dogfood-patterns.md](dogfood-patterns.md) — per-tech-stack cookbook with surfaces matrix, canonical arcs, gotchas, and receipt templates. Loaded by `bstack doctor` §13 (informational dogfood-readiness check) and by every agent applying this primitive.
 
 ---
 
 ## P12 — Persistent Loop Discipline
 
-**Closes**: long-horizon work decaying as the context window rots past ~100K tokens (the *"Dumb Zone"*). METR's Time Horizon 1.1 (Jan 2026) puts the **80%-reliability deployable horizon at ~1h on Opus 4.6** — a 14× reliability gap vs the 14.5h 50%-horizon. Above 1h, in-context loops fail.
+**Closes**: work that must outlive one session, or that iterates against an external success check, losing its state when the conversation ends. METR's Time Horizon 1.1 (Jan 2026) put the 80%-reliability horizon at ~1h on Opus 4.6 — a measurement not repeated on current models (1M context, with automatic compaction in Claude Code), so it is context for the design, not a trigger.
 
 **Skill name note**: P12's skill repo is `broomva/persist` — non-anthropomorphized rename of the pattern Geoffrey Huntley popularized as the "Ralph loop" (Jan 2026).
 
@@ -267,8 +259,8 @@ Mental checklist: *Did I interact with it? Did I capture evidence? Was the evide
 
 P12 is a reflex, not a request. Apply without being prompted:
 
-1. Before any work that may exceed ~1h of unsupervised agent time — write PROMPT.md, call `persist iterate`. Don't try >1h work in-context.
-2. When session token usage crosses ~100K — restart, don't continue in the rotted context.
+1. Before starting work that must outlive this session (an overnight run, work nobody will resume by hand) — write PROMPT.md, call `persist iterate`.
+2. When the session is losing track of its own earlier decisions (re-asking settled questions, contradicting its own findings) — write the state to PROMPT.md and restart.
 3. When the same fix has been attempted ≥3 times without convergence — stop in-context; spawn fresh persist loop.
 4. When orchestrating long-horizon work — default to persist + periodic checkpoints; compose with P5 (one persist loop per worktree) and P9 (each iteration's PR uses `p9 watch`).
 5. When the user says "run this in the background for an hour" — that's persist territory.
@@ -401,7 +393,7 @@ P13 is a reflex, not a request. Apply without being prompted:
 
 |  | Within session | Across sessions |
 |---|---|---|
-| **External trigger** (event-driven) | **P9** `p9 watch --background` (CI/deploy/build) | **P12** `persist iterate PROMPT.md` (cross-context-rot, >1h) |
+| **External trigger** (event-driven) | **P9** `p9 watch --background` (CI/deploy/build) | **P12** `persist iterate PROMPT.md` (work that outlives the session) |
 | **Internal trigger** (condition or time) | **`/goal <condition>`** (Haiku evaluator per turn) | **`/loop <interval>`** (Claude Code time-trigger) |
 
 **N>1 plane** (parallel-agent work):
@@ -416,7 +408,7 @@ Decision logic:
 1. Verifiable end state + bounded session + condition fits 4000 chars → `/goal <pipeline-completion-condition>`
 2. External completion event blocking (CI, deploy, build) → P9 `p9 watch --background` + drain wait-queue
 3. Time-triggered recurring routine → `/loop <interval> <slash-command>`
-4. >1h work OR cross-session OR context window approaching ~100K → P12 `persist iterate PROMPT.md` with budget
+4. Cross-session required, or iteration against an external success check → P12 `persist iterate PROMPT.md` with budget
 5. Independent in-session subtasks with no shared mutable writes → P5 — multiple `Agent` calls in one message
 6. N independent plan files for cross-session parallel fan-out (spec sub-phases, multi-crate work) → `bstack wave dispatch <plan...>` — atomic validate + worktree per plan
 7. **Inside the N>1 × across-session × external-trigger cell, the tiebreak is the worktree axis**: each peer needs its own branch and worktree → `bstack wave dispatch <plan...>`; peers coordinate in ONE worktree (parallel PR sweep, several ready tickets, a fixer beside an adversarial reviewer) → `bstack fleet up <roster>` — atomic roster validation, a durable brief per peer, pid-keyed liveness, teardown that never deletes the only record of an unreclaimed fleet. Independent *in-session* subtasks stay at rule 5 (P5 `Agent` calls).
@@ -429,7 +421,7 @@ Decision logic:
 
 1. **Pre-flight of substantive autonomous work** — state chosen mechanism + cite cube cell (session-scope × trigger-source × agent-count).
 2. **Before returning control mid-arc** — verify no mechanism would keep the arc closed.
-3. **At mechanism boundary crossings** (goal hits >1h, context ~100K, in-session N>1 needs across-session fan-out) — explicit transition, not drift.
+3. **At mechanism boundary crossings** (an in-session goal turns out to need more than one session, in-session N>1 needs across-session fan-out) — explicit transition, not drift.
 4. **When composing mechanisms** — surface the composition tree, don't compose silently.
 5. **Tempted to type "continue please" / wait for user prompts** — STOP. That's the ritual P19 makes impossible.
 
@@ -474,7 +466,7 @@ P11, P12, and P13 are structural siblings at different scales:
 | Primitive | Discipline | Surface | Evidence | Scale |
 |---|---|---|---|---|
 | **P11** Empirical Feedback | "validate by interacting" | live deployed system | screenshots, logs, browser session | in-session (≤1h) |
-| **P12** Persistent Loop | "restart fresh when context rots" | filesystem (PROMPT.md + git) | state.jsonl + each iteration's evidence | cross-session (>1h) |
+| **P12** Persistent Loop | "restart fresh each iteration" | filesystem (PROMPT.md + git) | state.jsonl + each iteration's evidence | cross-session (>1h) |
 | **P13** Dream Cycle | "consolidate by replaying" | frozen substrate | diff against frozen snapshot | tier-crossing |
 
 The whole stack composes:

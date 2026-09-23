@@ -112,9 +112,11 @@ bstack_upgrade() {
             new="$(echo "$upd" | awk '{print $3}')"
             if [ ! -d "$BSTACK_DIR/.git" ]; then
                 # Vendored install (≥ 0.9.0): self-upgrade via release tarball +
-                # sha256 verification + atomic swap. Falls back to manual `npx
-                # skills add` guidance if the tarball is missing on the release
-                # (e.g. pre-0.9.0 releases without the tarball job).
+                # sha256 verification + atomic swap. Points at /bstack-upgrade (a
+                # clone) if the tarball is missing on the release (e.g. pre-0.9.0
+                # releases without the tarball job). Never `npx skills add`: it
+                # registers bstack in the skills lock, and a later update can
+                # replace the vendored install with SKILL.md alone.
                 bstack_upgrade_vendored "$old" "$new"
                 return $?
             fi
@@ -169,7 +171,7 @@ bstack_upgrade_vendored() {
     } >> "$log"
 
     if ! command -v curl >/dev/null 2>&1; then
-        echo "Vendored upgrade requires curl. Falling back to manual: npx skills add -g broomva/bstack" >&2
+        echo "Vendored upgrade requires curl. Install curl, or run /bstack-upgrade (it clones the release)." >&2
         echo "  ERR: curl missing" >> "$log"
         return 1
     fi
@@ -185,13 +187,13 @@ bstack_upgrade_vendored() {
     echo "Downloading $tarball..."
     if ! curl -fsSL --max-time 120 -o "$tmp/$tarball" "$base_url/$tarball" 2>>"$log"; then
         echo "  Failed to download $base_url/$tarball" >&2
-        echo "  Falling back to: npx skills add -g broomva/bstack" >&2
+        echo "  Run /bstack-upgrade instead (it clones the release)." >&2
         echo "  ERR: tarball download failed" >> "$log"
         return 1
     fi
     if ! curl -fsSL --max-time 30 -o "$tmp/$sha_file" "$base_url/$sha_file" 2>>"$log"; then
         echo "  Failed to download $base_url/$sha_file" >&2
-        echo "  Falling back to: npx skills add -g broomva/bstack" >&2
+        echo "  Run /bstack-upgrade instead (it clones the release)." >&2
         echo "  ERR: sha256 download failed" >> "$log"
         return 1
     fi
