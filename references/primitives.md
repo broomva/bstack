@@ -247,7 +247,7 @@ P11 is a reflex, not a request. Agents must apply the following without being pr
 
 ## P12 — Persistent Loop Discipline
 
-**Closes**: work that must outlive one session, or that iterates against an external success check, losing its state when the conversation ends. METR's Time Horizon 1.1 (Jan 2026) put the 80%-reliability horizon at ~1h on Opus 4.6 — a measurement not repeated on current models (1M context, with automatic compaction in Claude Code), so it is context for the design, not a trigger.
+**Closes**: work that must outlive one session losing its state when the conversation ends. METR's Time Horizon 1.1 (Jan 2026) put the 80%-reliability horizon at ~1h on Opus 4.6 — a measurement not repeated on current models (1M context, with automatic compaction in Claude Code), so it is context for the design, not a trigger.
 
 **Skill name note**: P12's skill repo is `broomva/persist` — non-anthropomorphized rename of the pattern Geoffrey Huntley popularized as the "Ralph loop" (Jan 2026).
 
@@ -260,10 +260,9 @@ P11 is a reflex, not a request. Agents must apply the following without being pr
 P12 is a reflex, not a request. Apply without being prompted:
 
 1. Before starting work that must outlive this session (an overnight run, work nobody will resume by hand) — write PROMPT.md, call `persist iterate`.
-2. When the session is losing track of its own earlier decisions (re-asking settled questions, contradicting its own findings) — write the state to PROMPT.md and restart.
-3. When the same fix has been attempted ≥3 times without convergence — stop in-context; spawn fresh persist loop.
-4. When orchestrating long-horizon work — default to persist + periodic checkpoints; compose with P5 (one persist loop per worktree) and P9 (each iteration's PR uses `p9 watch`).
-5. When the user says "run this in the background for an hour" — that's persist territory.
+2. When the same fix has been attempted ≥3 times without convergence — stop in-context; spawn fresh persist loop.
+3. When orchestrating long-horizon work — default to persist + periodic checkpoints; compose with P5 (one persist loop per worktree) and P9 (each iteration's PR uses `p9 watch`).
+4. When the user says "run this in the background for an hour" — that's persist territory.
 
 ---
 
@@ -408,7 +407,7 @@ Decision logic:
 1. Verifiable end state + bounded session + condition fits 4000 chars → `/goal <pipeline-completion-condition>`
 2. External completion event blocking (CI, deploy, build) → P9 `p9 watch --background` + drain wait-queue
 3. Time-triggered recurring routine → `/loop <interval> <slash-command>`
-4. Cross-session required, or iteration against an external success check → P12 `persist iterate PROMPT.md` with budget
+4. Cross-session required → P12 `persist iterate PROMPT.md` with budget
 5. Independent in-session subtasks with no shared mutable writes → P5 — multiple `Agent` calls in one message
 6. N independent plan files for cross-session parallel fan-out (spec sub-phases, multi-crate work) → `bstack wave dispatch <plan...>` — atomic validate + worktree per plan
 7. **Inside the N>1 × across-session × external-trigger cell, the tiebreak is the worktree axis**: each peer needs its own branch and worktree → `bstack wave dispatch <plan...>`; peers coordinate in ONE worktree (parallel PR sweep, several ready tickets, a fixer beside an adversarial reviewer) → `bstack fleet up <roster>` — atomic roster validation, a durable brief per peer, pid-keyed liveness, teardown that never deletes the only record of an unreclaimed fleet. Independent *in-session* subtasks stay at rule 5 (P5 `Agent` calls).
@@ -465,8 +464,8 @@ P11, P12, and P13 are structural siblings at different scales:
 
 | Primitive | Discipline | Surface | Evidence | Scale |
 |---|---|---|---|---|
-| **P11** Empirical Feedback | "validate by interacting" | live deployed system | screenshots, logs, browser session | in-session (≤1h) |
-| **P12** Persistent Loop | "restart fresh each iteration" | filesystem (PROMPT.md + git) | state.jsonl + each iteration's evidence | cross-session (>1h) |
+| **P11** Empirical Feedback | "validate by interacting" | live deployed system | screenshots, logs, browser session | in-session |
+| **P12** Persistent Loop | "restart fresh each iteration" | filesystem (PROMPT.md + git) | state.jsonl + each iteration's evidence | cross-session (outlives one session) |
 | **P13** Dream Cycle | "consolidate by replaying" | frozen substrate | diff against frozen snapshot | tier-crossing |
 
 The whole stack composes:

@@ -2,7 +2,7 @@
 
 ## Self-Meta Definition
 
-This file IS the control harness for agents operating in this workspace. Codex loads it directly; Claude Code loads `CLAUDE.md`, which points here for each primitive's full rule. Some rules here are enforced by pre-commit hooks, Claude Code hooks, and the control audit (`make control-audit`); the ones marked reasoning-enforced rely on the agent applying them.
+This file IS the control harness for agents operating in this workspace. Codex loads it directly; Claude Code loads `CLAUDE.md`, which points here for each primitive's full rule. Some rules here are enforced by pre-commit hooks, Claude Code hooks, and the control audit (`make control-audit`); the ones with a Reflexive Trigger Rule rely on the agent applying them.
 
 **If you are an agent reading this**: you are part of a self-improving system. Your session will be captured, indexed, and used to improve future agents. The bstack consciousness substrate is always active.
 
@@ -187,7 +187,7 @@ Reference: `bstack/references/dogfood-patterns.md` for the per-stack surfaces ma
 
 ### P12 — Persist: Persistent Loop Discipline (Cross-Context Restart Loop)
 
-**What**: Reflexive discipline binding every agent to *restart the context window when it rots*, while preserving state in the filesystem. Work that must outlive one session, or that iterates against an external success check, needs state that survives the conversation.
+**What**: Reflexive discipline binding every agent to *restart the context window when it rots*, while preserving state in the filesystem. Work that must outlive one session needs state that survives the conversation.
 
 **How**: `python3 skills/persist/scripts/persist.py iterate <PROMPT.md>` substrate. Each iteration spawns a fresh agent context; state persists in PROMPT.md + git tree + state.jsonl. Validation backpressure from compilers/tests/linters, not model self-grading.
 
@@ -196,10 +196,9 @@ Reference: `bstack/references/dogfood-patterns.md` for the per-stack surfaces ma
 **Reflexive Trigger Rule**: P12 is a reflex. Apply without being prompted:
 
 1. Before starting work that must outlive this session (an overnight run, work nobody will resume by hand) — write PROMPT.md, call `persist iterate`.
-2. When the session is losing track of its own earlier decisions (re-asking settled questions, contradicting its own findings) — write the state to PROMPT.md and restart.
-3. When the same fix has been attempted ≥3 times without convergence — stop in-context; spawn fresh persist loop.
-4. When orchestrating long-horizon work — default to persist + periodic checkpoints; compose with P5 worktrees.
-5. When the user says "run this in the background for an hour" — that's persist territory.
+2. When the same fix has been attempted ≥3 times without convergence — stop in-context; spawn fresh persist loop.
+3. When orchestrating long-horizon work — default to persist + periodic checkpoints; compose with P5 worktrees.
+4. When the user says "run this in the background for an hour" — that's persist territory.
 
 ### P13 — Dream: Dream Cycle Discipline (Tier-Crossing Consolidation)
 
@@ -341,7 +340,7 @@ Candidates live in `research/entities/pattern/bstack-engine.md` (or equivalent l
 
 |  | Within session | Across sessions |
 |---|---|---|
-| **External trigger** (event-driven) | **Wait (P9)** `p9 watch --background` (CI/deploy/build blocking) | **Persist (P12)** `persist iterate PROMPT.md` (cross-context-rot, >1h) |
+| **External trigger** (event-driven) | **Wait (P9)** `p9 watch --background` (CI/deploy/build blocking) | **Persist (P12)** `persist iterate PROMPT.md` (work that outlives the session) |
 | **Internal trigger** (condition or time) | **`/goal <condition>`** (Haiku evaluator per turn) | **`/loop <interval>`** (Claude Code time-trigger) |
 
 **N>1 plane** (parallel-agent work):
@@ -356,7 +355,7 @@ Decision logic:
 1. Verifiable end state + bounded session + condition fits 4000 chars → `/goal <pipeline-completion-condition>`
 2. External completion event blocking (CI, deploy, build) → Wait (P9) `p9 watch --background` + drain wait-queue
 3. Time-triggered recurring routine → `/loop <interval> <slash-command>`
-4. Cross-session required, or iteration against an external success check → Persist (P12) `persist iterate PROMPT.md` with budget
+4. Cross-session required → Persist (P12) `persist iterate PROMPT.md` with budget
 5. Independent in-session subtasks with no shared mutable writes → Fanout (P5) — multiple `Agent` calls in one message
 6. N independent plan files for cross-session parallel fan-out (spec sub-phases, multi-crate work) → `bstack wave dispatch <plan...>` — atomic validate + worktree per plan
 7. **Inside the N>1 × across-session × external-trigger cell, the tiebreak is the worktree axis**: each peer needs its own branch and worktree → `bstack wave dispatch <plan...>`; peers coordinate in ONE worktree (parallel PR sweep, several ready tickets, a fixer beside an adversarial reviewer) → `bstack fleet up <roster>` — atomic roster validation, a durable brief per peer, pid-keyed liveness, teardown that never deletes the only record of an unreclaimed fleet. Independent *in-session* subtasks stay at rule 5 (Fanout (P5) `Agent` calls).

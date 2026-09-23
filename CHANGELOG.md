@@ -11,28 +11,36 @@ one. This release carries the parts that live in bstack.
 - **The upgrade nudge pointed at the path that breaks vendored installs.**
   `bstack-autoupdate-hook.sh` told every session with a vendored install to run
   `npx skills add -g broomva/bstack`, and `bin/bstack`'s three fallbacks said the
-  same. That command registers bstack in the skills lock, and a later update can
-  replace the vendored install with SKILL.md alone. All four now point at
-  `/bstack-upgrade`, which clones the release.
-- **The posture hook restated pause rules every turn.** The arc-continuation
-  Stop hook already enforces them in code, so the per-turn line keeps what the
-  model needs to act (arc, next slice, how to complete) and drops the list. It
-  still says "sticky posture", because the measured failure it exists for
-  (`/autonomous` re-stamped by hand 143x across 79 sessions) is posture decay.
-- **P12/P19 thresholds were an Opus 4.6 measurement.** "Exceeds ~1h" and
-  "~100K tokens" came from METR's Opus 4.6 horizon and were stated as triggers.
-  Current models run a 1M context with automatic compaction in Claude Code. The
-  triggers now name the work shapes persist exists for, in
-  `references/primitives.md` and both templates; the METR figure stays as dated
-  context.
+  same. That command can leave an install holding only SKILL.md, without
+  `bin/`, `scripts/` or hooks. The nudge now names `bstack upgrade` (verified
+  release tarball) and `bstack-upgrade/SKILL.md` (clones main); the fallbacks,
+  which print to a terminal, give the manual clone.
+- **The posture line is one sentence instead of three.** It keeps the arc,
+  the next slice, the pause criterion (only a cross-repo, destructive or
+  public-API-breaking decision) and how to complete the arc. The criterion
+  stays per-turn: the arc-continuation Stop hook blocks only empty turns and
+  handbacks without an ask block, so nothing else enforces it.
+- **P12/P19 no longer state an Opus 4.6 measurement as a trigger.** "Exceeds
+  ~1h" and "~100K tokens" came from METR's Opus 4.6 horizon. Current models run
+  a 1M context with automatic compaction in Claude Code. P12 now triggers on
+  work that must outlive the session and on repeated failed fixes, in
+  `references/primitives.md`, `references/primitives.yaml`, `SKILL.md`,
+  `references/dogfood-patterns.md` and both templates; the METR figure stays as
+  dated context.
 - **Four "Mental checklist before declaring done" paragraphs removed** from
   `references/primitives.md`. Each restated the trigger list above it as
   self-check questions, which current models over-apply.
-- **Templates:** the scaffolded AGENTS.md no longer claims every rule is
-  hook-enforced; the plugin-precedence step says `/kg load` instead of the grep
-  the P6 retrieval rule forbids.
-- **`scripts/wave.py`:** wave peers are told to execute the plan, not to use a
-  subagent per task. Opus 5 and later delegate readily without being told to.
+- **Templates:** the scaffolded AGENTS.md says the primitives with a Reflexive
+  Trigger Rule rely on the agent (not every rule is hook-enforced); the
+  plugin-precedence step says `/kg load` instead of the grep the P6 retrieval
+  rule forbids.
+- **Existing workspaces are not rewritten by an upgrade.** `bstack repair`
+  backfills only the philosophy and retrieval-discipline sections, so a
+  workspace scaffolded from an earlier template keeps its P12/P19 text until
+  edited by hand.
+- **Tests:** `tests/autoupdate-vendored-guidance.test.sh` (new) pins the upgrade
+  guidance in the hook and all three `bin/bstack` fallbacks;
+  `tests/loop-stall-hooks.test.sh` pins the pause criterion in the posture line.
 
 ## 0.40.3 — 2026-09-12
 

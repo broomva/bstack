@@ -50,7 +50,7 @@ fi
 if "$ARC_HELPER" active "$SID" >/dev/null 2>&1; then
     SLUG="$("$ARC_HELPER" status "$SID" 2>/dev/null | awk '{print $2}')"
     NEXT="$("$ARC_HELPER" next "$SID" 2>/dev/null)"
-    MSG="[autonomous arc${SLUG:+ $SLUG} active — sticky posture${NEXT:+ (next slice: $NEXT)}: continue the arc; run \`autonomous-arc.sh complete $SID\` when it is done.]"
+    MSG="[autonomous arc${SLUG:+ $SLUG} active — sticky posture${NEXT:+ (next slice: $NEXT)}: continue the arc; pause only for a cross-repo, destructive or public-API-breaking decision; run \`autonomous-arc.sh complete $SID\` when it is done.]"
     printf '%s\n' "$MSG"
 fi
 exit 0
