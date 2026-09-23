@@ -251,7 +251,7 @@ P11 is a reflex, not a request. Agents must apply the following without being pr
 
 **Skill name note**: P12's skill repo is `broomva/persist` — non-anthropomorphized rename of the pattern Geoffrey Huntley popularized as the "Ralph loop" (Jan 2026).
 
-**How**: `python3 skills/persist/scripts/persist.py iterate <PROMPT.md>` substrate. Each iteration spawns a fresh agent context. State persists in the filesystem (PROMPT.md + git tree + state.jsonl). Validation backpressure from compilers/tests/linters, not model self-grading. Five-state machine: `SPAWNED → ITERATING (self-loop) → SUCCESS | BUDGET_EXHAUSTED | ABANDONED`. Default budget: 50 iterations / 14400s wall-clock (METR's 80%-horizon ceiling).
+**How**: `python3 skills/persist/scripts/persist.py iterate <PROMPT.md>` substrate. Each iteration spawns a fresh agent context. State persists in the filesystem (PROMPT.md + git tree + state.jsonl). Validation backpressure from compilers/tests/linters, not model self-grading. Five-state machine: `SPAWNED → ITERATING (self-loop) → SUCCESS | BUDGET_EXHAUSTED | ABANDONED`. Default budget: 50 iterations / 14400s wall-clock.
 
 **Invariant**: state lives in the filesystem. Each iteration starts from PROMPT.md content, not conversation history. Validation backpressure is external. Each iteration is a fresh subprocess.
 
@@ -407,7 +407,7 @@ Decision logic:
 1. Verifiable end state + bounded session + condition fits 4000 chars → `/goal <pipeline-completion-condition>`
 2. External completion event blocking (CI, deploy, build) → P9 `p9 watch --background` + drain wait-queue
 3. Time-triggered recurring routine → `/loop <interval> <slash-command>`
-4. Cross-session required → P12 `persist iterate PROMPT.md` with budget
+4. Cross-session required, or a fresh-context restart after ≥3 non-converging attempts (P12 trigger 2) → P12 `persist iterate PROMPT.md` with budget
 5. Independent in-session subtasks with no shared mutable writes → P5 — multiple `Agent` calls in one message
 6. N independent plan files for cross-session parallel fan-out (spec sub-phases, multi-crate work) → `bstack wave dispatch <plan...>` — atomic validate + worktree per plan
 7. **Inside the N>1 × across-session × external-trigger cell, the tiebreak is the worktree axis**: each peer needs its own branch and worktree → `bstack wave dispatch <plan...>`; peers coordinate in ONE worktree (parallel PR sweep, several ready tickets, a fixer beside an adversarial reviewer) → `bstack fleet up <roster>` — atomic roster validation, a durable brief per peer, pid-keyed liveness, teardown that never deletes the only record of an unreclaimed fleet. Independent *in-session* subtasks stay at rule 5 (P5 `Agent` calls).

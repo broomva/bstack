@@ -9,18 +9,23 @@ was accurate for older models or older releases and now misleads the current
 one. This release carries the parts that live in bstack.
 
 - **The upgrade nudge pointed at the path that breaks vendored installs.**
-  `bstack-autoupdate-hook.sh` told every session with a vendored install to run
+  `bstack-autoupdate-hook.sh` told every session on a vendored install with an
+  upgrade available to run
   `npx skills add -g broomva/bstack`, and `bin/bstack`'s three fallbacks said the
   same. That command can leave an install holding only SKILL.md, without
-  `bin/`, `scripts/` or hooks. The nudge now names `bstack upgrade` (verified
-  release tarball) and `bstack-upgrade/SKILL.md` (clones main); the fallbacks,
-  which print to a terminal, give the manual clone.
-- **The posture line is one sentence instead of three.** It keeps the arc,
+  `bin/`, `scripts/` or hooks. The nudge now names `<install>/bin/bstack
+  upgrade` (verified release tarball; `bstack` need not be on PATH) and
+  `bstack-upgrade/SKILL.md` (clones main); the fallbacks, which print to a
+  terminal, give the manual clone. That manual flow now resolves a symlinked
+  install path first, so it replaces the install rather than the link.
+- **The posture line is one sentence instead of two.** It keeps the arc,
   the next slice, the pause criterion (only a cross-repo, destructive or
   public-API-breaking decision) and how to complete the arc. The criterion
-  stays per-turn: the arc-continuation Stop hook blocks only empty turns and
-  handbacks without an ask block, so nothing else enforces it.
-- **P12/P19 no longer state an Opus 4.6 measurement as a trigger.** "Exceeds
+  stays per-turn: the arc-continuation Stop hook blocks only empty turns,
+  `No response requested.` turns and handbacks without an ask block, so
+  nothing else enforces it.
+- **P12/P19 no longer state an Opus 4.6 measurement as a trigger.** P19's
+  persist row also routes P12's "≥3 failed fixes" restart, so the two agree. "Exceeds
   ~1h" and "~100K tokens" came from METR's Opus 4.6 horizon. Current models run
   a 1M context with automatic compaction in Claude Code. P12 now triggers on
   work that must outlive the session and on repeated failed fixes, in

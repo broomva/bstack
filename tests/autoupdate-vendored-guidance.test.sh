@@ -51,6 +51,27 @@ fi
 N="$(grep -c 'bstack-upgrade/SKILL.md (git clone --depth 1' "$BIN")"
 [ "$N" -eq 3 ] && ok "all three fallbacks point at the manual clone ($N)" || bad "expected 3 manual-clone fallbacks, found $N"
 
+echo "== bin/bstack upgrade at runtime: download fails on a vendored install =="
+# A source grep cannot see a fallback that crashes before printing (an unset
+# variable under set -u), so run the real path: a vendored copy of the repo, an
+# update-check stub that reports an upgrade, and a tarball URL that cannot resolve.
+INST="$H/install/bstack"
+mkdir -p "$INST"
+(cd "$BSTACK_REPO" && tar -cf - --exclude .git --exclude tests .) | tar -xf - -C "$INST"
+[ -x "$INST/bin/bstack" ] || { bad "could not stage a vendored copy at $INST"; echo "  passed: $PASS  failed: $FAIL"; exit 1; }
+printf '#!/bin/sh\necho "UPGRADE_AVAILABLE 0.1.0 0.2.0"\n' > "$INST/bin/bstack-update-check"
+chmod +x "$INST/bin/"*
+UP="$(HOME="$H" BSTACK_RELEASE_TARBALL_URL="file:///nonexistent-bstack-release" bash "$INST/bin/bstack" upgrade 2>&1)"
+case "$UP" in
+    *"$INST/bstack-upgrade/SKILL.md (git clone --depth 1"*) ok "fallback prints, with the install's own path" ;;
+    *) bad "fallback missing or path unexpanded: $(printf '%s' "$UP" | head -5)" ;;
+esac
+if printf '%s' "$UP" | grep -q 'npx skills add'; then
+    bad "runtime fallback mentions npx skills add"
+else
+    ok "runtime fallback does not mention npx skills add"
+fi
+
 echo ""
 echo "  passed: $PASS  failed: $FAIL"
 [ "$FAIL" -eq 0 ]
