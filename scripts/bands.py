@@ -16,8 +16,9 @@ the four Western Electric rules. The intent file is a pure function of (config,
 result, date). A model enters only downstream, through `diagnose-cmd`, and it
 gets no shell: its tools are exactly an ALLOWLIST of Read, Grep, Glob and LS, and
 any other token (every Bash entry, a write tool, an MCP tool, Agent, Skill) is
-refused when the config loads. Whatever the diagnosis needs from CI or history, the
-workflow pre-fetches into the checkout. The command adds --restricted (no
+refused when the config loads. What it reads beyond the code, the caller copies in:
+the shipped workflow copies the run list and the band result into .bands/
+(runs.json, result.json) of a throwaway clone. The command adds --restricted (no
 code-running tools; user, project and local settings files ignored),
 --strict-mcp-config (no MCP servers), --tools, --permission-mode dontAsk and
 --disallowedTools for the write tools. That is the grant of the flags passed here,
@@ -118,8 +119,9 @@ DIAGNOSE_PROMPT = (
     "Read the intent file at {intent}. A deterministic control-band detector wrote it: "
     "a metric left its control band, and the file records the anomaly, its evidence, "
     "the affected systems and the open questions. Diagnose the most likely cause. This "
-    "is a read-only diagnosis with no shell: read the code and any CI logs or history "
-    "the workflow fetched into the working directory, and write nothing. Return your "
+    "is a read-only diagnosis with no shell: read the code, and the run list and band "
+    "result in .bands/ (runs.json, result.json) if they are there, and write nothing. "
+    "Return your "
     "diagnosis as your reply, a markdown section headed '## Diagnosis' that the caller "
     "appends to the intent file: the most likely cause, the evidence for it, what would "
     "confirm or refute it, and whether this looks like a real regression or a baseline "
@@ -178,7 +180,7 @@ def tool_errors(tools) -> list[str]:
     every Bash entry, a write tool, `mcp__*`, `Agent`, `Skill`, a lower-cased
     `read`, or a token starting with '-' (which the CLI would parse as a flag) is
     refused without needing a rule of its own. A Bash entry gets its own message,
-    because the fix for it is upstream: pre-fetch the data, do not grant the shell.
+    because the fix for it is upstream: copy the data in, do not grant the shell.
     """
     if not isinstance(tools, str) or not tools.strip():
         return ["diagnose needs a non-empty 'tools' string (e.g. \"Read,Grep,Glob\")"]
@@ -189,8 +191,8 @@ def tool_errors(tools) -> list[str]:
             continue
         if tok.partition("(")[0].strip().lower() == "bash":
             errs.append(f"tool {tok!r} is refused: the diagnosis gets no shell. The "
-                        f"workflow pre-fetches the data the diagnosis reads (CI logs, run "
-                        f"lists, history) into the checkout; the allowlist is "
+                        f"workflow copies the run list and the band result into .bands/ "
+                        f"(runs.json, result.json) for it to read; the allowlist is "
                         f"{', '.join(DIAGNOSE_TOOLS)}")
         else:
             errs.append(f"tool {tok!r} is not on the read-only diagnose allowlist "

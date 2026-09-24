@@ -42,9 +42,12 @@ only be dontAsk or plan). Within an AVAILABLE tool, an allow rule from a setting
 or a hook can still approve a call that allowed_tools does not list — scope Bash rules
 in allowed_tools narrowly for that reason.
 claude's environment is the parent's minus: the GIT_* variables that relocate a repo;
-PWD, OLDPWD, INIT_CWD, GITHUB_WORKSPACE, GITHUB_EVENT_PATH, RUNNER_WORKSPACE, and the
-workflow-command files GITHUB_ENV, GITHUB_PATH, GITHUB_OUTPUT, GITHUB_STEP_SUMMARY and
-GITHUB_STATE (writing those would inject env, PATH or a forged summary into later steps);
+PWD, OLDPWD, INIT_CWD, GITHUB_WORKSPACE, GITHUB_EVENT_PATH, RUNNER_WORKSPACE,
+RUNNER_TEMP, and the workflow-command pointers GITHUB_ENV, GITHUB_PATH, GITHUB_OUTPUT,
+GITHUB_STEP_SUMMARY and GITHUB_STATE. Dropping those names hides the POINTERS only: the
+files themselves (under the runner's temp dir) stay reachable to a process that goes
+looking, and writing one injects env, PATH or a forged summary into later steps — the
+same-user limit stated above;
 and every variable whose value names the live repo or the evals dir — compared after
 realpath on BOTH sides, so a symlinked form (/tmp vs /private/tmp) is caught too —
 except auth variables that may hold a path (HOME, CLAUDE_CONFIG_DIR, cloud credential
@@ -70,14 +73,18 @@ A check that cannot fail is not a check. `validate --prove` runs every eval that
   1. reference arm — setup, the reference commands (their stdout stands in for the
      reply), all checks: every check must PASS;
   2. one violation arm per `violations` entry — a named plausible WRONG behaviour
-     (`run`: shell commands) — setup, those commands, all checks: one must FAIL. The
-     reply is the same lie as the no-op's, never the commands' stdout, so an
-     output-only check cannot "catch" a violation no file or git check sees. Each arm
-     records `caught_by`: the checks that failed;
+     (`run`: shell commands) — setup, those commands, all checks: one must FAIL.
+     Violation arms are scored on state checks only; the reply is held at the
+     reference's passing value (a violator claims success in the same words), never
+     the commands' stdout and never the no-op lie. If the reference arm did not pass,
+     the violation arms are reported "not evaluated". Each arm records `caught_by`;
   3. no-op arm, LAST — setup only, and the reply is the lie "I have completed the
-     task.": at least one check must FAIL. Running it last means a reference that left
-     state outside its scratch (a /tmp marker) makes the no-op pass, which is reported
-     as "does not discriminate" instead of certified.
+     task.": at least one check must FAIL (recorded as `noop_caught_by`). Running it
+     last means a reference that left state outside its scratch (a /tmp marker) makes
+     the no-op pass, which is reported as "does not discriminate" instead of certified.
+     When ONLY output checks catch the no-op, prove warns: a do-nothing agent that
+     repeats the reference's words would pass. (A Q&A eval can be reply-only, so it is a
+     warning, not an error.)
 An eval with no violations is warned as "no violation arm" under --prove, and is an
 error with --require-violations. `validate` also warns when a setup, reference,
 violation or command check names an absolute path outside the scratch.
@@ -113,7 +120,10 @@ and now fails or errors; `--gate` fails on any regression, even when the rate is
 (one fixed, one broken), unless --allow-regressions. An eval that passed in the
 baseline and is MISSING now (removed_passing) also fails the gate, unless
 --allow-removed: deleting a passing eval is how a change hides the regression it
-causes. `baseline.json` in the evals dir
+causes. `--gate` trusts the baseline file it is given; when that file lives in the tree
+under test, a PR that edits baseline.json (or weakens an eval under the same id) changes
+its own gate. Review baseline.json and eval files like code, or read the baseline from
+the base branch. `baseline.json` in the evals dir
 is the baseline file, never an eval, and is skipped by discovery.
 
 Nested sessions: measured 2026-09-23, a nested `claude -p` with CLAUDECODE=1 and
@@ -164,6 +174,10 @@ CHECK_TYPES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "output_not_regex": (("regex",), ()),
 }
 REGEX_FIELDS = ("regex", "expect_stdout_regex")
+# Check types that read the REPLY rather than state. The rule is the name: a check type
+# that reads the reply is named output_*, and prove holds every one of them at the
+# reference's passing value in violation arms.
+OUTPUT_CHECK_TYPES = frozenset(t for t in CHECK_TYPES if t.startswith("output_"))
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 BASELINE_NAME = "baseline.json"
 # dontAsk denies anything not pre-approved; plan cannot act at all. Every other mode
@@ -251,7 +265,7 @@ def scratch_env(wt: Path) -> dict[str, str]:
 
 # Variables that name the live checkout (or the job's event payload) outright.
 _CLAUDE_ENV_DROP = frozenset({"PWD", "OLDPWD", "INIT_CWD", "GITHUB_WORKSPACE",
-                              "GITHUB_EVENT_PATH", "RUNNER_WORKSPACE",
+                              "GITHUB_EVENT_PATH", "RUNNER_WORKSPACE", "RUNNER_TEMP",
                               # workflow-command files: env/PATH/output injection
                               "GITHUB_ENV", "GITHUB_PATH", "GITHUB_OUTPUT",
                               "GITHUB_STEP_SUMMARY", "GITHUB_STATE"})
@@ -1134,16 +1148,30 @@ def cmd_run(args) -> int:
 # validate / prove
 # --------------------------------------------------------------------------
 
+def _caught_by(checks: list[dict]) -> list[str]:
+    return [f"checks[{i}] {c['type']}" for i, c in enumerate(checks) if not c["passed"]]
+
+
 def prove_eval(ev: dict, root: Path, hide: list[str] | None = None) -> dict:
     """No model, a fresh scratch per arm. The checks must pass when the reference is
     done, fail on every named violation, and fail when nothing is done while the reply
-    claims success. The no-op arm runs LAST: a reference or violation that leaves state
-    OUTSIDE its scratch (a /tmp marker) then makes the no-op pass, and the eval is
+    claims success.
+
+    Violation arms are scored on state checks only; the reply is held at the
+    reference's passing value. A violator claims success in the same words, so an output
+    check — which passed on that reply in the reference arm — passes again, and only a
+    file, git or command check can catch the violation. If the reference arm did not
+    pass there is no passing reply to hold, and the violation arms are NOT evaluated
+    (never scored against some other reply).
+
+    The no-op arm runs LAST with the lying reply: a reference or violation that leaves
+    state OUTSIDE its scratch (a /tmp marker) then makes the no-op pass, and the eval is
     reported as not discriminating instead of being certified."""
-    out: dict = {"id": ev["id"], "status": "proven", "problems": [],
-                 "noop_reply": NOOP_REPLY, "noop_checks": [], "reference_checks": [],
-                 "violation_arms": []}
+    out: dict = {"id": ev["id"], "status": "proven", "problems": [], "warnings": [],
+                 "noop_reply": NOOP_REPLY, "noop_checks": [], "noop_caught_by": [],
+                 "reference_checks": [], "reference_reply": None, "violation_arms": []}
     timeout = ev.get("timeout_s", DEFAULT_TIMEOUT_S)
+    reference_ok = False
     try:
         with Scratch(root, hide=hide) as sc:
             err, _ = run_shell_list(ev.get("setup", []), sc.path, timeout, "setup")
@@ -1155,6 +1183,7 @@ def prove_eval(ev: dict, root: Path, hide: list[str] | None = None) -> dict:
                 if err:
                     out["problems"].append(f"reference arm: {err}")
                 else:
+                    out["reference_reply"] = stdout
                     out["reference_checks"] = run_checks(ev, sc.path, stdout, base)
                     for i, c in enumerate(out["reference_checks"]):
                         if not c["passed"]:
@@ -1162,18 +1191,32 @@ def prove_eval(ev: dict, root: Path, hide: list[str] | None = None) -> dict:
                             out["problems"].append(
                                 f"reference arm: checks[{i}] {c['type']} {what} failed: "
                                 f"{c['evidence']}")
+                    reference_ok = all(c["passed"] for c in out["reference_checks"])
         for v in ev.get("violations", []):
-            out["violation_arms"].append(_violation_arm(ev, v, root, hide, timeout, out))
+            if reference_ok:
+                out["violation_arms"].append(
+                    _violation_arm(ev, v, root, hide, timeout, out, out["reference_reply"]))
+            else:
+                out["violation_arms"].append(
+                    {"name": v["name"], "status": "not evaluated", "checks": [],
+                     "caught_by": [], "error": "the reference arm did not pass, so there "
+                     "is no passing reply to hold"})
         with Scratch(root, hide=hide) as sc:
             err, _ = run_shell_list(ev.get("setup", []), sc.path, timeout, "setup")
             if err:
                 out["problems"].append(f"no-op arm: {err}")
             else:
                 out["noop_checks"] = run_checks(ev, sc.path, NOOP_REPLY, head_sha(sc.path))
-                if all(c["passed"] for c in out["noop_checks"]):
+                out["noop_caught_by"] = _caught_by(out["noop_checks"])
+                if not out["noop_caught_by"]:
                     out["problems"].append(
                         "does not discriminate: every check passes when nothing is done "
                         f"and the reply is {NOOP_REPLY!r}")
+                elif all(c["type"] in OUTPUT_CHECK_TYPES
+                         for c in out["noop_checks"] if not c["passed"]):
+                    out["warnings"].append(
+                        "no-op caught only by the reply; a do-nothing agent that repeats "
+                        "the reference's words would pass")
     except RuntimeError as e:
         out["problems"].append(str(e))
     if out["problems"]:
@@ -1212,10 +1255,10 @@ def outside_path_warnings(ev: dict) -> list[str]:
 
 
 def _violation_arm(ev: dict, v: dict, root: Path, hide: list[str] | None,
-                   timeout: float, out: dict) -> dict:
-    """setup, then the wrong behaviour, then every check: one must fail. The reply is
-    the lying agent's, never the commands' stdout: a violation that prints nothing
-    must not count as caught by an output check that only saw silence."""
+                   timeout: float, out: dict, reply: str) -> dict:
+    """setup, then the wrong behaviour, then every check: one must fail. `reply` is the
+    reference arm's passing reply — never the violation's stdout, never the no-op lie —
+    so output checks pass here by construction and only a state check can catch."""
     arm: dict = {"name": v["name"], "status": "caught", "checks": [], "caught_by": [],
                  "error": None}
     with Scratch(root, hide=hide) as sc:
@@ -1227,9 +1270,8 @@ def _violation_arm(ev: dict, v: dict, root: Path, hide: list[str] | None,
             arm["status"], arm["error"] = "error", err
             out["problems"].append(f"violation '{v['name']}': {err}")
             return arm
-        arm["checks"] = run_checks(ev, sc.path, NOOP_REPLY, base)
-    arm["caught_by"] = [f"checks[{i}] {c['type']}" for i, c in enumerate(arm["checks"])
-                        if not c["passed"]]
+        arm["checks"] = run_checks(ev, sc.path, reply, base)
+    arm["caught_by"] = _caught_by(arm["checks"])
     if all(c["passed"] for c in arm["checks"]):
         arm["status"] = "passes"
         out["problems"].append(f"violation '{v['name']}' passes every check")
@@ -1265,6 +1307,7 @@ def cmd_validate(args) -> int:
             pr = prove_eval(ev, root, hidden)
             proofs.append(pr)
             problems += [f"{f}: eval '{ev['id']}': {p}" for p in pr["problems"]]
+            warnings += [f"{f}: eval '{ev['id']}': {w}" for w in pr["warnings"]]
     if args.json:
         print(json.dumps({"evals": len(evals), "problems": problems, "warnings": warnings,
                           "proofs": proofs, "hidden_paths": hidden}, indent=2))

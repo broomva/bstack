@@ -392,6 +392,91 @@ class TestProve(Base):
         self.assertIn("violation 'rewrites README silently' passes every check",
                       proof["problems"])
 
+    # -- the RULE: violation arms are scored on state checks only ------------------
+    def rule_eval(self):
+        """One check of EVERY output type the schema has, plus state checks; violations
+        that change state and violations that do not."""
+        (self.repo / "CHANGELOG.md").write_text("# changes\n")
+        git(self.repo, "add", "CHANGELOG.md")
+        git(self.repo, "commit", "-q", "-m", "changelog")
+        reply_word = {"output_regex": "(?i)changelog", "output_not_regex": "--no-verify"}
+        self.assertEqual(set(reply_word), set(ae.OUTPUT_CHECK_TYPES),
+                         "a new output check type needs a case in this rule test")
+        checks = [{"type": t, "regex": reply_word[t]} for t in sorted(ae.OUTPUT_CHECK_TYPES)]
+        checks += [{"type": "file_contains", "path": "CHANGELOG.md", "regex": "fix"},
+                   {"type": "file_unchanged", "path": "README.md"},
+                   {"type": "file_absent", "path": "junk.txt"},
+                   {"type": "command", "run": "git rev-parse --abbrev-ref HEAD",
+                    "expect_stdout_regex": "^HEAD$"}]
+        fix = "echo '- fix: the thing' >> CHANGELOG.md"
+        self.write_eval("rule", "p", checks,
+                        reference=[fix, "echo 'Done, added the changelog line.'"],
+                        violations=[
+                            {"name": "vandalises README", "run": [fix, "echo x >> README.md"]},
+                            {"name": "leaves junk", "run": [fix, "touch junk.txt"]},
+                            {"name": "switches branch", "run": [fix, "git checkout -q -b x"]},
+                            {"name": "does nothing, says nothing", "run": ["true"]},
+                            {"name": "talks instead", "run": ["echo 'I refuse'"]},
+                            {"name": "edits a file nothing checks",
+                             "run": [fix, "echo x >> NOTES.md"]}])
+        return checks
+
+    def test_rule_no_violation_arm_is_ever_caught_by_an_output_check(self):
+        checks = self.rule_eval()
+        rc, out, _ = self.prove("--json")
+        proof = json.loads(out)["proofs"][0]
+        arms = proof["violation_arms"]
+        self.assertEqual(len(arms), 6)
+        for arm in arms:
+            with self.subTest(violation=arm["name"]):
+                self.assertNotEqual(arm["status"], "not evaluated")
+                named = [e.split(" ", 1)[1] for e in arm["caught_by"]]
+                self.assertFalse(set(named) & ae.OUTPUT_CHECK_TYPES, arm["caught_by"])
+                # the reply is held at the reference's passing value: every output check
+                # passes in every violation arm, by construction
+                self.assertTrue(all(c["passed"] for c in arm["checks"]
+                                    if c["type"] in ae.OUTPUT_CHECK_TYPES), arm["checks"])
+        # state changes the checks see are caught; the one nothing checks is not
+        status = {a["name"]: a["status"] for a in arms}
+        self.assertEqual(status.pop("edits a file nothing checks"), "passes")
+        self.assertEqual(set(status.values()), {"caught"})
+        self.assertEqual(rc, 1)
+        self.assertIn("violation 'edits a file nothing checks' passes every check",
+                      proof["problems"])
+
+    def test_violation_arms_are_not_evaluated_when_the_reference_fails(self):
+        self.write_eval("bad-ref", "p", [
+            {"type": "output_regex", "regex": "Done"},
+            {"type": "file_contains", "path": "out.txt", "regex": "done"}],
+            reference=["echo Done"],   # never writes out.txt: the reference fails
+            violations=[{"name": "writes nothing", "run": ["true"]}])
+        rc, out, _ = self.prove("--json")
+        self.assertEqual(rc, 1)
+        arm = json.loads(out)["proofs"][0]["violation_arms"][0]
+        self.assertEqual((arm["status"], arm["checks"], arm["caught_by"]),
+                         ("not evaluated", [], []))
+
+    def test_noop_caught_only_by_the_reply_is_a_warning(self):
+        self.write_eval("qa", "p", [{"type": "output_regex", "regex": "\\b42\\b"}],
+                        reference=["echo 'The answer is 42.'"])
+        rc, out, _ = self.prove("--json")
+        data = json.loads(out)
+        self.assertEqual((rc, data["proofs"][0]["status"]), (0, "proven"), out)
+        self.assertEqual(data["proofs"][0]["noop_caught_by"], ["checks[0] output_regex"])
+        self.assertTrue(any("no-op caught only by the reply" in w for w in data["warnings"]))
+
+    def test_noop_caught_by_a_state_check_is_not_warned(self):
+        self.write_eval("stateful", "p", [
+            {"type": "output_regex", "regex": "wrote"},
+            {"type": "file_contains", "path": "out.txt", "regex": "done"}],
+            reference=["echo done > out.txt", "echo wrote out.txt"])
+        rc, out, _ = self.prove("--json")
+        data = json.loads(out)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(data["proofs"][0]["noop_caught_by"],
+                         ["checks[0] output_regex", "checks[1] file_contains"])
+        self.assertFalse(any("caught only by the reply" in w for w in data["warnings"]))
+
     def test_every_violation_gets_its_own_arm(self):
         self.branch_eval([{"name": "caught one", "run": ["echo moved >> NOTES.md"]},
                           {"name": "missed one", "run": ["git checkout -q -b t2",
@@ -755,7 +840,8 @@ class TestIsolation(Base):
         link.symlink_to(self.repo)
         neutral = str(self.tmp / "neutral")   # names that must go even when harmless-valued
         named = ("OLDPWD", "INIT_CWD", "GITHUB_WORKSPACE", "GITHUB_EVENT_PATH",
-                 "RUNNER_WORKSPACE", "GITHUB_ENV", "GITHUB_PATH", "GITHUB_OUTPUT",
+                 "RUNNER_WORKSPACE", "RUNNER_TEMP", "GITHUB_ENV", "GITHUB_PATH",
+                 "GITHUB_OUTPUT",
                  "GITHUB_STEP_SUMMARY", "GITHUB_STATE")
         probe = {k: neutral for k in named}
         probe.update({"PWD": live, "CLAUDE_PROJECT_DIR": live,
@@ -958,13 +1044,18 @@ class TestHidden(Base):
                        {"type": "file_contains", "path": "out.txt", "regex": "done"}]}))
         git(self.repo, "add", "evals")
         git(self.repo, "commit", "-q", "-m", "hidden violation")
-        for flag, absent in (((), True), (("--no-hide-evals-dir",), False)):
-            with self.subTest(flags=flag):
-                rc, out, _ = run_main("validate", self.agent_evals, "--prove", "--json",
-                                      "--repo", self.repo, *flag)
-                arm = json.loads(out)["proofs"][0]["violation_arms"][0]
-                self.assertEqual(arm["checks"][0]["passed"], absent, arm)
-                self.assertEqual(arm["status"], "caught")
+        rc, out, _ = run_main("validate", self.agent_evals, "--prove", "--json",
+                              "--repo", self.repo)
+        arm = json.loads(out)["proofs"][0]["violation_arms"][0]
+        self.assertTrue(arm["checks"][0]["passed"], arm)   # hidden in the violation arm too
+        self.assertEqual((arm["status"], arm["caught_by"]),
+                         ("caught", ["checks[1] file_contains"]))
+        # unhidden, the reference arm fails its file_absent: no passing reply to hold,
+        # so the violation arm is not evaluated at all
+        rc, out, _ = run_main("validate", self.agent_evals, "--prove", "--json",
+                              "--repo", self.repo, "--no-hide-evals-dir")
+        arm = json.loads(out)["proofs"][0]["violation_arms"][0]
+        self.assertEqual((rc, arm["status"], arm["checks"]), (1, "not evaluated", []))
 
 
 # ---------------------------------------------------------------------------

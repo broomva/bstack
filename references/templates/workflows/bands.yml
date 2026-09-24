@@ -52,10 +52,21 @@ jobs:
           python3 "$RUNNER_TEMP/bstack/scripts/bands.py" check "$BANDS_FILE" --series "$RUNNER_TEMP/series.json" --json > "$RUNNER_TEMP/result.json"
           tier=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["tier"])' "$RUNNER_TEMP/result.json")
           echo "tier=$tier" >> "$GITHUB_OUTPUT"
+          key=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["metric"] + "-" + d["tier"])' "$RUNNER_TEMP/result.json")
+          echo "key=$key" >> "$GITHUB_OUTPUT"
           { echo "### Control band: $tier"; echo '```json'; cat "$RUNNER_TEMP/result.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Is an intent PR already open for this metric and tier?
+        id: open
+        if: steps.check.outputs.tier == '2sigma' || steps.check.outputs.tier == '3sigma'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEY: ${{ steps.check.outputs.key }}
+        run: |
+          n=$(gh pr list --state open --head "bands/$KEY" --json number -q 'length')
+          if [ "${n:-0}" -gt 0 ]; then echo "open=true" >> "$GITHUB_OUTPUT"; echo "an intent PR for $KEY is already open"; else echo "open=false" >> "$GITHUB_OUTPUT"; fi
       - name: Write the intent, diagnose in a throwaway clone
         id: diag
-        if: steps.check.outputs.tier == '2sigma' || steps.check.outputs.tier == '3sigma'
+        if: (steps.check.outputs.tier == '2sigma' || steps.check.outputs.tier == '3sigma') && steps.open.outputs.open == 'false'
         env:
           CLAUDE_BIN: ${{ vars.CLAUDE_BIN || 'claude' }}
         run: |
@@ -70,7 +81,8 @@ jobs:
           mkdir -p "$diag/.bands"
           cp "$file" "$diag/.bands/intent.md"
           cp "$RUNNER_TEMP/runs.json" "$RUNNER_TEMP/result.json" "$diag/.bands/"
-          python3 "$RUNNER_TEMP/bstack/scripts/bands.py" diagnose-cmd "$BANDS_FILE" --intent .bands/intent.md --result "$RUNNER_TEMP/result.json" > "$RUNNER_TEMP/argv.json"
+          bands_abs="$PWD/$BANDS_FILE"
+          (cd "$diag" && python3 "$RUNNER_TEMP/bstack/scripts/bands.py" diagnose-cmd "$bands_abs" --intent .bands/intent.md --result "$RUNNER_TEMP/result.json") > "$RUNNER_TEMP/argv.json"
           python3 - "$RUNNER_TEMP/argv.json" "$CLAUDE_BIN" "$diag" "$file" "$GITHUB_OUTPUT" <<'PY'
           import json, subprocess, sys
           spec, claude, cwd, intent, gh_out = json.load(open(sys.argv[1])), sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
@@ -103,12 +115,12 @@ jobs:
         run: |
           set -euo pipefail
           branch="bands/$KEY"
-          gh auth setup-git
-          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then echo "an intent PR for $KEY is already open: $branch"; exit 0; fi
-          git switch -c "$branch"
+          git switch -C "$branch"
           git add "$FILE"
           git -c user.name="bands-detector" -c user.email="bands-detector@users.noreply.github.com" commit -q -m "intent: $(basename "$FILE" .md)"
-          git push -q origin "$branch"
+          # One-shot helper: nothing is written to the runner's git config. The bot's branch can
+          # outlive a merged or closed PR, so it is replaced, never merged into.
+          git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push -q --force origin "$branch"
           labels=(--label intent)
           [ "$TIER" = "3sigma" ] && labels+=(--label propose)
           gh pr create --head "$branch" --title "intent: $(basename "$FILE" .md)" \

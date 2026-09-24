@@ -27,7 +27,7 @@ BSTACK_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODULE="tests.test_agent_evals"
 SCRIPT="$BSTACK_REPO/scripts/agent_evals.py"
 EXAMPLE="$BSTACK_REPO/references/templates/eval.example.json"
-MIN_TESTS=91
+MIN_TESTS=95
 
 PASS=0
 FAIL=0

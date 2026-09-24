@@ -35,8 +35,9 @@ merge-base(HEAD, origin/main), else (no remote) every commit reachable from
 HEAD, capped at --max-commits (default 500). Commits are read oldest-first in
 topological order, so "later" means later in that order. A lock whose commit
 sits before the base is inactive: it belongs to history that already merged.
-The base comes from local refs, so the gate is `verify --base origin/<target>`
-in a fresh CI checkout.
+Local `verify` trusts local git state — its base comes from local refs, and a
+`.git/info/grafts` or `.git/shallow` file can hide a lock commit — so the gate
+is `verify --base origin/<target>` in a fresh CI checkout.
 
 What it guarantees, and what it does not
 ----------------------------------------
@@ -45,8 +46,8 @@ it was asked to make pass. `verify` exits 1 when a locked path's content at the
 end of its lock differs from its content at the lock commit (modified, deleted
 or renamed away); when a Test-Lock trailer carries no sha256 ("lock without
 content hash"); and when the content at a lock commit no longer matches the
-sha256 its trailer recorded — which is what catches `commit --amend -a` into
-the lock commit. It exits 3 on any Test-Unlock trailer in range until a human
+sha256 its trailer recorded — which catches an amend that keeps the trailer
+(`commit -a --amend --no-edit` into the lock commit). It exits 3 on any Test-Unlock trailer in range until a human
 accepts that commit with `--accept-unlock SHA`; 1 outranks 3, 3 outranks 0.
 The end of a lock is HEAD while it is active, the state just before its
 Test-Unlock commit once released (so a release must precede the change or ride
@@ -56,7 +57,9 @@ restored to the locked content is `touched_and_restored`: a warning, exit 0.
 It is NOT a security boundary. An agent that forges git objects with your
 credentials (`commit-tree` with a recomputed trailer, say) or drops the lock
 commit from the branch leaves history `verify` cannot tell from an honest one.
-Both are visible only in review of the lock commit and the range.
+`commit -a --amend -m <msg>` into the lock commit is such a drop: the new
+message replaces the trailer, so no lock remains. Both are visible only in
+review of the lock commit and the range — in CI too.
 
 Any git error or unparseable git output during a `verify` scan exits 2 — never
 "0 locks". A broken or hostile configuration fails the gate closed.
@@ -211,7 +214,29 @@ def repo_root(start: str) -> str | None:
         d = parent
     p = _git(["rev-parse", "--show-toplevel"], d)
     top = _text(p).strip()
-    return top if p.returncode == 0 and top else None
+    if p.returncode == 0 and top:
+        return top
+    if _inside_a_repository(d):
+        # git failed on a repository it cannot read (a bogus core.* value, say).
+        # Raise: the hook turns this into its one-line fail-open warning, and
+        # verify into exit 2. Silence here was indistinguishable from "no repo".
+        err = p.stderr.decode("utf-8", "replace").strip().splitlines()
+        raise GitError(f"git rev-parse --show-toplevel failed: {err[-1] if err else p.returncode}")
+    return None
+
+
+def _inside_a_repository(d: str) -> bool:
+    """A `.git` entry at or above `d`, or GIT_DIR set: decided on the filesystem,
+    not by parsing git's (localised) error text."""
+    if os.environ.get("GIT_DIR"):
+        return True
+    while True:
+        if os.path.lexists(os.path.join(d, ".git")):
+            return True
+        parent = os.path.dirname(d)
+        if parent == d:
+            return False
+        d = parent
 
 
 def _commit_sha(root: str, ref: str) -> str | None:
@@ -232,6 +257,8 @@ def _commit_sha(root: str, ref: str) -> str | None:
 @functools.lru_cache(maxsize=None)
 def _ignorecase(root: str) -> bool:
     p = _git(["config", "--bool", "--get", "core.ignorecase"], root)
+    if p.returncode not in (0, 1):  # 1 = unset; anything else is a broken config
+        raise GitError(f"git config core.ignorecase failed: {p.stderr.decode('utf-8', 'replace').strip()}")
     return _text(p).strip() == "true"
 
 
@@ -672,8 +699,9 @@ def committed_violations(s: Scan) -> tuple[dict[str, Lock], list[Violation], lis
                               "at its own commit — the lock pins nothing")
             continue
         # The trailer's hash binds the lock to the content it was taken on. An
-        # amend, fixup or rebase that rewrites the lock commit keeps the trailer
-        # but not the content — this is the check that sees it.
+        # amend, fixup or rebase that rewrites the lock commit but KEEPS its
+        # message keeps the trailer and not the content — this check sees that.
+        # A rewrite that replaces the message drops the lock: review only.
         if lk.digest is None:
             violations.append(Violation(
                 lk.sha, lk.path, "lock-without-hash", lk.path, lk.sha,

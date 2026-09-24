@@ -829,7 +829,7 @@ class DiagnoseCmdTest(TempDirCase):
 
     def test_any_bash_entry_is_refused(self):
         # Every shape the round-1 allowlist accepted, and the bare shell: all refused,
-        # with the message that points at the fix (pre-fetch, don't grant the shell).
+        # with the message that points at the fix (copy the data in, don't grant the shell).
         former = ("gh run view", "gh run list", "gh pr view", "git log", "git show",
                   "git diff", "git status", "cat", "ls", "head", "tail", "wc")
         for tok in [f"Bash({p} *)" for p in former] + ["Bash", "BASH", "bash(cat *)"]:
@@ -837,12 +837,12 @@ class DiagnoseCmdTest(TempDirCase):
                 errs = bands.tool_errors(f"Read,{tok}")
                 self.assertEqual(len(errs), 1)
                 self.assertIn("no shell", errs[0])
-                self.assertIn("pre-fetches", errs[0])
+                self.assertIn("copies the run list and the band result", errs[0])
                 c = cfg()
                 c["tiers"]["2sigma"]["tools"] = f"Read,{tok}"
                 rc, out, err = self.diagnose(self.config_file(c))
                 self.assertEqual((rc, out), (2, ""), err)
-                self.assertIn("pre-fetches the data the diagnosis reads", err)
+                self.assertIn("into .bands/ (runs.json, result.json)", err)
 
     def test_allowlist_refuses_everything_else(self):
         denied = ("Bash(**)", "Bash(* *)", "Bash(rm *)", "Bash(git push *)", "Bash(gh *)",

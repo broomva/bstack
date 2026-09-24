@@ -56,11 +56,13 @@ it. This reference adds what they lacked:
    the code, not the test. *Held by* `bstack test-lock`. The hook blocks edits to the locked
    test. `verify` in CI is the gate: it fails when the test's content differs from what the
    lock pinned, when a lock carries no hash, and when the lock commit's content no longer
-   matches its trailer (this catches `commit --amend -a`); it exits 3 on any `Test-Unlock:`
-   trailer until a human accepts that commit. That makes the lock tamper-evident against an
-   agent taking the shortcut of weakening the test. It is not a security boundary: an agent
-   that forges git objects with your credentials (`commit-tree` with a recomputed trailer)
-   or drops the lock commit is visible only in review.
+   matches its trailer (this catches an amend that keeps the trailer, `commit -a --amend
+   --no-edit`); it exits 3 on any `Test-Unlock:` trailer until a human accepts that commit.
+   That makes the lock tamper-evident against an agent taking the shortcut of weakening the
+   test. It is not a security boundary: an agent that forges git objects with your
+   credentials (`commit-tree` with a recomputed trailer) or drops the lock commit is visible
+   only in review, CI included — and `commit -a --amend -m <msg>` into the lock commit is
+   such a drop, since the new message replaces the trailer.
 5. **Configuration is code, so regression-test it by behavior.** A change to `CLAUDE.md`,
    `AGENTS.md`, skills or hooks runs 20–50 real tasks through `claude -p`, and every
    production incident becomes an eval. *Held by* `bstack evals`.

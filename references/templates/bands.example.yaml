@@ -42,7 +42,8 @@ tiers:
   # Claude diagnoses READ-ONLY with exactly these tools, and gets NO shell:
   # `tools` is an allowlist of Read, Grep, Glob and LS, and anything else (every
   # Bash entry, a write tool, mcp__*, Agent, Skill) fails the config. The workflow
-  # pre-fetches the CI logs and history the diagnosis reads into the checkout.
+  # copies the run list and the band result into .bands/ (runs.json, result.json)
+  # of a throwaway clone; that and the code are what the diagnosis reads.
   # diagnose-cmd adds --restricted, --strict-mcp-config, --tools, dontAsk and
   # denies Edit/Write/MultiEdit/NotebookEdit. A grant, not a sandbox: Read can
   # read any file in the checkout, so it must hold no credentials.

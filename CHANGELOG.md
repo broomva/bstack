@@ -37,7 +37,9 @@ proven red:
     servers and `dontAsk`, in a path-scrubbed environment.
   - `validate --prove` requires three things of every eval: the reference passes, each named
     `violations` arm fails a check, and a no-op agent replying "I have completed the task."
-    fails. Violation arms are scored as that same claim, never on their own stdout.
+    fails. Violation arms are scored with the reference's passing reply, so only a state
+    check (file, git or command) can catch a violation. When only the reply catches the
+    no-op, prove warns.
   - `--gate` fails on any per-eval regression over the evals both runs share, and on a
     passing eval that was removed.
 - **`bstack bands`** (P11). A deterministic Western Electric control-band detector with no

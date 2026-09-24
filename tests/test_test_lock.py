@@ -888,6 +888,20 @@ class ConfigBlindingTests(Base):
         self.assertExit(hook, 0)  # the hook fails OPEN, by design; verify is the gate
         self.assertIn("hook error, allowing", hook.stderr)
 
+    def test_a_config_git_cannot_read_warns_instead_of_failing_open_silently(self):
+        for key in ("core.abbrev", "core.quotepath"):
+            with self.subTest(key=key):
+                self.r.git("config", key, "bogus")
+                for p in (self.r.edit(os.path.join(self.r.root, TEST)),
+                          self.r.bash(f"echo x > {TEST}")):
+                    self.assertExit(p, 0)  # fail OPEN, by design ...
+                    lines = p.stderr.strip().splitlines()
+                    self.assertEqual(len(lines), 1, p.stderr)  # ... but never silently
+                    self.assertTrue(lines[0].startswith("test-lock: hook error, allowing"), p.stderr)
+                self.assertExit(self.r.run("verify"), 2)
+                self.assertExit(self.r.run("check-path", TEST), 1)
+                subprocess.run(["git", "config", "--unset", key], cwd=self.r.root, env=self.r.env())
+
     def test_comment_char_cannot_hide_the_trailer(self):
         self.r.git("config", "core.commentChar", "T")
         self.assertExit(self.r.edit(os.path.join(self.r.root, TEST)), 2)

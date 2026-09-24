@@ -13,7 +13,7 @@
 #   - no test may be skipped, expected-to-fail or unexpectedly-passing.
 #   - a floor on "Ran N tests". unittest exits 0 on "Ran 0 tests" for a module
 #     whose classes stopped being collected, so the exit code alone cannot tell
-#     "96 ran" from "none ran".
+#     "97 ran" from "none ran".
 #
 # Run from anywhere:
 #   bash tests/test-lock.test.sh
@@ -23,7 +23,7 @@ set -uo pipefail
 BSTACK_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$BSTACK_REPO" || exit 1
 MODULE="tests.test_test_lock"
-MIN_TESTS=96
+MIN_TESTS=97
 
 PASS=0
 FAIL=0
