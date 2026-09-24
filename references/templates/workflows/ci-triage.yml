@@ -1,0 +1,52 @@
+# CI triage — copy to .github/workflows/ci-triage.yml (bstack ≥ 0.41.0).
+#
+# Pipeline (P4): a judgment step inside the pipeline runs `claude -p` READ-ONLY.
+# When a watched workflow fails, Claude reads the failed job logs and writes a short
+# triage (likely cause, flaky or real). The workflow, not Claude, posts it on the PR.
+# The logs are fetched by the workflow; Claude gets only Read and Grep over them, with
+# no repository checkout, so it cannot write, push, or run commands.
+#
+# Edit `workflows:` below to the names of the workflows to triage.
+name: CI triage
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: write
+
+jobs:
+  triage:
+    if: github.event.workflow_run.conclusion == 'failure'
+    runs-on: ${{ vars.AGENT_EVAL_RUNNER_LABELS && fromJSON(vars.AGENT_EVAL_RUNNER_LABELS) || 'self-hosted' }}
+    timeout-minutes: 20
+    steps:
+      - name: Collect the failed logs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          REPO: ${{ github.repository }}
+        run: gh run view "$RUN_ID" --repo "$REPO" --log-failed > "$RUNNER_TEMP/failed.log" || true
+      - name: Triage (read-only)
+        env:
+          CLAUDE_BIN: ${{ vars.CLAUDE_BIN || 'claude' }}
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          cd "$RUNNER_TEMP"
+          "$CLAUDE_BIN" -p "Read failed.log. Identify the most likely cause, say whether the failure looks flaky or real, and write a summary of at most five lines for the PR thread. Do not propose a patch." \
+            --allowedTools "Read,Grep" --output-format json > triage.json
+          python3 -c 'import json,sys; print(json.load(open("triage.json")).get("result",""))' > triage.md
+      - name: Post on the PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          if [ -z "$PR_NUMBER" ]; then cat "$RUNNER_TEMP/triage.md" >> "$GITHUB_STEP_SUMMARY"; exit 0; fi
+          { echo "**CI triage** (read-only \`claude -p\`, advisory) for $RUN_URL"; echo; cat "$RUNNER_TEMP/triage.md"; } > "$RUNNER_TEMP/comment.md"
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file "$RUNNER_TEMP/comment.md"

@@ -1,0 +1,51 @@
+# Control band for one metric — copy to .control/bands/<metric>.yaml.
+#
+# Read by scripts/bands.py (bin/bstack-bands). Detection is deterministic: mean and
+# sample standard deviation over a rolling window, plus Western Electric rules, with
+# no model involved. The model enters only through the tiers below, and only as far
+# as each tier permits. Pattern: "Closing the loop on metrics",
+# https://academy.claude.com/courses/ai-native-sdlc-playbook/closing-the-loop-on-metrics
+#
+#   bstack-bands check  <this file> --series series.json --json > result.json
+#   bstack-bands intent <this file> --result result.json --out-dir intent
+#   bstack-bands diagnose-cmd <this file> --intent intent/<file>.md
+#
+# Every key below is required except `description`. Unknown keys are errors.
+
+# Slug: names the intent file (intent/<date>-<metric>-<tier>.md).
+metric: ci_test_failure_rate
+description: share of completed CI runs that failed, per day
+
+# rolling_<N>d = the points with t > (last point − N days);
+# rolling_<N>  = the last N points.
+# The baseline is the part of that window BEFORE the 8-point evaluation window.
+baseline: rolling_30d
+
+# Fewer baseline points than this -> tier `insufficient_baseline`, never `none`:
+# an unmeasured band is not a healthy one. Must be >= 2 (sample std, ddof=1).
+min_baseline_points: 10
+
+# R1: last point beyond 3σ · R2: 2 of last 3 beyond 2σ, same side ·
+# R3: 4 of last 5 beyond 1σ, same side · R4: last 8 on one side of the mean.
+# R3/R4 catch slow drift that never produces a spike.
+rules: western_electric
+
+# Which side counts as a breach: high | low | both.
+# A failure rate breaches high; a pass rate or throughput breaches low.
+direction: high
+
+# The graduated response. A tier may do LESS than shown here, never more:
+# 1sigma may only log, 2sigma may at most diagnose, 3sigma may at most propose.
+tiers:
+  # Log only: the job summary records it, nothing else happens.
+  1sigma: { action: log }
+  # Claude diagnoses READ-ONLY with exactly these tools. Edit, Write, MultiEdit,
+  # NotebookEdit and an unscoped Bash are refused.
+  2sigma: { action: diagnose, tools: "Read,Grep,Bash(gh run view *)" }
+  # Claude may act, but only through these routes: a pull request into the review
+  # gate, or a pre-approved runbook (runbook:<name>).
+  3sigma: { action: propose, routes: [pull_request, "runbook:rollback-deploy"] }
+
+# Carried into the intent file's "Affected users and systems" section.
+intent:
+  affected: "CI pipeline and the test suites it runs"

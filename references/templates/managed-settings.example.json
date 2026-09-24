@@ -1,0 +1,28 @@
+{
+  "allowManagedHooksOnly": true,
+  "enabledPlugins": {
+    "bstack@bstack": true
+  },
+  "extraKnownMarketplaces": {
+    "bstack": { "source": { "source": "github", "repo": "broomva/bstack" } }
+  },
+  "strictKnownMarketplaces": [
+    { "source": "github", "repo": "broomva/bstack" }
+  ],
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "/opt/org/claude-hooks/production-gate.sh" }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "deny": ["Read(.env*)", "Read(./secrets/**)"],
+    "disableBypassPermissionsMode": "disable"
+  },
+  "allowManagedPermissionRulesOnly": true,
+  "requiredMinimumVersion": "2.1.193"
+}

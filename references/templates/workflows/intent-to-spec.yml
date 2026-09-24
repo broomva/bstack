@@ -1,0 +1,61 @@
+# Intent → spec — copy to .github/workflows/intent-to-spec.yml (bstack ≥ 0.41.0).
+#
+# Tickets (P3) artifact chain: "an accepted intent.md triggers the requirements and
+# design pass". When an intent lands on the default branch with `Status: accepted` and
+# has no spec yet, `claude -p` writes docs/specs/<intent-name>.md and opens it as a PR.
+# The product owner reviews the spec; they do not write it.
+#
+# Off by default, because it spends model time on every accepted intent. Enable it by
+# setting the repository variable SDLC_INTENT_TO_SPEC=true.
+name: Intent to spec
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'intent/**.md'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  spec:
+    if: vars.SDLC_INTENT_TO_SPEC == 'true'
+    runs-on: ${{ vars.AGENT_EVAL_RUNNER_LABELS && fromJSON(vars.AGENT_EVAL_RUNNER_LABELS) || 'self-hosted' }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Fetch bstack
+        env:
+          BSTACK_REF: v0.41.0
+        run: git clone --quiet --depth 1 --branch "$BSTACK_REF" https://github.com/broomva/bstack.git "$RUNNER_TEMP/bstack"
+      - name: Spec every newly accepted intent
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BEFORE: ${{ github.event.before }}
+          CLAUDE_BIN: ${{ vars.CLAUDE_BIN || 'claude' }}
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.local/bin:$PATH"
+          git diff --name-only --no-ext-diff "$BEFORE" HEAD -- 'intent/*.md' | while read -r f; do
+            [ -f "$f" ] || continue
+            status=$(python3 "$RUNNER_TEMP/bstack/scripts/intent.py" status "$f" || true)
+            [ "$status" = "accepted" ] || continue
+            name=$(basename "$f" .md)
+            spec="docs/specs/$name.md"
+            [ -e "$spec" ] && continue
+            branch="spec/$name"
+            git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1 && continue
+            git switch -q -c "$branch" origin/main
+            "$CLAUDE_BIN" -p "Read $f and produce a requirements and design spec for integrating it into this codebase. Apply the skills available to you so it conforms to our standards. Write it to $spec. Describe clearly any areas of concern, especially where you cannot satisfy contradicting policies. Do not edit any other file." \
+              --allowedTools "Read,Grep,Glob,Write($spec)" --output-format json > "$RUNNER_TEMP/$name.json"
+            [ -f "$spec" ] || { echo "no spec written for $f"; git switch -q main; continue; }
+            git add "$spec"
+            git -c user.name="intent-to-spec" -c user.email="intent-to-spec@users.noreply.github.com" commit -q -m "spec: $name (from $f)"
+            git push -q origin "$branch"
+            gh pr create --head "$branch" --title "spec: $name" --body "Written by \`claude -p\` from the accepted \`$f\`. Review against the intent: does it solve the stated problem, and are the open questions answered or carried forward? Resolve flagged concerns with their policy owners before engineering plans against it."
+            git switch -q main
+          done

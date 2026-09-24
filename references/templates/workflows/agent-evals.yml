@@ -1,0 +1,67 @@
+# Agent evals — copy to .github/workflows/agent-evals.yml (bstack ≥ 0.41.0).
+#
+# Empirical (P11) rule 9: configuration is regression-tested by behavior. The suite
+# runs `claude -p` over real tasks whenever the configuration that steers the agent
+# changes, and nightly so model drift shows up without a config change.
+#
+# Runner: `claude -p` needs an authenticated Claude Code install. On a self-hosted
+# runner logged in to a subscription, runs bill the subscription; on a hosted runner,
+# set ANTHROPIC_API_KEY and runs bill the API. Under -p the project's settings-file
+# hooks load but its permissions.allow rules do not, so each eval carries its own
+# allowed_tools.
+#
+# Advisory until a baseline exists: record one with `bstack evals baseline`, then set
+# continue-on-error: false and add --gate.
+name: Agent evals
+
+on:
+  pull_request:
+    paths:
+      - CLAUDE.md
+      - AGENTS.md
+      - .claude/**
+      - .control/policy.yaml
+      - evals/agent/**
+  schedule:
+    - cron: '17 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-evals-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  evals:
+    runs-on: ${{ vars.AGENT_EVAL_RUNNER_LABELS && fromJSON(vars.AGENT_EVAL_RUNNER_LABELS) || 'self-hosted' }}
+    timeout-minutes: 180
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch bstack
+        env:
+          BSTACK_REF: v0.41.0
+        run: git clone --quiet --depth 1 --branch "$BSTACK_REF" https://github.com/broomva/bstack.git "$RUNNER_TEMP/bstack"
+      - name: Every eval discriminates
+        run: python3 "$RUNNER_TEMP/bstack/scripts/agent_evals.py" validate --prove --require-reference evals/agent
+      - name: Run the suite
+        env:
+          CLAUDE_BIN: ${{ vars.CLAUDE_BIN || 'claude' }}
+          MIN_PASS_RATE: ${{ vars.AGENT_EVAL_MIN_PASS_RATE || '0' }}
+        run: |
+          set -o pipefail   # a step without `shell:` runs `bash -e` with no pipefail, and `| tee` would hide the gate's exit 1
+          export PATH="$HOME/.local/bin:$PATH"   # the native installer's location; runner services often lack it
+          baseline=()
+          [ -f evals/agent/baseline.json ] && baseline=(--baseline evals/agent/baseline.json)
+          python3 "$RUNNER_TEMP/bstack/scripts/agent_evals.py" run evals/agent \
+            --claude "$CLAUDE_BIN" --min-pass-rate "$MIN_PASS_RATE" "${baseline[@]}" \
+            --json "$RUNNER_TEMP/agent-evals.json" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Keep the results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-evals
+          path: ${{ runner.temp }}/agent-evals.json
+          if-no-files-found: warn

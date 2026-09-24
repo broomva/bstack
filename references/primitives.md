@@ -62,6 +62,8 @@ Each primitive carries a **short name** for use in agent prose. When referencing
 
 **Invariant**: G1–G4 are blocking and cannot be overridden. G5–G6 are soft (warn but allow). The `autonomous` profile relaxes only soft gates.
 
+**Surface**: a gate holds only on a surface that loads. Under enterprise managed settings with `allowManagedHooksOnly`, user, project and local hooks are blocked. Only managed hooks, SDK hooks, and hooks from plugins force-enabled in managed `enabledPlugins` run. `bstack managed-hooks --fail-on-critical` reports which governance hooks would survive. See [ai-native-sdlc.md](ai-native-sdlc.md) principle 8.
+
 **Felt in real use**: this session's agents tried `git reset --hard` and `rm -rf /tmp/...` — both blocked correctly.
 
 ---
@@ -73,6 +75,8 @@ Each primitive carries a **short name** for use in agent prose. When referencing
 **How**: Linear MCP — agents call `save_issue` directly. State transitions Backlog → Todo → In Progress → Done track real progress. Symphony uses Linear as its dispatch source.
 
 **Invariant**: no significant work without a ticket. State must reflect reality (do not mark Done until merged + verified).
+
+**Artifact chain**: work that starts outside an existing ticket starts as a committed `intent/<date>-<slug>.md` (`bstack intent new`). The link runs both directions. Commits carry the ticket ID forward; after merge, the PR URL and merge SHA are attached back to the ticket (`save_issue` `links`, or `workflows/linear-backlink.yml`). A one-way link is not linkage. See [ai-native-sdlc.md](ai-native-sdlc.md).
 
 **Memory rule**: `feedback_linear_workspace.md` — never use the Linear CLI (defaults to wrong workspace), always use the MCP server.
 
@@ -87,6 +91,8 @@ Each primitive carries a **short name** for use in agent prose. When referencing
 **Invariant**: never merge with failing checks. Never `--no-verify`. CI must be green on `main` at all times.
 
 **Composes with P9**: the PR pipeline is the gate; the CI watcher is the productive-wait + auto-heal layer that turns a long CI run into actionable feedback instead of dead time.
+
+**Plan sync**: a PR that implements a committed plan is checked against the plan's "Files that change" by `bstack plan-drift`. A departure updates the plan in the same commit. Judgment steps inside the pipeline (build triage, flaky-test summary) run `claude -p` read-only. Anything the agent writes arrives as a PR, and it never passes the production gate.
 
 ---
 
@@ -246,6 +252,10 @@ P11 is a reflex, not a request. Agents must apply the following without being pr
 5. When CI or any test fails — capture full context first (logs + screenshots + last-known-good diff) before attempting a fix. The fix-without-context loop is how harness defects compound.
 6. At session end — produce a *dogfood receipt*: what was actually exercised vs what was only claimed. The receipt feeds P1 and P6.
 7. **Dogfood Plan keyed to detected stack** — before substantive feature work, produce a Dogfood Plan (entry surface · driver · evidence · smoke · end-to-end · receipt anchor) in the response and PR body, picking the right pattern from [references/dogfood-patterns.md](dogfood-patterns.md) — Tauri+sidecar / Next.js / Expo RN / Rust CLI / REST API / MCP server. The plan IS the agent's "how" for the stack; the receipt (rule 6) is the artifact that proves discipline was applied. The cookbook also names the skill toolkit (Interceptor is mandatory for visual deploy verification; gstack, cliclick, screencapture, curl+jq compose per stack).
+
+8. **Protect the feedback loop from the agent it constrains** — for a bug fix, commit the failing test first with `bstack test-lock commit <test> -m <msg>`, then fix the code, not the test. The PreToolUse hook blocks edits to a locked test. `bstack test-lock verify` fails CI if a later commit touched one. Only a human `Test-Unlock:` commit, visible in review, releases a lock.
+9. **Configuration is regression-tested by behavior** — a change to `CLAUDE.md`, `AGENTS.md`, skills or hooks runs the agent eval suite (`bstack evals run`), and every production incident becomes an eval. An eval that cannot fail is not an eval: `bstack evals validate --prove` shows each one fails on a no-op and passes on its reference.
+10. **Production feedback is detected deterministically** — `bstack bands` applies Western Electric rules over a rolling baseline, with no model. At 1σ it logs, at 2σ a read-only diagnosis runs, and at 3σ the model may only propose through a PR. A breach writes the next `intent.md`.
 
 Mental checklist: *Did I interact with it? Did I capture evidence? Was the evidence multi-modal? Did I exercise it like a user would? Is the deploy actually correct, or just deployed? Does my Dogfood Plan match the stack I'm actually working on?*
 
@@ -454,6 +464,8 @@ Decision logic:
 Scoring: anti-slop ≥ 7/10 to pass; round budget is dynamic — 3 free rounds, 4–7 each earned by a continuation verdict, ≥8 human, stops absorbing; verdict + round ledger logged in PR comments + Linear ticket. Implementation: `broomva/cross-review` skill.
 
 **Invariant**: substantive PRs (>200 LOC OR public API change OR multi-file OR governance-class) cannot merge without cross-model adversarial verdict ≥ 7/10. Self-review by the writing model is forbidden as the *sole* verdict. The gate fires *before* P4 auto-merge — not after merge as code review.
+
+**Review policy file**: a `REVIEW.md` at the repo root states the passes (bugs · security · compliance against `spec.md` + `plan.md`), what counts as Important, and the nit cap. Stratum B and C reviewers load it. Template: `references/templates/REVIEW.md`.
 
 ### P20 Reflexive Trigger Rule (binding on every agent)
 

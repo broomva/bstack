@@ -1,0 +1,87 @@
+# Control bands — copy to .github/workflows/bands.yml (bstack ≥ 0.41.0).
+#
+# Empirical (P11) rule 10: detection is deterministic, and the model acts only in tiers.
+#   none / 1sigma (log) → the job summary only
+#   2sigma (diagnose)   → intent.md + a READ-ONLY diagnosis, opened as a PR
+#   3sigma (propose)    → the same PR, labelled `propose`; any fix goes through review
+# The PR is the triage queue. Merging it with `Status: accepted` accepts the intent.
+# `insufficient_baseline` is reported as such and never read as healthy.
+#
+# The shipped metric is CI failure rate over this repo's workflow runs. Point BANDS_FILE
+# at a different .control/bands/*.yaml and replace the series step for another metric.
+name: Control bands
+
+on:
+  schedule:
+    - cron: '41 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+jobs:
+  bands:
+    runs-on: ${{ vars.AGENT_EVAL_RUNNER_LABELS && fromJSON(vars.AGENT_EVAL_RUNNER_LABELS) || 'self-hosted' }}
+    timeout-minutes: 30
+    env:
+      BANDS_FILE: .control/bands/ci-failure-rate.yaml
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch bstack
+        env:
+          BSTACK_REF: v0.41.0
+        run: git clone --quiet --depth 1 --branch "$BSTACK_REF" https://github.com/broomva/bstack.git "$RUNNER_TEMP/bstack"
+      - name: Build the series
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh run list --repo "$REPO" --limit 1000 --json conclusion,createdAt,status > "$RUNNER_TEMP/runs.json"
+          python3 "$RUNNER_TEMP/bstack/scripts/bands.py" series ci-failure-rate --runs-json "$RUNNER_TEMP/runs.json" > "$RUNNER_TEMP/series.json"
+      - name: Check the band (deterministic, no model)
+        id: check
+        run: |
+          python3 "$RUNNER_TEMP/bstack/scripts/bands.py" check "$BANDS_FILE" --series "$RUNNER_TEMP/series.json" --json > "$RUNNER_TEMP/result.json"
+          tier=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["tier"])' "$RUNNER_TEMP/result.json")
+          echo "tier=$tier" >> "$GITHUB_OUTPUT"
+          { echo "### Control band: $tier"; echo '```json'; cat "$RUNNER_TEMP/result.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Write intent, diagnose read-only, open the PR
+        if: steps.check.outputs.tier == '2sigma' || steps.check.outputs.tier == '3sigma'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TIER: ${{ steps.check.outputs.tier }}
+          CLAUDE_BIN: ${{ vars.CLAUDE_BIN || 'claude' }}
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.local/bin:$PATH"
+          out=$(python3 "$RUNNER_TEMP/bstack/scripts/bands.py" intent "$BANDS_FILE" --result "$RUNNER_TEMP/result.json" --out-dir intent)
+          file=$(printf '%s\n' "$out" | { grep -E '^intent/.*\.md$' || true; } | tail -1)
+          [ -n "$file" ] || { echo "no intent written: $out"; exit 0; }
+          branch="bands/$(basename "$file" .md)"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then echo "already open: $branch"; exit 0; fi
+          python3 "$RUNNER_TEMP/bstack/scripts/bands.py" diagnose-cmd "$BANDS_FILE" --intent "$file" > "$RUNNER_TEMP/argv.json"
+          python3 - "$RUNNER_TEMP/argv.json" "$CLAUDE_BIN" "$file" <<'PY'
+          import json, subprocess, sys
+          argv = json.load(open(sys.argv[1])); argv[0] = sys.argv[2]
+          out = subprocess.run(argv, capture_output=True, text=True, timeout=900)
+          try:
+              reply = json.loads(out.stdout).get("result", "")
+          except ValueError:
+              reply = out.stdout
+          reply = reply.strip() or "_no reply_"
+          if not reply.startswith("## Diagnosis"):  # the prompt asks for this heading; add it only if absent
+              reply = "## Diagnosis\n\n" + reply
+          with open(sys.argv[3], "a") as f:
+              f.write("\n<!-- read-only, model-written below; detection above is deterministic -->\n" + reply + "\n")
+          PY
+          git switch -c "$branch"
+          git add "$file"
+          git -c user.name="bands-detector" -c user.email="bands-detector@users.noreply.github.com" commit -q -m "intent: $(basename "$file" .md)"
+          git push -q origin "$branch"
+          labels=(--label intent)
+          [ "$TIER" = "3sigma" ] && labels+=(--label propose)
+          gh pr create --head "$branch" --title "intent: $(basename "$file" .md)" \
+            --body "Written by the control-band detector (deterministic). Tier: $TIER. Merge with Status: accepted to accept the intent; close to dismiss and tune the band." \
+            "${labels[@]}" || gh pr create --head "$branch" --title "intent: $(basename "$file" .md)" --body "Tier: $TIER (labels unavailable)."
