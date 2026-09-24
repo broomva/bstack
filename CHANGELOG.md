@@ -1,5 +1,65 @@
 # Changelog
 
+## 0.41.0 — unreleased
+
+### feat(sdlc): the AI-native SDLC playbook's twelve plays, held by mechanisms rather than prose
+
+Anthropic's *AI-native SDLC playbook* (Claude Academy course
+<https://academy.claude.com/courses/ai-native-sdlc-playbook/introduction>) names twelve
+plays. [references/ai-native-sdlc.md](references/ai-native-sdlc.md) maps each onto an
+existing primitive, so the count stays at twenty, and names the mechanism that holds it.
+Where bstack keeps its own rule (CLAUDE.md size, rule of three, gating on a cross-model
+verdict), the divergence is written down with its reason.
+
+Six commands, each with a unittest suite behind a no-skip wrapper and one-line mutations
+proven red:
+
+- **`bstack test-lock`** (Empirical, P11). A failing test committed under a `Test-Lock:`
+  trailer may not be weakened by the fix. The lock lives in git history, not a side file an
+  agent could delete.
+  - A PreToolUse hook in the plugin blocks Edit/Write/MultiEdit/NotebookEdit on locked
+    paths, and Bash commands whose write target is one.
+  - It also blocks committing a `Test-Unlock:` while a lock is active.
+  - `verify` fails when a locked test's content at HEAD differs from the locked content.
+  - It runs git with `--no-show-signature` and `core.fsmonitor=false`: a repo with
+    `log.showSignature=true` otherwise runs its configured `gpg.program` on every hook
+    call.
+- **`bstack evals`** (P11). Continuous evals of the agent's configuration over `claude -p`.
+  - Each eval runs in a scratch checkout, so the live tree is never touched.
+  - The evals directory is hidden from the agent under test. When a path is hidden, the
+    scratch is a separate repository holding one orphan commit of HEAD's files minus that
+    path. A worktree would share the live repo's branches and objects, so `git show`
+    could still read the reference solutions.
+  - `validate --prove` shows every eval discriminates: its checks fail on a no-op and pass
+    on the eval's reference solution.
+  - `--gate` fails on any per-eval regression against the baseline, not only on a lower
+    rate, and compares only the evals present in both runs.
+- **`bstack bands`** (P11). A deterministic Western Electric control-band detector with no
+  model in it.
+  - At 2σ and 3σ it writes the next `intent.md`.
+  - `diagnose-cmd` refuses write tools and unscoped shells.
+  - A baseline too small to judge reports `insufficient_baseline`, never `none`.
+- **`bstack plan-drift`** (Pipeline, P4). Does the diff still match the plan's "Files that
+  change"? Each commit is judged against the plan as it stood at that commit, so a later
+  plan edit cannot hide an earlier departure.
+- **`bstack managed-hooks`** (Gate, P2). Which hooks survive `allowManagedHooksOnly`?
+  Under that key, user, project and local hooks are blocked, and so is `/goal`.
+  `--fail-on-critical` exits 1 when a governance hook would be blocked.
+- **`bstack intent`** (Tickets, P3). `new`, `lint`, `status` and `set-status` for the
+  Stage-1 artifact.
+
+Templates in `references/templates/`:
+- `intent.md`, `plan.md`, `REVIEW.md`
+- `bands.example.yaml`, `eval.example.json`, `managed-settings.example.json`
+- six workflows (`sdlc-gates`, `agent-evals`, `ci-triage`, `bands`, `intent-to-spec`,
+  `linear-backlink`)
+
+`tests/workflow-injection-safety.test.sh` now scans the workflow templates too, because a
+sink in a template becomes a sink in every repo that copies it.
+
+`references/primitives.md` gains the matching clauses: P2 Surface, P3 Artifact chain, P4
+Plan sync, P11 rules 8–10, and P20 Review policy file.
+
 ## 0.40.3 — 2026-09-12
 
 ### feat(asks): the ask ledger ships with the skill that requires it, and one command sees every arc
