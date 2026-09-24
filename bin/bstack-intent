@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# bstack-intent — the Stage-1 intent.md artifact (BRO-2542).
+#
+# Thin shim that dispatches to scripts/intent.py. Mirrors the bstack-fleet
+# shim pattern. Forwards argv unchanged.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PY="$SCRIPT_DIR/scripts/intent.py"
+
+if [ ! -f "$PY" ]; then
+  echo "bstack-intent: scripts/intent.py not found at $PY" >&2
+  exit 1
+fi
+
+exec python3 "$PY" "$@"

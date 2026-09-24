@@ -1,0 +1,14 @@
+{
+  "id": "missing-key",
+  "description": "d",
+  "prompt": "p",
+  "allowed_tools": [
+    "Read"
+  ],
+  "checks": [
+    {
+      "type": "output_regex",
+      "regex": "ok"
+    }
+  ]
+}

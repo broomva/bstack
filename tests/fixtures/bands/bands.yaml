@@ -1,0 +1,13 @@
+# Test fixture for tests/test_bands.py — a valid bands config.
+metric: ci_test_failure_rate
+description: share of completed CI runs that failed, per day
+baseline: rolling_30d
+min_baseline_points: 10
+rules: western_electric
+direction: high
+tiers:
+  1sigma: { action: log }
+  2sigma: { action: diagnose, tools: "Read,Grep,Bash(gh run view *)" }
+  3sigma: { action: propose, routes: [pull_request, "runbook:rollback-deploy"] }
+intent:
+  affected: "CI pipeline and the test suites it runs"

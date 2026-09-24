@@ -1,0 +1,18 @@
+{
+  "id": "typo-key",
+  "description": "d",
+  "source": "s",
+  "prompt": "p",
+  "allowed_tools": [
+    "Read"
+  ],
+  "checks": [
+    {
+      "type": "output_regex",
+      "regex": "ok"
+    }
+  ],
+  "setpu": [
+    "true"
+  ]
+}

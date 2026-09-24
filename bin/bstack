@@ -67,6 +67,23 @@ Asks (BRO-2179):
   asks lanes <ledger> --runnable  What can still run with no human input (exit 3
                                   while any lane can, so an arc must not stop).
 
+AI-native SDLC (≥ 0.41.0, references/ai-native-sdlc.md):
+  intent new|lint|status|set-status
+                                  The Stage-1 artifact: intent/<date>-<slug>.md.
+  plan-drift [--plan P] [--strict]
+                                  Does the diff still match the plan's
+                                  "Files that change"? (P4 plan sync)
+  test-lock commit|list|verify|check-path
+                                  Lock a failing test under a Test-Lock: trailer;
+                                  the fix may not edit it. (P11 rule 8)
+  evals run|validate|baseline     Agent evals over real tasks via `claude -p`;
+                                  validate --prove shows each eval discriminates.
+  bands check|intent|series|diagnose-cmd
+                                  Deterministic control-band detector; a breach
+                                  writes the next intent.md. (P11 rule 10)
+  managed-hooks [--fail-on-critical]
+                                  Which hooks survive allowManagedHooksOnly? (P2)
+
 Release (maintainers):
   release tag                     Tag the current VERSION and create the
                                   matching GitHub Release from CHANGELOG.
@@ -355,6 +372,12 @@ case "$cmd" in
     workspace)              exec "$BIN_DIR/bstack-workspace" "$@" ;;
     cross-review)           exec "$BIN_DIR/bstack-cross-review" "$@" ;;
     asks)                   exec "$BIN_DIR/bstack-asks" "$@" ;;
+    intent)                 exec "$BIN_DIR/bstack-intent" "$@" ;;
+    plan-drift)             exec "$BIN_DIR/bstack-plan-drift" "$@" ;;
+    test-lock)              exec "$BIN_DIR/bstack-test-lock" "$@" ;;
+    evals)                  exec "$BIN_DIR/bstack-evals" "$@" ;;
+    bands)                  exec "$BIN_DIR/bstack-bands" "$@" ;;
+    managed-hooks)          exec "$BIN_DIR/bstack-managed-hooks" "$@" ;;
     release)
         sub="${1:-}"
         [ $# -gt 0 ] && shift
