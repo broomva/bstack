@@ -42,7 +42,7 @@ CFG = {
     "direction": "high",
     "tiers": {
         "1sigma": {"action": "log"},
-        "2sigma": {"action": "diagnose", "tools": "Read,Grep,Bash(gh run view *)"},
+        "2sigma": {"action": "diagnose", "tools": "Read,Grep,Glob"},
         "3sigma": {"action": "propose", "routes": ["pull_request", "runbook:rollback-deploy"]},
     },
     "intent": {"affected": "CI pipeline and the test suites it runs"},
@@ -488,7 +488,7 @@ class IntentTest(TempDirCase):
         self.assertEqual(rows[-1], "| 2026-09-28 | 12.5 | +2.44 |")
         self.assertIn("within its 1σ band", text)
         self.assertIn("read-only diagnosis only", text)
-        self.assertIn("Read,Grep,Bash(gh run view *)", text)
+        self.assertIn("`Read,Grep,Glob`", text)
         self.assertIn("CI pipeline and the test suites it runs",
                       text.split("## Affected users and systems")[1])
         constraints = text.split("## Constraints")[1].split("## Open questions")[0]
@@ -594,8 +594,9 @@ class IntentTest(TempDirCase):
         rc, out, _ = self.intent(res, "--json")
         self.assertEqual(rc, 0)
         first = json.loads(out)
-        self.assertEqual({k: first[k] for k in ("created", "tier", "action")},
-                         {"created": True, "tier": "2sigma", "action": "diagnose"})
+        self.assertEqual({k: first[k] for k in ("created", "tier", "action", "dedupe_key")},
+                         {"created": True, "tier": "2sigma", "action": "diagnose",
+                          "dedupe_key": "ci_test_failure_rate-2sigma"})
         path = self.written(first["path"])
         rc, out, _ = self.intent(res, "--json")
         self.assertEqual(json.loads(out), {**first, "created": False})
@@ -609,11 +610,24 @@ class IntentTest(TempDirCase):
     def test_json_when_nothing_is_written(self):
         rc, out, _ = self.intent(self.result_file(R4_ONLY), "--json")
         self.assertEqual(json.loads(out), {"path": None, "created": False,
-                                           "tier": "1sigma", "action": "log"})
+                                           "tier": "1sigma", "action": "log",
+                                           "dedupe_key": "ci_test_failure_rate-1sigma"})
         rc, out, _ = self.intent(self.result_file(QUIET, name="q.json"), "--json")
         self.assertEqual(json.loads(out), {"path": None, "created": False,
-                                           "tier": "none", "action": "none"})
+                                           "tier": "none", "action": "none",
+                                           "dedupe_key": "ci_test_failure_rate-none"})
         self.assertFalse((self.tmp / "intent").exists())
+
+    def test_dedupe_key_names_the_incident_not_the_day(self):
+        # A sustained breach rolls the file date daily; the key must not roll with it.
+        res = self.result_file(R2_ONLY)
+        days = [json.loads(self.intent(res, "--json", "--date", d)[1])
+                for d in ("2026-10-01", "2026-10-02")]
+        self.assertNotEqual(days[0]["path"], days[1]["path"])
+        self.assertEqual(days[0]["dedupe_key"], days[1]["dedupe_key"])
+        self.assertEqual(days[0]["dedupe_key"], "ci_test_failure_rate-2sigma")
+        three = json.loads(self.intent(self.result_file(R1_ONLY, name="r1.json"), "--json")[1])
+        self.assertEqual(three["dedupe_key"], "ci_test_failure_rate-3sigma")
 
 
 # --- series adapter -------------------------------------------------------------
@@ -732,7 +746,7 @@ class SeriesAdapterTest(TempDirCase):
 # --- diagnose-cmd -----------------------------------------------------------------
 
 class DiagnoseCmdTest(TempDirCase):
-    ALLOWED = "Read,Grep,Bash(gh run view *)"
+    ALLOWED = "Read,Grep,Glob"
 
     def setUp(self):
         super().setUp()
@@ -744,8 +758,9 @@ class DiagnoseCmdTest(TempDirCase):
         return call(["diagnose-cmd", str(config_path), *which,
                      "--intent", str(intent or self.intent_md)])
 
-    def expected(self, tools, base="Read Grep Bash"):
+    def expected(self, tools, base="Read Grep Glob"):
         return ["claude", "-p", bands.DIAGNOSE_PROMPT.format(intent=str(self.intent_md)),
+                "--restricted", "--strict-mcp-config",
                 "--tools", base,
                 "--allowedTools", tools,
                 "--disallowedTools", "Edit Write MultiEdit NotebookEdit",
@@ -757,15 +772,13 @@ class DiagnoseCmdTest(TempDirCase):
         return argv[argv.index("--allowedTools") + 1]
 
     def test_tools_lists_only_the_granted_base_names(self):
-        self.assertEqual(bands.base_tools("Read,Grep,Bash(gh run view *)"), "Read Grep Bash")
-        self.assertEqual(bands.base_tools("Glob, LS,Read,Bash(git log *),Bash( cat * ),Read"),
-                         "Glob LS Read Bash")
+        self.assertEqual(bands.base_tools("Glob, LS,Read,Read Glob"), "Glob LS Read")
         c = cfg()
-        c["tiers"]["2sigma"]["tools"] = "Read,Glob,Bash(git log *),Bash(git diff *)"
+        c["tiers"]["2sigma"]["tools"] = "Read,Glob,Read"
         rc, out, err = self.diagnose(self.config_file(c))
         self.assertEqual(rc, 0, err)
         argv = json.loads(out)
-        self.assertEqual(argv[argv.index("--tools") + 1], "Read Glob Bash")
+        self.assertEqual(argv[argv.index("--tools") + 1], "Read Glob")
         self.assertEqual(argv.count("--tools"), 1)
 
     def test_exact_argv(self):
@@ -773,6 +786,10 @@ class DiagnoseCmdTest(TempDirCase):
         self.assertEqual(rc, 0)
         argv = json.loads(out)
         self.assertEqual(argv, self.expected(self.ALLOWED))
+        # No shell and no MCP: the two flags that make "no shell" hold beyond --tools.
+        self.assertIn("--restricted", argv)
+        self.assertIn("--strict-mcp-config", argv)
+        self.assertNotIn("Bash", " ".join(argv[3:]))
         self.assertNotIn("--dangerously-skip-permissions", argv)
         self.assertIn(str(self.intent_md), argv[2])
         self.assertIn("## Diagnosis", argv[2])
@@ -796,18 +813,36 @@ class DiagnoseCmdTest(TempDirCase):
                 self.assertEqual(out, "")
 
     def test_allowlist_accepts_exactly_its_shapes(self):
-        for tok in bands.DIAGNOSE_TOOLS + bands.DIAGNOSE_BASH:
+        self.assertEqual(bands.DIAGNOSE_TOOLS, ("Read", "Grep", "Glob", "LS"))
+        for tok in bands.DIAGNOSE_TOOLS:
             with self.subTest(tok=tok):
                 self.assertEqual(bands.tool_errors(tok), [])
-        self.assertEqual(bands.tool_tokens("Read, Bash(gh run view *) Grep"),
-                         ["Read", "Bash(gh run view *)", "Grep"])
-        # Whitespace inside the parentheses is normalised, and the argv carries the
-        # normalised token, i.e. exactly what was checked.
+        self.assertEqual(bands.tool_tokens("Read, Bash(git log *) Grep"),
+                         ["Read", "Bash(git log *)", "Grep"])
+        # Comma/space separators are normalised; the argv carries exactly the tokens
+        # that were checked.
         c = cfg()
-        c["tiers"]["2sigma"]["tools"] = "Read,Bash( gh  run view * )"
+        c["tiers"]["2sigma"]["tools"] = "Read, Grep  LS"
         rc, out, err = self.diagnose(self.config_file(c))
         self.assertEqual(rc, 0, err)
-        self.assertEqual(self.granted(out), "Read,Bash(gh run view *)")
+        self.assertEqual(self.granted(out), "Read,Grep,LS")
+
+    def test_any_bash_entry_is_refused(self):
+        # Every shape the round-1 allowlist accepted, and the bare shell: all refused,
+        # with the message that points at the fix (pre-fetch, don't grant the shell).
+        former = ("gh run view", "gh run list", "gh pr view", "git log", "git show",
+                  "git diff", "git status", "cat", "ls", "head", "tail", "wc")
+        for tok in [f"Bash({p} *)" for p in former] + ["Bash", "BASH", "bash(cat *)"]:
+            with self.subTest(tok=tok):
+                errs = bands.tool_errors(f"Read,{tok}")
+                self.assertEqual(len(errs), 1)
+                self.assertIn("no shell", errs[0])
+                self.assertIn("pre-fetches", errs[0])
+                c = cfg()
+                c["tiers"]["2sigma"]["tools"] = f"Read,{tok}"
+                rc, out, err = self.diagnose(self.config_file(c))
+                self.assertEqual((rc, out), (2, ""), err)
+                self.assertIn("pre-fetches the data the diagnosis reads", err)
 
     def test_allowlist_refuses_everything_else(self):
         denied = ("Bash(**)", "Bash(* *)", "Bash(rm *)", "Bash(git push *)", "Bash(gh *)",
@@ -825,6 +860,10 @@ class DiagnoseCmdTest(TempDirCase):
                 self.assertEqual(rc, 2, err)
                 self.assertIn("allowlist", err)
                 self.assertEqual(out, "")
+                # Refused at config load, so `check` fails on it too, not just diagnose.
+                rc, _, _ = call(["check", str(self.tmp / "bands.yaml"), "--series",
+                                 str(FIX / "series-2sigma.json")])
+                self.assertEqual(rc, 2)
 
     def test_propose_tier_tools_are_allowlisted_too(self):
         c = cfg()
@@ -854,7 +893,7 @@ class DiagnoseCmdTest(TempDirCase):
                             str(self.tmp / "intent")])
         text = self.written(path).read_text()
         self.assertIn("Claude may use `Read` and", text)
-        self.assertNotIn("gh run view", text)
+        self.assertNotIn("Read,Grep", text)
 
     def test_tier_without_tools_falls_back_to_2sigma(self):
         rc, out, _ = self.diagnose(FIX / "bands.yaml", "--tier", "3sigma")

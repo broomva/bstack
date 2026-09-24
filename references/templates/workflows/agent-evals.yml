@@ -7,8 +7,9 @@
 # Runner: `claude -p` needs an authenticated Claude Code install. On a self-hosted
 # runner logged in to a subscription, runs bill the subscription; on a hosted runner,
 # set ANTHROPIC_API_KEY and runs bill the API. Under -p the project's settings-file
-# hooks load. The runner passes `--tools` and `--permission-mode dontAsk`, so each
-# eval's allowed_tools is its whole grant, whatever the user's default mode.
+# hooks load. The runner passes `--tools`, `--strict-mcp-config` and `--permission-mode
+# dontAsk`. The agent sees only the built-in tools its allowed_tools names and no MCP
+# servers. Within an available tool, a settings-file allow rule can still approve a call.
 #
 # Advisory until a baseline exists: record one with `bstack evals baseline`, then set
 # continue-on-error: false and add --gate.
@@ -40,6 +41,8 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Fetch bstack
         env:
           BSTACK_REF: v0.41.0

@@ -20,17 +20,14 @@ is content-addressed with the commit that carries it, and shows up in PR review.
     Test-Unlock: <repo-relative path>              a LATER commit that releases it
 
 `commit` writes the sha256 of the locked content (a file's bytes; for a
-directory, a manifest of its files), binding the lock to what it pinned. A lock
-without the hash (hand-written, or older) still works, with a warning. A lock on
-a directory covers everything under it; an unlock releases every lock at or
-below its path.
+directory, a manifest of its files). A lock on a directory covers everything
+under it; an unlock releases every lock at or below its path.
 
-A release is a human decision, and `verify` enforces that rather than trusting
-it: any Test-Unlock trailer git parses in range — however it was spelled —
-makes `verify` exit 3 until a human accepts that commit with `--accept-unlock
-SHA`. No guard over command text can enumerate the spellings (`--trailer
-K=V`, message files, trailer aliases, split literals), so the gate is on what
-landed in history.
+Trailers are parsed HERE, not by git: commits are enumerated with `git
+rev-list`, their raw messages read with `git cat-file`, and the trailer block —
+the last paragraph, never the title — split into `Key: value` lines with keys
+compared case-insensitively. No trailer.*, core.commentChar or color.* setting
+can rename, drop or hide a lock.
 
 Range: commits in <base>..HEAD, where base is `--base REF`, else env
 BSTACK_TEST_LOCK_BASE, else merge-base(HEAD, origin/HEAD), else
@@ -38,25 +35,31 @@ merge-base(HEAD, origin/main), else (no remote) every commit reachable from
 HEAD, capped at --max-commits (default 500). Commits are read oldest-first in
 topological order, so "later" means later in that order. A lock whose commit
 sits before the base is inactive: it belongs to history that already merged.
+The base comes from local refs, so the gate is `verify --base origin/<target>`
+in a fresh CI checkout.
 
-Invariant
----------
-A lock exists so the final test is the original. `verify` exits 1 when a locked
-path's content at the end of its lock differs from its content at the lock
-commit — modified, deleted or renamed away. The end of a lock is HEAD while it
-is active, the state just before its Test-Unlock commit once released (so a
-release must precede the change, or ride on that same commit; a release added
-after the fact does not launder it), or the re-lock commit when the path is
-locked again. A path edited and later restored to the locked content is
-reported as `touched_and_restored` with the commits involved — a warning, exit
-0: intermediate commits are review material, not a violation. `verify` also
-exits 1 when the content at a lock commit no longer matches the sha256 its
-trailer recorded: the lock commit was rewritten (an amend, a fixup, a rebase
-that squashed into it).
+What it guarantees, and what it does not
+----------------------------------------
+It is tamper-EVIDENT against an agent taking the shortcut of weakening the test
+it was asked to make pass. `verify` exits 1 when a locked path's content at the
+end of its lock differs from its content at the lock commit (modified, deleted
+or renamed away); when a Test-Lock trailer carries no sha256 ("lock without
+content hash"); and when the content at a lock commit no longer matches the
+sha256 its trailer recorded — which is what catches `commit --amend -a` into
+the lock commit. It exits 3 on any Test-Unlock trailer in range until a human
+accepts that commit with `--accept-unlock SHA`; 1 outranks 3, 3 outranks 0.
+The end of a lock is HEAD while it is active, the state just before its
+Test-Unlock commit once released (so a release must precede the change or ride
+on it), or the re-lock commit when the path is locked again. An edit later
+restored to the locked content is `touched_and_restored`: a warning, exit 0.
 
-The limit of a trailer-based lock: a reset or rebase that DROPS the lock commit
-entirely leaves nothing to verify. The hook blocks the common ways to do that
-(best effort); past it, only review sees the rewritten range.
+It is NOT a security boundary. An agent that forges git objects with your
+credentials (`commit-tree` with a recomputed trailer, say) or drops the lock
+commit from the branch leaves history `verify` cannot tell from an honest one.
+Both are visible only in review of the lock commit and the range.
+
+Any git error or unparseable git output during a `verify` scan exits 2 — never
+"0 locks". A broken or hostile configuration fails the gate closed.
 
 Subcommands
 -----------
@@ -69,49 +72,40 @@ Subcommands
     check-path <path>         exit 2 if an active lock covers the path
     hook                      Claude Code PreToolUse hook (JSON on stdin)
 
-The hook FAILS OPEN. An internal error exits 0 with a one-line stderr warning:
-a guard that crashed closed would block every edit in every repository, and
-`verify` (run before merge) is the check that fails closed. Its Bash branch is
-best effort, and it blocks on the TARGET of a write, not on the co-occurrence
-of a locked path and a write construct: it resolves the targets of
-redirections, tee, sed -i, perl -i, mv, cp, rm, truncate, dd of=, find -delete,
-git checkout/restore/rm/mv (also inside `sh -c` and after `cd`). So
-`pytest <locked> 2>&1 | tee log` and `cat <locked>` pass while
-`sed -i ... <locked>` blocks. Restoring a locked file from HEAD or the index
-passes — that is the recovery `verify --worktree` prescribes; restoring it from
-any other source blocks. A command that does not tokenize falls back to the
-co-occurrence rule. Restoring from the lock commit itself also passes: it is the
-recovery `verify` prints. While a lock is active the hook also blocks, best
-effort: any commit-making git call whose command text, de-quoted words or
--F/--file message file mentions "unlock" (any case); and the common history
-rewrites — `commit --amend`, `rebase`, `reset` to a commit at or before a lock
-commit, `branch -f`, `checkout -B`, `switch -C`, `update-ref`, `replace`,
-`filter-branch`, `symbolic-ref` writes and `remote set-head` — and a force-move
-of any branch that holds an active lock, even when HEAD is elsewhere. A write or
-rewrite the parser cannot see (an interpreter one-liner, a git alias, a patch
-file) is what `verify` exists for; the hook is early feedback, `verify` is the
-gate.
+The hook is the course's play, "a hook that blocks edits to test files during a
+fix task", and nothing more: Edit/Write/MultiEdit/NotebookEdit on a locked
+path, and a Bash command whose write TARGET is a locked path (redirections,
+tee, sed -i, perl -i, mv, cp, rm, truncate, dd of=, find -delete, git
+checkout/restore/rm/mv; also inside `sh -c` and after `cd`). `cat <locked>` and
+`pytest <locked> 2>&1 | tee log` pass. Restoring a locked file from HEAD, the
+index or its lock commit passes: those are the recoveries `verify` prints. A
+command over 64 KB or 200 segments is not analysed: it blocks if a locked path
+appears in its text, else passes. The hook does not police history rewrites or
+commit messages; `verify` is the gate for both. It FAILS OPEN — an internal
+error exits 0 with a one-line warning — because a guard that crashed closed
+would block every edit in every repository, while `verify` fails closed.
 
-Git hygiene: every git call pins the repository config an agent could set to
-blind or hijack the scan (see _PINNED: fsmonitor off, log.date, output
-encoding, comment char, trailer separators, --no-replace-objects); diff-like
-calls add `--no-ext-diff --no-textconv`, logs `--no-show-signature` and
-`--encoding=UTF-8`; and every call gets a filtered environment (PATH, HOME,
-LANG, LC_ALL, TMPDIR, GIT_*): a repository's config can otherwise execute
-code, and a hook must not hand it the session's secrets. Only `commit` adds
-SSH_AUTH_SOCK, GNUPGHOME and GPG_TTY, so a signed commit still signs; hook,
-verify, list and check-path never pass them. The
+Git hygiene: every git call runs with `core.fsmonitor=false` and
+`--no-replace-objects`, diff-like calls with `--no-ext-diff --no-textconv`, and
+a filtered environment (PATH, HOME, LANG, LC_ALL, TMPDIR, GIT_*): a
+repository's config can otherwise execute code, and a hook must not hand it the
+session's secrets. Only `commit` adds SSH_AUTH_SOCK, GNUPGHOME and GPG_TTY, so a
+signed commit still signs. `commit` writes its trailers into the message itself
+(no `--trailer`, so no trailer.*.cmd runs and no trailer.*.ifmissing drops one)
+and re-reads the commit it made: a lock whose trailer did not land exits 1. The
 `--worktree` comparison hashes file bytes in-process instead of asking git,
 because git would run the repository's clean filters to do it — so a locked
 path under LFS or autocrlf can differ falsely from its committed blob.
 
 Exit codes
 ----------
-    commit      0 committed · 1 git failed · 2 usage (missing path, not a repo)
+    commit      0 committed · 1 git failed, or the lock trailer did not land ·
+                2 usage (missing path, not a repo)
     list        0 · 2 usage/environment (not a repo, bad --base)
-    verify      0 clean · 1 violation (content drift or a rewritten lock
-                commit) · 2 usage/environment · 3 a release in range needs a
-                human (--accept-unlock SHA); 1 outranks 3, 3 outranks 0
+    verify      0 clean · 1 violation (content drift, a missing hash, or a
+                lock commit that no longer matches its hash) · 2 usage, or any
+                git error during the scan · 3 a release in range needs a human
+                (--accept-unlock SHA); 1 outranks 3, 3 outranks 0
     check-path  0 not locked · 2 locked · 1 internal error
     hook        0 allow (including every internal error) · 2 block
 """
@@ -149,24 +143,15 @@ FILE_TOOLS = {
 
 _ENV_KEEP = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR")
 _SIGNING_ENV = ("SSH_AUTH_SOCK", "GNUPGHOME", "GPG_TTY")  # `commit` only
-# Pinned on every git call. Each closes a one-line repository config (or ref)
-# that would otherwise run code, break parsing, or hide the trailers:
-#   core.fsmonitor       runs a program on index reads
-#   log.date             a bogus value makes `git log` die (the hook then fails open)
-#   i18n.logOutputEncoding  UTF-16 output makes every trailer unparseable
-#   core.commentChar     `T` turns every "Test-Lock:" line into a comment
-#   trailer.separators   keeps what counts as a trailer identical locally and in CI
-#   --no-replace-objects `git replace` would swap the lock commit for another
-_PINNED = ("-c", "core.fsmonitor=false", "-c", "log.date=iso", "-c", "i18n.logOutputEncoding=UTF-8",
-           "-c", "core.commentChar=#", "-c", "trailer.separators=:", "--no-replace-objects",
-           "--no-pager")
+# Pinned on every git call: fsmonitor runs a program on index reads, and a
+# `git replace` ref would swap the lock commit for another. Trailers are parsed
+# in-process (see message_trailers), so no trailer/comment/log setting matters.
+_PINNED = ("-c", "core.fsmonitor=false", "--no-replace-objects", "--no-pager")
 _DIGEST_KEY = "sha256="
 _HEX64 = re.compile(r"[0-9a-f]{64}")
-_LOG_FORMAT = (
-    "%x1e%H%x1f%s%x1f"
-    f"%(trailers:key={LOCK_KEY},valueonly,unfold)%x1f"
-    f"%(trailers:key={UNLOCK_KEY},valueonly,unfold)%x1f"
-)
+_TRAILER_LINE = re.compile(r"([A-Za-z0-9][A-Za-z0-9-]*)[ \t]*:(.*)")
+MAX_COMMAND = 64 * 1024
+MAX_SEGMENTS = 200
 
 
 class LockError(Exception):
@@ -203,12 +188,16 @@ def _text(p: subprocess.CompletedProcess) -> str:
     return p.stdout.decode("utf-8", "surrogateescape")
 
 
-def _git_ok(args: Sequence[str], cwd: str, **kw) -> str:
+def _git_raw(args: Sequence[str], cwd: str, **kw) -> bytes:
     p = _git(args, cwd, **kw)
     if p.returncode != 0:
         err = p.stderr.decode("utf-8", "replace").strip().splitlines()
         raise GitError(f"git {args[0]} failed: {err[-1] if err else 'exit %d' % p.returncode}")
-    return _text(p)
+    return p.stdout
+
+
+def _git_ok(args: Sequence[str], cwd: str, **kw) -> str:
+    return _git_raw(args, cwd, **kw).decode("utf-8", "surrogateescape")
 
 
 def repo_root(start: str) -> str | None:
@@ -226,9 +215,18 @@ def repo_root(start: str) -> str | None:
 
 
 def _commit_sha(root: str, ref: str) -> str | None:
+    """The commit `ref` names; None only when it names nothing (an unborn HEAD,
+    an unknown ref). Any other failure — git said something on stderr, a
+    config it cannot parse — raises, so a scan fails closed instead of
+    mistaking a broken repository for an empty one."""
     p = _git(["rev-parse", "--verify", "--quiet", "--end-of-options", f"{ref}^{{commit}}"], root)
     sha = _text(p).strip()
-    return sha if p.returncode == 0 and sha else None
+    if p.returncode == 0 and sha:
+        return sha
+    err = p.stderr.decode("utf-8", "replace").strip()
+    if err or p.returncode not in (0, 1):
+        raise GitError(f"git rev-parse {ref} failed: {err.splitlines()[-1] if err else p.returncode}")
+    return None
 
 
 @functools.lru_cache(maxsize=None)
@@ -276,17 +274,25 @@ def candidates(path: str, cwd: str, root: str) -> list[str]:
     a symlink still matches the symlink) and fully resolved (so an alias that
     points at a locked file matches the file). "" is the repository root.
     """
-    root_real = os.path.realpath(root)
+    root_real = _realdir(root)
     bases = [""] if os.path.isabs(path) else [cwd, root]
     out: list[str] = []
     for b in bases:
         full = os.path.normpath(os.path.join(b, path) if b else path)
-        parent_resolved = os.path.join(os.path.realpath(os.path.dirname(full)), os.path.basename(full))
-        for form in (parent_resolved, os.path.realpath(full)):
+        parent_resolved = os.path.join(_realdir(os.path.dirname(full)), os.path.basename(full))
+        # realpath(full) is parent_resolved unless the last component is itself a
+        # link: one lstat, not a full walk, keeps a 64 KB command inside budget.
+        fully = os.path.realpath(parent_resolved) if os.path.islink(parent_resolved) else parent_resolved
+        for form in (parent_resolved, fully):
             rel = _rel_to_root(form, root_real)
             if rel is not None and rel not in out:
                 out.append(rel)
     return out
+
+
+@functools.lru_cache(maxsize=4096)
+def _realdir(d: str) -> str:
+    return os.path.realpath(d)
 
 
 # --------------------------------------------------------------------------- #
@@ -297,7 +303,7 @@ class Lock:
     path: str
     sha: str
     subject: str
-    digest: str | None = None  # sha256 the trailer recorded; None on an older lock
+    digest: str | None = None  # sha256 the trailer recorded; None is itself a violation
 
     def as_json(self) -> dict:
         return {"path": self.path, "sha": self.sha, "short": self.sha[:SHORT],
@@ -325,7 +331,7 @@ class Scan:
     warnings: list[str]
 
 
-def resolve_base(root: str, explicit: str | None, tip: str = "HEAD") -> tuple[str | None, str]:
+def resolve_base(root: str, explicit: str | None) -> tuple[str | None, str]:
     """(base sha or None, where it came from). An explicit base that does not
     resolve is an error, never a silent fall-through to a wider range."""
     for label, ref in (("--base", explicit), (BASE_ENV, os.environ.get(BASE_ENV) or None)):
@@ -335,71 +341,135 @@ def resolve_base(root: str, explicit: str | None, tip: str = "HEAD") -> tuple[st
                 raise LockError(f"{label} {ref!r} does not name a commit")
             return sha, f"{label} {ref}"
     for ref in ("origin/HEAD", "origin/main"):
-        p = _git(["merge-base", tip, ref], root)
+        p = _git(["merge-base", "HEAD", ref], root)
         sha = _text(p).strip()
         if p.returncode == 0 and sha:
-            return sha, f"merge-base({tip}, {ref})"
+            return sha, f"merge-base(HEAD, {ref})"
     return None, "none (no remote): every reachable commit"
 
 
 def split_digest(value: str) -> tuple[str, str | None]:
-    """`<path> sha256=<hex>` -> (path, hex); a value without the suffix is an
-    older lock and keeps working, with a warning from `verify`."""
+    """`<path> sha256=<hex>` -> (path, hex); without the suffix the hash is
+    None, which `verify` reports as a violation."""
     head, sep, tail = value.strip().rpartition(" " + _DIGEST_KEY)
     if sep and _HEX64.fullmatch(tail.strip().lower()):
         return head.strip(), tail.strip().lower()
     return value.strip(), None
 
 
-def _split_values(raw: str) -> list[str]:
-    return [line.strip() for line in raw.split("\n") if line.strip()]
-
-
-def parse_log(raw: bytes) -> list[Commit]:
-    """Parse `git log -z --format=_LOG_FORMAT [--name-status]` output."""
-    commits: list[Commit] = []
-    for rec in raw.decode("utf-8", "surrogateescape").split("\x1e")[1:]:
-        parts = rec.split("\x1f", 4)
-        if len(parts) < 5:
+def message_trailers(message: str) -> list[tuple[str, str]]:
+    """(key, value) pairs from a commit message's trailer block, parsed here
+    rather than by git so no trailer.*, core.commentChar or color.* setting can
+    rename, drop or hide one. The block is the last paragraph when there is more
+    than one (the title paragraph is never a trailer block, as in git); every
+    `Key: value` line in it counts, and a line starting with whitespace continues
+    the previous value."""
+    paras: list[list[str]] = []
+    cur: list[str] = []
+    for line in message.replace("\r\n", "\n").split("\n"):
+        if line.strip():
+            cur.append(line)
+        elif cur:
+            paras.append(cur)
+            cur = []
+    if cur:
+        paras.append(cur)
+    if len(paras) < 2:
+        return []
+    out: list[tuple[str, str]] = []
+    for line in paras[-1]:
+        if line[:1] in (" ", "\t"):
+            if out:
+                out[-1] = (out[-1][0], f"{out[-1][1]} {line.strip()}".strip())
             continue
-        sha, subject, locks_raw, unlocks_raw, rest = parts
-        c = Commit(sha=sha.strip(), subject=subject,
-                   locks=_split_values(locks_raw), unlocks=_split_values(unlocks_raw))
-        toks = rest.split("\0")
-        j = 0
-        while j < len(toks):
-            status = toks[j].strip("\n")
-            if not status:
-                j += 1
-                continue
-            n = 2 if status[0] in "RC" else 1
-            paths = tuple(toks[j + 1:j + 1 + n])
-            j += 1 + n
-            if len(paths) == n:
-                c.changes.append((status[0], paths))
-        commits.append(c)
-    return commits
+        m = _TRAILER_LINE.fullmatch(line.rstrip())
+        if m:
+            out.append((m.group(1), m.group(2).strip()))
+    return out
+
+
+def _messages(root: str, shas: Sequence[str]) -> dict[str, str]:
+    """Raw message of each commit, read in one `cat-file --batch` pass. Output
+    that does not parse as the commits asked for raises (exit 2 in verify)."""
+    if not shas:
+        return {}
+    raw = _git_raw(["cat-file", "--batch"], root, stdin=("\n".join(shas) + "\n").encode())
+    out: dict[str, str] = {}
+    pos = 0
+    for sha in shas:
+        nl = raw.find(b"\n", pos)
+        header = raw[pos:nl].split() if nl >= 0 else []
+        if len(header) != 3 or header[0].decode() != sha or header[1] != b"commit":
+            raise GitError(f"unparseable cat-file output for {sha[:SHORT]}")
+        size = int(header[2])
+        body = raw[nl + 1:nl + 1 + size]
+        pos = nl + 1 + size + 1
+        _, sep, message = body.partition(b"\n\n")
+        if not sep and body:
+            message = b""
+        out[sha] = message.decode("utf-8", "surrogateescape")
+    return out
+
+
+def _changes(root: str, shas: Sequence[str]) -> dict[str, list[tuple[str, tuple[str, ...]]]]:
+    """Per-commit name-status (renames detected), one `diff-tree --stdin` pass.
+    A merge shows nothing; the content comparison in `verify` covers merges."""
+    known = set(shas)
+    out: dict[str, list[tuple[str, tuple[str, ...]]]] = {sha: [] for sha in shas}
+    if not shas:
+        return out
+    raw = _git_ok(["diff-tree", "--stdin", "-r", "-z", "-M", "--name-status", "--root",
+                   "--no-ext-diff", "--no-textconv"], root,
+                  stdin=("\n".join(shas) + "\n").encode())
+    toks = raw.split("\0")
+    cur: str | None = None
+    j = 0
+    while j < len(toks):
+        t = toks[j].strip("\n")
+        if not t:
+            j += 1
+            continue
+        if t in known:
+            cur = t
+            j += 1
+            continue
+        n = 2 if t[0] in "RC" else 1
+        paths = tuple(toks[j + 1:j + 1 + n])
+        if cur is None or len(paths) != n or not t[0].isalpha():
+            raise GitError("unparseable diff-tree output")
+        out[cur].append((t[0], paths))
+        j += 1 + n
+    return out
 
 
 def scan(root: str, base_arg: str | None = None, max_commits: int | None = None,
-         with_changes: bool = False, tip: str = "HEAD") -> Scan:
-    base, source = resolve_base(root, base_arg, tip)
+         with_changes: bool = False) -> Scan:
+    """Every in-range commit with its trailers (and, for verify, its changes).
+    Any git failure raises GitError: a scan never reports "no locks" because
+    git could not answer."""
+    base, source = resolve_base(root, base_arg)
     warnings: list[str] = []
-    if _commit_sha(root, tip) is None:  # unborn branch: no history, no locks
+    if _commit_sha(root, "HEAD") is None:  # unborn branch: no history, no locks
         return Scan(root, base, source, False, [], warnings)
     cap = max_commits if max_commits is not None else (None if base else DEFAULT_MAX_COMMITS)
-    args = ["log", "-z", "--topo-order", "--reverse", "--no-color", "--no-show-signature",
-            "--encoding=UTF-8", f"--format={_LOG_FORMAT}"]
+    args = ["rev-list", "--topo-order", "--reverse"]
     if cap:
         args.append(f"--max-count={cap}")
-    if with_changes:
-        args += ["-M", "--name-status", "--no-ext-diff", "--no-textconv"]
-    args += [f"{base}..{tip}" if base else tip, "--"]
-    p = _git(args, root)
-    if p.returncode != 0:
-        err = p.stderr.decode("utf-8", "replace").strip().splitlines()
-        raise GitError(f"git log failed: {err[-1] if err else p.returncode}")
-    commits = parse_log(p.stdout)
+    args += [f"{base}..HEAD" if base else "HEAD", "--"]
+    shas = _git_ok(args, root).split()
+    if any(not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", x) for x in shas):
+        raise GitError("unparseable rev-list output")
+    messages = _messages(root, shas)
+    changes = _changes(root, shas) if with_changes else {}
+    commits: list[Commit] = []
+    for sha in shas:
+        msg = messages[sha]
+        trailers = message_trailers(msg)
+        c = Commit(sha=sha, subject=msg.split("\n", 1)[0].strip(),
+                   locks=[v for k, v in trailers if k.lower() == LOCK_KEY.lower()],
+                   unlocks=[v for k, v in trailers if k.lower() == UNLOCK_KEY.lower()],
+                   changes=changes.get(sha, []))
+        commits.append(c)
     for c in commits:
         c.unlock_raw = list(c.unlocks)
         for key, values in ((LOCK_KEY, c.locks), (UNLOCK_KEY, c.unlocks)):
@@ -499,11 +569,13 @@ def _blobs(root: str, oids: Sequence[str]) -> dict[str, bytes]:
     want = list(dict.fromkeys(oids))
     if not want:
         return {}
-    raw = _git(["cat-file", "--batch"], root, stdin=("\n".join(want) + "\n").encode()).stdout
+    raw = _git_raw(["cat-file", "--batch"], root, stdin=("\n".join(want) + "\n").encode())
     out: dict[str, bytes] = {}
     pos = 0
     for oid in want:
-        nl = raw.index(b"\n", pos)
+        nl = raw.find(b"\n", pos)
+        if nl < 0:
+            raise GitError("unparseable cat-file output")
         header = raw[pos:nl].split()
         pos = nl + 1
         if len(header) == 3 and header[1] == b"blob":
@@ -603,9 +675,14 @@ def committed_violations(s: Scan) -> tuple[dict[str, Lock], list[Violation], lis
         # amend, fixup or rebase that rewrites the lock commit keeps the trailer
         # but not the content — this is the check that sees it.
         if lk.digest is None:
-            s.warnings.append(f"{lk.sha[:SHORT]}: 'Test-Lock: {lk.path}' carries no sha256 "
-                              "(an older lock): a rewrite of its commit would go unseen")
-        elif content_digest(s.root, _tree_rows(s.root, lk.sha, lk.path), lk.path) != lk.digest:
+            violations.append(Violation(
+                lk.sha, lk.path, "lock-without-hash", lk.path, lk.sha,
+                f"lock without content hash: its {LOCK_KEY} trailer carries no sha256, so a "
+                "rewrite of the lock commit would go unseen",
+                "a human re-locks the test with `bstack test-lock commit`, which records the "
+                "hash", [lk.sha]))
+            continue
+        if content_digest(s.root, _tree_rows(s.root, lk.sha, lk.path), lk.path) != lk.digest:
             violations.append(Violation(
                 lk.sha, lk.path, "lock-rewritten", lk.path, lk.sha,
                 f"lock commit rewritten: the content at {lk.sha[:SHORT]} no longer matches the "
@@ -692,7 +769,7 @@ def worktree_violations(root: str, locked: dict[str, Lock]) -> list[Violation]:
 
 
 # --------------------------------------------------------------------------- #
-# Bash analysis (best effort): write targets and git invocations
+# Bash analysis (best effort): write targets only
 # --------------------------------------------------------------------------- #
 _PUNCT = set("();<>|&\n")
 _ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
@@ -706,13 +783,7 @@ _INPLACE = {"sed": re.compile(r"^-[nErszu]*i"), "gsed": re.compile(r"^-[nErszu]*
             "perl": re.compile(r"^-[aFlnpsTtuUwWX0-9]*i")}
 _HEAD_SOURCES = {"HEAD", "@"}
 _GIT_VALUE_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env"}
-# git subcommands that create a commit, and so can carry a Test-Unlock trailer.
-_COMMIT_MAKERS = {"commit", "commit-tree", "merge", "am", "cherry-pick", "revert", "pull"}
-# git subcommands that can rewrite or drop the lock commit, or move the base.
-_REWRITERS = {"commit", "rebase", "reset", "branch", "checkout", "switch", "update-ref", "replace",
-              "filter-branch", "filter-repo", "symbolic-ref", "remote"}
 _SEGMENT_SPLIT = re.compile(r"[;&|\n]+")
-_MAX_MSG_FILE = 1 << 20
 
 
 @dataclass
@@ -720,20 +791,6 @@ class _Target:
     path: str
     cwd: str
     source: str | None = None  # a git restore's explicit source; None for other writes
-
-
-@dataclass
-class _GitCall:
-    sub: str
-    args: list[str]
-    cwd: str
-
-
-@dataclass
-class _Analysis:
-    targets: list[_Target] = field(default_factory=list)
-    gits: list[_GitCall] = field(default_factory=list)
-    words: list[str] = field(default_factory=list)  # every de-quoted word, for the unlock scan
 
 
 def _tokenize(command: str) -> list[str]:
@@ -757,7 +814,11 @@ def _operands(args: Sequence[str]) -> list[str]:
     return out
 
 
-def _git_call(args: list[str], cwd: str) -> _GitCall | None:
+def _git_targets(args: list[str], cwd: str) -> list[_Target]:
+    """Paths a git invocation may overwrite in the worktree. Restoring from
+    HEAD or the index returns a locked file to its committed content — the
+    recovery `verify --worktree` prescribes — so only an explicit other source
+    is a target (and the hook still lets the lock commit itself through)."""
     i = 0
     while i < len(args) and args[i].startswith("-"):
         if args[i] in _GIT_VALUE_OPTS and i + 1 < len(args):
@@ -766,45 +827,11 @@ def _git_call(args: list[str], cwd: str) -> _GitCall | None:
             i += 2
             continue
         i += 1
-    return _GitCall(args[i], args[i + 1:], cwd) if i < len(args) else None
-
-
-def _split_source(words: list[str], before_dd: list[str] | None, cwd: str) -> tuple[str | None, list[str]]:
-    """(tree-ish, paths) for checkout/reset-style arguments, the way git splits them."""
-    if before_dd is not None:
-        return (before_dd[0] if before_dd else None), words
-    if len(words) >= 2 and not os.path.lexists(os.path.join(cwd, words[0])):
-        return words[0], words[1:]
-    return None, words
-
-
-def _reset_shape(rest: list[str], cwd: str) -> tuple[str | None, list[str]]:
-    """(commit, paths) for `git reset`. No paths means HEAD moves to `commit`
-    (None: HEAD itself, so it does not move)."""
-    words: list[str] = []
-    before_dd: list[str] | None = None
-    for a in rest:
-        if a == "--":
-            before_dd, words = list(words), []
-        elif not a.startswith("-"):
-            words.append(a)
-    if before_dd is None and len(words) == 1 and not os.path.lexists(os.path.join(cwd, words[0])):
-        return words[0], []
-    return _split_source(words, before_dd, cwd)
-
-
-def _git_targets(call: _GitCall) -> list[_Target]:
-    """Paths a git invocation may overwrite. Restoring from HEAD or the index
-    returns a locked file to its committed content — the recovery `verify
-    --worktree` prescribes — so only an explicit other source is a target."""
-    sub, rest, cwd = call.sub, call.args, call.cwd
+    if i >= len(args):
+        return []
+    sub, rest = args[i], args[i + 1:]
     if sub in ("rm", "mv"):
         return [_Target(p, cwd) for p in _operands(rest)]
-    if sub == "reset":
-        source, paths = _reset_shape(rest, cwd)
-        if not paths or source is None or source in _HEAD_SOURCES:
-            return []
-        return [_Target(p, cwd, source) for p in paths]
     if sub not in ("checkout", "restore"):
         return []
     source: str | None = None
@@ -829,8 +856,12 @@ def _git_targets(call: _GitCall) -> list[_Target]:
         j += 1
     if sub == "restore":
         paths = (before_dd or []) + words
+    elif before_dd is not None:
+        source, paths = (before_dd[0] if before_dd else None), words
+    elif len(words) >= 2 and not os.path.lexists(os.path.join(cwd, words[0])):
+        source, paths = words[0], words[1:]
     else:
-        source, paths = _split_source(words, before_dd, cwd)
+        paths = words
     if source is None or source in _HEAD_SOURCES:
         return []
     return [_Target(p, cwd, source) for p in paths]
@@ -859,8 +890,8 @@ def _copy_targets(cmd: str, args: list[str], cwd: str) -> list[_Target]:
     return out
 
 
-def _segment(words: list[str], cwd: str, out: _Analysis, depth: int) -> str | None:
-    """Analyse one simple command into `out`; return a new cwd when it is a `cd`."""
+def _segment(words: list[str], cwd: str, out: list[_Target], depth: int) -> str | None:
+    """One simple command's write targets into `out`; a new cwd if it is a `cd`."""
     i = 0
     while i < len(words):
         w = words[i]
@@ -895,50 +926,43 @@ def _segment(words: list[str], cwd: str, out: _Analysis, depth: int) -> str | No
                     break
         inner = analyze(script, cwd, depth + 1) if script else None
         if inner:
-            out.targets += inner.targets
-            out.gits += inner.gits
-            out.words += inner.words
+            out += inner
         return None
     if cmd == "git":
-        call = _git_call(args, cwd)
-        if call:
-            out.gits.append(call)
-            out.targets += _git_targets(call)
-        return None
-    if cmd in _ALL_OPERANDS:
-        out.targets += [_Target(p, cwd) for p in _operands(args)]
+        out += _git_targets(args, cwd)
+    elif cmd in _ALL_OPERANDS:
+        out += [_Target(p, cwd) for p in _operands(args)]
     elif cmd in _COPIERS:
-        out.targets += _copy_targets(cmd, args, cwd)
+        out += _copy_targets(cmd, args, cwd)
     elif cmd in _INPLACE:
         if any(_INPLACE[cmd].match(a) or a.startswith("--in-place") for a in args):
-            out.targets += [_Target(p, cwd) for p in _operands(args)]
+            out += [_Target(p, cwd) for p in _operands(args)]
     elif cmd == "dd":
-        out.targets += [_Target(a[3:], cwd) for a in args if a.startswith("of=")]
+        out += [_Target(a[3:], cwd) for a in args if a.startswith("of=")]
     elif cmd == "find" and any(a in ("-delete", "-exec", "-execdir", "-ok") for a in args):
         for a in args:
             if a.startswith("-") or a in ("(", "!"):
                 break
-            out.targets.append(_Target(a, cwd))
+            out.append(_Target(a, cwd))
     return None
 
 
-def analyze(command: str, cwd: str, depth: int = 0) -> _Analysis | None:
-    """Write targets and git invocations a command visibly makes; None when it
-    does not tokenize (the caller falls back to a coarse rule, never to allow).
-    Linear in the command's length: tokenizing is one pass, and nothing here
-    backtracks."""
+def analyze(command: str, cwd: str, depth: int = 0) -> list[_Target] | None:
+    """Write targets a command visibly makes; None when it does not tokenize
+    (the caller falls back to a coarse rule, never to allow). Linear in the
+    command's length: tokenizing is one pass, and nothing here backtracks."""
     try:
         tokens = _tokenize(command)
     except ValueError:
         return None
-    out = _Analysis(words=[t for t in tokens if not _is_punct(t)])
+    out: list[_Target] = []
     cur = cwd
     segment: list[str] = []
     redirects: list[str] = []
 
     def flush() -> None:
         nonlocal cur
-        out.targets.extend(_Target(r, cur) for r in redirects)
+        out.extend(_Target(r, cur) for r in redirects)
         new = _segment(segment, cur, out, depth) if segment else None
         if new:
             cur = new
@@ -973,11 +997,7 @@ def analyze(command: str, cwd: str, depth: int = 0) -> _Analysis | None:
 def bash_write_targets(command: str, cwd: str, depth: int = 0) -> list[tuple[str, str]] | None:
     """(path, directory it resolves in) for every write the command visibly makes."""
     a = analyze(command, cwd, depth)
-    return None if a is None else [(t.path, t.cwd) for t in a.targets]
-
-
-def _coarse_segments(command: str) -> list[list[str]]:
-    return [seg.split() for seg in _SEGMENT_SPLIT.split(command)]
+    return None if a is None else [(t.path, t.cwd) for t in a]
 
 
 def _coarse_write(command: str) -> bool:
@@ -985,131 +1005,23 @@ def _coarse_write(command: str) -> bool:
     split and a set lookup per word, no backtracking regex."""
     if ">" in command:
         return True
-    for words in _coarse_segments(command):
+    for seg in _SEGMENT_SPLIT.split(command):
+        words = seg.split()
         names = {os.path.basename(w) for w in words}
         if names & (_ALL_OPERANDS | _COPIERS):
             return True
         if names & set(_INPLACE) and any(w.startswith("-") and "i" in w for w in words):
             return True
-        if "git" in names and names & {"checkout", "restore", "reset", "rm", "mv"}:
+        if "git" in names and names & {"checkout", "restore", "rm", "mv"}:
             return True
         if "dd" in names and any(w.startswith("of=") for w in words):
             return True
     return False
 
 
-def _coarse_git(command: str, subs: set[str]) -> bool:
-    return any("git" in words and subs & set(words) for words in _coarse_segments(command))
-
-
-def _message_files(call: _GitCall) -> list[str]:
-    """Message sources a commit-making git call reads from disk."""
-    files: list[str] = []
-    rest = call.args
-    for k, a in enumerate(rest):
-        if a in ("-F", "--file", "-t", "--template") and k + 1 < len(rest):
-            files.append(rest[k + 1])
-        elif a.startswith(("--file=", "--template=")):
-            files.append(a.split("=", 1)[1])
-        elif (a.startswith("-F") or a.startswith("-t")) and len(a) > 2 and not a.startswith("--"):
-            files.append(a[2:])
-    if call.sub == "am":
-        files += _operands(rest)
-    return [f if os.path.isabs(f) else os.path.join(call.cwd, f) for f in files if f != "-"]
-
-
-def _mentions_unlock(a: _Analysis | None, command: str) -> bool:
-    """Best effort, and deliberately broad: any "unlock" in the command text, in
-    its de-quoted words (so `Test-Unl''ock` counts), or in a message file a
-    commit reads. `verify` exits 3 on every Test-Unlock however it was spelled —
-    that is the gate; this is early feedback."""
-    if "unlock" in command.casefold():
-        return True
-    if a is None:
-        return False
-    if any("unlock" in w.casefold() for w in a.words):
-        return True
-    for call in a.gits:
-        if call.sub not in _COMMIT_MAKERS:
-            continue
-        for f in _message_files(call):
-            try:
-                with open(f, "rb") as fh:
-                    if b"unlock" in fh.read(_MAX_MSG_FILE).lower():
-                        return True
-            except OSError:
-                continue
-    return False
-
-
-def _long(arg: str, name: str, shortest: int) -> bool:
-    """git accepts any unambiguous prefix of a long option: --amen is --amend."""
-    return len(arg) >= shortest and name.startswith(arg.split("=", 1)[0])
-
-
-def _rewrite(call: _GitCall, root: str, locked: dict[str, Lock]) -> str | None:
-    """A description of how this git call can rewrite or drop a lock commit (or
-    move the range base), else None."""
-    sub, rest = call.sub, call.args
-    flags = [a for a in rest if a.startswith("-")]
-    if sub == "commit" and any(_long(a, "--amend", 4) for a in flags):
-        return "git commit --amend"
-    if sub == "rebase" and not any(_long(a, n, 4) for a in flags
-                                   for n in ("--abort", "--quit", "--show-current-patch")):
-        return "git rebase"
-    if sub in ("update-ref", "replace", "filter-branch", "filter-repo"):
-        return f"git {sub}"
-    if sub == "branch" and any(a in ("-f", "-C", "-M") or _long(a, "--force", 6) for a in flags):
-        return "git branch --force"
-    if sub == "checkout" and "-B" in flags:
-        return "git checkout -B"
-    if sub == "switch" and any(a == "-C" or _long(a, "--force-create", 8) for a in flags):
-        return "git switch -C"
-    if sub == "symbolic-ref" and (any(a in ("-d", "--delete") for a in flags) or len(_operands(rest)) >= 2):
-        return "git symbolic-ref"
-    if sub == "remote" and _operands(rest)[:1] == ["set-head"]:
-        return "git remote set-head"
-    if sub == "reset":
-        target, paths = _reset_shape(rest, call.cwd)
-        if paths or target is None:
-            return None  # an index write (handled as a target) or no HEAD move
-        sha = _commit_sha(root, target)
-        if sha is None:
-            return f"git reset {target}"  # unresolvable here: assume the worst
-        if sha == _commit_sha(root, "HEAD"):
-            return None
-        for lk in locked.values():
-            if sha == lk.sha or _git(["merge-base", "--is-ancestor", sha, lk.sha], root).returncode == 0:
-                return f"git reset {target}"
-    return None
-
-
-def _rewritten_refs(call: _GitCall) -> list[str]:
-    """Refs other than HEAD that this call force-moves: the branch a `branch -f`,
-    `checkout -B` or `switch -C` overwrites, the ref `update-ref` sets. The lock
-    lives on that branch even when HEAD is elsewhere (`checkout main`, then
-    `branch -f fix main`)."""
-    sub, rest = call.sub, call.args
-    names: list[str] = []
-    if sub == "branch" and any(a in ("-f", "-C", "-M") or _long(a, "--force", 6) for a in rest):
-        names = [f"refs/heads/{o}" for o in _operands(rest)]
-    elif sub in ("checkout", "switch"):
-        for k, a in enumerate(rest):
-            if (a == "-B" and sub == "checkout") or (a == "-C" and sub == "switch") or \
-                    (sub == "switch" and _long(a, "--force-create", 8) and "=" not in a):
-                if k + 1 < len(rest):
-                    names.append(f"refs/heads/{rest[k + 1]}")
-            elif sub == "switch" and a.startswith("--force-create="):
-                names.append(f"refs/heads/{a.split('=', 1)[1]}")
-    elif sub == "update-ref":
-        names = _operands(rest)[:1]
-    return names
-
-
-def _ref_locks(root: str, ref: str) -> dict[str, Lock]:
-    if _commit_sha(root, ref) is None:
-        return {}
-    return active_locks(scan(root, tip=ref).commits)
+def _over_cap(command: str) -> bool:
+    """Past this size the command is not analysed (the hook has a 5 s budget)."""
+    return len(command) > MAX_COMMAND or len(_SEGMENT_SPLIT.split(command)) > MAX_SEGMENTS
 
 
 def _target_hits(lock: str, target: str) -> bool:
@@ -1181,9 +1093,16 @@ def cmd_commit(args: argparse.Namespace) -> int:
     if missing:
         print(f"error: {', '.join(missing)}: nothing tracked there to lock", file=sys.stderr)
         return 2
-    cmd = ["commit", "-q", "-m", args.message]
-    for r in rels:
-        cmd += ["--trailer", f"{LOCK_KEY}: {r} {_DIGEST_KEY}{digests[r]}"]
+    # The trailers go into the message here, not through `--trailer`: git's
+    # trailer machinery obeys trailer.*.cmd (runs a program) and
+    # trailer.*.ifmissing (can drop the line). A trailing Key: value paragraph
+    # the caller wrote stays one paragraph with ours.
+    wanted = [f"{LOCK_KEY}: {r} {_DIGEST_KEY}{digests[r]}" for r in rels]
+    body = args.message.rstrip("\n")
+    joins = len(body.split("\n\n")) > 1 and all(
+        _TRAILER_LINE.fullmatch(x.rstrip()) for x in body.split("\n\n")[-1].splitlines() if x.strip())
+    message = body + ("\n" if joins else "\n\n") + "\n".join(wanted) + "\n"
+    cmd = ["commit", "-q", "--cleanup=whitespace", "-m", message]
     if empty:
         cmd.append("--allow-empty")
     # The pathspec commits ONLY the locked paths: anything else already staged
@@ -1195,6 +1114,16 @@ def cmd_commit(args: argparse.Namespace) -> int:
         print("error: git commit failed; nothing was locked", file=sys.stderr)
         return 1
     sha = _git_ok(["rev-parse", "HEAD"], root).strip()
+    # Re-read the commit just made and parse its trailers in-process: a commit-msg
+    # hook (or anything else) that dropped a lock line leaves a commit that pins
+    # nothing, and that must not print "locked".
+    landed = {v for k, v in message_trailers(_messages(root, [sha])[sha]) if k.lower() == LOCK_KEY.lower()}
+    lost = [w for w in wanted if w.split(": ", 1)[1] not in landed]
+    if lost:
+        print(f"error: commit {sha[:SHORT]} is missing {', '.join(lost)} — something rewrote the "
+              "message (a commit-msg hook?). Nothing is locked; undo that commit and lock again.",
+              file=sys.stderr)
+        return 1
     changed = [r for r in rels if content_digest(root, _tree_rows(root, sha, r), r) != digests[r]]
     if changed:
         print(f"error: {', '.join(changed)} changed while committing (a commit hook rewrote it?): "
@@ -1329,58 +1258,43 @@ def _hook(payload: dict) -> int:
     command = tin.get("command")
     if not isinstance(command, str) or not command.strip():
         return 0
-    a = analyze(command, cwd)
-    watched = [] if a is None else [g for g in a.gits if g.sub in _COMMIT_MAKERS | _REWRITERS]
-    if a is not None and not a.targets and not watched:
-        return 0  # fast path: nothing written, no watched git call, no git spawned
+    if _over_cap(command):
+        root = repo_root(cwd)
+        if root is None:
+            return 0
+        f = _fold(_ignorecase(root))
+        text = f(command)
+        for lk in sorted(active_locks(scan(root).commits).values(), key=lambda x: x.path):
+            if f(lk.path) in text:
+                return _block(lk.path, lk.sha)
+        return 0
+    targets = analyze(command, cwd)
+    if targets == []:
+        return 0  # fast path: nothing written, no git spawned
     root = repo_root(cwd)
     if root is None:
         return 0
-    for g in watched:
-        for ref in _rewritten_refs(g):
-            held = _ref_locks(root, ref)
-            if held:
-                lk = sorted(held.values(), key=lambda x: x.path)[0]
-                print(f"BLOCKED (test-lock): `git {g.sub}` force-moves {ref}, where {lk.path} is "
-                      f"locked by {lk.sha[:SHORT]}: that can rewrite or drop history, including "
-                      "the lock commit. Fix the code in a new commit on that branch. (A best-effort "
-                      "guard: `verify` checks each lock against the sha256 its trailer recorded.)",
-                      file=sys.stderr)
-                return 2
     locked = active_locks(scan(root).commits)
     if not locked:
         return 0
-    first = sorted(locked.values(), key=lambda x: x.path)[0]
-    makes_commit = (any(g.sub in _COMMIT_MAKERS for g in watched) if a is not None
-                    else _coarse_git(command, _COMMIT_MAKERS))
-    if makes_commit and _mentions_unlock(a, command):
-        print(f"BLOCKED (test-lock): this commit mentions an unlock while {first.path} is locked by "
-              f"{first.sha[:SHORT]}. Releasing a lock is a human decision visible in review, not a "
-              "step for the agent the lock constrains, and `verify` exits 3 on any release until "
-              "a human accepts it. Fix the code, or ask the human.", file=sys.stderr)
-        return 2
-    for g in watched:
-        why = _rewrite(g, root, locked)
-        if why:
-            print(f"BLOCKED (test-lock): `{why}` can rewrite or drop history while {first.path} is "
-                  f"locked by {first.sha[:SHORT]}; a rewritten lock commit no longer pins the test. "
-                  "Fix the code in a new commit. (A best-effort guard: `verify` checks each lock "
-                  "against the sha256 its trailer recorded.)", file=sys.stderr)
-            return 2
-    if a is None:  # untokenizable: fall back to the coarse rule, never to allow
+    if targets is None:  # untokenizable: fall back to the coarse rule, never to allow
         if _coarse_write(command):
             f = _fold(_ignorecase(root))
             for lk in sorted(locked.values(), key=lambda x: x.path):
                 if f(lk.path) in f(command):
                     return _block(lk.path, lk.sha)
         return 0
-    for t in a.targets:
+    sources: dict[str, str | None] = {}
+    for t in targets:
         lk = locking(locked, candidates(t.path, t.cwd, root), root, match=_target_hits)
         if lk is None:
             continue
         # Restoring from the lock commit itself is the recovery `verify` prints.
-        if t.source is not None and _commit_sha(root, t.source) == lk.sha:
-            continue
+        if t.source is not None:
+            if t.source not in sources:
+                sources[t.source] = _commit_sha(root, t.source)
+            if sources[t.source] == lk.sha:
+                continue
         return _block(lk.path, lk.sha)
     return 0
 

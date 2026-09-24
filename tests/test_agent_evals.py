@@ -368,6 +368,7 @@ class TestProve(Base):
         arm = json.loads(out)["proofs"][0]["violation_arms"][0]
         self.assertEqual((arm["name"], arm["status"]), ("edits on the base branch", "caught"))
         self.assertEqual([c["passed"] for c in arm["checks"]], [False, True])
+        self.assertEqual(arm["caught_by"], ["checks[0] command"])
 
     def test_violation_that_passes_every_check_fails_the_proof(self):
         # Wrong: branches, then ALSO edits the policy file. Nothing checks the policy file.
@@ -377,6 +378,19 @@ class TestProve(Base):
         rc, out, _ = self.prove()
         self.assertEqual(rc, 1, out)
         self.assertIn("violation 'edits the policy file too' passes every check", out)
+
+    def test_an_output_only_check_cannot_catch_a_silent_violation(self):
+        self.write_eval("output-only", "p", [{"type": "output_regex", "regex": "\\S"}],
+                        reference=["echo done"],
+                        violations=[{"name": "rewrites README silently",
+                                     "run": ["echo x >> README.md"]}])
+        rc, out, _ = self.prove("--json")
+        self.assertEqual(rc, 1, out)
+        proof = json.loads(out)["proofs"][0]
+        arm = proof["violation_arms"][0]
+        self.assertEqual((arm["status"], arm["caught_by"]), ("passes", []))
+        self.assertIn("violation 'rewrites README silently' passes every check",
+                      proof["problems"])
 
     def test_every_violation_gets_its_own_arm(self):
         self.branch_eval([{"name": "caught one", "run": ["echo moved >> NOTES.md"]},
@@ -598,12 +612,13 @@ class TestIsolation(Base):
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0]["argv"], ["-p", "say hi", "--tools", "Read,Bash",
                                             "--allowedTools", "Read,Bash(git status:*)",
+                                            "--strict-mcp-config",
                                             "--permission-mode", "dontAsk",
                                             "--output-format", "json"])
         self.assertNotIn("--dangerously-skip-permissions", calls[0]["argv"])
         self.assertTrue(calls[0]["cwd"].startswith(str(self.tmp / "t")), calls[0]["cwd"])
 
-    def test_tools_are_the_deduplicated_base_names_and_omitted_when_empty(self):
+    def test_tools_are_the_deduplicated_base_names_and_empty_means_none(self):
         self.write_eval("t", "say hi", [{"type": "output_regex", "regex": "hi"}],
                         allowed_tools=["Bash(git *)", "Edit", "Bash(ls:*)", "Read",
                                        "mcp__srv__tool"])
@@ -615,10 +630,11 @@ class TestIsolation(Base):
                         allowed_tools=[])
         self.run_evals()
         argv = self.model_calls()[0]["argv"]
-        self.assertNotIn("--tools", argv)
+        self.assertEqual(argv[argv.index("--tools") + 1], "")   # "" = no built-in tool
         self.assertNotIn("--allowedTools", argv)
+        self.assertIn("--strict-mcp-config", argv)
 
-    VECTORS = ("fsmonitor", "hook", "filter", "diffext", "editor")
+    VECTORS = ("fsmonitor", "hook", "filter", "lfsprocess", "diffext", "editor")
 
     def bare_home(self) -> dict:
         """No global or system git config: a machine-wide core.hooksPath (lefthook,
@@ -638,32 +654,42 @@ class TestIsolation(Base):
             f"printf '#!/bin/sh\\ntouch {m['hook']}\\n' > .git/hooks/pre-commit",
             "chmod +x .git/hooks/pre-commit",
             f"git config filter.evil.clean 'touch {m['filter']}; cat'",
-            "printf '* filter=evil\\n' > .gitattributes",
+            f"git config filter.lfs.process 'touch {m['lfsprocess']}; cat'",
+            "git config filter.lfs.required true",
+            "printf '* filter=evil\\n*.lfs filter=lfs\\n' > .gitattributes",
+            "echo payload > x.lfs",
             f"git config diff.external 'touch {m['diffext']}; true'",
             f"git config core.editor 'touch {m['editor']}; true'",
             "echo edit >> NOTES.md", "echo PLANTED"])
-        chain = ("git status --porcelain >/dev/null && git add -A && "
-                 "{ git diff --cached >/dev/null 2>&1 || true; } && "
+        # NOTES.md is staged on its own first: in the control, the lfs vector makes
+        # `git add -A` die, and the diff/editor/hook vectors still need staged content
+        steps = ["git status --porcelain >/dev/null", "git add NOTES.md", "git add -A",
+                 "{ git diff --cached >/dev/null 2>&1 || true; }",
                  "git -c user.name=c -c user.email=c@example.invalid commit -e -q "
-                 "-m check-commit && git log -1 --format=%s")
-        return plant, chain, m
+                 "-m check-commit", "git log -1 --format=%s"]
+        return plant, steps, m
 
     def test_planted_git_config_fires_without_the_overrides(self):
         """Positive control: the same plant and chain, plain env, every marker appears.
         Without this, the test below could pass because a vector never fired at all."""
-        plant, chain, m = self.plant_and_check()
+        plant, steps, m = self.plant_and_check()
         repo = self.tmp / "control"
         git(self.tmp, "init", "-q", "-b", "main", str(repo))
         (repo / "NOTES.md").write_text("n\n")
         git(repo, "add", "-A")
         git(repo, "commit", "-q", "-m", "i")
         env = dict(_CLEAN_ENV, **self.bare_home())
-        subprocess.run(f"{plant} && {chain}", shell=True, cwd=repo, env=env, check=True,
+        subprocess.run(plant, shell=True, cwd=repo, env=env, check=True,
                        stdin=subprocess.DEVNULL, capture_output=True)
+        # each step on its own: a vector that makes git die must not hide the next one
+        for step in steps:
+            subprocess.run(step, shell=True, cwd=repo, env=env,
+                           stdin=subprocess.DEVNULL, capture_output=True)
         self.assertEqual([k for k, p in m.items() if not p.exists()], [])
 
     def test_git_config_planted_by_the_agent_never_runs_for_checks(self):
-        plant, chain, m = self.plant_and_check()
+        plant, steps, m = self.plant_and_check()
+        chain = " && ".join(steps)
         self.write_eval("planted", f"shell {plant}\nsay ok", [
             {"type": "output_regex", "regex": "PLANTED"},
             # proof the plant is really there (reading config executes nothing)
@@ -689,40 +715,68 @@ class TestIsolation(Base):
             {"type": "command", "run": "git diff --quiet --exit-code", "expect_exit": 1}])
         self.assertEqual(r["status"], "passed", r)
 
+    def test_a_global_scope_filter_never_runs_at_scratch_build_or_in_checks(self):
+        home = self.bare_home()
+        marker = self.tmp / "marker-global-smudge"
+        Path(home["HOME"], ".gitconfig").write_text(
+            f'[filter "glob"]\n\tsmudge = "touch {marker}; cat"\n'
+            f'\tclean = "touch {marker}; cat"\n\trequired = true\n')
+        (self.repo / ".gitattributes").write_text("*.md filter=glob\n")
+        git(self.repo, "add", ".gitattributes")
+        git(self.repo, "commit", "-q", "-m", "attrs")
+        self.write_eval("glob", "write NOTES.md edited\nsay ok", [
+            {"type": "command", "run": "git status --porcelain && git add -A",
+             "expect_stdout_regex": "NOTES.md"},
+            {"type": "file_contains", "path": "README.md", "regex": "readme"}])
+        with mock.patch.dict(os.environ, home):
+            rc, s, out = self.run_evals()
+        self.assertEqual(s["results"][0]["status"], "passed", s["results"][0])
+        self.assertFalse(marker.exists())
+
     def test_per_eval_permission_mode_and_bypass_refused(self):
         self.write_eval("pm", "say hi", [{"type": "output_regex", "regex": "hi"}],
                         permission_mode="plan")
         self.run_evals()
         argv = self.model_calls()[0]["argv"]
         self.assertEqual(argv[argv.index("--permission-mode") + 1], "plan")
-        self.write_eval("pm", "say hi", [{"type": "output_regex", "regex": "hi"}],
-                        permission_mode="bypassPermissions")
-        rc, out, _ = run_main("validate", self.evals)
-        self.assertEqual(rc, 1)
-        self.assertIn("bypassPermissions is never allowed", out)
+        for mode in ("acceptEdits", "auto", "manual", "bypassPermissions", "default"):
+            with self.subTest(mode=mode):
+                self.write_eval("pm", "say hi", [{"type": "output_regex", "regex": "hi"}],
+                                permission_mode=mode)
+                rc, out, _ = run_main("validate", self.evals)
+                self.assertEqual(rc, 1)
+                self.assertIn("must be one of dontAsk, plan", out)
 
     def test_claude_env_names_neither_the_live_repo_nor_the_evals_dir(self):
         live = str(self.repo)
         self.write_eval("env", 'shell cat "$GITHUB_WORKSPACE/NOTES.md"\nsay hi',
                         [{"type": "output_not_regex", "regex": "notes"}])
-        probe = {"PWD": live, "OLDPWD": live, "INIT_CWD": live, "GITHUB_WORKSPACE": live,
-                 "GITHUB_EVENT_PATH": f"{live}/event.json", "RUNNER_WORKSPACE": str(self.tmp),
-                 "CLAUDE_PROJECT_DIR": live, "SOME_TOOL_CFG": f"{live}/cfg",
-                 "EVALS_HINT": str(self.evals), "CLAUDE_CONFIG_DIR": f"{live}/.cc",
-                 "ANTHROPIC_API_KEY": "k-test",
-                 "PATH": f"{live}/bin{os.pathsep}{os.environ['PATH']}"}
+        link = self.tmp / "logical-live"   # a symlinked (logical) form of the live path
+        link.symlink_to(self.repo)
+        neutral = str(self.tmp / "neutral")   # names that must go even when harmless-valued
+        named = ("OLDPWD", "INIT_CWD", "GITHUB_WORKSPACE", "GITHUB_EVENT_PATH",
+                 "RUNNER_WORKSPACE", "GITHUB_ENV", "GITHUB_PATH", "GITHUB_OUTPUT",
+                 "GITHUB_STEP_SUMMARY", "GITHUB_STATE")
+        probe = {k: neutral for k in named}
+        probe.update({"PWD": live, "CLAUDE_PROJECT_DIR": live,
+                      "SOME_TOOL_CFG": f"{live}/cfg", "EVALS_HINT": str(self.evals),
+                      "VIRTUAL_ENV": f"{link}/venv", "CLAUDE_CONFIG_DIR": f"{live}/.cc",
+                      "ANTHROPIC_API_KEY": "k-test",
+                      "PATH": f"{live}/bin{os.pathsep}{link}/bin{os.pathsep}"
+                              f"{os.environ['PATH']}"})
         with mock.patch.dict(os.environ, probe):
             rc, s, out = self.run_evals()
         self.assertEqual(s["results"][0]["status"], "passed", s["results"][0])
         call = self.model_calls()[0]
         env = call["env"]
         self.assertEqual(env["PWD"], call["cwd"])
-        for gone in ("OLDPWD", "INIT_CWD", "GITHUB_WORKSPACE", "GITHUB_EVENT_PATH",
-                     "RUNNER_WORKSPACE", "CLAUDE_PROJECT_DIR", "SOME_TOOL_CFG", "EVALS_HINT"):
+        for gone in named + ("CLAUDE_PROJECT_DIR", "SOME_TOOL_CFG", "EVALS_HINT",
+                             "VIRTUAL_ENV"):
             self.assertNotIn(gone, env)
         self.assertEqual((env["ANTHROPIC_API_KEY"], env["CLAUDE_CONFIG_DIR"]),
                          ("k-test", f"{live}/.cc"))   # auth survives
         self.assertNotIn(f"{live}/bin", env["PATH"].split(os.pathsep))
+        self.assertNotIn(f"{link}/bin", env["PATH"].split(os.pathsep))
         leaks = [k for k, v in env.items() if live in v and k != "CLAUDE_CONFIG_DIR"]
         self.assertEqual(leaks, [])
 

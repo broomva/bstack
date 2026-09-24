@@ -7,7 +7,7 @@ rules: western_electric
 direction: high
 tiers:
   1sigma: { action: log }
-  2sigma: { action: diagnose, tools: "Read,Grep,Bash(gh run view *)" }
+  2sigma: { action: diagnose, tools: "Read,Grep,Glob" }
   3sigma: { action: propose, routes: [pull_request, "runbook:rollback-deploy"] }
 intent:
   affected: "CI pipeline and the test suites it runs"

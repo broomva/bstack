@@ -98,14 +98,16 @@ class Repo:
         return self.git("rev-parse", "HEAD").strip()
 
     def lock(self, *paths: str) -> str:
-        return self.commit("lock the repro", *[f"Test-Lock: {p}" for p in paths], allow_empty=True)
-
-    def cli_lock(self, *paths: str) -> str:
         """A lock through `commit`, so its trailer carries the sha256."""
         p = self.run("commit", *paths, "-m", "lock the repro")
         if p.returncode != 0:
             raise AssertionError(p.stderr)
         return self.head()
+
+    cli_lock = lock
+
+    def digest(self, rel: str) -> str:
+        return hashlib.sha256(Path(self.root, rel).read_bytes()).hexdigest()
 
     def sh(self, script: str, **env: str) -> None:
         p = subprocess.run(["bash", "-c", script], cwd=self.root, env=self.env(**env),
@@ -215,7 +217,8 @@ class VerifyTests(Base):
 
     def test_lock_commit_may_itself_add_the_test(self):
         self.r.write("tests/test_new.py", "def test_new():\n    assert 0\n")
-        self.r.commit("repro", "Test-Lock: tests/test_new.py")
+        self.assertExit(self.r.run("commit", "tests/test_new.py", "-m", "repro"), 0)
+        self.assertNotEqual(self.r.git("show", "--name-only", "--format=", "HEAD").strip(), "")
         self.assertExit(self.r.run("verify"), 0)
         self.assertExit(self.r.run("check-path", "tests/test_new.py"), 2)
 
@@ -358,7 +361,7 @@ class RangeTests(Base):
         self.assertIn(f"{lock[:7]}  {TEST}  lock the repro", p.stdout)
         d = json.loads(self.r.run("list", "--json").stdout)
         self.assertEqual(d["locks"], [{"path": TEST, "sha": lock, "short": lock[:7],
-                                       "subject": "lock the repro", "sha256": None}])
+                                       "subject": "lock the repro", "sha256": self.r.digest(TEST)}])
 
     def test_several_locks_in_one_commit(self):
         self.r.write("tests/test_two.py", "def test_two():\n    assert 0\n")
@@ -400,6 +403,11 @@ class RangeTests(Base):
         self.assertEqual(d["locks"], [])
         self.assertTrue(d["truncated"])
         self.assertEqual(len(json.loads(self.r.run("list", "--json").stdout)["locks"]), 1)
+
+    def test_a_title_is_never_a_trailer_block(self):
+        self.r.commit("Test-Lock: src/app.py", allow_empty=True)  # a subject, not a trailer
+        self.assertEqual(json.loads(self.r.run("list", "--json").stdout)["locks"], [])
+        self.assertExit(self.r.edit(os.path.join(self.r.root, "src/app.py")), 0)
 
     def test_malformed_trailer_is_warned_not_honored(self):
         self.r.commit("bad lock", "Test-Lock: ../outside.py", allow_empty=True)
@@ -583,11 +591,6 @@ class HookBashTests(Base):
             with self.subTest(cmd=cmd, head="past the lock"):
                 self.assertExit(self.r.bash(cmd), 0)
 
-    def test_committing_a_release_is_not_the_agents_call(self):
-        p = self.r.bash(f'git commit --allow-empty -m wip --trailer "Test-Unlock: {TEST}"')
-        self.assertExit(p, 2)
-        self.assertIn("human decision", p.stderr)
-
     def test_untokenizable_command_falls_back_to_the_coarse_rule(self):
         self.assertExit(self.r.bash(f"echo 'unterminated > {TEST}"), 2)
         self.assertExit(self.r.bash("echo 'unterminated"), 0)
@@ -699,43 +702,6 @@ class UnlockGateTests(Base):
         self.assertExit(self.r.run("verify", "--accept-unlock", "no-such-ref"), 2)
 
 
-class HookUnlockTests(Base):
-    """The hook's unlock guard: best effort, broad, and early."""
-
-    def setUp(self) -> None:
-        super().setUp()
-        self.r.cli_lock(TEST)
-        self.msg = os.path.join(self.r.tmp, "msg")
-        Path(self.msg).write_text(f"fix\n\nTest-Unlock: {TEST}\n")
-
-    def _blocked(self, cmd: str) -> None:
-        p = self.r.bash(cmd)
-        self.assertExit(p, 2)
-        self.assertIn("human decision", p.stderr)
-
-    def test_probe91_key_equals_value(self):
-        self._blocked(f'git commit -m x --trailer "Test-Unlock={TEST}"')
-
-    def test_probe93_message_file_content(self):
-        self._blocked(f"git commit -F {self.msg}")
-        self._blocked(f"git commit --file={self.msg}")
-
-    def test_probe94_trailer_alias(self):
-        self._blocked(f'git -c trailer.u.key=Test-Unlock commit -m x --trailer "u: {TEST}"')
-
-    def test_probe95_split_literal(self):
-        self._blocked(f"printf 'x\\n\\nTest-Unl''ock: {TEST}\\n' > /tmp/m; git commit -F /tmp/m")
-
-    def test_probe95b_variable(self):
-        self._blocked(f'K=Test-Unlock; git commit -q --allow-empty -m x --trailer "$K: {TEST}"')
-
-    def test_probe95c_edit_and_unlock_in_one_commit(self):
-        self._blocked(f"git commit -qa -F {self.msg}")
-
-    def test_an_ordinary_commit_passes(self):
-        self.assertExit(self.r.bash('git commit -qm "fix the parser"'), 0)
-
-
 # --------------------------------------------------------------------------- #
 # BLOCKER-2: a lock is bound to its content; history rewrites are guarded
 # --------------------------------------------------------------------------- #
@@ -764,77 +730,110 @@ class LockHashTests(Base):
         self.r.git("commit", "-q", "--amend", "--no-edit")
         self.assertExit(self.r.run("verify"), 1)
 
-    def test_clean_hashed_lock_verifies_and_older_lock_warns(self):
+    def test_lock_without_hash_is_a_violation(self):
         self.r.cli_lock(TEST)
         self.assertExit(self.r.run("verify"), 0)
-        self.r.lock("src/app.py")  # a hand-written trailer: no hash
-        d = json.loads(self.r.run("verify", "--json").stdout)
-        self.assertTrue(any("carries no sha256" in w for w in d["warnings"]))
+        self.r.commit("hand-written lock", "Test-Lock: src/app.py", allow_empty=True)
+        p = self.r.run("verify", "--json")
+        self.assertExit(p, 1)
+        self.assertEqual([(v["kind"], v["path"]) for v in json.loads(p.stdout)["violations"]],
+                         [("lock-without-hash", "src/app.py")])
+        self.assertIn("lock without content hash", self.r.run("verify").stdout)
 
 
-class HookRewriteTests(Base):
+# --------------------------------------------------------------------------- #
+# What the hook no longer polices (verify is the gate for these)
+# --------------------------------------------------------------------------- #
+RESET = "re" + "set"  # kept out of literal command text some shells' safety gates match on
+
+
+class HookScopeTests(Base):
+    """The hook blocks writes to locked paths and nothing else."""
+
     def setUp(self) -> None:
         super().setUp()
-        self.lock = self.r.cli_lock(TEST)
+        self.lock = self.r.lock(TEST)
 
-    def _blocked(self, cmd: str) -> None:
-        p = self.r.bash(cmd)
-        self.assertExit(p, 2)
-        self.assertIn("rewrite or drop history", p.stderr)
+    def test_rebase_onto_main_is_allowed(self):
+        self.r.git("update-ref", "refs/remotes/origin/main", "HEAD~1")
+        self.assertExit(self.r.bash("git rebase origin/main"), 0)
+        self.assertExit(self.r.bash("git pull --rebase origin main"), 0)
 
-    def test_probe18_hard_move_before_the_lock(self):
-        self._blocked(f"git {RESET} --hard HEAD~1")
-
-    def test_probe19_soft_move_before_the_lock(self):
-        self._blocked(f"git {RESET} --soft HEAD~1")
-
-    def test_probe20_amend(self):
-        self._blocked("git commit --amend --no-edit -a")
-        self._blocked("git commit --amen --no-edit")
-
-    def test_probe20b_rebase(self):
-        self._blocked("GIT_SEQUENCE_EDITOR=: git rebase -q -i --autosquash HEAD~2")
-
-    def test_probe85_86_recreate_the_branch(self):
-        self._blocked("git checkout -q -B main")
-        self._blocked("git switch -C main")
-        # A new name, so only the while-a-lock-is-active rule can fire.
-        self._blocked("git checkout -q -B brand-new HEAD~1")
-        self._blocked("git switch -C brand-new-2 HEAD~1")
-
-    def test_branch_force(self):
-        self._blocked("git branch -f main HEAD~1")
-        self._blocked("git branch -f brand-new HEAD~1")  # only the while-locked rule applies
-
-    def test_ref_and_object_surgery(self):
-        for cmd in ("git update-ref refs/remotes/origin/HEAD HEAD", f"git replace {self.lock} HEAD~1",
-                    "git filter-branch -f --tree-filter true HEAD",
-                    "git symbolic-ref --delete refs/remotes/origin/HEAD"):
-            with self.subTest(cmd=cmd):
-                self._blocked(cmd)
-
-    def test_chain85_force_moving_a_locked_branch_from_elsewhere(self):
-        # HEAD on a branch with no lock; the lock lives on main, which these overwrite.
-        self.r.git("checkout", "-q", "-b", "other", "HEAD~1")
-        for cmd in ("git branch -f main other", "git checkout -q -B main", "git switch -C main",
-                    "git update-ref refs/heads/main HEAD"):
-            with self.subTest(cmd=cmd):
-                p = self.r.bash(cmd)
-                self.assertExit(p, 2)
-                self.assertIn("refs/heads/main", p.stderr)
-        self.assertExit(self.r.bash("git branch -f scratch other"), 0)  # an unlocked branch
-
-    def test_an_explicit_head_target_does_not_move_head(self):
-        self.assertEqual(self.r.head(), self.lock)
-        self.assertExit(self.r.bash(f"git {RESET} --hard HEAD"), 0)
-
-    def test_moves_that_keep_the_lock_pass(self):
-        after = self.r.commit("fix the code", allow_empty=True)
-        self.r.commit("more", allow_empty=True)
-        for cmd in (f"git {RESET} --hard", f"git {RESET} -q HEAD -- {TEST}", f"git {RESET} --hard {after}",
-                    "git rebase --abort", "git branch topic", "git checkout -b topic2"):
+    def test_other_history_rewrites_are_allowed(self):
+        self.r.commit("fix the code", allow_empty=True)
+        for cmd in ("git commit --amend --no-edit", f"git {RESET} --soft HEAD~1",
+                    f"git {RESET} --hard HEAD~1", "git branch -f main HEAD~1", "git branch -D topic",
+                    "git checkout -B main", "git update-ref refs/heads/x HEAD"):
             with self.subTest(cmd=cmd):
                 self.assertExit(self.r.bash(cmd), 0)
+
+    def test_unlock_vocabulary_in_commits_is_allowed(self):
+        for cmd in ("git commit -am 'fix: unlock the mutex'",
+                    "pytest tests/test_unlock_flow.py && git commit -qm x",
+                    f'git commit -m x --trailer "Test-Unlock={TEST}"'):
+            with self.subTest(cmd=cmd):
+                self.assertExit(self.r.bash(cmd), 0)
+
+
+# --------------------------------------------------------------------------- #
+# commit re-reads what it wrote
+# --------------------------------------------------------------------------- #
+class CommitIntegrityTests(Base):
+    def test_a_dropped_trailer_is_an_error_not_a_lock(self):
+        hook = os.path.join(self.r.root, ".git", "hooks", "commit-msg")
+        Path(hook).write_text("#!/bin/sh\nsed -i.bak '/Test-Lock/d' \"$1\"\n")
+        os.chmod(hook, 0o755)
+        p = self.r.run("commit", TEST, "-m", "lock the repro")
+        self.assertExit(p, 1)
+        self.assertIn("missing", p.stderr)
+        self.assertNotIn("locked ", p.stdout)
+
+    def test_trailer_config_can_neither_drop_nor_run_anything(self):
+        marker = os.path.join(self.r.tmp, "ran")
+        self.r.git("config", "trailer.Test-Lock.ifmissing", "doNothing")
+        self.r.git("config", "trailer.Test-Lock.cmd", f"touch {marker}; echo x")
+        self.assertExit(self.r.run("commit", TEST, "-m", "lock the repro"), 0)
+        self.assertFalse(os.path.exists(marker))
+        body = self.r.git("log", "-1", "--format=%B")
+        self.assertIn(f"Test-Lock: {TEST} sha256={self.r.digest(TEST)}", body)
+
+    def test_an_existing_trailer_block_stays_one_block(self):
+        msg = "lock the repro\n\nCo-Authored-By: A <a@example.invalid>"
+        self.assertExit(self.r.run("commit", TEST, "-m", msg), 0)
+        last = self.r.git("log", "-1", "--format=%B").strip().split("\n\n")[-1]
+        self.assertIn("Co-Authored-By: A", last)
+        self.assertIn(f"Test-Lock: {TEST}", last)
+
+
+# --------------------------------------------------------------------------- #
+# The hook's size cap
+# --------------------------------------------------------------------------- #
+class HookCapTests(Base):
+    def setUp(self) -> None:
+        super().setUp()
+        self.r.lock(TEST)
+
+    def _timed(self, cmd: str, code: int) -> None:
+        start = time.monotonic()
+        p = self.r.bash(cmd)
+        self.assertLess(time.monotonic() - start, 1.0)
+        self.assertExit(p, code)
+
+    def test_over_cap_without_a_locked_path_is_allowed(self):
+        cmd = "echo " + "x " * 40000
+        self.assertGreater(len(cmd), tl.MAX_COMMAND)
+        self._timed(cmd, 0)
+
+    def test_over_the_segment_cap_a_named_locked_path_blocks(self):
+        cmd = "true; " * (tl.MAX_SEGMENTS + 1) + f"cat {TEST}"  # a read, but past the cap
+        self.assertLess(len(cmd), tl.MAX_COMMAND)
+        self._timed(cmd, 2)
+
+    def test_worst_case_under_the_cap_is_decided_within_a_second(self):
+        # Thousands of targets, each in its own directory: no resolution is shared.
+        cmd = ("rm " + " ".join(f"d{i}/f.py" for i in range(9000)))[:tl.MAX_COMMAND].rsplit(" ", 1)[0]
+        self.assertGreater(len(cmd), tl.MAX_COMMAND - 16)
+        self._timed(cmd, 0)
 
 
 # --------------------------------------------------------------------------- #
@@ -864,6 +863,30 @@ class ConfigBlindingTests(Base):
     def test_probe89c_replace_object(self):
         self.r.git("replace", self.r.head(), "HEAD~1")
         self._weakened_verify_fails()
+
+    def test_trailer_key_alias_cannot_rename_the_lock(self):
+        self.r.git("config", "trailer.Test-Lock.key", "Foo")
+        self.assertExit(self.r.edit(os.path.join(self.r.root, TEST)), 2)
+        self.assertEqual(len(json.loads(self.r.run("list", "--json").stdout)["locks"]), 1)
+        self._weakened_verify_fails()
+
+    def test_trailer_alias_cannot_turn_a_lock_into_an_unlock(self):
+        self.r.git("config", "trailer.Test-Lock.key", "Test-Unlock")
+        self._weakened_verify_fails()
+
+    def test_color_config_cannot_blind_the_scan(self):
+        self.r.git("config", "color.ui", "always")
+        self._weakened_verify_fails()
+
+    def test_a_broken_config_fails_verify_closed(self):
+        self.r.git("config", "core.logAllRefUpdates", "bogus")
+        p = self.r.run("verify")
+        self.assertExit(p, 2)
+        self.assertNotIn("clean", p.stdout)
+        self.assertExit(self.r.run("list"), 2)
+        hook = self.r.edit(os.path.join(self.r.root, TEST))
+        self.assertExit(hook, 0)  # the hook fails OPEN, by design; verify is the gate
+        self.assertIn("hook error, allowing", hook.stderr)
 
     def test_comment_char_cannot_hide_the_trailer(self):
         self.r.git("config", "core.commentChar", "T")

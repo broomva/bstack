@@ -13,14 +13,16 @@ https://academy.claude.com/courses/ai-native-sdlc-playbook/closing-the-loop-on-m
 INVARIANT: detection never involves a model. The tier is a pure function of
 (config, series): mean and sample standard deviation over a rolling window, plus
 the four Western Electric rules. The intent file is a pure function of (config,
-result, date). A model enters only downstream, through `diagnose-cmd`, whose tool
-grant is an ALLOWLIST that fails closed: Read, Grep, Glob, LS, and Bash only as
-`Bash(<prefix> *)` for a fixed set of read verbs (DIAGNOSE_BASH_PREFIXES). Any
-other token — a write tool, an MCP tool, Agent, Skill, a wider Bash glob — is
-refused when the config loads. That bounds what the session is GRANTED; it is not
-a sandbox. Hooks configured for the runner still fire under `claude -p`, and
-`git diff/log/show --output=<file>` can write a file, so run the diagnosis in a
-throwaway checkout without write credentials in its environment.
+result, date). A model enters only downstream, through `diagnose-cmd`, and it
+gets no shell: its tools are exactly an ALLOWLIST of Read, Grep, Glob and LS, and
+any other token (every Bash entry, a write tool, an MCP tool, Agent, Skill) is
+refused when the config loads. Whatever the diagnosis needs from CI or history, the
+workflow pre-fetches into the checkout. The command adds --restricted (no
+code-running tools; user, project and local settings files ignored),
+--strict-mcp-config (no MCP servers), --tools, --permission-mode dontAsk and
+--disallowedTools for the write tools. That is the grant of the flags passed here,
+not a sandbox: managed settings still apply, and Read can read any file in the
+working directory, .git/config included, so the checkout must hold no credentials.
 
 Second invariant: an unmeasurable band never presents as a healthy one. Too few
 baseline points yields tier `insufficient_baseline`, never `none`, and under
@@ -94,17 +96,14 @@ RULES = {
     "R3": "4 of the last 5 points are beyond 1σ on the same side",
     "R4": "the last 8 points are all on the same side of the mean",
 }
-# Diagnose is read-only by contract, so its tools are an ALLOWLIST: a deny-list
-# let `Bash(gh *)`, `Bash(rm *)`, `mcp__*` and `Agent` through, because the set of
-# things that can write is open and the set of things needed to read is small.
-# Tokens are compared exactly after whitespace normalisation; no other shape
-# (another glob, the legacy `:*` form, a different case) is accepted.
+# Diagnose is read-only by contract, so its tools are an ALLOWLIST, compared
+# exactly (case included), and it holds no shell. A deny-list let `Bash(gh *)` and
+# `mcp__*` through; a list of "read-only" Bash prefixes let `git log --output=<f>`
+# write. The set of things that can write is open; the set needed to read is this.
 DIAGNOSE_TOOLS = ("Read", "Grep", "Glob", "LS")
-DIAGNOSE_BASH_PREFIXES = ("gh run view", "gh run list", "gh pr view", "git log", "git show",
-                          "git diff", "git status", "cat", "ls", "head", "tail", "wc")
-DIAGNOSE_BASH = tuple(f"Bash({p} *)" for p in DIAGNOSE_BASH_PREFIXES)
-# Denied again on the command line, belt to the allowlist's braces: a project
-# settings file can pre-approve tools, and --allowedTools only adds to that.
+# Denied on the command line as well. --restricted already ignores the settings
+# files whose allow rules could pre-approve them (under -p, the user-scope ones);
+# this keeps the write tools denied even if that flag's meaning ever changes.
 WRITE_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 REQUIRED_KEYS = ("metric", "baseline", "min_baseline_points", "rules", "direction",
                  "tiers", "intent")
@@ -119,12 +118,12 @@ DIAGNOSE_PROMPT = (
     "Read the intent file at {intent}. A deterministic control-band detector wrote it: "
     "a metric left its control band, and the file records the anomaly, its evidence, "
     "the affected systems and the open questions. Diagnose the most likely cause. This "
-    "is a read-only diagnosis: inspect code, history and CI runs with the tools you are "
-    "allowed, and do not edit files, open pull requests, push, or run anything that "
-    "changes state. Reply with your diagnosis as a markdown section headed "
-    "'## Diagnosis', to be appended to the intent file: the most likely cause, the "
-    "evidence for it, what would confirm or refute it, and whether this looks like a "
-    "real regression or a baseline shift that should re-anchor the band."
+    "is a read-only diagnosis with no shell: read the code and any CI logs or history "
+    "the workflow fetched into the working directory, and write nothing. Return your "
+    "diagnosis as your reply, a markdown section headed '## Diagnosis' that the caller "
+    "appends to the intent file: the most likely cause, the evidence for it, what would "
+    "confirm or refute it, and whether this looks like a real regression or a baseline "
+    "shift that should re-anchor the band."
 )
 
 
@@ -154,7 +153,7 @@ def parse_baseline(spec: str) -> tuple[int, str]:
 
 def tool_tokens(tools: str) -> list[str]:
     """Split an --allowedTools string on commas/whitespace OUTSIDE parentheses,
-    so `Bash(gh run view *)` stays one token."""
+    so a refused `Bash(git log *)` is reported as one token."""
     out, cur, depth = [], [], 0
     for ch in tools:
         if ch == "(":
@@ -172,49 +171,45 @@ def tool_tokens(tools: str) -> list[str]:
     return out
 
 
-def normalize_tool(tok: str) -> str:
-    """`Bash( gh  run view * )` -> `Bash(gh run view *)`. Nothing else is rewritten:
-    case, the name, and the glob shape are compared as written."""
-    name, paren, rest = tok.partition("(")
-    if not paren or not rest.endswith(")"):
-        return tok
-    return f"{name}({' '.join(rest[:-1].split())})"
-
-
 def tool_errors(tools) -> list[str]:
     """Why a diagnose tools string is not on the allowlist. Empty list means it is.
 
-    Fails closed: a token is accepted only if, once normalised, it EQUALS one of
-    DIAGNOSE_TOOLS or DIAGNOSE_BASH. So a write tool, `Bash(rm *)`, `Bash(gh *)`,
-    `Bash(**)`, `mcp__*`, `Agent`, `Skill`, a lower-cased `read`, or a token
-    starting with '-' (which the CLI would parse as a flag) is refused without
-    needing a rule of its own.
+    Fails closed: a token is accepted only if it EQUALS one of DIAGNOSE_TOOLS. So
+    every Bash entry, a write tool, `mcp__*`, `Agent`, `Skill`, a lower-cased
+    `read`, or a token starting with '-' (which the CLI would parse as a flag) is
+    refused without needing a rule of its own. A Bash entry gets its own message,
+    because the fix for it is upstream: pre-fetch the data, do not grant the shell.
     """
     if not isinstance(tools, str) or not tools.strip():
-        return ["diagnose needs a non-empty 'tools' string (e.g. \"Read,Grep\")"]
-    allowed = set(DIAGNOSE_TOOLS) | set(DIAGNOSE_BASH)
+        return ["diagnose needs a non-empty 'tools' string (e.g. \"Read,Grep,Glob\")"]
+    allowed = set(DIAGNOSE_TOOLS)
     errs = []
     for tok in tool_tokens(tools):
-        if normalize_tool(tok) not in allowed:
+        if tok in allowed:
+            continue
+        if tok.partition("(")[0].strip().lower() == "bash":
+            errs.append(f"tool {tok!r} is refused: the diagnosis gets no shell. The "
+                        f"workflow pre-fetches the data the diagnosis reads (CI logs, run "
+                        f"lists, history) into the checkout; the allowlist is "
+                        f"{', '.join(DIAGNOSE_TOOLS)}")
+        else:
             errs.append(f"tool {tok!r} is not on the read-only diagnose allowlist "
-                        f"({', '.join(DIAGNOSE_TOOLS)}, or Bash(<prefix> *) with a prefix "
-                        f"in: {', '.join(DIAGNOSE_BASH_PREFIXES)})")
+                        f"({', '.join(DIAGNOSE_TOOLS)})")
     return errs
 
 
 def normalized_tools(tools: str) -> str:
     """The tools string as it is granted: the exact tokens tool_errors checked."""
-    return ",".join(normalize_tool(t) for t in tool_tokens(tools))
+    return ",".join(tool_tokens(tools))
 
 
 def base_tools(tools: str) -> str:
-    """`Read,Grep,Bash(gh run view *)` -> `Read Grep Bash`: the tool NAMES the
-    session may see at all (--tools), deduplicated in first-seen order."""
+    """The tool names the session may see at all (--tools), deduplicated in
+    first-seen order."""
     names: list[str] = []
     for t in tool_tokens(tools):
-        name = normalize_tool(t).partition("(")[0]
-        if name not in names:
-            names.append(name)
+        if t not in names:
+            names.append(t)
     return " ".join(names)
 
 
@@ -774,15 +769,15 @@ def diagnose_argv(cfg: dict, tier: str, intent_path):
     errs = tool_errors(tools)
     if errs:
         raise BandsError("refusing to build a diagnose command: " + "; ".join(errs))
-    # --allowedTools only PRE-APPROVES; it does not remove other tools, and the
-    # repo's own settings can pre-approve more. So: --tools limits the tools the
-    # session can see at all to the allowlisted names (a settings-approved tool
-    # outside them does not exist for it); --allowedTools narrows Bash to the
-    # allowlisted prefixes; --permission-mode dontAsk denies whatever is not
-    # pre-approved instead of prompting; --disallowedTools denies the write tools
-    # even if a settings allow rule names them. Hooks still run: this is a grant,
-    # not a sandbox. Never --dangerously-skip-permissions.
+    # --restricted removes the code-running tools (none is named in --tools) and
+    # ignores the user, project and local settings files, so no allow rule or hook
+    # from them applies; --strict-mcp-config with no --mcp-config loads no MCP
+    # server; --tools limits the built-in tools the session can see to the
+    # allowlisted names; dontAsk denies whatever is not pre-approved instead of
+    # prompting; --disallowedTools denies the write tools. Managed settings still
+    # apply: a grant, not a sandbox. Never --dangerously-skip-permissions.
     return ["claude", "-p", DIAGNOSE_PROMPT.format(intent=intent_path),
+            "--restricted", "--strict-mcp-config",
             "--tools", base_tools(tools),
             "--allowedTools", normalized_tools(tools),
             "--disallowedTools", " ".join(WRITE_TOOLS),
@@ -834,8 +829,11 @@ def cmd_intent(args) -> int:
         # only on created=true. `created` is false whenever the file already
         # existed, --force or not, so a re-run never re-diagnoses a filed intent.
         if args.json:
+            # dedupe_key names the incident, not the day: a sustained breach keeps
+            # one open PR per metric and tier (branch bands/<dedupe_key>).
             print(json.dumps({"path": str(path) if path else None, "created": created,
-                              "tier": tier, "action": action}))
+                              "tier": tier, "action": action,
+                              "dedupe_key": f"{metric}-{tier}"}))
         else:
             print(message)
         return 0
@@ -922,8 +920,8 @@ def main(argv: list[str] | None = None) -> int:
     i.add_argument("--date", help="YYYY-MM-DD (default: the date of the last evaluated point)")
     i.add_argument("--force", action="store_true", help="overwrite an existing intent file")
     i.add_argument("--json", action="store_true",
-                   help='print {"path", "created", "tier", "action"}; created is false '
-                        'when the file already existed')
+                   help='print {"path", "created", "tier", "action", "dedupe_key"}; '
+                        'created is false when the file already existed')
 
     s = sub.add_parser("series", help="build a series from raw data")
     s.add_argument("kind", choices=["ci-failure-rate"])

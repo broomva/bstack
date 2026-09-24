@@ -38,7 +38,8 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
           cd "$RUNNER_TEMP"
           "$CLAUDE_BIN" -p "Read failed.log. Identify the most likely cause, say whether the failure looks flaky or real, and write a summary of at most five lines for the PR thread. Do not propose a patch." \
-            --allowedTools "Read,Grep" --permission-mode dontAsk --output-format json < /dev/null > triage.json
+            --tools "Read Grep" --allowedTools "Read,Grep" --restricted --strict-mcp-config \
+            --permission-mode dontAsk --output-format json < /dev/null > triage.json
           python3 -c 'import json,sys; print(json.load(open("triage.json")).get("result",""))' > triage.md
       - name: Post on the PR
         env:

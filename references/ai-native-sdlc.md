@@ -53,20 +53,23 @@ it. This reference adds what they lacked:
    to gate).
 4. **Protect the feedback loop from the agent it constrains.** For a bug fix, commit the
    failing test first under a `Test-Lock:` trailer that records the test's sha256, then fix
-   the code, not the test. *Held by* `bstack test-lock`. The hook blocks edits to the test
-   and the common history rewrites, best effort. `verify` in CI is the gate. It fails when
-   the test's content differs from what the lock pinned, and when the lock commit itself was
-   rewritten (the hash no longer matches). An edit later restored to the pinned content is
-   only a warning. `verify` exits 3 on any `Test-Unlock:` trailer until a human accepts that
-   commit, so no unlock passes unattended. The limit: a reset that drops the lock commit
-   entirely leaves nothing to verify, and is visible only in review.
+   the code, not the test. *Held by* `bstack test-lock`. The hook blocks edits to the locked
+   test. `verify` in CI is the gate: it fails when the test's content differs from what the
+   lock pinned, when a lock carries no hash, and when the lock commit's content no longer
+   matches its trailer (this catches `commit --amend -a`); it exits 3 on any `Test-Unlock:`
+   trailer until a human accepts that commit. That makes the lock tamper-evident against an
+   agent taking the shortcut of weakening the test. It is not a security boundary: an agent
+   that forges git objects with your credentials (`commit-tree` with a recomputed trailer)
+   or drops the lock commit is visible only in review.
 5. **Configuration is code, so regression-test it by behavior.** A change to `CLAUDE.md`,
    `AGENTS.md`, skills or hooks runs 20–50 real tasks through `claude -p`, and every
    production incident becomes an eval. *Held by* `bstack evals`.
    - Each eval runs in a standalone scratch repo that hides the evals.
    - Planted git config there is neutralized.
-   - The agent under test gets `--tools` and `--permission-mode dontAsk`, so its
-     `allowed_tools` is its whole grant.
+   - The agent under test sees only the built-in tools its `allowed_tools` names (`--tools`)
+     and no MCP servers (`--strict-mcp-config`), and nothing unapproved runs (`dontAsk`).
+     Within an available tool, a settings-file allow rule or hook can still approve a call
+     that `allowed_tools` does not list.
    - An eval must *discriminate*. `validate --prove` requires its reference solution to pass,
      each named `violations` arm (a plausible wrong behaviour) to fail a check, and a no-op
      agent that only replies "I have completed the task." to fail.
@@ -77,12 +80,12 @@ it. This reference adds what they lacked:
    At 2σ a read-only diagnosis runs. At 3σ the model may only propose, through a PR or a
    pre-approved runbook. The detector is a unit-tested program with no model in it. *Held by*
    `bstack bands`:
-   - The diagnosis gets only an allowlist of read-only tools, failing closed, under `--tools`
-     and `--permission-mode dontAsk`.
+   - The model returns text; a program writes the file.
+   - The diagnosis runs in a throwaway clone that holds no credentials. It has Read, Grep and
+     Glob only: no shell (`--restricted`) and no MCP servers. The workflow pre-fetches the
+     data it reads and appends its reply to the intent.
    - The series drops the incomplete current day.
    - An undersized baseline reports `insufficient_baseline`, never `none`.
-   - The `bands.yml` template runs the diagnosis with no write token. Afterwards it checks
-     that the deterministic intent text is byte-identical and that nothing else changed.
 8. **Governance hooks live on a surface the organization trusts.** Under
    `allowManagedHooksOnly`, user, project and local hooks are blocked. Only managed hooks, SDK
    hooks, and hooks from plugins force-enabled in managed `enabledPlugins` run, and `/goal`

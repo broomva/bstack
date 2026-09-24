@@ -167,11 +167,29 @@ class TestLint(Base):
         self.assertTrue(any("is empty" in p for p in self.lint(text)))
 
     def test_leftover_placeholder_reported_with_line(self):
-        text = FILLED.replace("None.", "<Who decides the tag cadence?>")
+        ph = '<What is still unknown, and who can answer each question. Write "None." when there are none.>'
+        text = FILLED.replace("None.", ph)
         probs = self.lint(text)
         self.assertEqual(len(probs), 1)
         line = FILLED.split("\n").index("None.") + 1
-        self.assertEqual(probs[0], f"{line}: unfilled placeholder <Who decides the tag cadence?>")
+        self.assertEqual(probs[0], f"{line}: unfilled placeholder {ph}")
+
+    def test_angle_bracket_prose_is_not_a_placeholder_wrapped_or_not(self):
+        for body in ("We measured throughput a < b before the change,\nand tail latency "
+                     "y > x once it shipped to real users.",
+                     "Keep p99 < 200ms and error rate > 0 alerts; see <Who decides?>."):
+            with self.subTest(body=body):
+                self.assertEqual(self.lint(FILLED.replace("None.", body)), [])
+
+    def test_lint_uses_the_placeholders_of_the_template_in_use(self):
+        tpl = self.write("# Intent: <title>\n\nAuthor: <name>. Status: draft.\n\n"
+                         "## Problem\n\n<Custom prompt>\n", "custom-tpl.md")
+        doc = self.write(FILLED.replace("None.", "<Custom prompt>"), "doc.md")
+        self.assertEqual(run("lint", str(doc))[0], 0)          # not a shipped placeholder
+        rc, out, _ = run("lint", str(doc), "--template", str(tpl))
+        self.assertEqual(rc, 1, out)
+        self.assertIn("unfilled placeholder <Custom prompt>", out)
+        self.assertEqual(run("lint", str(doc), "--template", str(self.tmp / "no.md"))[0], 2)
 
     def test_angle_brackets_in_code_and_autolinks_are_not_placeholders(self):
         text = FILLED.replace(

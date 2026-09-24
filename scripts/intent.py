@@ -12,11 +12,13 @@ record through the commit itself.
     set-status <file> <s>   rewrite the header's Status in place (nothing else changes)
 
 Invariant: an intent that lints clean has a title, an author, a recognised status, and
-all five required sections with real content. A placeholder is any `<...>` outside code
-spans, code fences and HTML comments, other than an autolink such as
-`<https://example.com>`. The template is made of placeholders, so a freshly created
-intent fails lint until someone fills it in. Put literal angle brackets in code
-(`Vec<String>`) so they are not read as unfilled.
+all five required sections with real content. A placeholder is one of the TEMPLATE's
+own `<...>` strings (the template in use: `lint --template`, default the shipped one),
+compared whitespace-normalized so a line-wrapped copy (prettier --prose-wrap, `gq`) still
+counts, and found outside code spans, code fences and HTML comments. Any other angle-
+bracket prose — `a < b` … `y > x`, `Vec<String>`, an autolink — is never a placeholder.
+The template is made of placeholders, so a freshly created intent fails lint until
+someone fills it in.
 
 Exit codes:
     0  ok
@@ -31,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import functools
 import json
 import os
 import re
@@ -49,8 +52,10 @@ HEADER_RE = re.compile(
 H1_RE = re.compile(r"^#(?!#)\s")
 H2_RE = re.compile(r"^##(?!#)\s+(?P<name>.+?)\s*#*\s*$")
 FENCE_RE = re.compile(r"^\s*(```|~~~)")
-# A placeholder may be line-wrapped (prettier --prose-wrap, mdformat --wrap, `gq`), so
-# it may span single newlines — but not a blank line, which ends the paragraph.
+# A CANDIDATE placeholder: `<...>` that may span single newlines (a line-wrapped one)
+# but not a blank line. A candidate counts only when its whitespace-normalized text is
+# one of the template's own placeholders — generic `<...>` matching false-fails prose
+# such as "a < b,\nand y > x".
 PLACEHOLDER_RE = re.compile(r"<(?:[^<>\n]|\n(?![ \t]*\n))+>")
 AUTOLINK_RE = re.compile(r"<[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\s<>]*>")
 COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
@@ -69,9 +74,29 @@ def _blank_comments(text: str) -> str:
     return COMMENT_RE.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), text)
 
 
-def parse(text: str) -> dict:
+def _norm_ws(s: str) -> str:
+    return " ".join(s.split())
+
+
+@functools.lru_cache(maxsize=None)
+def _template_placeholders(path: str) -> frozenset:
+    try:
+        text = Path(path).read_bytes().decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return frozenset()
+    return frozenset(_norm_ws(m.group(0)) for m in PLACEHOLDER_RE.finditer(_blank_comments(text)))
+
+
+def template_placeholders(template: Path | str | None = None) -> frozenset:
+    """The template's own placeholder strings, whitespace-normalized."""
+    return _template_placeholders(str(Path(template or DEFAULT_TEMPLATE).resolve()))
+
+
+def parse(text: str, placeholders: frozenset | None = None) -> dict:
     """Structure of an intent: title, header, sections (with body and first line), and
-    every placeholder found outside code and comments."""
+    every template placeholder still present outside code and comments."""
+    if placeholders is None:
+        placeholders = template_placeholders()
     lines = [ln.rstrip("\r") for ln in _blank_comments(text).split("\n")]
     doc: dict = {"title": None, "title_line": None, "author": None, "status": None,
                  "header_line": None, "sections": [], "placeholders": []}
@@ -114,8 +139,9 @@ def parse(text: str) -> dict:
             current["body"].append(line)
     joined = "\n".join(prose)
     for m in PLACEHOLDER_RE.finditer(joined):
-        doc["placeholders"].append((joined.count("\n", 0, m.start()) + 1,
-                                    " ".join(m.group(0).split())))
+        text_ = _norm_ws(m.group(0))
+        if text_ in placeholders:
+            doc["placeholders"].append((joined.count("\n", 0, m.start()) + 1, text_))
     return doc
 
 
@@ -123,9 +149,9 @@ def _norm(name: str) -> str:
     return " ".join(name.split()).lower()
 
 
-def lint_text(text: str) -> list[str]:
+def lint_text(text: str, placeholders: frozenset | None = None) -> list[str]:
     """Problems as `line: message` (line 0 = the document as a whole)."""
-    doc = parse(text)
+    doc = parse(text, placeholders)
     p: list[str] = []
     if doc["title_line"] is None:
         p.append("1: missing title line '# Intent: <title>'")
@@ -222,9 +248,12 @@ def cmd_new(args) -> int:
 
 
 def cmd_lint(args) -> int:
+    if args.template and not Path(args.template).is_file():
+        raise IntentError(f"template not found: {args.template}")
+    ph = template_placeholders(args.template)
     report = []
     for f in args.files:
-        report.append({"file": str(f), "problems": lint_text(_read(Path(f)))})
+        report.append({"file": str(f), "problems": lint_text(_read(Path(f)), ph)})
     bad = sum(bool(r["problems"]) for r in report)
     if args.json:
         print(json.dumps({"files": report, "failed": bad}, indent=2))
@@ -300,6 +329,8 @@ def main(argv: list[str] | None = None) -> int:
 
     l = sub.add_parser("lint", help="check sections, placeholders and status")
     l.add_argument("files", nargs="+")
+    l.add_argument("--template", help="the template whose placeholders count "
+                                      f"(default: the shipped {DEFAULT_TEMPLATE.name})")
     l.add_argument("--json", action="store_true")
 
     s = sub.add_parser("status", help="print the Status from the header")

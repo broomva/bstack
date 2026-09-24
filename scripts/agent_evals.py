@@ -34,24 +34,31 @@ an agent that runs `git log --all`, reads $PWD or $GITHUB_WORKSPACE, or follows 
 cwd upward. They do NOT contain a same-user process that goes looking: `ps` shows this
 script's argv, `lsof`/`/proc/<pid>/cwd` show the live checkout, and `find /` finds the
 evals. Containing that needs an OS sandbox or a container around the claude process.
-claude runs with `--permission-mode dontAsk` (per-eval `permission_mode` may pick
-dontAsk, plan, acceptEdits, auto or manual; bypassPermissions is refused), so anything
-outside `allowed_tools` is denied whatever the user's or project's defaultMode says.
-Its environment is the parent's minus: the GIT_* variables that relocate a repo; PWD,
-OLDPWD, INIT_CWD, GITHUB_WORKSPACE, GITHUB_EVENT_PATH and RUNNER_WORKSPACE; and every
-variable whose value contains the live repo's or the evals dir's absolute path, except
-auth variables that may hold a path (HOME, CLAUDE_CONFIG_DIR, cloud credential files).
-PATH is filtered entry by entry. PWD is set to the scratch. With `--tools` (the base
-names of allowed_tools, e.g. `Bash(git *)` -> `Bash`) and dontAsk, allowed_tools is the
-whole grant: a tool pre-approved by a settings file is not even available.
+The grant: built-in tools = allowed_tools (`--tools` gets their base names, e.g.
+`Bash(git *)` -> `Bash`; `allowed_tools: []` passes `--tools ""`, so no built-in tool is
+available at all); no MCP servers (`--strict-mcp-config` with no --mcp-config loads
+none); nothing unapproved (`--permission-mode dontAsk`; a per-eval `permission_mode` may
+only be dontAsk or plan). Within an AVAILABLE tool, an allow rule from a settings file
+or a hook can still approve a call that allowed_tools does not list — scope Bash rules
+in allowed_tools narrowly for that reason.
+claude's environment is the parent's minus: the GIT_* variables that relocate a repo;
+PWD, OLDPWD, INIT_CWD, GITHUB_WORKSPACE, GITHUB_EVENT_PATH, RUNNER_WORKSPACE, and the
+workflow-command files GITHUB_ENV, GITHUB_PATH, GITHUB_OUTPUT, GITHUB_STEP_SUMMARY and
+GITHUB_STATE (writing those would inject env, PATH or a forged summary into later steps);
+and every variable whose value names the live repo or the evals dir — compared after
+realpath on BOTH sides, so a symlinked form (/tmp vs /private/tmp) is caught too —
+except auth variables that may hold a path (HOME, CLAUDE_CONFIG_DIR, cloud credential
+files). PATH is filtered entry by entry. PWD is set to the scratch.
 
 Planted git config: the agent can rewrite its scratch's .git/config and hooks. Every
 process the runner starts afterwards (check commands, internal git) gets top-precedence
 overrides via GIT_CONFIG_COUNT — core.fsmonitor=false, core.hooksPath=/dev/null,
 core.pager=cat, diff.external= (empty), core.editor=true, sequence.editor=true,
 protocol.ext.allow=never, credential.helper= (empty), commit/tag.gpgSign=false — and
-every filter/diff/merge driver command defined in the scratch's config is blanked
-(filter.lfs.* excepted). Consequence: a porcelain `git diff` in a check exits 128
+every filter/diff/merge driver command defined in ANY config scope is blanked, with
+filter.<name>.required=false, filter.lfs.* included. The scratch's own checkout is made
+the same way, so LFS files arrive as pointer files: an eval over LFS content must
+materialize those files in its `setup`. Consequence: a porcelain `git diff` in a check exits 128
 ("external diff died") instead of running anything; use `git diff --no-ext-diff` or
 plumbing (diff-index, diff-files, cat-file, rev-parse, ls-files). What this does NOT
 cover: an eval's shell check still runs whatever PROGRAM it names, and the agent could
@@ -63,7 +70,10 @@ A check that cannot fail is not a check. `validate --prove` runs every eval that
   1. reference arm — setup, the reference commands (their stdout stands in for the
      reply), all checks: every check must PASS;
   2. one violation arm per `violations` entry — a named plausible WRONG behaviour
-     (`run`: shell commands) — setup, those commands, all checks: one must FAIL;
+     (`run`: shell commands) — setup, those commands, all checks: one must FAIL. The
+     reply is the same lie as the no-op's, never the commands' stdout, so an
+     output-only check cannot "catch" a violation no file or git check sees. Each arm
+     records `caught_by`: the checks that failed;
   3. no-op arm, LAST — setup only, and the reply is the lie "I have completed the
      task.": at least one check must FAIL. Running it last means a reference that left
      state outside its scratch (a /tmp marker) makes the no-op pass, which is reported
@@ -156,11 +166,11 @@ CHECK_TYPES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
 REGEX_FIELDS = ("regex", "expect_stdout_regex")
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 BASELINE_NAME = "baseline.json"
-# dontAsk denies anything not pre-approved, so allowed_tools is the whole grant whatever
-# the user's or project's defaultMode says. bypassPermissions is refused outright: it
-# would make allowed_tools meaningless.
+# dontAsk denies anything not pre-approved; plan cannot act at all. Every other mode
+# approves calls allowed_tools never listed (acceptEdits: file edits and mkdir/mv/rm;
+# auto: a classifier; bypassPermissions: everything), so they are refused.
 DEFAULT_PERMISSION_MODE = "dontAsk"
-PERMISSION_MODES = ("dontAsk", "plan", "acceptEdits", "auto", "manual")
+PERMISSION_MODES = ("dontAsk", "plan")
 # The no-op arm's reply: an agent that did nothing and says it did everything. An
 # empty reply let any `output_regex "\\S"` "discriminate", and a real claude always
 # replies with something.
@@ -202,7 +212,6 @@ def _git_var_allowed(k: str) -> bool:
 # every config file — including a scratch .git/config the agent under test rewrote —
 # so a planted fsmonitor, hook, pager, external diff, editor, credential helper or
 # signing program never runs outside the agent's own permission sandbox.
-# filter.lfs.* is deliberately left alone so LFS repos keep working.
 GIT_SAFE_OVERRIDES: tuple[tuple[str, str], ...] = (
     ("core.fsmonitor", "false"), ("core.hooksPath", "/dev/null"), ("core.pager", "cat"),
     ("diff.external", ""), ("core.editor", "true"), ("sequence.editor", "true"),
@@ -210,8 +219,11 @@ GIT_SAFE_OVERRIDES: tuple[tuple[str, str], ...] = (
     ("commit.gpgSign", "false"), ("tag.gpgSign", "false"),
 )
 # Driver commands have agent-chosen names (.gitattributes `filter=evil`), so no fixed
-# list can name them; scratch_env() blanks every one the scratch's config defines.
-_DRIVER_KEY_RE = r"^(filter|diff|merge)\..+\.(clean|smudge|process|command|textconv|driver)$"
+# list can name them; scratch_env() blanks every one any config scope defines — lfs
+# too — and sets filter.<name>.required=false, or a blanked required filter would make
+# git die instead of passing content through.
+_DRIVER_KEY_RE = (r"^(filter\..+\.(clean|smudge|process|required)"
+                  r"|diff\..+\.(command|textconv)|merge\..+\.driver)$")
 
 
 def filtered_env(extra_overrides: tuple[tuple[str, str], ...] | list = ()) -> dict[str, str]:
@@ -228,17 +240,21 @@ def filtered_env(extra_overrides: tuple[tuple[str, str], ...] | list = ()) -> di
 
 def scratch_env(wt: Path) -> dict[str, str]:
     """filtered_env() for commands run in a scratch, with every filter/diff/merge driver
-    command defined in the scratch's own config (includes followed) blanked, except
-    filter.lfs.*. Reading config executes nothing."""
-    p = git(["config", "--local", "--includes", "--name-only", "--get-regexp",
-             _DRIVER_KEY_RE], wt)
-    keys = sorted({k for k in p.stdout.split() if not k.lower().startswith("filter.lfs.")})
-    return filtered_env([(k, "") for k in keys])
+    command defined in ANY config scope (system, global, the scratch's own; includes
+    followed) blanked and every filter made non-required. Reading config executes
+    nothing."""
+    p = git(["config", "--includes", "--name-only", "--get-regexp", _DRIVER_KEY_RE], wt)
+    keys = sorted(set(p.stdout.split()))
+    return filtered_env([(k, "false" if k.lower().endswith(".required") else "")
+                         for k in keys])
 
 
 # Variables that name the live checkout (or the job's event payload) outright.
 _CLAUDE_ENV_DROP = frozenset({"PWD", "OLDPWD", "INIT_CWD", "GITHUB_WORKSPACE",
-                              "GITHUB_EVENT_PATH", "RUNNER_WORKSPACE"})
+                              "GITHUB_EVENT_PATH", "RUNNER_WORKSPACE",
+                              # workflow-command files: env/PATH/output injection
+                              "GITHUB_ENV", "GITHUB_PATH", "GITHUB_OUTPUT",
+                              "GITHUB_STEP_SUMMARY", "GITHUB_STATE"})
 # Auth-related variables that may legitimately hold a path; kept even when that path
 # happens to lie inside the repo. (Keys and tokens never hold paths.)
 _AUTH_PATH_VARS = frozenset({"HOME", "CLAUDE_CONFIG_DIR", "GOOGLE_APPLICATION_CREDENTIALS",
@@ -254,6 +270,18 @@ def _needles(paths) -> list[str]:
     return sorted(out)
 
 
+def _names_secret(value: str, needles: list[str]) -> bool:
+    """True when `value`, or the realpath of any absolute path-like piece of it, contains
+    a secret path. Realpath on the value side catches a logical form (/tmp/x) of a
+    physical needle (/private/tmp/x)."""
+    if any(n in value for n in needles):
+        return True
+    for piece in value.split(os.pathsep):
+        if piece.startswith(os.sep) and any(n in os.path.realpath(piece) for n in needles):
+            return True
+    return False
+
+
 def claude_env(scratch: Path | None = None, secret_paths=None) -> dict[str, str]:
     """The environment for claude: the parent's (claude needs its credentials), minus
     the GIT_* variables that relocate a repo, minus the variables that name the live
@@ -265,10 +293,10 @@ def claude_env(scratch: Path | None = None, secret_paths=None) -> dict[str, str]
     for k, v in os.environ.items():
         if (k.startswith("GIT_") and not _git_var_allowed(k)) or k in _CLAUDE_ENV_DROP:
             continue
-        if needles and any(n in v for n in needles):
+        if needles and _names_secret(v, needles):
             if k == "PATH":
                 v = os.pathsep.join(e for e in v.split(os.pathsep)
-                                    if not any(n in e for n in needles))
+                                    if not _names_secret(e, needles))
             elif k not in _AUTH_PATH_VARS:
                 continue
         env[k] = v
@@ -473,8 +501,8 @@ def validate_eval(ev) -> list[str]:
         p += _violation_problems(ev["violations"])
     if "permission_mode" in ev and ev["permission_mode"] not in PERMISSION_MODES:
         p.append(f"'permission_mode' must be one of {', '.join(PERMISSION_MODES)}, got "
-                 f"{ev['permission_mode']!r} (bypassPermissions is never allowed: it would "
-                 f"make allowed_tools meaningless)")
+                 f"{ev['permission_mode']!r} (any other mode approves calls allowed_tools "
+                 f"does not list)")
     if "tags" in ev:
         p += _str_list_problems("'tags'", ev["tags"])
     if "timeout_s" in ev and (not _is_num(ev["timeout_s"]) or ev["timeout_s"] <= 0):
@@ -686,7 +714,10 @@ class Scratch:
         commit = must(git(["commit-tree", tree, "-m", "scratch"], self.path,
                           extra_env=_SCRATCH_IDENTITY), "commit-tree").stdout.strip()
         must(git(["update-ref", "refs/heads/main", commit], self.path), "update-ref")
-        must(git(["checkout", "-q", "-f", "--detach", commit], self.path), "checkout")
+        # drivers blanked here too: nothing from any config scope runs at checkout, and
+        # LFS content arrives as pointer files
+        must(git(["checkout", "-q", "-f", "--detach", commit], self.path,
+                 extra_env=scratch_env(self.path)), "checkout")
 
     def __exit__(self, *exc) -> None:
         if not self.keep and self.tmp is not None:
@@ -861,14 +892,15 @@ def tool_base_names(allowed: list[str]) -> list[str]:
 
 
 def claude_argv(claude: str, ev: dict) -> list[str]:
-    """--tools makes only the named tools AVAILABLE; --allowedTools pre-approves the
-    scoped rules; dontAsk denies the rest. Under dontAsk alone, a tool pre-approved by a
-    settings file stays approved — with --tools as well, allowed_tools is the whole grant."""
-    argv = [claude, "-p", ev["prompt"]]
+    """--tools: the only AVAILABLE built-in tools ("" = none); --allowedTools: the scoped
+    rules pre-approved; --strict-mcp-config (no --mcp-config): no MCP servers; dontAsk:
+    everything else denied."""
+    argv = [claude, "-p", ev["prompt"],
+            "--tools", ",".join(tool_base_names(ev["allowed_tools"]))]
     if ev["allowed_tools"]:
-        argv += ["--tools", ",".join(tool_base_names(ev["allowed_tools"]))]
         argv += ["--allowedTools", ",".join(ev["allowed_tools"])]
-    argv += ["--permission-mode", ev.get("permission_mode", DEFAULT_PERMISSION_MODE)]
+    argv += ["--strict-mcp-config",
+             "--permission-mode", ev.get("permission_mode", DEFAULT_PERMISSION_MODE)]
     return argv + ["--output-format", "json"]
 
 
@@ -1181,18 +1213,23 @@ def outside_path_warnings(ev: dict) -> list[str]:
 
 def _violation_arm(ev: dict, v: dict, root: Path, hide: list[str] | None,
                    timeout: float, out: dict) -> dict:
-    """setup, then the wrong behaviour, then every check: one must fail."""
-    arm: dict = {"name": v["name"], "status": "caught", "checks": [], "error": None}
+    """setup, then the wrong behaviour, then every check: one must fail. The reply is
+    the lying agent's, never the commands' stdout: a violation that prints nothing
+    must not count as caught by an output check that only saw silence."""
+    arm: dict = {"name": v["name"], "status": "caught", "checks": [], "caught_by": [],
+                 "error": None}
     with Scratch(root, hide=hide) as sc:
         err, _ = run_shell_list(ev.get("setup", []), sc.path, timeout, "setup")
         if not err:
             base = head_sha(sc.path)
-            err, stdout = run_shell_list(v["run"], sc.path, timeout, "violation")
+            err, _ = run_shell_list(v["run"], sc.path, timeout, "violation")
         if err:
             arm["status"], arm["error"] = "error", err
             out["problems"].append(f"violation '{v['name']}': {err}")
             return arm
-        arm["checks"] = run_checks(ev, sc.path, stdout, base)
+        arm["checks"] = run_checks(ev, sc.path, NOOP_REPLY, base)
+    arm["caught_by"] = [f"checks[{i}] {c['type']}" for i, c in enumerate(arm["checks"])
+                        if not c["passed"]]
     if all(c["passed"] for c in arm["checks"]):
         arm["status"] = "passes"
         out["problems"].append(f"violation '{v['name']}' passes every check")

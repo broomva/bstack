@@ -39,14 +39,14 @@ direction: high
 tiers:
   # Log only: the job summary records it, nothing else happens.
   1sigma: { action: log }
-  # Claude diagnoses READ-ONLY with exactly these tools. `tools` is an ALLOWLIST
-  # and fails closed: Read, Grep, Glob, LS, and Bash only as `Bash(<prefix> *)`
-  # with a prefix in: gh run view, gh run list, gh pr view, git log, git show,
-  # git diff, git status, cat, ls, head, tail, wc. Anything else (a write tool,
-  # mcp__*, Agent, Skill, Bash(gh *), Bash(**)) fails the config.
-  # diagnose-cmd adds --permission-mode dontAsk and denies Edit/Write/MultiEdit/
-  # NotebookEdit. It is a grant, not a sandbox: runner hooks still fire.
-  2sigma: { action: diagnose, tools: "Read,Grep,Bash(gh run view *)" }
+  # Claude diagnoses READ-ONLY with exactly these tools, and gets NO shell:
+  # `tools` is an allowlist of Read, Grep, Glob and LS, and anything else (every
+  # Bash entry, a write tool, mcp__*, Agent, Skill) fails the config. The workflow
+  # pre-fetches the CI logs and history the diagnosis reads into the checkout.
+  # diagnose-cmd adds --restricted, --strict-mcp-config, --tools, dontAsk and
+  # denies Edit/Write/MultiEdit/NotebookEdit. A grant, not a sandbox: Read can
+  # read any file in the checkout, so it must hold no credentials.
+  2sigma: { action: diagnose, tools: "Read,Grep,Glob" }
   # Claude may act, but only through these routes: a pull request into the review
   # gate, or a pre-approved runbook (runbook:<name>). An optional `tools` here is
   # what the read-only diagnosis at 3sigma uses (same allowlist); without it,

@@ -3,10 +3,9 @@
 # test-lock (blocking): a test committed under a `Test-Lock:` trailer may not differ from
 #   its locked content, and the lock commit may not be rewritten. Empirical (P11) rule 8 —
 #   protect the feedback loop from the agent it constrains. `verify` exits 3 on any
-#   `Test-Unlock:` release. The job stays red until a person adds the label
-#   `test-unlock-approved`; adding it is the human decision. Nothing here can tell who added
-#   the label, so an agent holding the same GitHub credentials could add it too. Keep that
-#   label out of any automation.
+#   `Test-Unlock:` release, and the job stays red. What happens next is a person's call:
+#   merge over the red check deliberately, or remove the release. No workflow input can
+#   accept it, because an agent holding the same credentials could set that input too.
 # plan-drift (advisory): the diff is compared with the plan's "Files that change".
 #   Pipeline (P4) plan sync. Flip continue-on-error to false and add --strict to gate.
 #
@@ -15,7 +14,6 @@ name: SDLC gates
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled, unlabeled]
 
 permissions:
   contents: read
@@ -28,6 +26,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Fetch bstack
         env:
           BSTACK_REF: v0.41.0
@@ -35,14 +34,7 @@ jobs:
       - name: Locked tests are unchanged
         env:
           BASE_REF: ${{ github.base_ref }}
-          RELEASE_ACCEPTED: ${{ contains(github.event.pull_request.labels.*.name, 'test-unlock-approved') }}
-        run: |
-          rc=0
-          python3 "$RUNNER_TEMP/bstack/scripts/test_lock.py" verify --base "origin/$BASE_REF" || rc=$?
-          if [ "$rc" -eq 3 ] && [ "$RELEASE_ACCEPTED" = "true" ]; then
-            echo "Test-Unlock release accepted by the test-unlock-approved label"; exit 0
-          fi
-          exit "$rc"
+        run: python3 "$RUNNER_TEMP/bstack/scripts/test_lock.py" verify --base "origin/$BASE_REF"
 
   plan-drift:
     name: plan-drift (advisory)
@@ -52,6 +44,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Fetch bstack
         env:
           BSTACK_REF: v0.41.0

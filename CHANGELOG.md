@@ -14,45 +14,38 @@ verdict), the divergence is written down with its reason.
 Six commands, each with a unittest suite behind a no-skip wrapper and one-line mutations
 proven red:
 
-- **`bstack test-lock`** (Empirical, P11). A failing test committed under a `Test-Lock:`
-  trailer may not be weakened by the fix. The lock lives in git history, not a side file an
-  agent could delete.
-  - The lock trailer records the test's sha256 at lock time.
-  - A PreToolUse hook in the plugin gives fast feedback, best effort. It blocks
-    Edit/Write/MultiEdit/NotebookEdit on locked paths, and Bash commands whose write target
-    is one. It also blocks the common history rewrites (`commit --amend`, `rebase`, a
-    `reset` to or before the lock, `branch -f`, `update-ref`, …) and any commit whose
-    message mentions an unlock.
+- **`bstack test-lock`** (Empirical, P11). The course's play, "a hook that blocks edits to
+  test files during a fix task", made tamper-evident.
+  - A failing test is committed under a `Test-Lock: <path> sha256=<hex>` trailer.
+  - The plugin's PreToolUse hook blocks writes to a locked test: Edit, Write, MultiEdit and
+    NotebookEdit, and Bash commands whose write target is locked.
   - `verify` is the gate:
-    - It fails on content drift, and on a lock commit whose content no longer matches its
-      recorded hash (`lock-rewritten`).
-    - It exits 3 on any `Test-Unlock:` trailer, however spelled, until a human accepts that
-      commit with `--accept-unlock`.
-    - Its limit: a reset that drops the lock commit entirely is visible only in review.
-  - Git runs with `--no-show-signature`, `core.fsmonitor=false`, a pinned
-    `core.commentChar`, `log.date` and encoding, and `--no-replace-objects`. Without these,
-    a repo could run its `gpg.program` on every hook call, or hide every lock by changing
-    the comment character.
-  - Against a 96-probe adversarial corpus and 25 chains, no bypass is missed by both the
-    hook and `verify`.
+    - It fails on content drift, on a lock without a hash, and on a lock commit whose content
+      no longer matches its trailer (`commit --amend -a`).
+    - It exits 3 on any `Test-Unlock:` release, and stays red until a person acts.
+    - It parses trailers in-process from raw commits, so no git config can hide a lock.
+    - It fails closed (exit 2) on any scan error.
+  - It is **not** a security boundary against an agent that forges git objects with your
+    credentials or drops the lock commit. Both are visible only in review, and the CI run
+    on a fresh checkout is the real gate.
 - **`bstack evals`** (P11). Continuous evals of the agent's configuration over `claude -p`.
-  - Each eval runs in a standalone scratch repository. It holds one orphan commit of HEAD's
-    files, with the evals directory hidden. A worktree would share the live repo's refs and
-    objects.
-  - The agent under test gets `--tools` and `--permission-mode dontAsk`, so `allowed_tools`
-    is its whole grant. Its environment is scrubbed of paths to the live checkout.
-  - Git config the agent plants in the scratch (fsmonitor, hooks, filter and diff drivers,
-    editors) is neutralized for every command the runner starts there.
-  - `validate --prove` requires three things of every eval: its reference passes, each
-    named `violations` arm fails a check, and a no-op agent replying "I have completed the
-    task." fails.
-  - `--gate` fails on any per-eval regression against the baseline, including a passing
-    eval that was removed, and compares only the evals present in both runs.
+  - Each eval runs in a standalone scratch repository holding one orphan commit of HEAD's
+    files, with the evals directory hidden.
+  - Git config the agent plants there (fsmonitor, hooks, and every filter, diff and merge
+    driver, LFS included) is neutralized for the commands the runner starts.
+  - The agent under test sees only the built-in tools its `allowed_tools` names, with no MCP
+    servers and `dontAsk`, in a path-scrubbed environment.
+  - `validate --prove` requires three things of every eval: the reference passes, each named
+    `violations` arm fails a check, and a no-op agent replying "I have completed the task."
+    fails. Violation arms are scored as that same claim, never on their own stdout.
+  - `--gate` fails on any per-eval regression over the evals both runs share, and on a
+    passing eval that was removed.
 - **`bstack bands`** (P11). A deterministic Western Electric control-band detector with no
   model in it.
-  - At 2σ and 3σ it writes the next `intent.md`.
-  - The diagnosis gets an allowlist of read-only tools, failing closed, under `--tools` and
-    `dontAsk`.
+  - At 2σ and 3σ it writes the next `intent.md`; `intent --json` gives a `dedupe_key`.
+  - The diagnosis has Read, Grep and Glob only: no shell, no MCP servers.
+  - The template runs the diagnosis in a throwaway clone without credentials. The model
+    returns text, and the workflow writes it.
   - The series drops the incomplete current day.
   - A baseline too small to judge reports `insufficient_baseline`, never `none`.
 - **`bstack plan-drift`** (Pipeline, P4). Does the diff still match the plan's "Files that
