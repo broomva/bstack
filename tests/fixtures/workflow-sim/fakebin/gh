@@ -1,0 +1,159 @@
+#!/usr/bin/env python3
+"""Fake `gh` for tests/workflow-templates.test.sh (BRO-2542). Never talks to GitHub.
+
+State lives in $SIM (one directory per scenario):
+  prs.json        JSON array of pull requests: {number, headRefName, state, isCrossRepository}.
+                  `pr list` filters it by --head and --state the way gh does, projects the
+                  --json fields, then applies the REAL -q expression with jq. So a template's
+                  fork filter is evaluated, not assumed.
+  runs.json       what `run list` returns.
+  origin.git      the bare origin; `pr create` refuses a head that is not on it.
+  gh.log          one JSON line per call: argv, whether GH_TOKEN was set.
+  pr_create.log   one JSON line per PR opened.
+  violations.log  a call that must not happen (`auth setup-git`, anything unmodelled).
+                  The harness fails a scenario whose violations.log is not empty, so a
+                  template that swallows the error still goes red.
+"""
+import json
+import os
+import subprocess
+import sys
+
+SIM = os.environ["SIM"]
+argv = sys.argv[1:]
+
+
+def log(name, obj):
+    with open(os.path.join(SIM, name), "a") as f:
+        f.write(json.dumps(obj) + "\n")
+
+
+def violation(msg, code=1):
+    log("violations.log", {"argv": argv, "why": msg})
+    print(f"fake gh: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def opts(args, flags, multi=()):
+    """Parse --flag VALUE / -q VALUE pairs. Unknown flags are a violation."""
+    out, pos, i = {m: [] for m in multi}, [], 0
+    while i < len(args):
+        a = args[i]
+        if a in flags or a in multi:
+            if i + 1 >= len(args):
+                violation(f"{a} needs a value")
+            if a in multi:
+                out[a].append(args[i + 1])
+            else:
+                out[a] = args[i + 1]
+            i += 2
+        elif a.startswith("-"):
+            violation(f"flag {a} is not modelled by the fake")
+        else:
+            pos.append(a)
+            i += 1
+    return out, pos
+
+
+def emit(rows, fields, query):
+    """gh --json projection, then -q through jq -r (gh prints jq strings raw)."""
+    if fields is None:
+        if query is not None:
+            violation("-q without --json")
+        violation("output without --json is not modelled by the fake")
+    keys = fields.split(",")
+    projected = []
+    for r in rows:
+        missing = [k for k in keys if k not in r]
+        if missing:
+            violation(f"--json field(s) {missing} not modelled in the fixture")
+        projected.append({k: r[k] for k in keys})
+    text = json.dumps(projected)
+    if query is None:
+        print(text)
+        return
+    p = subprocess.run(["jq", "-r", query], input=text, capture_output=True, text=True)
+    if p.returncode != 0:
+        print(p.stderr, file=sys.stderr, end="")
+        sys.exit(p.returncode)
+    print(p.stdout, end="")
+
+
+def load_prs():
+    path = os.path.join(SIM, "prs.json")
+    return json.load(open(path)) if os.path.exists(path) else []
+
+
+def origin_sha(ref):
+    p = subprocess.run(["git", "--git-dir", os.path.join(SIM, "origin.git"), "rev-parse",
+                        "--verify", "-q", ref], capture_output=True, text=True)
+    return p.stdout.strip() if p.returncode == 0 else None
+
+
+log("gh.log", {"argv": argv, "GH_TOKEN": bool(os.environ.get("GH_TOKEN"))})
+cmd = tuple(argv[:2])
+
+# Real gh in Actions: an API call from a step whose env holds no token fails.
+if cmd in {("pr", "list"), ("pr", "create"), ("run", "list")} and not os.environ.get("GH_TOKEN"):
+    print("gh: To use GitHub CLI in a GitHub Actions workflow, set the GH_TOKEN environment "
+          "variable.", file=sys.stderr)
+    sys.exit(4)
+
+if cmd == ("pr", "list"):
+    o, pos = opts(argv[2:], {"--state", "--head", "--json", "-q", "--jq", "--repo", "-R",
+                             "--limit", "-L", "--base", "-B"})
+    if pos:
+        violation(f"unexpected positional {pos}")
+    state = o.get("--state", "open")
+    want = {"open": {"OPEN"}, "closed": {"CLOSED", "MERGED"}, "merged": {"MERGED"},
+            "all": {"OPEN", "CLOSED", "MERGED"}}.get(state)
+    if want is None:
+        violation(f"--state {state!r} is not a gh state")
+    rows = [p for p in load_prs() if p["state"] in want
+            and ("--head" not in o or p["headRefName"] == o["--head"])]
+    emit(rows, o.get("--json"), o.get("-q", o.get("--jq")))
+
+elif cmd == ("pr", "create"):
+    o, pos = opts(argv[2:], {"--head", "-H", "--title", "-t", "--body", "-b", "--base", "-B",
+                             "--repo", "-R"}, multi=("--label", "-l"))
+    head = o.get("--head", o.get("-H"))
+    if not head:
+        violation("pr create without --head")
+    tip = origin_sha(f"refs/heads/{head}")
+    if tip is None:
+        print(f"pull request create failed: head branch {head!r} is not on the remote",
+              file=sys.stderr)
+        sys.exit(1)
+    if tip == origin_sha("refs/heads/main"):
+        print(f"pull request create failed: No commits between main and {head}", file=sys.stderr)
+        sys.exit(1)
+    prs = load_prs()
+    if any(p["headRefName"] == head and p["state"] == "OPEN" and not p["isCrossRepository"]
+           for p in prs):
+        print(f"a pull request for branch {head!r} into branch 'main' already exists",
+              file=sys.stderr)
+        sys.exit(1)
+    number = max([p["number"] for p in prs] + [0]) + 1
+    prs.append({"number": number, "headRefName": head, "state": "OPEN",
+                "isCrossRepository": False})
+    json.dump(prs, open(os.path.join(SIM, "prs.json"), "w"))
+    log("pr_create.log", {"number": number, "head": head, "tip": tip,
+                          "title": o.get("--title", o.get("-t")),
+                          "labels": o["--label"] + o["-l"]})
+    print(f"https://github.invalid/owner/repo/pull/{number}")
+
+elif cmd == ("run", "list"):
+    o, pos = opts(argv[2:], {"--repo", "-R", "--limit", "-L", "--json", "-q", "--jq",
+                             "--workflow", "-w", "--branch", "-b"})
+    emit(json.load(open(os.path.join(SIM, "runs.json"))), o.get("--json"),
+         o.get("-q", o.get("--jq")))
+
+elif cmd == ("auth", "git-credential"):
+    # Origin is a local bare repo, so git never asks for a credential; a no-op either way.
+    sys.stdin.read()
+
+elif cmd == ("auth", "setup-git"):
+    violation("`gh auth setup-git` writes a credential helper into the runner's git config")
+
+else:
+    violation(f"gh {' '.join(argv[:2])} is not modelled by the fake")

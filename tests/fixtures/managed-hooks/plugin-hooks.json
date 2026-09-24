@@ -1,0 +1,13 @@
+{
+  "description": "fixture plugin hooks, hooks/hooks.json shape",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit",
+        "hooks": [
+          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/test-lock-hook.sh\"" }
+        ]
+      }
+    ]
+  }
+}

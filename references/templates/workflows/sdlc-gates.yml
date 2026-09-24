@@ -1,0 +1,61 @@
+# SDLC gates — copy to .github/workflows/sdlc-gates.yml (bstack ≥ 0.41.0).
+#
+# test-lock (blocking): a test committed under a `Test-Lock:` trailer may not differ from
+#   its locked content, and the lock commit may not be rewritten. Empirical (P11) rule 8 —
+#   protect the feedback loop from the agent it constrains. `verify` exits 3 on any
+#   `Test-Unlock:` release, and the job stays red. What happens next is a person's call:
+#   merge over the red check deliberately, or remove the release. No workflow input can
+#   accept it, because an agent holding the same credentials could set that input too.
+# plan-drift (advisory): the diff is compared with the plan's "Files that change".
+#   Pipeline (P4) plan sync. Flip continue-on-error to false and add --strict to gate.
+#
+# Every value reaches a `run:` block through `env:`, never as an inline expression.
+name: SDLC gates
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test-lock:
+    name: test-lock verify
+    runs-on: ${{ vars.CI_RUNNER_LABELS && fromJSON(vars.CI_RUNNER_LABELS) || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Fetch bstack
+        env:
+          BSTACK_REF: v0.41.0
+        run: git clone --quiet --depth 1 --branch "$BSTACK_REF" https://github.com/broomva/bstack.git "$RUNNER_TEMP/bstack"
+      - name: Locked tests are unchanged
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: python3 "$RUNNER_TEMP/bstack/scripts/test_lock.py" verify --base "origin/$BASE_REF"
+
+  plan-drift:
+    name: plan-drift (advisory)
+    runs-on: ${{ vars.CI_RUNNER_LABELS && fromJSON(vars.CI_RUNNER_LABELS) || 'ubuntu-latest' }}
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Fetch bstack
+        env:
+          BSTACK_REF: v0.41.0
+        run: git clone --quiet --depth 1 --branch "$BSTACK_REF" https://github.com/broomva/bstack.git "$RUNNER_TEMP/bstack"
+      - name: Diff matches the plan
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -o pipefail   # keep plan_drift's exit status through `| tee` (matters once --strict is added)
+          printf '%s\n' "$PR_BODY" > "$RUNNER_TEMP/pr-body.md"
+          python3 "$RUNNER_TEMP/bstack/scripts/plan_drift.py" \
+            --base "origin/$BASE_REF" --pr-body "$RUNNER_TEMP/pr-body.md" \
+            --json "$RUNNER_TEMP/plan-drift.json" | tee -a "$GITHUB_STEP_SUMMARY"

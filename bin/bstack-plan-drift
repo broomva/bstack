@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# bstack-plan-drift — does the merged diff still match the committed plan.md?
+# (BRO-2542). Thin shim that dispatches to scripts/plan_drift.py, mirroring the
+# bstack-fleet shim pattern. Forwards argv unchanged.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PLAN_DRIFT_PY="$SCRIPT_DIR/scripts/plan_drift.py"
+
+if [ ! -f "$PLAN_DRIFT_PY" ]; then
+  echo "bstack-plan-drift: scripts/plan_drift.py not found at $PLAN_DRIFT_PY" >&2
+  exit 2
+fi
+
+exec python3 "$PLAN_DRIFT_PY" "$@"

@@ -1,0 +1,72 @@
+# Linear back-link — copy to .github/workflows/linear-backlink.yml (bstack ≥ 0.41.0).
+#
+# Tickets (P3): the link runs both directions. Commits carry the ticket ID forward;
+# when a PR merges, this attaches the PR URL and the merge SHA back onto every ticket
+# the PR names (title, body or branch). A one-way link is not linkage.
+#
+# Needs the secret LINEAR_API_KEY. Without it the job reports the IDs it would have
+# linked and exits 0, so a missing credential is visible in the summary, not silent.
+# ID_PATTERN is a regex for your team keys; the default matches any KEY-123.
+name: Linear back-link
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+
+jobs:
+  backlink:
+    if: github.event.pull_request.merged == true
+    runs-on: ${{ vars.CI_RUNNER_LABELS && fromJSON(vars.CI_RUNNER_LABELS) || 'ubuntu-latest' }}
+    steps:
+      - name: Attach PR + merge SHA to the tickets
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          ID_PATTERN: ${{ vars.LINEAR_ID_PATTERN || '[A-Z]{2,5}-[0-9]+' }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_BRANCH: ${{ github.event.pull_request.head.ref }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re, urllib.request
+          env = os.environ
+          # A PR implements the tickets its title, branch, first body line, or a
+          # Closes/Fixes/Resolves/Ticket line names. A ticket the body merely cites is
+          # evidence, not work done, and is not linked. Title and body match
+          # case-sensitively, so "UTF-8" or "SHA-256" in prose never read as tickets.
+          # The branch matches case-insensitively, because git branches are lowercase.
+          body = env.get("PR_BODY", "").splitlines()
+          named = body[:1] + [l for l in body if re.match(r"\s*(Closes|Fixes|Resolves|Ticket|Linear)\b", l, re.I)]
+          pat = env["ID_PATTERN"]
+          ids = set(re.findall(pat, "\n".join([env.get("PR_TITLE", "")] + named)))
+          ids |= {m.upper() for m in re.findall(pat, env.get("PR_BRANCH", ""), flags=re.I)}
+          ids = sorted(ids)
+          summary = open(env["GITHUB_STEP_SUMMARY"], "a")
+          if not ids:
+              summary.write("No ticket ID found in the PR title, body or branch.\n"); raise SystemExit(0)
+          if not env.get("LINEAR_API_KEY"):
+              summary.write(f"LINEAR_API_KEY is not set; would have linked {', '.join(ids)} to {env['MERGE_SHA']}.\n"); raise SystemExit(0)
+          q = ("mutation($i:String!,$t:String!,$s:String!,$u:String!)"
+               "{attachmentCreate(input:{issueId:$i,title:$t,subtitle:$s,url:$u}){success}}")
+          failed = []
+          for i in ids:
+              body = json.dumps({"query": q, "variables": {"i": i, "u": env["PR_URL"],
+                     "t": f"PR #{env['PR_NUMBER']} merged", "s": f"merge {env['MERGE_SHA']}"}}).encode()
+              req = urllib.request.Request("https://api.linear.app/graphql", data=body,
+                     headers={"Content-Type": "application/json", "Authorization": env["LINEAR_API_KEY"]})
+              try:
+                  res = json.load(urllib.request.urlopen(req, timeout=20))
+                  ok = bool(res.get("data", {}).get("attachmentCreate", {}).get("success"))
+              except Exception as e:
+                  ok, res = False, {"error": str(e)}
+              summary.write(f"{i}: {'linked' if ok else 'FAILED'}\n")
+              if not ok:
+                  failed.append((i, res))
+          if failed:
+              print(json.dumps(failed)); raise SystemExit(1)
+          PY

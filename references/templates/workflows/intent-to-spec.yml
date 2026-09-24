@@ -1,0 +1,110 @@
+# Intent → spec — copy to .github/workflows/intent-to-spec.yml (bstack ≥ 0.41.0).
+#
+# Tickets (P3) artifact chain: "an accepted intent.md triggers the requirements and
+# design pass". When an intent lands on the default branch with `Status: accepted`, has
+# no spec yet, and has no open spec PR, `claude -p` drafts docs/specs/<intent-name>.md
+# and the workflow opens it as a PR. The product owner reviews the spec; they do not
+# write it.
+#
+# The model returns text; a program writes the file. The draft is produced in a throwaway
+# clone with no credentials, using Read/Grep/Glob only (no shell, no MCP servers). Only
+# the steps that talk to GitHub hold a token.
+#
+# Off by default, because it spends model time on every accepted intent. Enable it by
+# setting the repository variable SDLC_INTENT_TO_SPEC=true.
+name: Intent to spec
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'intent/**.md'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: intent-to-spec
+  cancel-in-progress: false
+
+jobs:
+  spec:
+    if: vars.SDLC_INTENT_TO_SPEC == 'true'
+    runs-on: ${{ vars.AGENT_EVAL_RUNNER_LABELS && fromJSON(vars.AGENT_EVAL_RUNNER_LABELS) || 'self-hosted' }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Fetch bstack
+        env:
+          BSTACK_REF: v0.41.0
+        run: git clone --quiet --depth 1 --branch "$BSTACK_REF" https://github.com/broomva/bstack.git "$RUNNER_TEMP/bstack"
+      - name: Which accepted intents need a spec?
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          : > "$RUNNER_TEMP/todo.txt"
+          git diff --name-only --no-ext-diff "$BEFORE" HEAD -- 'intent/*.md' > "$RUNNER_TEMP/changed.txt"
+          while read -r f; do
+            [ -f "$f" ] || continue
+            status=$(python3 "$RUNNER_TEMP/bstack/scripts/intent.py" status "$f" || true)
+            [ "$status" = "accepted" ] || { echo "skip $f: status is '$status'"; continue; }
+            name=$(basename "$f" .md)
+            [ -e "docs/specs/$name.md" ] && { echo "skip $f: docs/specs/$name.md exists"; continue; }
+            # An open spec PR from this repo (not a fork) already covers it. A branch left
+            # behind by a closed or merged PR does not.
+            n=$(gh pr list --state open --head "spec/$name" --json number,isCrossRepository \
+                  -q '[.[] | select(.isCrossRepository | not)] | length')
+            [ "${n:-0}" -gt 0 ] && { echo "skip $f: spec/$name already has an open PR"; continue; }
+            echo "$f $name" >> "$RUNNER_TEMP/todo.txt"
+          done < "$RUNNER_TEMP/changed.txt"
+      - name: Draft each spec in a throwaway clone (no token in this step)
+        env:
+          CLAUDE_BIN: ${{ vars.CLAUDE_BIN || 'claude' }}
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.local/bin:$PATH"
+          : > "$RUNNER_TEMP/drafted.txt"
+          while read -r f name; do
+            src="$RUNNER_TEMP/src-$name"
+            git clone --quiet --no-local . "$src"
+            # stdin from /dev/null: `claude -p` reads piped stdin, which here is this loop's input.
+            (cd "$src" && "$CLAUDE_BIN" -p "Read $f and write a requirements and design spec for integrating it into this codebase. Apply the skills available to you so it conforms to our standards. Describe clearly any areas of concern, especially where you cannot satisfy contradicting policies. Return the whole spec, in markdown, as your reply; do not write any file." \
+              --tools "Read Grep Glob" --allowedTools "Read,Grep,Glob" --restricted --strict-mcp-config \
+              --permission-mode dontAsk --output-format json < /dev/null > "$RUNNER_TEMP/$name.json") || true
+            python3 - "$RUNNER_TEMP/$name.json" "docs/specs/$name.md" <<'PY' || { echo "::warning::no spec drafted for $f"; continue; }
+          import json, os, sys
+          try:
+              data = json.load(open(sys.argv[1]))
+          except (OSError, ValueError):
+              raise SystemExit(1)
+          reply = (data.get("result") or "").strip()
+          if data.get("is_error") or not reply:
+              raise SystemExit(1)
+          os.makedirs(os.path.dirname(sys.argv[2]), exist_ok=True)
+          open(sys.argv[2], "w").write(reply + "\n")
+          PY
+            echo "$f $name" >> "$RUNNER_TEMP/drafted.txt"
+          done < "$RUNNER_TEMP/todo.txt"
+      - name: Open one PR per drafted spec
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          while read -r f name; do
+            branch="spec/$name"
+            git switch -q -C "$branch" origin/main
+            git add "docs/specs/$name.md"
+            git -c user.name="intent-to-spec" -c user.email="intent-to-spec@users.noreply.github.com" commit -q -m "spec: $name (from $f)"
+            # One-shot helper: nothing is written to the runner's git config. The bot's branch
+            # can outlive a closed or merged PR (the earlier check ruled out an open one), so it
+            # is replaced; a closed PR's commits stay reachable at refs/pull/<n>/head.
+            git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push -q --force origin "$branch"
+            gh pr create --head "$branch" --title "spec: $name" --body "Drafted by \`claude -p\` from the accepted \`$f\`. Review against the intent: does it solve the stated problem, and are the open questions answered or carried forward? Resolve flagged concerns with their policy owners before engineering plans against it."
+            git switch -q main
+          done < "$RUNNER_TEMP/drafted.txt"

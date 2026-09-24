@@ -1,5 +1,5 @@
 {
-  "description": "bstack governance hooks. Paths self-locate via ${CLAUDE_PLUGIN_ROOT} so they survive reinstalls and are invisible to the skills CLI. The two hooks that WRITE <workspace>/.control (knowledge-wakeup via leverage-ship-sensor; leverage-sensor at Stop) run through bstack-hook-guard.sh, which no-ops them outside a bstack-governed workspace so this personal-scope plugin never pollutes non-bstack repos. arc-continuation + autonomous-posture are session-scoped, self-guarding, and write nothing to the workspace, so they run unwrapped (wrapping them would false-negative the loop-stall logic when cwd is a nested non-governed repo). l3-stability is source-guarded internally. bstack-autoupdate is workspace-agnostic (global). Primitive map: SessionStart = P6 knowledge-wakeup + P7 autoupdate; Stop = P19 arc-continuation + loop-sensor; UserPromptSubmit = P19 autonomous-posture; PreToolUse = L3-G0 gate.",
+  "description": "bstack governance hooks. Paths self-locate via ${CLAUDE_PLUGIN_ROOT} so they survive reinstalls and are invisible to the skills CLI. The two hooks that WRITE <workspace>/.control (knowledge-wakeup via leverage-ship-sensor; leverage-sensor at Stop) run through bstack-hook-guard.sh, which no-ops them outside a bstack-governed workspace so this personal-scope plugin never pollutes non-bstack repos. arc-continuation + autonomous-posture are session-scoped, self-guarding, and write nothing to the workspace, so they run unwrapped (wrapping them would false-negative the loop-stall logic when cwd is a nested non-governed repo). l3-stability is source-guarded internally. bstack-autoupdate is workspace-agnostic (global). Primitive map: SessionStart = P6 knowledge-wakeup + P7 autoupdate; Stop = P19 arc-continuation + loop-sensor; UserPromptSubmit = P19 autonomous-posture; PreToolUse = L3-G0 gate + P11 test-lock (blocks edits to tests committed under a Test-Lock: trailer; fail-open on internal error, `bstack test-lock verify` in CI is the backstop).",
   "hooks": {
     "SessionStart": [
       {
@@ -51,6 +51,16 @@
           {
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/l3-stability-pretool-hook.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/test-lock-hook.sh\"",
+            "timeout": 5
           }
         ]
       }

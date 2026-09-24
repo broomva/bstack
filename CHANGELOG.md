@@ -1,5 +1,77 @@
 # Changelog
 
+## 0.41.0 — unreleased
+
+### feat(sdlc): the AI-native SDLC playbook's twelve plays, held by mechanisms rather than prose
+
+Anthropic's *AI-native SDLC playbook* (Claude Academy course
+<https://academy.claude.com/courses/ai-native-sdlc-playbook/introduction>) names twelve
+plays. [references/ai-native-sdlc.md](references/ai-native-sdlc.md) maps each onto an
+existing primitive, so the count stays at twenty, and names the mechanism that holds it.
+Where bstack keeps its own rule (CLAUDE.md size, rule of three, gating on a cross-model
+verdict), the divergence is written down with its reason.
+
+Six commands, each with a unittest suite behind a no-skip wrapper and one-line mutations
+proven red:
+
+- **`bstack test-lock`** (Empirical, P11). The course's play, "a hook that blocks edits to
+  test files during a fix task", made tamper-evident.
+  - A failing test is committed under a `Test-Lock: <path> sha256=<hex>` trailer.
+  - The plugin's PreToolUse hook blocks writes to a locked test: Edit, Write, MultiEdit and
+    NotebookEdit, and Bash commands whose write target is locked.
+  - `verify` is the gate:
+    - It fails on content drift, on a lock without a hash, and on a lock commit whose content
+      no longer matches its trailer (`commit --amend --no-edit`; an amend with `-m` replaces
+      the message and so drops the lock, which is visible only in review).
+    - It exits 3 on any `Test-Unlock:` release, and stays red until a person acts.
+    - It parses trailers in-process from raw commits, so no git config can hide a lock.
+    - It fails closed (exit 2) on any scan error.
+  - It is **not** a security boundary against an agent that forges git objects with your
+    credentials or drops the lock commit. Both are visible only in review, and the CI run
+    on a fresh checkout is the real gate.
+- **`bstack evals`** (P11). Continuous evals of the agent's configuration over `claude -p`.
+  - Each eval runs in a standalone scratch repository holding one orphan commit of HEAD's
+    files, with the evals directory hidden.
+  - Git config the agent plants there (fsmonitor, hooks, and every filter, diff and merge
+    driver, LFS included) is neutralized for the commands the runner starts.
+  - The agent under test sees only the built-in tools its `allowed_tools` names, with no MCP
+    servers and `dontAsk`, in a path-scrubbed environment.
+  - `validate --prove` requires three things of every eval: the reference passes, each named
+    `violations` arm fails a check, and a no-op agent replying "I have completed the task."
+    fails. Violation arms are scored with the reference's passing reply, so only a state
+    check (file, git or command) can catch a violation. When only the reply catches the
+    no-op, prove warns.
+  - `--gate` fails on any per-eval regression over the evals both runs share, and on a
+    passing eval that was removed.
+- **`bstack bands`** (P11). A deterministic Western Electric control-band detector with no
+  model in it.
+  - At 2σ and 3σ it writes the next `intent.md`; `intent --json` gives a `dedupe_key`.
+  - The diagnosis has Read, Grep, Glob and LS only: no shell, no MCP servers.
+  - The template runs the diagnosis in a throwaway clone without credentials. The model
+    returns text, and the workflow writes it.
+  - The series drops the incomplete current day.
+  - A baseline too small to judge reports `insufficient_baseline`, never `none`.
+- **`bstack plan-drift`** (Pipeline, P4). Does the diff still match the plan's "Files that
+  change"? Each commit is judged against the plan as it stood at that commit, so a later
+  plan edit cannot hide an earlier departure.
+- **`bstack managed-hooks`** (Gate, P2). Which hooks survive `allowManagedHooksOnly`?
+  Under that key, user, project and local hooks are blocked, and so is `/goal`.
+  `--fail-on-critical` exits 1 when a governance hook would be blocked.
+- **`bstack intent`** (Tickets, P3). `new`, `lint`, `status` and `set-status` for the
+  Stage-1 artifact.
+
+Templates in `references/templates/`:
+- `intent.md`, `plan.md`, `REVIEW.md`
+- `bands.example.yaml`, `eval.example.json`, `managed-settings.example.json`
+- six workflows (`sdlc-gates`, `agent-evals`, `ci-triage`, `bands`, `intent-to-spec`,
+  `linear-backlink`)
+
+`tests/workflow-injection-safety.test.sh` now scans the workflow templates too, because a
+sink in a template becomes a sink in every repo that copies it.
+
+`references/primitives.md` gains the matching clauses: P2 Surface, P3 Artifact chain, P4
+Plan sync, P11 rules 8–10, and P20 Review policy file.
+
 ## 0.40.3 — 2026-09-12
 
 ### feat(asks): the ask ledger ships with the skill that requires it, and one command sees every arc
