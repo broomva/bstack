@@ -13,8 +13,14 @@ https://academy.claude.com/courses/ai-native-sdlc-playbook/closing-the-loop-on-m
 INVARIANT: detection never involves a model. The tier is a pure function of
 (config, series): mean and sample standard deviation over a rolling window, plus
 the four Western Electric rules. The intent file is a pure function of (config,
-result, date). A model enters only downstream, through `diagnose-cmd`, and only
-with read-only tools — this script refuses to build that command otherwise.
+result, date). A model enters only downstream, through `diagnose-cmd`, whose tool
+grant is an ALLOWLIST that fails closed: Read, Grep, Glob, LS, and Bash only as
+`Bash(<prefix> *)` for a fixed set of read verbs (DIAGNOSE_BASH_PREFIXES). Any
+other token — a write tool, an MCP tool, Agent, Skill, a wider Bash glob — is
+refused when the config loads. That bounds what the session is GRANTED; it is not
+a sandbox. Hooks configured for the runner still fire under `claude -p`, and
+`git diff/log/show --output=<file>` can write a file, so run the diagnosis in a
+throwaway checkout without write credentials in its environment.
 
 Second invariant: an unmeasurable band never presents as a healthy one. Too few
 baseline points yields tier `insufficient_baseline`, never `none`, and under
@@ -41,14 +47,15 @@ Algorithm
 
 Subcommands
   check <bands.yaml> --series F|- [--json] [--fail-on 1sigma|2sigma|3sigma]
-  intent <bands.yaml> --result R --out-dir D [--date YYYY-MM-DD] [--force]
-  series ci-failure-rate --runs-json F|-
-  diagnose-cmd <bands.yaml> --intent FILE
+  intent <bands.yaml> --result R --out-dir D [--date YYYY-MM-DD] [--force] [--json]
+  series ci-failure-rate --runs-json F|- [--include-today] [--now ISO]
+  diagnose-cmd <bands.yaml> (--result R | --tier T) --intent FILE
 
 Exit codes
-  0  ok (including "breach found" when --fail-on is not given)
+  0  ok (including "breach found" when --fail-on is not given, and a
+     diagnose-cmd skip when no diagnose tools are configured)
   2  config or input error: bad YAML, schema violation, unreadable series,
-     a write-capable diagnose tool, a result that does not match its config
+     a diagnose tool outside the allowlist, a result that does not match its config
   3  check --fail-on T: the tier is at or above T
   4  check --fail-on T: the baseline is insufficient, so the band is unmeasured.
      Not 0: a gate that read "unmeasured" as "healthy" would pass anything.
@@ -87,8 +94,17 @@ RULES = {
     "R3": "4 of the last 5 points are beyond 1σ on the same side",
     "R4": "the last 8 points are all on the same side of the mean",
 }
-# Diagnose is read-only by contract. These are the tools that write files; an
-# unscoped Bash is refused alongside them because it can write anything.
+# Diagnose is read-only by contract, so its tools are an ALLOWLIST: a deny-list
+# let `Bash(gh *)`, `Bash(rm *)`, `mcp__*` and `Agent` through, because the set of
+# things that can write is open and the set of things needed to read is small.
+# Tokens are compared exactly after whitespace normalisation; no other shape
+# (another glob, the legacy `:*` form, a different case) is accepted.
+DIAGNOSE_TOOLS = ("Read", "Grep", "Glob", "LS")
+DIAGNOSE_BASH_PREFIXES = ("gh run view", "gh run list", "gh pr view", "git log", "git show",
+                          "git diff", "git status", "cat", "ls", "head", "tail", "wc")
+DIAGNOSE_BASH = tuple(f"Bash({p} *)" for p in DIAGNOSE_BASH_PREFIXES)
+# Denied again on the command line, belt to the allowlist's braces: a project
+# settings file can pre-approve tools, and --allowedTools only adds to that.
 WRITE_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 REQUIRED_KEYS = ("metric", "baseline", "min_baseline_points", "rules", "direction",
                  "tiers", "intent")
@@ -98,7 +114,6 @@ _METRIC_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _BASELINE_RE = re.compile(r"^rolling_([1-9][0-9]*)(d?)$")
 _ROUTE_RE = re.compile(r"^(pull_request|runbook:[A-Za-z0-9][A-Za-z0-9_.-]*)$")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-_TOOL_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
 
 DIAGNOSE_PROMPT = (
     "Read the intent file at {intent}. A deterministic control-band detector wrote it: "
@@ -157,27 +172,50 @@ def tool_tokens(tools: str) -> list[str]:
     return out
 
 
-def tool_errors(tools) -> list[str]:
-    """Why a diagnose tier's tools are not read-only. Empty list means they are.
+def normalize_tool(tok: str) -> str:
+    """`Bash( gh  run view * )` -> `Bash(gh run view *)`. Nothing else is rewritten:
+    case, the name, and the glob shape are compared as written."""
+    name, paren, rest = tok.partition("(")
+    if not paren or not rest.endswith(")"):
+        return tok
+    return f"{name}({' '.join(rest[:-1].split())})"
 
-    Refuses the file-writing tools, an unscoped Bash, and any token that is not
-    tool-shaped — a token starting with '-' would be read by the CLI as a flag,
-    which is how `--dangerously-skip-permissions` could ride in on a tools string.
+
+def tool_errors(tools) -> list[str]:
+    """Why a diagnose tools string is not on the allowlist. Empty list means it is.
+
+    Fails closed: a token is accepted only if, once normalised, it EQUALS one of
+    DIAGNOSE_TOOLS or DIAGNOSE_BASH. So a write tool, `Bash(rm *)`, `Bash(gh *)`,
+    `Bash(**)`, `mcp__*`, `Agent`, `Skill`, a lower-cased `read`, or a token
+    starting with '-' (which the CLI would parse as a flag) is refused without
+    needing a rule of its own.
     """
     if not isinstance(tools, str) or not tools.strip():
         return ["diagnose needs a non-empty 'tools' string (e.g. \"Read,Grep\")"]
+    allowed = set(DIAGNOSE_TOOLS) | set(DIAGNOSE_BASH)
     errs = []
-    write = {t.lower() for t in WRITE_TOOLS}
     for tok in tool_tokens(tools):
-        name, paren, rest = tok.partition("(")
-        if not _TOOL_NAME_RE.match(name):
-            errs.append(f"tool {tok!r} is not a tool name")
-        elif name.lower() in write:
-            errs.append(f"tool {tok!r} writes files; diagnose is read-only by contract")
-        elif name.lower() == "bash" and (not paren or rest.rstrip(")").strip() in ("", "*")):
-            errs.append(f"tool {tok!r} is an unscoped shell; diagnose is read-only by "
-                        f"contract, so scope it, e.g. Bash(gh run view *)")
+        if normalize_tool(tok) not in allowed:
+            errs.append(f"tool {tok!r} is not on the read-only diagnose allowlist "
+                        f"({', '.join(DIAGNOSE_TOOLS)}, or Bash(<prefix> *) with a prefix "
+                        f"in: {', '.join(DIAGNOSE_BASH_PREFIXES)})")
     return errs
+
+
+def normalized_tools(tools: str) -> str:
+    """The tools string as it is granted: the exact tokens tool_errors checked."""
+    return ",".join(normalize_tool(t) for t in tool_tokens(tools))
+
+
+def base_tools(tools: str) -> str:
+    """`Read,Grep,Bash(gh run view *)` -> `Read Grep Bash`: the tool NAMES the
+    session may see at all (--tools), deduplicated in first-seen order."""
+    names: list[str] = []
+    for t in tool_tokens(tools):
+        name = normalize_tool(t).partition("(")[0]
+        if name not in names:
+            names.append(name)
+    return " ".join(names)
 
 
 def validate_config(cfg) -> list[str]:
@@ -273,7 +311,9 @@ def _validate_tiers(tiers: dict) -> list[str]:
         for k in t:
             if k not in TIER_KEYS[action]:
                 errs.append(f"{where}: key {k!r} does not apply to action {action!r}")
-        if action == "diagnose":
+        # Wherever `tools` appears, its only consumer is diagnose-cmd, so the same
+        # read-only allowlist applies to a propose tier's tools as to a diagnose tier's.
+        if action == "diagnose" or "tools" in t:
             errs.extend(f"{where}: {e}" for e in tool_errors(t.get("tools")))
         if action == "propose":
             routes = t.get("routes")
@@ -566,11 +606,16 @@ def _cell(v) -> str:
             .replace("\r", " ").replace("\n", " ").strip())
 
 
-def _permits(tier: str, t_cfg: dict) -> str:
-    action = t_cfg["action"]
-    if action == "diagnose":
+def _permits(cfg: dict, tier: str) -> str:
+    """What this tier lets Claude do. The tools named here are the ones
+    `diagnose-cmd` grants at this tier, normalised the same way, so the command
+    can never exceed what the intent records."""
+    t_cfg = cfg["tiers"][tier]
+    tools = diagnose_tools(cfg, tier)
+    shown = f"`{normalized_tools(tools)}`" if tools else "no tools (none configured)"
+    if t_cfg["action"] == "diagnose":
         return (f"This tier ({tier}, action: diagnose) permits a read-only diagnosis only. "
-                f"Claude may use `{t_cfg['tools']}` and may not edit files, open pull "
+                f"Claude may use {shown} and may not edit files, open pull "
                 f"requests or trigger runbooks. The diagnosis comes back as a "
                 f"`## Diagnosis` section for a human to act on.")
     lines = [f"This tier ({tier}, action: propose) permits Claude to act, but only "
@@ -581,13 +626,14 @@ def _permits(tier: str, t_cfg: dict) -> str:
         else:
             lines.append(f"- trigger the pre-approved runbook `{r.split(':', 1)[1]}`")
     lines += ["", "Nothing else, and nothing that bypasses review."]
+    if tools:
+        lines += ["", f"A read-only diagnosis with {shown} may run first."]
     return "\n".join(lines)
 
 
 def render_intent(cfg: dict, result: dict, config_path) -> str:
     """intent.md in the Stage 1: Plan shape. Deterministic, no model."""
     metric, tier = result["metric"], result["tier"]
-    t_cfg = cfg["tiers"][tier]
     b, ev, fired = result["baseline"], result["evaluated"], result["rules_fired"]
     last = ev[-1]
     mean, std = b["mean"], b["std"]
@@ -618,7 +664,7 @@ def render_intent(cfg: dict, result: dict, config_path) -> str:
         f"Return `{metric}` to within its 1σ band, [{_fmt(mean - std)}, {_fmt(mean + std)}] "
         f"(baseline mean ± one sample standard deviation), and keep it there.",
         "",
-        _permits(tier, t_cfg),
+        _permits(cfg, tier),
         "",
         "## Affected users and systems",
         "",
@@ -657,7 +703,8 @@ def _check_date(s: str) -> str:
 # neutral and action_required say nothing about whether the code works.
 FAILED_CONCLUSIONS = ("failure", "timed_out", "startup_failure")
 
-def ci_failure_rate(runs) -> list[dict]:
+def ci_failure_rate(runs, now: _dt.datetime | None = None,
+                    include_today: bool = False) -> list[dict]:
     """`gh run list --json conclusion,createdAt,status` -> daily failure share.
 
     Counts completed runs. A run that timed out or never started failed, as far as
@@ -668,7 +715,14 @@ def ci_failure_rate(runs) -> list[dict]:
     zero there would read as "nothing failed" when nothing was measured. `n` is
     the number of runs counted that day (ignored by `check`). gh lists 20 runs by
     default, so a caller wants `--limit` large enough to cover the window.
+
+    The current UTC day (and any later one) is dropped unless include_today: it is
+    incomplete, and as the LAST point it is exactly the point R1 and R2 judge. A
+    scheduled run at 06:00 UTC would otherwise compare six hours of today (one
+    failure in two runs) against full days and open a 3σ intent from one failure.
+    `now` is naive UTC and defaults to the clock; tests pass it.
     """
+    today = (now or _dt.datetime.now(_dt.timezone.utc).replace(tzinfo=None)).date()
     if not isinstance(runs, list):
         raise BandsError("runs JSON must be an array (the output of gh run list --json)")
     days: dict[str, list[int]] = {}
@@ -683,6 +737,8 @@ def ci_failure_rate(runs) -> list[dict]:
             day = parse_t(r.get("createdAt")).date().isoformat()
         except BandsError as e:
             raise BandsError(f"runs[{i}].createdAt: {e}")
+        if not include_today and day >= today.isoformat():
+            continue
         counts = days.setdefault(day, [0, 0])
         counts[conclusion in FAILED_CONCLUSIONS] += 1
     return [{"t": d, "v": f / (s + f), "n": s + f}
@@ -691,23 +747,47 @@ def ci_failure_rate(runs) -> list[dict]:
 
 # --- diagnose ---------------------------------------------------------------------
 
-def diagnose_argv(cfg: dict, intent_path) -> list[str]:
-    """The exact argv for the diagnose tier. Refuses anything not read-only.
+def diagnose_tools(cfg: dict, tier: str):
+    """The tools string a diagnosis at `tier` runs with, or None if none is configured.
+
+    The breaching tier's own `tools` when it defines them, else the 2sigma tier's.
+    Using 2sigma's unconditionally let the command exceed what a 3sigma intent
+    recorded, and made a valid cautious config (2sigma: log) fail every run.
+    """
+    tiers = cfg.get("tiers") or {}
+    tools = (tiers.get(tier) or {}).get("tools")
+    if tools is None:
+        tools = (tiers.get("2sigma") or {}).get("tools")
+    return tools
+
+
+def diagnose_argv(cfg: dict, tier: str, intent_path):
+    """The exact argv for a read-only diagnosis at `tier`, or None when no diagnose
+    tools are configured. Refuses any tool outside the allowlist.
 
     Checked here as well as in validate_config: this function is importable, and a
     caller that built `cfg` by hand must not get a write-capable command out of it.
     """
-    t_cfg = (cfg.get("tiers") or {}).get("2sigma") or {}
-    if t_cfg.get("action") != "diagnose":
-        raise BandsError(f"tiers.2sigma action is {t_cfg.get('action')!r}, not 'diagnose'; "
-                         f"there is no diagnose command to build")
-    errs = tool_errors(t_cfg.get("tools"))
+    tools = diagnose_tools(cfg, tier)
+    if tools is None:
+        return None
+    errs = tool_errors(tools)
     if errs:
         raise BandsError("refusing to build a diagnose command: " + "; ".join(errs))
-    # Never --dangerously-skip-permissions: under -p, --allowedTools is then the
-    # whole grant, and tool_errors has just proved it read-only.
+    # --allowedTools only PRE-APPROVES; it does not remove other tools, and the
+    # repo's own settings can pre-approve more. So: --tools limits the tools the
+    # session can see at all to the allowlisted names (a settings-approved tool
+    # outside them does not exist for it); --allowedTools narrows Bash to the
+    # allowlisted prefixes; --permission-mode dontAsk denies whatever is not
+    # pre-approved instead of prompting; --disallowedTools denies the write tools
+    # even if a settings allow rule names them. Hooks still run: this is a grant,
+    # not a sandbox. Never --dangerously-skip-permissions.
     return ["claude", "-p", DIAGNOSE_PROMPT.format(intent=intent_path),
-            "--allowedTools", t_cfg["tools"], "--output-format", "json"]
+            "--tools", base_tools(tools),
+            "--allowedTools", normalized_tools(tools),
+            "--disallowedTools", " ".join(WRITE_TOOLS),
+            "--permission-mode", "dontAsk",
+            "--output-format", "json"]
 
 
 # --- CLI ------------------------------------------------------------------------------
@@ -748,32 +828,43 @@ def cmd_intent(args) -> int:
     if metric != cfg["metric"]:
         raise BandsError(f"result is for metric {metric!r} but the config is for "
                          f"{cfg['metric']!r}")
-    if tier not in BAND_TIERS:
-        print(f"{metric}: tier {tier}; no breach to write an intent for")
+
+    def report(path, created: bool, action: str, message: str) -> int:
+        # --json is the machine contract: a caller proceeds (diagnose, open a PR)
+        # only on created=true. `created` is false whenever the file already
+        # existed, --force or not, so a re-run never re-diagnoses a filed intent.
+        if args.json:
+            print(json.dumps({"path": str(path) if path else None, "created": created,
+                              "tier": tier, "action": action}))
+        else:
+            print(message)
         return 0
+
+    if tier not in BAND_TIERS:
+        return report(None, False, "none", f"{metric}: tier {tier}; no breach to write an "
+                                           f"intent for")
     action = action_for(cfg, tier)
     if result.get("action") != action:
         raise BandsError(f"result says action {result.get('action')!r} for {tier} but this "
                          f"config says {action!r}; re-run check with this config")
     if action == "log":
-        print(f"log only: {metric} is at {tier} ({', '.join(result['rules_fired'])}); "
-              f"no intent written")
-        return 0
+        return report(None, False, action,
+                      f"log only: {metric} is at {tier} ({', '.join(result['rules_fired'])}); "
+                      f"no intent written")
     date = _check_date(args.date) if args.date else \
         parse_t(result["evaluated"][-1]["t"]).date().isoformat()
     out_dir = Path(args.out_dir)
     path = out_dir / f"{date}-{metric}-{tier}.md"
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
-        if path.exists() and not args.force:
-            print(path)
+        existed = path.exists()
+        if existed and not args.force:
             print(f"bands: {path} exists; not overwritten (pass --force)", file=sys.stderr)
-            return 0
+            return report(path, False, action, str(path))
         path.write_text(render_intent(cfg, result, args.config), encoding="utf-8")
     except OSError as e:
         raise BandsError(f"cannot write {path}: {e}")
-    print(path)
-    return 0
+    return report(path, not existed, action, str(path))
 
 
 def cmd_series(args) -> int:
@@ -781,15 +872,34 @@ def cmd_series(args) -> int:
         runs = json.loads(read_input(args.runs_json))
     except json.JSONDecodeError as e:
         raise BandsError(f"{args.runs_json}: unparseable JSON: {e}")
-    print(json.dumps(ci_failure_rate(runs), indent=2))
+    now = parse_t(args.now) if args.now else None
+    print(json.dumps(ci_failure_rate(runs, now=now, include_today=args.include_today),
+                     indent=2))
     return 0
 
 
 def cmd_diagnose(args) -> int:
     cfg = load_config(args.config)
+    if args.result:
+        result = load_result(args.result)
+        if result["metric"] != cfg["metric"]:
+            raise BandsError(f"result is for metric {result['metric']!r} but the config is "
+                             f"for {cfg['metric']!r}")
+        tier = result["tier"]
+    else:
+        tier = args.tier
+    # A skip is exit 0, never 2: a config that diagnoses nothing is a valid config,
+    # and a caller under `set -e` must not fail every run because of it.
+    if tier not in BAND_TIERS:
+        print(json.dumps({"skip": f"tier {tier} has nothing to diagnose"}))
+        return 0
+    argv = diagnose_argv(cfg, tier, args.intent)
+    if argv is None:
+        print(json.dumps({"skip": "no diagnose tools configured"}))
+        return 0
     if not Path(args.intent).is_file():
         raise BandsError(f"no intent file at {args.intent}")
-    print(json.dumps(diagnose_argv(cfg, args.intent)))
+    print(json.dumps(argv))
     return 0
 
 
@@ -811,15 +921,24 @@ def main(argv: list[str] | None = None) -> int:
     i.add_argument("--out-dir", required=True)
     i.add_argument("--date", help="YYYY-MM-DD (default: the date of the last evaluated point)")
     i.add_argument("--force", action="store_true", help="overwrite an existing intent file")
+    i.add_argument("--json", action="store_true",
+                   help='print {"path", "created", "tier", "action"}; created is false '
+                        'when the file already existed')
 
     s = sub.add_parser("series", help="build a series from raw data")
     s.add_argument("kind", choices=["ci-failure-rate"])
     s.add_argument("--runs-json", required=True,
                    help="gh run list --json conclusion,createdAt,status output; '-' for stdin")
+    s.add_argument("--include-today", action="store_true",
+                   help="keep the current, incomplete UTC day (dropped by default)")
+    s.add_argument("--now", help="ISO date/datetime to treat as now (default: the clock)")
 
     d = sub.add_parser("diagnose-cmd", help="print the read-only diagnose argv as JSON")
     d.add_argument("config", help="bands YAML")
     d.add_argument("--intent", required=True, help="the intent file to diagnose")
+    which = d.add_mutually_exclusive_group(required=True)
+    which.add_argument("--result", help="output of `check --json`; its tier picks the tools")
+    which.add_argument("--tier", choices=BAND_TIERS, help="the breaching tier")
 
     args = ap.parse_args(argv)
     handler = {"check": cmd_check, "intent": cmd_intent, "series": cmd_series,

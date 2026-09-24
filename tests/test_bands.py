@@ -101,12 +101,26 @@ def clean_env() -> dict:
 
 
 class TempDirCase(unittest.TestCase):
+    """A temp dir that is also the cwd, so a red run cannot write into the repo:
+    a cwd-relative path built from an unexpected message lands here instead."""
+
     def setUp(self):
         self._td = tempfile.TemporaryDirectory()
-        self.tmp = Path(self._td.name)
+        self.tmp = Path(self._td.name).resolve()
+        self._cwd = os.getcwd()
+        os.chdir(self.tmp)
 
     def tearDown(self):
+        os.chdir(self._cwd)
         self._td.cleanup()
+
+    def written(self, out: str) -> Path:
+        """The path `intent` printed, proven to be a file inside the temp dir."""
+        p = Path(out.strip())
+        self.assertTrue(p.is_absolute() and self.tmp in p.resolve().parents,
+                        f"intent did not print a path inside the temp dir: {out!r}")
+        self.assertTrue(p.is_file(), f"no file at {p}")
+        return p
 
     def series_file(self, values, name="s.json") -> Path:
         p = self.tmp / name
@@ -454,7 +468,7 @@ class IntentTest(TempDirCase):
     def test_intent_content(self):
         rc, out, _ = self.intent(self.result_file(R2_ONLY))
         self.assertEqual(rc, 0)
-        path = Path(out.strip())
+        path = self.written(out)
         self.assertEqual(path.name, "2026-09-28-ci_test_failure_rate-2sigma.md")
         text = path.read_text()
         lines = text.splitlines()
@@ -486,12 +500,12 @@ class IntentTest(TempDirCase):
         res = self.result_file(R2_ONLY)
         _, a, _ = self.intent(res, out="a")
         _, b, _ = self.intent(res, out="b")
-        self.assertEqual(Path(a.strip()).read_bytes(), Path(b.strip()).read_bytes())
+        self.assertEqual(self.written(a).read_bytes(), self.written(b).read_bytes())
 
     def test_intent_never_overwrites_without_force(self):
         res = self.result_file(R2_ONLY)
         _, out, _ = self.intent(res)
-        path = Path(out.strip())
+        path = self.written(out)
         path.write_text("hand-edited\n")
         rc, out2, err = self.intent(res)
         self.assertEqual(rc, 0)
@@ -525,7 +539,7 @@ class IntentTest(TempDirCase):
     def test_propose_tier_names_its_routes(self):
         rc, out, _ = self.intent(self.result_file(R1_ONLY))
         self.assertEqual(rc, 0)
-        text = Path(out.strip()).read_text()
+        text = self.written(out).read_text()
         self.assertIn("3sigma control band", text)
         self.assertIn("open a pull request into the review gate", text)
         self.assertIn("pre-approved runbook `rollback-deploy`", text)
@@ -535,7 +549,7 @@ class IntentTest(TempDirCase):
         res.write_text(json.dumps(run([10] * 12 + [10] * 7 + [11])))
         rc, out, _ = self.intent(res)
         self.assertEqual(rc, 0)
-        text = Path(out.strip()).read_text()
+        text = self.written(out).read_text()
         self.assertIn("| +inf |", text)
         self.assertIn("zero variance", text)
 
@@ -575,6 +589,33 @@ class IntentTest(TempDirCase):
         self.assertIn("re-run check", err)
 
 
+    def test_json_reports_created_then_not(self):
+        res = self.result_file(R2_ONLY)
+        rc, out, _ = self.intent(res, "--json")
+        self.assertEqual(rc, 0)
+        first = json.loads(out)
+        self.assertEqual({k: first[k] for k in ("created", "tier", "action")},
+                         {"created": True, "tier": "2sigma", "action": "diagnose"})
+        path = self.written(first["path"])
+        rc, out, _ = self.intent(res, "--json")
+        self.assertEqual(json.loads(out), {**first, "created": False})
+        # --force rewrites the file, but it existed: still not "created", so a caller
+        # gated on created=true does not re-diagnose a filed intent.
+        path.write_text("hand-edited\n")
+        rc, out, _ = self.intent(res, "--json", "--force")
+        self.assertEqual(json.loads(out)["created"], False)
+        self.assertTrue(path.read_text().startswith("# Intent:"))
+
+    def test_json_when_nothing_is_written(self):
+        rc, out, _ = self.intent(self.result_file(R4_ONLY), "--json")
+        self.assertEqual(json.loads(out), {"path": None, "created": False,
+                                           "tier": "1sigma", "action": "log"})
+        rc, out, _ = self.intent(self.result_file(QUIET, name="q.json"), "--json")
+        self.assertEqual(json.loads(out), {"path": None, "created": False,
+                                           "tier": "none", "action": "none"})
+        self.assertFalse((self.tmp / "intent").exists())
+
+
 # --- series adapter -------------------------------------------------------------
 
 class SeriesAdapterTest(TempDirCase):
@@ -591,34 +632,86 @@ class SeriesAdapterTest(TempDirCase):
         return [{"status": status, "conclusion": c, "createdAt": f"2026-09-01T0{i}:00:00Z"}
                 for i, c in enumerate(conclusions)]
 
+    NOW = dt.datetime(2026, 9, 24, 6, 41)       # a fixed clock, after every fixture day
+
+    def rate(self, runs, **kw):
+        return bands.ci_failure_rate(runs, now=kw.pop("now", self.NOW), **kw)
+
     def test_ci_failure_rate_fixture(self):
         runs = json.loads((FIX / "gh-runs.json").read_text())
-        self.assertEqual(bands.ci_failure_rate(runs), self.WANT)
+        self.assertEqual(self.rate(runs), self.WANT)
 
     def test_timed_out_counts_as_a_failure(self):
-        self.assertEqual(bands.ci_failure_rate(self.one_day("success", "timed_out")),
+        self.assertEqual(self.rate(self.one_day("success", "timed_out")),
                          [{"t": "2026-09-01", "v": 0.5, "n": 2}])
 
     def test_startup_failure_counts_as_a_failure(self):
-        self.assertEqual(bands.ci_failure_rate(self.one_day("success", "startup_failure")),
+        self.assertEqual(self.rate(self.one_day("success", "startup_failure")),
                          [{"t": "2026-09-01", "v": 0.5, "n": 2}])
 
     def test_non_verdict_conclusions_are_not_counted(self):
         for c in ("cancelled", "skipped", "neutral", "action_required", "stale", "", None):
             with self.subTest(conclusion=c):
-                self.assertEqual(bands.ci_failure_rate(self.one_day("success", c)),
+                self.assertEqual(self.rate(self.one_day("success", c)),
                                  [{"t": "2026-09-01", "v": 0.0, "n": 1}])
         # A run still going carries no conclusion yet, whatever the field says.
-        self.assertEqual(bands.ci_failure_rate(
+        self.assertEqual(self.rate(
             self.one_day("failure", status="in_progress")), [])
 
     def test_cli_output_feeds_check(self):
         rc, out, _ = call(["series", "ci-failure-rate", "--runs-json",
-                           str(FIX / "gh-runs.json")])
+                           str(FIX / "gh-runs.json"), "--now", "2026-09-24T06:41:00Z"])
         self.assertEqual(rc, 0)
         self.assertEqual(json.loads(out), self.WANT)
         pts = bands.parse_series(out, "adapter")
         self.assertEqual([p["t"] for p in pts], [w["t"] for w in self.WANT])
+
+    @staticmethod
+    def month_with_partial_today():
+        """25 full days of 20 runs at ~10% failures, then a 6-hour stub of today:
+        2 runs, 1 failed. Today is 2026-09-26; the scheduled run fires at 06:41Z."""
+        runs = []
+        for d in range(25):
+            day = dt.date(2026, 9, 1) + dt.timedelta(days=d)
+            fails = (1, 2, 3, 2)[d % 4]
+            for h in range(20):
+                runs.append({"status": "completed",
+                             "conclusion": "failure" if h < fails else "success",
+                             "createdAt": f"{day.isoformat()}T{h:02d}:00:00Z"})
+        runs += [{"status": "completed", "conclusion": c, "createdAt": f"2026-09-26T0{h}:00:00Z"}
+                 for h, c in enumerate(("failure", "success"))]
+        return runs
+
+    def test_partial_today_is_dropped_by_default(self):
+        runs = self.month_with_partial_today()
+        now = dt.datetime(2026, 9, 26, 6, 41)
+        series = self.rate(runs, now=now)
+        self.assertEqual(series[-1]["t"], "2026-09-25")
+        self.assertEqual(len(series), 25)
+        r = bands.evaluate(cfg(), bands.parse_series(json.dumps(series)))
+        self.assertEqual(r["tier"], "none")
+        # Kept on request, the stub is exactly the false 3σ breach the default prevents.
+        kept = self.rate(runs, now=now, include_today=True)
+        self.assertEqual(kept[-1], {"t": "2026-09-26", "v": 0.5, "n": 2})
+        r = bands.evaluate(cfg(), bands.parse_series(json.dumps(kept)))
+        self.assertEqual(r["tier"], "3sigma")
+
+    def test_partial_today_cli_flags(self):
+        p = self.tmp / "runs.json"
+        p.write_text(json.dumps(self.month_with_partial_today()))
+        base = ["series", "ci-failure-rate", "--runs-json", str(p),
+                "--now", "2026-09-26T06:41:00Z"]
+        rc, out, _ = call(base)
+        self.assertEqual((rc, json.loads(out)[-1]["t"]), (0, "2026-09-25"))
+        rc, out, _ = call(base + ["--include-today"])
+        self.assertEqual((rc, json.loads(out)[-1]["t"]), (0, "2026-09-26"))
+        rc, _, _ = call(["series", "ci-failure-rate", "--runs-json", str(p), "--now", "soon"])
+        self.assertEqual(rc, 2)
+
+    def test_default_clock_drops_future_days_and_keeps_past_ones(self):
+        runs = [{"status": "completed", "conclusion": "failure", "createdAt": t}
+                for t in ("2000-01-01T00:00:00Z", "2999-01-01T00:00:00Z")]
+        self.assertEqual([p["t"] for p in bands.ci_failure_rate(runs)], ["2000-01-01"])
 
     def test_malformed_runs_exit_2(self):
         bad = {
@@ -639,62 +732,165 @@ class SeriesAdapterTest(TempDirCase):
 # --- diagnose-cmd -----------------------------------------------------------------
 
 class DiagnoseCmdTest(TempDirCase):
+    ALLOWED = "Read,Grep,Bash(gh run view *)"
+
     def setUp(self):
         super().setUp()
         self.intent_md = self.tmp / "intent.md"
         self.intent_md.write_text("# Intent: x\n")
 
-    def diagnose(self, config_path):
-        return call(["diagnose-cmd", str(config_path), "--intent", str(self.intent_md)])
+    def diagnose(self, config_path, *which, intent=None):
+        which = which or ("--tier", "2sigma")
+        return call(["diagnose-cmd", str(config_path), *which,
+                     "--intent", str(intent or self.intent_md)])
+
+    def expected(self, tools, base="Read Grep Bash"):
+        return ["claude", "-p", bands.DIAGNOSE_PROMPT.format(intent=str(self.intent_md)),
+                "--tools", base,
+                "--allowedTools", tools,
+                "--disallowedTools", "Edit Write MultiEdit NotebookEdit",
+                "--permission-mode", "dontAsk", "--output-format", "json"]
+
+    @staticmethod
+    def granted(out):
+        argv = json.loads(out)
+        return argv[argv.index("--allowedTools") + 1]
+
+    def test_tools_lists_only_the_granted_base_names(self):
+        self.assertEqual(bands.base_tools("Read,Grep,Bash(gh run view *)"), "Read Grep Bash")
+        self.assertEqual(bands.base_tools("Glob, LS,Read,Bash(git log *),Bash( cat * ),Read"),
+                         "Glob LS Read Bash")
+        c = cfg()
+        c["tiers"]["2sigma"]["tools"] = "Read,Glob,Bash(git log *),Bash(git diff *)"
+        rc, out, err = self.diagnose(self.config_file(c))
+        self.assertEqual(rc, 0, err)
+        argv = json.loads(out)
+        self.assertEqual(argv[argv.index("--tools") + 1], "Read Glob Bash")
+        self.assertEqual(argv.count("--tools"), 1)
 
     def test_exact_argv(self):
         rc, out, _ = self.diagnose(FIX / "bands.yaml")
         self.assertEqual(rc, 0)
         argv = json.loads(out)
-        self.assertEqual(argv, [
-            "claude", "-p", bands.DIAGNOSE_PROMPT.format(intent=str(self.intent_md)),
-            "--allowedTools", "Read,Grep,Bash(gh run view *)", "--output-format", "json",
-        ])
+        self.assertEqual(argv, self.expected(self.ALLOWED))
         self.assertNotIn("--dangerously-skip-permissions", argv)
         self.assertIn(str(self.intent_md), argv[2])
         self.assertIn("## Diagnosis", argv[2])
         self.assertIn("read-only", argv[2])
 
-    def test_refuses_write_capable_tools(self):
-        for tools in ("Read,Edit", "Write", "Read MultiEdit", "NotebookEdit,Grep",
-                      "read,write", "Bash", "Read,Bash(*)", "Read,--dangerously-skip-permissions"):
-            with self.subTest(tools=tools):
+    def test_result_picks_the_tier(self):
+        res = self.tmp / "r.json"
+        res.write_text(json.dumps(run(BASE + R2_ONLY)))
+        rc, out, _ = self.diagnose(FIX / "bands.yaml", "--result", str(res))
+        self.assertEqual(rc, 0)
+        self.assertEqual(json.loads(out), self.expected(self.ALLOWED))
+
+    def test_needs_exactly_one_of_result_or_tier(self):
+        res = self.tmp / "r.json"
+        res.write_text(json.dumps(run(BASE + R2_ONLY)))
+        for which in ((), ("--tier", "2sigma", "--result", str(res)), ("--tier", "none")):
+            with self.subTest(which=which):
+                rc, out, _ = call(["diagnose-cmd", str(FIX / "bands.yaml"), *which,
+                                   "--intent", str(self.intent_md)])
+                self.assertEqual(rc, 2)
+                self.assertEqual(out, "")
+
+    def test_allowlist_accepts_exactly_its_shapes(self):
+        for tok in bands.DIAGNOSE_TOOLS + bands.DIAGNOSE_BASH:
+            with self.subTest(tok=tok):
+                self.assertEqual(bands.tool_errors(tok), [])
+        self.assertEqual(bands.tool_tokens("Read, Bash(gh run view *) Grep"),
+                         ["Read", "Bash(gh run view *)", "Grep"])
+        # Whitespace inside the parentheses is normalised, and the argv carries the
+        # normalised token, i.e. exactly what was checked.
+        c = cfg()
+        c["tiers"]["2sigma"]["tools"] = "Read,Bash( gh  run view * )"
+        rc, out, err = self.diagnose(self.config_file(c))
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(self.granted(out), "Read,Bash(gh run view *)")
+
+    def test_allowlist_refuses_everything_else(self):
+        denied = ("Bash(**)", "Bash(* *)", "Bash(rm *)", "Bash(git push *)", "Bash(gh *)",
+                  "Bash(sed -i *)", "Bash(*)", "Bash", "BASH", "Bash(gh run view:*)",
+                  "Bash(cat)", "Bash(gh run view *", "bash(cat *)", "Bash (cat *)",
+                  "mcp__github__create_pull_request", "Agent", "Skill", "WebFetch",
+                  "Edit", "EDIT", "write", " Write", "MultiEdit", "NotebookEdit", "read",
+                  "--dangerously-skip-permissions")
+        for tok in denied:
+            with self.subTest(tok=tok):
+                self.assertNotEqual(bands.tool_errors(f"Read,{tok}"), [])
                 c = cfg()
-                c["tiers"]["2sigma"]["tools"] = tools
+                c["tiers"]["2sigma"]["tools"] = f"Read,{tok}"
                 rc, out, err = self.diagnose(self.config_file(c))
                 self.assertEqual(rc, 2, err)
+                self.assertIn("allowlist", err)
                 self.assertEqual(out, "")
+
+    def test_propose_tier_tools_are_allowlisted_too(self):
+        c = cfg()
+        c["tiers"]["3sigma"]["tools"] = "Bash(gh *)"
+        self.assertTrue(any("tiers.3sigma" in e for e in bands.validate_config(c)))
 
     def test_function_refuses_even_an_unvalidated_config(self):
         # The importable door: a hand-built cfg that never went through load_config.
         c = cfg()
-        c["tiers"]["2sigma"]["tools"] = "Read,Write"
+        c["tiers"]["2sigma"]["tools"] = "Read,Bash(gh *)"
         with self.assertRaises(bands.BandsError) as ctx:
-            bands.diagnose_argv(c, "intent.md")
-        self.assertIn("read-only", str(ctx.exception))
+            bands.diagnose_argv(c, "2sigma", "intent.md")
+        self.assertIn("allowlist", str(ctx.exception))
 
-    def test_scoped_bash_is_read_only_enough(self):
-        self.assertEqual(bands.tool_errors("Read,Grep,Glob,Bash(gh run view *)"), [])
-        self.assertEqual(bands.tool_tokens("Read, Bash(gh run view *) Grep"),
-                         ["Read", "Bash(gh run view *)", "Grep"])
+    def test_breaching_tier_tools_win_over_2sigma(self):
+        # 3sigma diagnoses with Read only: the command must not grant 2sigma's wider set,
+        # and the intent must record the same grant the command carries.
+        c = cfg()
+        c["tiers"]["3sigma"] = {"action": "diagnose", "tools": "Read"}
+        conf = self.config_file(c)
+        rc, out, _ = self.diagnose(conf, "--tier", "3sigma")
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.granted(out), "Read")
+        res = self.tmp / "r3.json"
+        res.write_text(json.dumps(run(BASE + R1_ONLY, config=c)))
+        rc, path, _ = call(["intent", str(conf), "--result", str(res), "--out-dir",
+                            str(self.tmp / "intent")])
+        text = self.written(path).read_text()
+        self.assertIn("Claude may use `Read` and", text)
+        self.assertNotIn("gh run view", text)
+
+    def test_tier_without_tools_falls_back_to_2sigma(self):
+        rc, out, _ = self.diagnose(FIX / "bands.yaml", "--tier", "3sigma")
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.granted(out), self.ALLOWED)
+
+    def test_no_tools_anywhere_skips_with_exit_0(self):
+        # Valid and cautious: 2sigma only logs, 3sigma proposes with no tools.
+        c = cfg()
+        c["tiers"]["2sigma"] = {"action": "log"}
+        conf = self.config_file(c)
+        for tier in ("2sigma", "3sigma"):
+            with self.subTest(tier=tier):
+                rc, out, err = self.diagnose(conf, "--tier", tier,
+                                             intent=self.tmp / "missing.md")
+                self.assertEqual(rc, 0, err)
+                self.assertEqual(json.loads(out), {"skip": "no diagnose tools configured"})
+
+    def test_non_breach_result_skips_with_exit_0(self):
+        res = self.tmp / "quiet.json"
+        res.write_text(json.dumps(run(BASE + QUIET)))
+        rc, out, _ = self.diagnose(FIX / "bands.yaml", "--result", str(res))
+        self.assertEqual(rc, 0)
+        self.assertIn("skip", json.loads(out))
 
     def test_missing_intent_exits_2(self):
-        rc, _, err = call(["diagnose-cmd", str(FIX / "bands.yaml"), "--intent",
-                           str(self.tmp / "missing.md")])
+        rc, _, err = self.diagnose(FIX / "bands.yaml", intent=self.tmp / "missing.md")
         self.assertEqual(rc, 2)
         self.assertIn("no intent file", err)
 
-    def test_no_diagnose_tier_exits_2(self):
-        c = cfg()
-        c["tiers"]["2sigma"] = {"action": "log"}
-        rc, _, err = self.diagnose(self.config_file(c))
+    def test_result_for_another_metric_exits_2(self):
+        res = self.tmp / "other.json"
+        res.write_text(json.dumps(run(BASE + R2_ONLY, config=cfg(metric="deploy_latency"))))
+        rc, _, err = self.diagnose(FIX / "bands.yaml", "--result", str(res))
         self.assertEqual(rc, 2)
-        self.assertIn("not 'diagnose'", err)
+        self.assertIn("deploy_latency", err)
 
 
 # --- entry points -------------------------------------------------------------------

@@ -1,8 +1,9 @@
 # AI-native SDLC — the playbook's twelve plays on the twenty primitives
 
-Source: Anthropic, *The AI-native SDLC playbook* — Claude Academy course
-<https://academy.claude.com/courses/ai-native-sdlc-playbook/introduction>, the same text as
-the blog post <https://claude.com/blog/the-ai-native-sdlc-playbook> (2026-08-21).
+Source: Anthropic, *The AI-native SDLC playbook*, a Claude Academy course
+<https://academy.claude.com/courses/ai-native-sdlc-playbook/introduction>. Anthropic also
+published a blog post of the same name: <https://claude.com/blog/the-ai-native-sdlc-playbook>
+(2026-08-21).
 
 This file maps each play onto bstack and names the mechanism that holds it. **No new
 primitive is added.** Every play lands as a reflex or a command under an existing one, so the
@@ -51,22 +52,37 @@ it. This reference adds what they lacked:
    plan is updated in the same commit. *Held by* `bstack plan-drift` (advisory; `--strict`
    to gate).
 4. **Protect the feedback loop from the agent it constrains.** For a bug fix, commit the
-   failing test first under a `Test-Lock:` trailer, then fix the code, not the test. Only a
-   `Test-Unlock:` commit releases the lock, and that commit is visible in review. *Held by*
-   `bstack test-lock`: the hook blocks edits early, and `verify` in CI is the backstop for
-   every other door.
+   failing test first under a `Test-Lock:` trailer that records the test's sha256, then fix
+   the code, not the test. *Held by* `bstack test-lock`. The hook blocks edits to the test
+   and the common history rewrites, best effort. `verify` in CI is the gate. It fails when
+   the test's content differs from what the lock pinned, and when the lock commit itself was
+   rewritten (the hash no longer matches). An edit later restored to the pinned content is
+   only a warning. `verify` exits 3 on any `Test-Unlock:` trailer until a human accepts that
+   commit, so no unlock passes unattended. The limit: a reset that drops the lock commit
+   entirely leaves nothing to verify, and is visible only in review.
 5. **Configuration is code, so regression-test it by behavior.** A change to `CLAUDE.md`,
    `AGENTS.md`, skills or hooks runs 20–50 real tasks through `claude -p`, and every
-   production incident becomes an eval. An eval must *discriminate*: `validate --prove` shows
-   its checks fail on a no-op and pass on a reference solution. *Held by* `bstack evals`.
+   production incident becomes an eval. *Held by* `bstack evals`.
+   - Each eval runs in a standalone scratch repo that hides the evals.
+   - Planted git config there is neutralized.
+   - The agent under test gets `--tools` and `--permission-mode dontAsk`, so its
+     `allowed_tools` is its whole grant.
+   - An eval must *discriminate*. `validate --prove` requires its reference solution to pass,
+     each named `violations` arm (a plausible wrong behaviour) to fail a check, and a no-op
+     agent that only replies "I have completed the task." to fail.
 6. **The review policy is a committed file, and the writer never approves.** `REVIEW.md` names
    the passes (bugs · security · compliance against `spec.md` + `plan.md`), defines Important,
    and caps nits. *Held by* P20.
 7. **Detection is deterministic, and the model acts only in tiers.** At 1σ the detector logs.
    At 2σ a read-only diagnosis runs. At 3σ the model may only propose, through a PR or a
    pre-approved runbook. The detector is a unit-tested program with no model in it. *Held by*
-   `bstack bands`: `diagnose-cmd` refuses write tools, and an undersized baseline reports
-   `insufficient_baseline`, never `none`.
+   `bstack bands`:
+   - The diagnosis gets only an allowlist of read-only tools, failing closed, under `--tools`
+     and `--permission-mode dontAsk`.
+   - The series drops the incomplete current day.
+   - An undersized baseline reports `insufficient_baseline`, never `none`.
+   - The `bands.yml` template runs the diagnosis with no write token. Afterwards it checks
+     that the deterministic intent text is byte-identical and that nothing else changed.
 8. **Governance hooks live on a surface the organization trusts.** Under
    `allowManagedHooksOnly`, user, project and local hooks are blocked. Only managed hooks, SDK
    hooks, and hooks from plugins force-enabled in managed `enabledPlugins` run, and `/goal`

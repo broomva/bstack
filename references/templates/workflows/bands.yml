@@ -47,41 +47,74 @@ jobs:
           tier=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["tier"])' "$RUNNER_TEMP/result.json")
           echo "tier=$tier" >> "$GITHUB_OUTPUT"
           { echo "### Control band: $tier"; echo '```json'; cat "$RUNNER_TEMP/result.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-      - name: Write intent, diagnose read-only, open the PR
+      - name: Write the intent and diagnose read-only (no token in this step)
+        id: diag
         if: steps.check.outputs.tier == '2sigma' || steps.check.outputs.tier == '3sigma'
         env:
-          GH_TOKEN: ${{ github.token }}
-          TIER: ${{ steps.check.outputs.tier }}
           CLAUDE_BIN: ${{ vars.CLAUDE_BIN || 'claude' }}
         run: |
           set -euo pipefail
           export PATH="$HOME/.local/bin:$PATH"
-          out=$(python3 "$RUNNER_TEMP/bstack/scripts/bands.py" intent "$BANDS_FILE" --result "$RUNNER_TEMP/result.json" --out-dir intent)
-          file=$(printf '%s\n' "$out" | { grep -E '^intent/.*\.md$' || true; } | tail -1)
-          [ -n "$file" ] || { echo "no intent written: $out"; exit 0; }
-          branch="bands/$(basename "$file" .md)"
-          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then echo "already open: $branch"; exit 0; fi
-          python3 "$RUNNER_TEMP/bstack/scripts/bands.py" diagnose-cmd "$BANDS_FILE" --intent "$file" > "$RUNNER_TEMP/argv.json"
-          python3 - "$RUNNER_TEMP/argv.json" "$CLAUDE_BIN" "$file" <<'PY'
+          python3 "$RUNNER_TEMP/bstack/scripts/bands.py" intent "$BANDS_FILE" --result "$RUNNER_TEMP/result.json" --out-dir intent --json > "$RUNNER_TEMP/intent.json"
+          created=$(python3 -c 'import json,sys; print(str(json.load(open(sys.argv[1])).get("created", False)).lower())' "$RUNNER_TEMP/intent.json")
+          file=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["path"])' "$RUNNER_TEMP/intent.json")
+          echo "file=$file" >> "$GITHUB_OUTPUT"
+          echo "created=$created" >> "$GITHUB_OUTPUT"
+          # An intent that already exists (open PR, or merged earlier) is not diagnosed again.
+          [ "$created" = "true" ] || { echo "intent already exists: $file"; exit 0; }
+          python3 "$RUNNER_TEMP/bstack/scripts/bands.py" diagnose-cmd "$BANDS_FILE" --intent "$file" --result "$RUNNER_TEMP/result.json" > "$RUNNER_TEMP/argv.json"
+          # Post-condition checked by a program the model cannot modify: after the diagnosis,
+          # the deterministic intent text must be byte-identical and nothing else may change.
+          cp "$file" "$RUNNER_TEMP/intent.before"
+          python3 - "$RUNNER_TEMP/argv.json" "$CLAUDE_BIN" "$file" "$GITHUB_OUTPUT" <<'PY'
           import json, subprocess, sys
-          argv = json.load(open(sys.argv[1])); argv[0] = sys.argv[2]
-          out = subprocess.run(argv, capture_output=True, text=True, timeout=900)
+          spec = json.load(open(sys.argv[1]))
+          if isinstance(spec, dict) and spec.get("skip"):
+              raise SystemExit(0)
+          argv = spec; argv[0] = sys.argv[2]
+          out = subprocess.run(argv, capture_output=True, text=True, timeout=900, stdin=subprocess.DEVNULL)
+          reply, failed = "", out.returncode != 0
           try:
-              reply = json.loads(out.stdout).get("result", "")
+              data = json.loads(out.stdout)
+              reply, failed = data.get("result", ""), failed or bool(data.get("is_error"))
           except ValueError:
-              reply = out.stdout
-          reply = reply.strip() or "_no reply_"
-          if not reply.startswith("## Diagnosis"):  # the prompt asks for this heading; add it only if absent
+              reply, failed = out.stdout, True
+          reply = reply.strip()
+          if failed or not reply:
+              reply = "## Diagnosis\n\n_diagnosis failed (exit %d): %s_" % (out.returncode, (reply or out.stderr.strip())[:300])
+              open(sys.argv[4], "a").write("diag_failed=1\n")
+          elif not reply.startswith("## Diagnosis"):  # the prompt asks for this heading; add it only if absent
               reply = "## Diagnosis\n\n" + reply
           with open(sys.argv[3], "a") as f:
               f.write("\n<!-- read-only, model-written below; detection above is deterministic -->\n" + reply + "\n")
           PY
+          before_bytes=$(wc -c < "$RUNNER_TEMP/intent.before" | tr -d ' ')
+          head -c "$before_bytes" "$file" | cmp -s - "$RUNNER_TEMP/intent.before" \
+            || { echo "::error::the deterministic part of $file changed during the diagnosis"; exit 1; }
+          changed=$(git status --porcelain --untracked-files=all | grep -v -F -- "$file" || true)
+          [ -z "$changed" ] || { echo "::error::the diagnosis changed files outside the intent:"; echo "$changed"; exit 1; }
+      - name: Open the intent PR
+        if: steps.diag.outputs.created == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TIER: ${{ steps.check.outputs.tier }}
+          FILE: ${{ steps.diag.outputs.file }}
+        run: |
+          set -euo pipefail
+          name=$(basename "$FILE" .md)
+          branch="bands/$name"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then echo "already open: $branch"; exit 0; fi
           git switch -c "$branch"
-          git add "$file"
-          git -c user.name="bands-detector" -c user.email="bands-detector@users.noreply.github.com" commit -q -m "intent: $(basename "$file" .md)"
+          git add "$FILE"
+          git -c user.name="bands-detector" -c user.email="bands-detector@users.noreply.github.com" commit -q -m "intent: $name"
           git push -q origin "$branch"
           labels=(--label intent)
           [ "$TIER" = "3sigma" ] && labels+=(--label propose)
-          gh pr create --head "$branch" --title "intent: $(basename "$file" .md)" \
+          gh pr create --head "$branch" --title "intent: $name" \
             --body "Written by the control-band detector (deterministic). Tier: $TIER. Merge with Status: accepted to accept the intent; close to dismiss and tune the band." \
-            "${labels[@]}" || gh pr create --head "$branch" --title "intent: $(basename "$file" .md)" --body "Tier: $TIER (labels unavailable)."
+            "${labels[@]}" || gh pr create --head "$branch" --title "intent: $name" --body "Tier: $TIER (labels unavailable)."
+      - name: A failed diagnosis fails the job
+        if: steps.diag.outputs.diag_failed == '1'
+        run: |
+          echo "::error::the read-only diagnosis failed; the intent PR carries the failure text"
+          exit 1

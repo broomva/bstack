@@ -45,11 +45,13 @@ SLUG_RE = re.compile(r"[a-z0-9-]+")
 DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 TITLE_RE = re.compile(r"^#\s+Intent:[ \t]*(?P<title>.*?)\s*$")
 HEADER_RE = re.compile(
-    r"^Author:[ \t]*(?P<author>.*?)\.[ \t]+Status:[ \t]*(?P<status>[A-Za-z-]+)\.?[ \t]*$")
+    r"^[ \t]*Author:[ \t]*(?P<author>.*?)\.[ \t]+Status:[ \t]*(?P<status>[A-Za-z-]+)\.?[ \t]*$")
 H1_RE = re.compile(r"^#(?!#)\s")
 H2_RE = re.compile(r"^##(?!#)\s+(?P<name>.+?)\s*#*\s*$")
 FENCE_RE = re.compile(r"^\s*(```|~~~)")
-PLACEHOLDER_RE = re.compile(r"<[^<>\n]+>")
+# A placeholder may be line-wrapped (prettier --prose-wrap, mdformat --wrap, `gq`), so
+# it may span single newlines — but not a blank line, which ends the paragraph.
+PLACEHOLDER_RE = re.compile(r"<(?:[^<>\n]|\n(?![ \t]*\n))+>")
 AUTOLINK_RE = re.compile(r"<[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\s<>]*>")
 COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
 INLINE_CODE_RE = re.compile(r"(`+)(?:(?!\1).)+?\1")
@@ -61,8 +63,10 @@ class IntentError(Exception):
 
 
 def _blank_comments(text: str) -> str:
-    """Drop HTML comments but keep their newlines, so line numbers still line up."""
-    return COMMENT_RE.sub(lambda m: "\n" * m.group(0).count("\n"), text)
+    """Mask HTML comments with spaces, keeping every newline and every column, so line
+    numbers AND character offsets in the masked text match the raw text (set-status
+    rewrites the raw line at offsets it found in the masked one)."""
+    return COMMENT_RE.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), text)
 
 
 def parse(text: str) -> dict:
@@ -73,19 +77,20 @@ def parse(text: str) -> dict:
                  "header_line": None, "sections": [], "placeholders": []}
     in_fence = False
     current = None
+    prose: list[str] = []   # one entry per line: code and autolinks removed
     for n, line in enumerate(lines, 1):
         if FENCE_RE.match(line):
             in_fence = not in_fence
+            prose.append("")
             if current is not None:
                 current["body"].append(line)
             continue
         if in_fence:
+            prose.append("")
             if current is not None:
                 current["body"].append(line)
             continue
-        prose = AUTOLINK_RE.sub("", INLINE_CODE_RE.sub("", line))
-        for m in PLACEHOLDER_RE.finditer(prose):
-            doc["placeholders"].append((n, m.group(0)))
+        prose.append(AUTOLINK_RE.sub("", INLINE_CODE_RE.sub("", line)))
         if doc["title"] is None and H1_RE.match(line):
             t = TITLE_RE.match(line)
             doc["title"] = t.group("title") if t else ""
@@ -107,6 +112,10 @@ def parse(text: str) -> dict:
             continue
         if current is not None:
             current["body"].append(line)
+    joined = "\n".join(prose)
+    for m in PLACEHOLDER_RE.finditer(joined):
+        doc["placeholders"].append((joined.count("\n", 0, m.start()) + 1,
+                                    " ".join(m.group(0).split())))
     return doc
 
 
@@ -257,9 +266,14 @@ def cmd_set_status(args) -> int:
     # split on "\n" only — the same split parse() numbers lines by — so the rewrite
     # touches the Status token and nothing else, CRLF endings included.
     lines = raw.split("\n")
+    masked = _blank_comments(raw).split("\n")[header_line - 1].rstrip("\r")
     line = lines[header_line - 1]
     content = line.rstrip("\r")
-    m = HEADER_RE.match(content)
+    m = HEADER_RE.match(masked)
+    if m is None:   # parse() and this match must agree; refuse rather than guess
+        print(f"intent: {path}: header line {header_line} could not be rewritten safely",
+              file=sys.stderr)
+        return 1
     old = m.group("status")
     lines[header_line - 1] = (content[:m.start("status")] + args.status
                               + content[m.end("status"):] + line[len(content):])

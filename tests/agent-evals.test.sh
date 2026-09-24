@@ -13,8 +13,8 @@
 #   - a floor on "Ran N tests". unittest exits 0 on a module that collects nothing
 #     useful, so the exit code alone cannot tell "56 ran" from "3 ran".
 #   - the CLI must run as a subprocess, and the shipped example eval must both
-#     validate and PROVE (its checks fail on a no-op and pass on its reference) in a
-#     throwaway repo. The suite imports the module; consumers exec it.
+#     validate and PROVE (its checks fail on a no-op, pass on its reference, and fail
+#     on each of its named violations) in a throwaway repo. The suite imports the module; consumers exec it.
 #
 # No test calls a model: `claude` is a fake executable written into a temp dir.
 #
@@ -27,7 +27,7 @@ BSTACK_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODULE="tests.test_agent_evals"
 SCRIPT="$BSTACK_REPO/scripts/agent_evals.py"
 EXAMPLE="$BSTACK_REPO/references/templates/eval.example.json"
-MIN_TESTS=67
+MIN_TESTS=89
 
 PASS=0
 FAIL=0
@@ -87,10 +87,10 @@ G=(git -c core.fsmonitor=false -c core.hooksPath=/dev/null -c user.name=t -c use
 if "${G[@]}" init -q -b main "$SCRATCH/repo" \
    && mkdir -p "$SCRATCH/repo/.control" && echo "gates: []" >"$SCRATCH/repo/.control/policy.yaml" \
    && "${G[@]}" -C "$SCRATCH/repo" add -A && "${G[@]}" -C "$SCRATCH/repo" commit -q -m init; then
-    if OUT="$(python3 "$SCRIPT" validate "$EXAMPLE" --prove --repo "$SCRATCH/repo" 2>&1)"; then
-        assert_pass "shipped eval.example.json validates and proves"
+    if OUT="$(python3 "$SCRIPT" validate "$EXAMPLE" --prove --require-reference --require-violations --repo "$SCRATCH/repo" 2>&1)"; then
+        assert_pass "shipped eval.example.json proves (reference + every violation caught)"
     else
-        assert_fail "shipped eval.example.json validates and proves" "$(echo "$OUT" | tail -5)"
+        assert_fail "shipped eval.example.json proves (reference + every violation caught)" "$(echo "$OUT" | tail -5)"
     fi
     if [ "$("${G[@]}" -C "$SCRATCH/repo" worktree list | wc -l | tr -d ' ')" = "1" ]; then
         assert_pass "--prove left no scratch worktree behind"

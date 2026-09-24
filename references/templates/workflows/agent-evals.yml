@@ -7,8 +7,8 @@
 # Runner: `claude -p` needs an authenticated Claude Code install. On a self-hosted
 # runner logged in to a subscription, runs bill the subscription; on a hosted runner,
 # set ANTHROPIC_API_KEY and runs bill the API. Under -p the project's settings-file
-# hooks load but its permissions.allow rules do not, so each eval carries its own
-# allowed_tools.
+# hooks load. The runner passes `--tools` and `--permission-mode dontAsk`, so each
+# eval's allowed_tools is its whole grant, whatever the user's default mode.
 #
 # Advisory until a baseline exists: record one with `bstack evals baseline`, then set
 # continue-on-error: false and add --gate.

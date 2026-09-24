@@ -8,7 +8,7 @@
 #
 #   bstack-bands check  <this file> --series series.json --json > result.json
 #   bstack-bands intent <this file> --result result.json --out-dir intent
-#   bstack-bands diagnose-cmd <this file> --intent intent/<file>.md
+#   bstack-bands diagnose-cmd <this file> --result result.json --intent intent/<file>.md
 #
 # Every key below is required except `description`. Unknown keys are errors.
 
@@ -39,11 +39,18 @@ direction: high
 tiers:
   # Log only: the job summary records it, nothing else happens.
   1sigma: { action: log }
-  # Claude diagnoses READ-ONLY with exactly these tools. Edit, Write, MultiEdit,
-  # NotebookEdit and an unscoped Bash are refused.
+  # Claude diagnoses READ-ONLY with exactly these tools. `tools` is an ALLOWLIST
+  # and fails closed: Read, Grep, Glob, LS, and Bash only as `Bash(<prefix> *)`
+  # with a prefix in: gh run view, gh run list, gh pr view, git log, git show,
+  # git diff, git status, cat, ls, head, tail, wc. Anything else (a write tool,
+  # mcp__*, Agent, Skill, Bash(gh *), Bash(**)) fails the config.
+  # diagnose-cmd adds --permission-mode dontAsk and denies Edit/Write/MultiEdit/
+  # NotebookEdit. It is a grant, not a sandbox: runner hooks still fire.
   2sigma: { action: diagnose, tools: "Read,Grep,Bash(gh run view *)" }
   # Claude may act, but only through these routes: a pull request into the review
-  # gate, or a pre-approved runbook (runbook:<name>).
+  # gate, or a pre-approved runbook (runbook:<name>). An optional `tools` here is
+  # what the read-only diagnosis at 3sigma uses (same allowlist); without it,
+  # 3sigma diagnoses with the 2sigma tools.
   3sigma: { action: propose, routes: [pull_request, "runbook:rollback-deploy"] }
 
 # Carried into the intent file's "Affected users and systems" section.

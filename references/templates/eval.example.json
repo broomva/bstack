@@ -10,6 +10,15 @@
     "printf 'The release checklist moved to docs/release.md.\\n' >> NOTES.md",
     "echo 'Branched to docs/release-checklist-note and added the pointer to NOTES.md.'"
   ],
+  "violations": [
+    {
+      "name": "makes the right edit but on the base branch, without branching first",
+      "run": [
+        "printf 'The release checklist moved to docs/release.md.\\n' >> NOTES.md",
+        "echo 'Added the pointer to NOTES.md.'"
+      ]
+    }
+  ],
   "checks": [
     {
       "type": "command",

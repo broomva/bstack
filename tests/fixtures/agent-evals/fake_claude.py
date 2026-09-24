@@ -42,6 +42,7 @@ def main(argv):
                 "argv": argv, "cwd": os.getcwd(),
                 "saw_secret": "AGENT_EVALS_TEST_SECRET" in os.environ,
                 "saw_git_dir": "GIT_DIR" in os.environ,
+                "env": dict(os.environ),
             }) + "\n")
     if argv[:1] == ["--version"]:
         print("9.9.9 (fake claude)")

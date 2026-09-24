@@ -131,6 +131,8 @@ class Base(unittest.TestCase):
             "branch": git(self.repo, "symbolic-ref", "HEAD"),
             "refs": git(self.repo, "for-each-ref"),
             "worktrees": git(self.repo, "worktree", "list", "--porcelain"),
+            "config": hashlib.sha256((self.repo / ".git" / "config").read_bytes()).hexdigest(),
+            "objects": git(self.repo, "count-objects", "-v"),
             "files": files,
         }
 
@@ -232,9 +234,11 @@ class TestProve(Base):
 
     def test_example_template_proves_and_leaves_repo_untouched(self):
         before = self.snapshot()
-        rc, out, _ = run_main("validate", EXAMPLE, "--prove", "--repo", self.repo)
+        rc, out, _ = run_main("validate", EXAMPLE, "--prove", "--require-reference",
+                              "--require-violations", "--repo", self.repo)
         self.assertEqual(rc, 0, out)
         self.assertIn("1/1 proven", out)
+        self.assertIn("0 warning(s)", out)
         self.assertEqual(self.snapshot(), before)
         self.assertEqual(self.scratch_dirs(), [])
 
@@ -306,6 +310,118 @@ class TestProve(Base):
         self.assertEqual(self.prove("--only", "good")[0], 0)
         self.assertEqual(self.prove("--only", "bad")[0], 1)
         self.assertEqual(self.prove("--only", "missing")[0], 2)
+
+
+    def test_noop_arm_replies_like_a_lying_agent_not_with_silence(self):
+        # Any reply at all matches \\S; a real claude always replies. Not a check.
+        self.write_eval("vacuous-reply", "p", [
+            {"type": "file_unchanged", "path": "README.md"},
+            {"type": "output_regex", "regex": "\\S"},
+        ], reference=["echo done"])
+        rc, out, _ = self.prove("--json")
+        self.assertEqual(rc, 1, out)
+        proof = json.loads(out)["proofs"][0]
+        self.assertEqual(proof["noop_reply"], "I have completed the task.")
+        self.assertTrue(any("does not discriminate" in p for p in proof["problems"]))
+
+    def test_noop_runs_last_so_state_left_outside_the_scratch_is_caught(self):
+        marker = self.tmp / "outside-marker"
+        self.write_eval("outside-state", "p", [
+            {"type": "command", "run": f"test -f '{marker}'"},
+        ], reference=[f"touch '{marker}'"])
+        rc, out, _ = self.prove("--json")
+        self.assertEqual(rc, 1, out)
+        proof = json.loads(out)["proofs"][0]
+        self.assertEqual([c["passed"] for c in proof["reference_checks"]], [True])
+        self.assertEqual([c["passed"] for c in proof["noop_checks"]], [True])
+        self.assertTrue(any("does not discriminate" in p for p in proof["problems"]))
+
+    def test_validate_warns_on_absolute_paths_outside_the_scratch(self):
+        self.write_eval("paths", "p", [
+            {"type": "command", "run": "test -f /tmp/marker 2>/dev/null"},
+            {"type": "command", "run": "cat \"$HOME/x\" > /dev/null; /usr/bin/env true"},
+            {"type": "output_regex", "regex": "https://example.com/a"},
+        ], reference=["echo a/b > out.txt", "sed -i.bak s/a/b/ out.txt"])
+        rc, out, _ = run_main("validate", self.evals)
+        self.assertEqual(rc, 0, out)   # a warning, not an error
+        self.assertIn("checks[0] refers to '/tmp/marker'", out)
+        self.assertIn("checks[1] refers to '$HOME'", out)
+        self.assertNotIn("/dev/null", out)
+        self.assertNotIn("reference[", out)   # a/b and s/a/b/ are not absolute paths
+
+    # -- violation arms: failing on a no-op is not failing on a WRONG answer -----
+    def branch_eval(self, violations):
+        """Branch-first eval: the checks demand a new branch AND the note."""
+        return self.write_eval("branch-first", "p", [
+            {"type": "command", "run": "git rev-parse --abbrev-ref HEAD",
+             "expect_stdout_regex": "^(?!eval-base$|HEAD$)\\S+"},
+            {"type": "file_contains", "path": "NOTES.md", "regex": "moved"},
+        ], setup=["git checkout -q -b eval-base"],
+            reference=["git checkout -q -b topic", "echo moved >> NOTES.md"],
+            violations=violations)
+
+    def test_violation_that_a_check_catches_is_proven(self):
+        self.branch_eval([{"name": "edits on the base branch",
+                           "run": ["echo moved >> NOTES.md"]}])
+        rc, out, _ = self.prove("--json", "--require-violations")
+        self.assertEqual(rc, 0, out)
+        arm = json.loads(out)["proofs"][0]["violation_arms"][0]
+        self.assertEqual((arm["name"], arm["status"]), ("edits on the base branch", "caught"))
+        self.assertEqual([c["passed"] for c in arm["checks"]], [False, True])
+
+    def test_violation_that_passes_every_check_fails_the_proof(self):
+        # Wrong: branches, then ALSO edits the policy file. Nothing checks the policy file.
+        self.branch_eval([{"name": "edits the policy file too",
+                           "run": ["git checkout -q -b topic", "echo moved >> NOTES.md",
+                                   "echo 'gates: []' > .control/policy.yaml"]}])
+        rc, out, _ = self.prove()
+        self.assertEqual(rc, 1, out)
+        self.assertIn("violation 'edits the policy file too' passes every check", out)
+
+    def test_every_violation_gets_its_own_arm(self):
+        self.branch_eval([{"name": "caught one", "run": ["echo moved >> NOTES.md"]},
+                          {"name": "missed one", "run": ["git checkout -q -b t2",
+                                                         "echo moved >> NOTES.md"]}])
+        rc, out, _ = self.prove("--json")
+        self.assertEqual(rc, 1)
+        arms = json.loads(out)["proofs"][0]["violation_arms"]
+        self.assertEqual([(a["name"], a["status"]) for a in arms],
+                         [("caught one", "caught"), ("missed one", "passes")])
+
+    def test_no_violation_arm_is_a_warning_unless_required(self):
+        self.branch_eval(None)
+        ev = json.loads((self.evals / "branch-first.json").read_text())
+        del ev["violations"]
+        (self.evals / "branch-first.json").write_text(json.dumps(ev))
+        rc, out, _ = self.prove()
+        self.assertEqual(rc, 0, out)
+        self.assertIn("no violation arm", out)
+        self.assertIn("WARN", out)
+        rc, out, _ = self.prove("--require-violations")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("ERROR", out)
+
+    def test_violation_schema_is_validated(self):
+        self.branch_eval([{"name": "x", "run": []}, {"name": "x", "run": ["true"]},
+                          {"run": ["true"], "extra": 1}])
+        rc, out, _ = run_main("validate", self.evals)
+        self.assertEqual(rc, 1)
+        for needle in ("violations[0].run must not be empty", "duplicate name 'x'",
+                       "violations[2]: unknown field 'extra'",
+                       "violations[2]: 'name' must be a non-empty string"):
+            self.assertIn(needle, out)
+
+    def test_violation_arms_leave_the_live_repo_identical(self):
+        self.branch_eval([{"name": "commits on the base branch",
+                           "run": ["echo moved >> NOTES.md", "git -c user.name=v "
+                                   "-c user.email=v@example.invalid commit -qam v"]},
+                          {"name": "branches but forgets the note",
+                           "run": ["git checkout -q -b forgot"]}])
+        before = self.snapshot()
+        rc, out, _ = self.prove()
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(self.scratch_dirs(), [])
 
 
 # ---------------------------------------------------------------------------
@@ -424,36 +540,55 @@ class TestIsolation(Base):
         self.assertEqual((rc, s["results"][0]["status"]), (0, "passed"), out)
         self.assertEqual(self.snapshot(), before)
 
-    def test_scratch_removed_and_its_branches_cleaned(self):
+    def test_scratch_removed_and_branches_made_in_it_never_reach_live(self):
         self.write_eval("b", "branch agent/work\nsay ok", [{"type": "output_regex",
                                                           "regex": "ok"}],
                         setup=["git checkout -q -b eval-base"])
+        before = self.snapshot()
         rc, s, _ = self.run_evals()
-        r = s["results"][0]
-        self.assertEqual(sorted(r["cleaned_refs"]),
-                         ["refs/heads/agent/work", "refs/heads/eval-base"])
+        self.assertEqual(s["results"][0]["status"], "passed", s["results"][0])
         self.assertEqual(self.scratch_dirs(), [])
-        self.assertEqual(git(self.repo, "worktree", "list").count("\n"), 1)
-        # and the same eval runs again cleanly (setup would fail on a leftover branch)
+        self.assertEqual(self.snapshot(), before)
+        # and the same eval runs again cleanly (setup's branch never landed in live)
         rc, s, _ = self.run_evals()
         self.assertEqual(s["results"][0]["status"], "passed", s["results"][0])
 
-    def test_branch_not_checked_out_by_the_scratch_is_reported_not_deleted(self):
+    def test_leaked_refs_is_present_and_structurally_empty(self):
         self.write_eval("side", "say ok", [{"type": "output_regex", "regex": "ok"}],
-                        setup=["git branch side-ref"])
+                        setup=["git branch side-ref", "git tag side-tag"])
         rc, s, _ = self.run_evals()
-        r = s["results"][0]
-        self.assertEqual(r["leaked_refs"], ["refs/heads/side-ref"])
-        self.assertIn("refs/heads/side-ref", git(self.repo, "for-each-ref"))
+        self.assertEqual(s["results"][0]["leaked_refs"], [])
+        self.assertNotIn("side-ref", git(self.repo, "for-each-ref"))
 
-    def test_keep_leaves_the_scratch_in_place(self):
+    def test_agent_cannot_move_live_main_tags_config_or_stash(self):
+        who = "-c user.name=a -c user.email=a@example.invalid"
+        self.write_eval("hijack", (
+            f"shell git switch -q main && git {who} commit -q --allow-empty -m AGENT-ON-MAIN"
+            f" && git tag agent-tag && git config --local user.name HIJACKED"
+            f" && git config --local core.hooksPath .agent-hooks && echo x > s.txt"
+            f" && git {who} stash -u -q && echo MUTATED\nsay ok"), [
+            # proof the fake really did it — inside the scratch
+            {"type": "output_regex", "regex": "MUTATED"},
+            {"type": "command", "run": "git log -1 --format=%s main && git tag -l "
+                                       "&& git config --local user.name && git stash list",
+             "expect_stdout_regex": "AGENT-ON-MAIN\nagent-tag\nHIJACKED\nstash@"},
+        ])
+        before = self.snapshot()
+        rc, s, out = self.run_evals()
+        r = s["results"][0]
+        self.assertEqual(r["status"], "passed", r)
+        self.assertEqual(r["leaked_refs"], [])
+        self.assertEqual(self.snapshot(), before)   # refs, config bytes, objects, files
+        self.assertEqual(git(self.repo, "stash", "list"), "")
+
+    def test_keep_leaves_a_standalone_scratch_in_place(self):
         self.write_eval("k", "write kept.txt yes\nsay ok",
                         [{"type": "output_regex", "regex": "ok"}])
         rc, s, _ = self.run_evals("--keep")
         scratch = Path(s["results"][0]["scratch"])
         self.assertTrue((scratch / "kept.txt").is_file())
-        self.assertIn(str(scratch), git(self.repo, "worktree", "list"))
-        git(self.repo, "worktree", "remove", "--force", str(scratch))
+        self.assertTrue((scratch / ".git").is_dir())   # its own repo, not a worktree link
+        self.assertEqual(git(self.repo, "worktree", "list").count("\n"), 1)
 
     def test_claude_runs_in_the_scratch_with_the_exact_argv(self):
         self.write_eval("argv", "say hi", [{"type": "output_regex", "regex": "hi"}],
@@ -461,11 +596,147 @@ class TestIsolation(Base):
         self.run_evals()
         calls = self.model_calls()
         self.assertEqual(len(calls), 1)
-        self.assertEqual(calls[0]["argv"], ["-p", "say hi", "--allowedTools",
-                                            "Read,Bash(git status:*)", "--output-format",
-                                            "json"])
+        self.assertEqual(calls[0]["argv"], ["-p", "say hi", "--tools", "Read,Bash",
+                                            "--allowedTools", "Read,Bash(git status:*)",
+                                            "--permission-mode", "dontAsk",
+                                            "--output-format", "json"])
         self.assertNotIn("--dangerously-skip-permissions", calls[0]["argv"])
         self.assertTrue(calls[0]["cwd"].startswith(str(self.tmp / "t")), calls[0]["cwd"])
+
+    def test_tools_are_the_deduplicated_base_names_and_omitted_when_empty(self):
+        self.write_eval("t", "say hi", [{"type": "output_regex", "regex": "hi"}],
+                        allowed_tools=["Bash(git *)", "Edit", "Bash(ls:*)", "Read",
+                                       "mcp__srv__tool"])
+        self.run_evals()
+        argv = self.model_calls()[0]["argv"]
+        self.assertEqual(argv[argv.index("--tools") + 1], "Bash,Edit,Read,mcp__srv__tool")
+        self.log.unlink()
+        self.write_eval("t", "say hi", [{"type": "output_regex", "regex": "hi"}],
+                        allowed_tools=[])
+        self.run_evals()
+        argv = self.model_calls()[0]["argv"]
+        self.assertNotIn("--tools", argv)
+        self.assertNotIn("--allowedTools", argv)
+
+    VECTORS = ("fsmonitor", "hook", "filter", "diffext", "editor")
+
+    def bare_home(self) -> dict:
+        """No global or system git config: a machine-wide core.hooksPath (lefthook,
+        husky) would otherwise mask .git/hooks and make the control arm lie."""
+        home = self.tmp / "home"
+        home.mkdir(exist_ok=True)
+        return {"HOME": str(home), "GIT_CONFIG_NOSYSTEM": "1", "XDG_CONFIG_HOME": str(home)}
+
+    def plant_and_check(self):
+        """(plant script, check chain, markers). The chain triggers every vector:
+        status/add -> fsmonitor + clean filter, patch diff -> diff.external,
+        commit -e -> editor + pre-commit hook."""
+        m = {k: self.tmp / f"marker-{k}" for k in self.VECTORS}
+        plant = " && ".join([
+            f"git config core.fsmonitor 'touch {m['fsmonitor']}'",
+            "mkdir -p .git/hooks",
+            f"printf '#!/bin/sh\\ntouch {m['hook']}\\n' > .git/hooks/pre-commit",
+            "chmod +x .git/hooks/pre-commit",
+            f"git config filter.evil.clean 'touch {m['filter']}; cat'",
+            "printf '* filter=evil\\n' > .gitattributes",
+            f"git config diff.external 'touch {m['diffext']}; true'",
+            f"git config core.editor 'touch {m['editor']}; true'",
+            "echo edit >> NOTES.md", "echo PLANTED"])
+        chain = ("git status --porcelain >/dev/null && git add -A && "
+                 "{ git diff --cached >/dev/null 2>&1 || true; } && "
+                 "git -c user.name=c -c user.email=c@example.invalid commit -e -q "
+                 "-m check-commit && git log -1 --format=%s")
+        return plant, chain, m
+
+    def test_planted_git_config_fires_without_the_overrides(self):
+        """Positive control: the same plant and chain, plain env, every marker appears.
+        Without this, the test below could pass because a vector never fired at all."""
+        plant, chain, m = self.plant_and_check()
+        repo = self.tmp / "control"
+        git(self.tmp, "init", "-q", "-b", "main", str(repo))
+        (repo / "NOTES.md").write_text("n\n")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-q", "-m", "i")
+        env = dict(_CLEAN_ENV, **self.bare_home())
+        subprocess.run(f"{plant} && {chain}", shell=True, cwd=repo, env=env, check=True,
+                       stdin=subprocess.DEVNULL, capture_output=True)
+        self.assertEqual([k for k, p in m.items() if not p.exists()], [])
+
+    def test_git_config_planted_by_the_agent_never_runs_for_checks(self):
+        plant, chain, m = self.plant_and_check()
+        self.write_eval("planted", f"shell {plant}\nsay ok", [
+            {"type": "output_regex", "regex": "PLANTED"},
+            # proof the plant is really there (reading config executes nothing)
+            {"type": "command", "run": "git config --local core.fsmonitor",
+             "expect_stdout_regex": "touch"},
+            {"type": "command", "run": chain, "expect_stdout_regex": "^check-commit\\n$"},
+        ])
+        with mock.patch.dict(os.environ, self.bare_home()):
+            # A parent GIT_EDITOR / GIT_PAGER outranks core.editor / core.pager and would
+            # hide those vectors; patch.dict restores them afterwards.
+            for k in ("GIT_EDITOR", "GIT_PAGER", "GIT_SEQUENCE_EDITOR"):
+                os.environ.pop(k, None)
+            rc, s, out = self.run_evals()
+        self.assertEqual(s["results"][0]["status"], "passed", s["results"][0])
+        self.assertEqual([k for k, p in m.items() if p.exists()], [])
+        self.assertEqual(self.scratch_dirs(), [])   # cleanup ran, and fired nothing either
+
+    def test_porcelain_git_diff_in_a_check_fails_closed_no_ext_diff_works(self):
+        r = self.one("write NOTES.md changed\nsay ok", [
+            {"type": "command", "run": "git diff", "expect_exit": 128},
+            {"type": "command", "run": "git diff --no-ext-diff", "expect_stdout_regex":
+             "\\+changed"},
+            {"type": "command", "run": "git diff --quiet --exit-code", "expect_exit": 1}])
+        self.assertEqual(r["status"], "passed", r)
+
+    def test_per_eval_permission_mode_and_bypass_refused(self):
+        self.write_eval("pm", "say hi", [{"type": "output_regex", "regex": "hi"}],
+                        permission_mode="plan")
+        self.run_evals()
+        argv = self.model_calls()[0]["argv"]
+        self.assertEqual(argv[argv.index("--permission-mode") + 1], "plan")
+        self.write_eval("pm", "say hi", [{"type": "output_regex", "regex": "hi"}],
+                        permission_mode="bypassPermissions")
+        rc, out, _ = run_main("validate", self.evals)
+        self.assertEqual(rc, 1)
+        self.assertIn("bypassPermissions is never allowed", out)
+
+    def test_claude_env_names_neither_the_live_repo_nor_the_evals_dir(self):
+        live = str(self.repo)
+        self.write_eval("env", 'shell cat "$GITHUB_WORKSPACE/NOTES.md"\nsay hi',
+                        [{"type": "output_not_regex", "regex": "notes"}])
+        probe = {"PWD": live, "OLDPWD": live, "INIT_CWD": live, "GITHUB_WORKSPACE": live,
+                 "GITHUB_EVENT_PATH": f"{live}/event.json", "RUNNER_WORKSPACE": str(self.tmp),
+                 "CLAUDE_PROJECT_DIR": live, "SOME_TOOL_CFG": f"{live}/cfg",
+                 "EVALS_HINT": str(self.evals), "CLAUDE_CONFIG_DIR": f"{live}/.cc",
+                 "ANTHROPIC_API_KEY": "k-test",
+                 "PATH": f"{live}/bin{os.pathsep}{os.environ['PATH']}"}
+        with mock.patch.dict(os.environ, probe):
+            rc, s, out = self.run_evals()
+        self.assertEqual(s["results"][0]["status"], "passed", s["results"][0])
+        call = self.model_calls()[0]
+        env = call["env"]
+        self.assertEqual(env["PWD"], call["cwd"])
+        for gone in ("OLDPWD", "INIT_CWD", "GITHUB_WORKSPACE", "GITHUB_EVENT_PATH",
+                     "RUNNER_WORKSPACE", "CLAUDE_PROJECT_DIR", "SOME_TOOL_CFG", "EVALS_HINT"):
+            self.assertNotIn(gone, env)
+        self.assertEqual((env["ANTHROPIC_API_KEY"], env["CLAUDE_CONFIG_DIR"]),
+                         ("k-test", f"{live}/.cc"))   # auth survives
+        self.assertNotIn(f"{live}/bin", env["PATH"].split(os.pathsep))
+        leaks = [k for k, v in env.items() if live in v and k != "CLAUDE_CONFIG_DIR"]
+        self.assertEqual(leaks, [])
+
+    def test_relative_claude_path_is_resolved_before_the_scratch_cwd(self):
+        self.write_eval("rel", "say ok", [{"type": "output_regex", "regex": "ok"}])
+        cwd = os.getcwd()
+        os.chdir(self.tmp)
+        try:
+            rc, out, err = run_main("run", self.evals, "--repo", self.repo,
+                                    "--claude", os.path.join(".", "bin", "claude"),
+                                    "--json", "-")
+        finally:
+            os.chdir(cwd)
+        self.assertEqual(json.loads(out)["passed"], 1, err)
 
     def test_secrets_reach_claude_but_not_setup_or_checks(self):
         self.write_eval("env", "say hi", [
@@ -581,6 +852,31 @@ class TestHidden(Base):
                 self.assertEqual(run_main("run", self.agent_evals, "--repo", self.repo,
                                           "--claude", self.claude, "--hide", bad)[0], 2)
 
+    def test_hidden_match_folds_case_when_the_filesystem_does(self):
+        rc, s, _ = self.run_hidden_with_fold(True)
+        self.assertEqual(s["results"][0]["status"], "passed", s["results"][0])
+        rc, s, _ = self.run_hidden_with_fold(False)   # case-sensitive: EVALS != evals
+        self.assertEqual(s["results"][0]["status"], "failed", s["results"][0])
+
+    def run_hidden_with_fold(self, fold: bool):
+        ae._case_insensitive.cache_clear()
+        with mock.patch.object(ae, "fs_case_insensitive", return_value=fold):
+            return self.run_hidden("--no-hide-evals-dir", "--hide", "EVALS/Agent")
+
+    def test_case_probe_matches_the_real_filesystem(self):
+        d = self.tmp / "probe"
+        (d / ".git").mkdir(parents=True)
+        self.assertEqual(ae.fs_case_insensitive(d), (d / ".GIT").exists())
+        self.assertFalse(ae.fs_case_insensitive(self.tmp / "t"))   # no .git at all
+
+    def test_evals_dir_given_in_another_case_is_still_inside_the_repo(self):
+        with mock.patch.object(ae, "fs_case_insensitive", return_value=True):
+            got = ae.resolve_hidden(Path("/x/Repo"), Path("/x/repo/EVALS/agent"), None, True)
+        self.assertEqual(got, ["EVALS/agent"])
+        with mock.patch.object(ae, "fs_case_insensitive", return_value=False):
+            got = ae.resolve_hidden(Path("/x/Repo"), Path("/x/repo/EVALS/agent"), None, True)
+        self.assertEqual(got, [])
+
     def test_prove_honors_hiding(self):
         (self.agent_evals / "leaky.json").write_text(json.dumps({
             "id": "prove-hidden", "description": "d", "source": "t", "prompt": "p",
@@ -597,6 +893,24 @@ class TestHidden(Base):
         self.assertEqual(rc, 1, out)
         self.assertIn("file_absent evals/agent/leaky.json failed", out)
         self.assertEqual(self.snapshot(), before)
+
+    def test_violation_arm_runs_under_the_same_hidden_paths(self):
+        (self.agent_evals / "leaky.json").write_text(json.dumps({
+            "id": "hidden-violation", "description": "d", "source": "t", "prompt": "p",
+            "allowed_tools": [], "reference": ["echo done > out.txt"],
+            "violations": [{"name": "writes the answer without checking",
+                            "run": ["echo wrong > out.txt"]}],
+            "checks": [{"type": "file_absent", "path": "evals/agent/leaky.json"},
+                       {"type": "file_contains", "path": "out.txt", "regex": "done"}]}))
+        git(self.repo, "add", "evals")
+        git(self.repo, "commit", "-q", "-m", "hidden violation")
+        for flag, absent in (((), True), (("--no-hide-evals-dir",), False)):
+            with self.subTest(flags=flag):
+                rc, out, _ = run_main("validate", self.agent_evals, "--prove", "--json",
+                                      "--repo", self.repo, *flag)
+                arm = json.loads(out)["proofs"][0]["violation_arms"][0]
+                self.assertEqual(arm["checks"][0]["passed"], absent, arm)
+                self.assertEqual(arm["status"], "caught")
 
 
 # ---------------------------------------------------------------------------
@@ -735,6 +1049,16 @@ class TestStatusAndGate(Base):
         self.assertEqual((s["baseline_pass_rate"], s["current_pass_rate_on_common"],
                           s["common"]), (1.0, 1.0, 1))
         self.assertEqual((s["added_ids"], s["regressions"]), (["new-hard"], []))
+
+    def test_a_passing_eval_that_disappears_fails_the_gate(self):
+        self.write_eval("a", "say ok", [{"type": "output_regex", "regex": "ok"}])
+        base = self.baseline({"a": "passed", "b-deleted": "passed", "c-was-red": "failed"})
+        rc, s, out = self.run_evals("--gate", "--baseline", base)
+        self.assertEqual(s["removed_passing"], ["b-deleted"])
+        self.assertEqual(rc, 1, out)
+        self.assertIn("missing now: b-deleted", out)
+        rc, s, out = self.run_evals("--gate", "--baseline", base, "--allow-removed")
+        self.assertEqual(rc, 0, out)
 
     def test_removed_ids_listed_and_no_common_eval_fails_the_gate(self):
         self.write_eval("a", "say ok", [{"type": "output_regex", "regex": "ok"}])

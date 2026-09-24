@@ -8,49 +8,83 @@ the checks that define an acceptable outcome (a command's exit and output, a fil
 unchanged, a file that must contain something, a reply that must or must not match).
 
     validate <evals-dir>            every eval file is well-formed
-    validate <evals-dir> --prove    the checks DISCRIMINATE: they fail when nothing is
-                                    done and pass on the eval's `reference` commands
-                                    (no model is called)
+    validate <evals-dir> --prove    the checks DISCRIMINATE: they pass on the eval's
+                                    `reference`, fail on each named violation, and fail
+                                    on a no-op (no model is called)
     run <evals-dir>                 run `claude -p` on every eval, score it, summarize
     baseline <results.json> --out F freeze a run's pass rate for later comparison
 
-Invariant: an eval never touches the live checkout. Each one runs in a scratch
-`git worktree add --detach <tmp> HEAD` that is removed afterwards (unless --keep). The
-live tree's status, HEAD and working files are byte-identical after a run. Branches an
-eval checks out inside its scratch are deleted with it (they are identified from the
-scratch's own HEAD reflog, so a branch another session creates meanwhile is never
-touched); any other new branch is reported as `leaked_refs`, never deleted.
+Invariant: an eval never writes to the live repository. Each arm runs in a scratch
+that is a STANDALONE git repository (never a `git worktree`, which would share refs,
+config, stash and objects with the live repo): one orphan commit holding HEAD's tree,
+built inside the scratch from the live repo by READ-only commands (ls-tree,
+pack-objects, config --get), with a local `main` at that commit and HEAD detached
+there. Whatever the agent does to main, tags, config or the stash lands in the
+scratch's own .git and is deleted with it (unless --keep). `leaked_refs` stays in each
+result for schema stability and is structurally empty.
 
-Hidden paths: the agent under test must not be able to read the answers. A worktree
-shares the live repo's refs and objects, so `git show HEAD~1:evals/…` or `git log --all`
-would reveal a deleted evals dir. When any path is hidden (`--hide PATH`, and by default
-the evals dir itself whenever it lies inside --repo; `--no-hide-evals-dir` opts out),
-the scratch is instead a STANDALONE repository holding one orphan commit: HEAD's tree
-minus the hidden paths, built inside the scratch (ls-tree, pack only the kept blobs,
-update-index, write-tree, commit-tree, all in the filtered env). No ref, history or
-object in it contains the hidden paths, and the live object store is not written to.
-It gets a local `main` at that commit, with HEAD detached there, as in a worktree.
-Relative --hide paths are repo-relative. Checks run in the same scratch, so they cannot
-read hidden files either.
+Hidden paths: `--hide PATH` (repo-relative, repeatable), and by default the evals dir
+itself whenever it lies inside --repo (`--no-hide-evals-dir` opts out), are left out of
+the orphan tree, so no ref, history or object in the scratch contains them. On a
+case-folding filesystem (probed once per repo) the match is case-insensitive. Checks
+run in the same scratch, so they cannot read hidden files either.
+
+Threat model, plainly: hiding and the environment scrub stop ACCIDENTAL discovery —
+an agent that runs `git log --all`, reads $PWD or $GITHUB_WORKSPACE, or follows its
+cwd upward. They do NOT contain a same-user process that goes looking: `ps` shows this
+script's argv, `lsof`/`/proc/<pid>/cwd` show the live checkout, and `find /` finds the
+evals. Containing that needs an OS sandbox or a container around the claude process.
+claude runs with `--permission-mode dontAsk` (per-eval `permission_mode` may pick
+dontAsk, plan, acceptEdits, auto or manual; bypassPermissions is refused), so anything
+outside `allowed_tools` is denied whatever the user's or project's defaultMode says.
+Its environment is the parent's minus: the GIT_* variables that relocate a repo; PWD,
+OLDPWD, INIT_CWD, GITHUB_WORKSPACE, GITHUB_EVENT_PATH and RUNNER_WORKSPACE; and every
+variable whose value contains the live repo's or the evals dir's absolute path, except
+auth variables that may hold a path (HOME, CLAUDE_CONFIG_DIR, cloud credential files).
+PATH is filtered entry by entry. PWD is set to the scratch. With `--tools` (the base
+names of allowed_tools, e.g. `Bash(git *)` -> `Bash`) and dontAsk, allowed_tools is the
+whole grant: a tool pre-approved by a settings file is not even available.
+
+Planted git config: the agent can rewrite its scratch's .git/config and hooks. Every
+process the runner starts afterwards (check commands, internal git) gets top-precedence
+overrides via GIT_CONFIG_COUNT — core.fsmonitor=false, core.hooksPath=/dev/null,
+core.pager=cat, diff.external= (empty), core.editor=true, sequence.editor=true,
+protocol.ext.allow=never, credential.helper= (empty), commit/tag.gpgSign=false — and
+every filter/diff/merge driver command defined in the scratch's config is blanked
+(filter.lfs.* excepted). Consequence: a porcelain `git diff` in a check exits 128
+("external diff died") instead of running anything; use `git diff --no-ext-diff` or
+plumbing (diff-index, diff-files, cat-file, rev-parse, ls-files). What this does NOT
+cover: an eval's shell check still runs whatever PROGRAM it names, and the agent could
+have planted one (a script in the scratch, a shim earlier on a relative PATH entry).
+Write checks against git plumbing or absolute system tools, never scratch-local scripts.
 
 A check that cannot fail is not a check. `validate --prove` runs every eval that has a
-`reference` twice, in two fresh scratch checkouts, without claude: a no-op arm (setup
-only, empty reply) where at least one check must FAIL, and a reference arm (setup, then
-the reference commands, whose stdout stands in for the reply) where every check must PASS.
+`reference`, without claude, one fresh scratch per arm, in this order:
+  1. reference arm — setup, the reference commands (their stdout stands in for the
+     reply), all checks: every check must PASS;
+  2. one violation arm per `violations` entry — a named plausible WRONG behaviour
+     (`run`: shell commands) — setup, those commands, all checks: one must FAIL;
+  3. no-op arm, LAST — setup only, and the reply is the lie "I have completed the
+     task.": at least one check must FAIL. Running it last means a reference that left
+     state outside its scratch (a /tmp marker) makes the no-op pass, which is reported
+     as "does not discriminate" instead of certified.
+An eval with no violations is warned as "no violation arm" under --prove, and is an
+error with --require-violations. `validate` also warns when a setup, reference,
+violation or command check names an absolute path outside the scratch.
 
-Trust model: `setup`, `reference` and `command` checks are shell strings run with
-cwd = the scratch checkout. That is acceptable because eval files are repo-owned and
-reviewed like code, the same as a Makefile. Those shells, and every git subprocess this
-script spawns, get a filtered environment (PATH, HOME, LANG, LC_ALL, TMPDIR, GIT_*,
-minus the GIT_* variables that relocate a repository or inject config), so an API key
-in the parent environment is not visible to them. Git runs with core.fsmonitor=false
-and hooks disabled; diff-family commands also get --no-ext-diff --no-textconv. Only the
-claude process inherits the full environment, because it needs its credentials; it
-never gets --dangerously-skip-permissions.
+Trust model: `setup`, `reference`, violation and `command` shell strings are run with
+cwd = the scratch. That is acceptable because eval files are repo-owned and reviewed
+like code, the same as a Makefile. Those shells, and every git subprocess this script
+spawns, get a filtered environment (PATH, HOME, LANG, LC_ALL, TMPDIR, GIT_*, minus the
+GIT_* variables that relocate a repository or inject config), so an API key in the
+parent environment is not visible to them. Git runs with core.fsmonitor=false and hooks
+disabled; diff-family commands also get --no-ext-diff --no-textconv. claude never gets
+--dangerously-skip-permissions.
 
 Eval file (one JSON object per `<evals-dir>/*.json`):
     id, description, source, prompt, allowed_tools, checks       required
-    setup, reference, timeout_s (default 600), tags               optional
+    setup, reference, violations, timeout_s (default 600), tags   optional
+violations: [{"name": "<what the wrong agent does>", "run": ["shell cmd", ...]}, ...]
 Check types: command {run, expect_exit=0, expect_stdout_regex?, timeout_s?},
 file_unchanged {path}, file_contains {path, regex}, file_absent {path},
 output_regex {regex}, output_not_regex {regex}. Regexes use re.search with no implicit
@@ -66,7 +100,10 @@ Baseline comparison runs only over the evals present in BOTH runs, so adding a n
 reports baseline_pass_rate and current_pass_rate_on_common over that intersection,
 plus added_ids and removed_ids. A regression is an eval that passed in the baseline
 and now fails or errors; `--gate` fails on any regression, even when the rate is flat
-(one fixed, one broken), unless --allow-regressions. `baseline.json` in the evals dir
+(one fixed, one broken), unless --allow-regressions. An eval that passed in the
+baseline and is MISSING now (removed_passing) also fails the gate, unless
+--allow-removed: deleting a passing eval is how a change hides the regression it
+causes. `baseline.json` in the evals dir
 is the baseline file, never an eval, and is skipped by discovery.
 
 Nested sessions: measured 2026-09-23, a nested `claude -p` with CLAUDECODE=1 and
@@ -93,6 +130,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import functools
 import json
 import os
 import re
@@ -105,7 +143,7 @@ import time
 from pathlib import Path, PurePosixPath
 
 REQUIRED_KEYS = ("id", "description", "source", "prompt", "allowed_tools", "checks")
-OPTIONAL_KEYS = ("setup", "reference", "timeout_s", "tags")
+OPTIONAL_KEYS = ("setup", "reference", "violations", "permission_mode", "timeout_s", "tags")
 # type -> (required fields, optional fields), "type" itself excluded.
 CHECK_TYPES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "command": (("run",), ("expect_exit", "expect_stdout_regex", "timeout_s")),
@@ -118,6 +156,15 @@ CHECK_TYPES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
 REGEX_FIELDS = ("regex", "expect_stdout_regex")
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 BASELINE_NAME = "baseline.json"
+# dontAsk denies anything not pre-approved, so allowed_tools is the whole grant whatever
+# the user's or project's defaultMode says. bypassPermissions is refused outright: it
+# would make allowed_tools meaningless.
+DEFAULT_PERMISSION_MODE = "dontAsk"
+PERMISSION_MODES = ("dontAsk", "plan", "acceptEdits", "auto", "manual")
+# The no-op arm's reply: an agent that did nothing and says it did everything. An
+# empty reply let any `output_regex "\\S"` "discriminate", and a real claude always
+# replies with something.
+NOOP_REPLY = "I have completed the task."
 DEFAULT_TIMEOUT_S = 600
 CHECK_TIMEOUT_S = 120
 EXCERPT = 4000
@@ -150,18 +197,84 @@ def _git_var_allowed(k: str) -> bool:
             and not k.startswith(_GIT_ENV_DENY_PREFIX))
 
 
-def filtered_env() -> dict[str, str]:
-    """PATH, HOME, LANG, LC_ALL, TMPDIR and the safe GIT_* variables — nothing else."""
+# Top-precedence git config for every shell and git process the RUNNER starts (setup,
+# reference, violation and check commands, internal git calls). GIT_CONFIG_COUNT beats
+# every config file — including a scratch .git/config the agent under test rewrote —
+# so a planted fsmonitor, hook, pager, external diff, editor, credential helper or
+# signing program never runs outside the agent's own permission sandbox.
+# filter.lfs.* is deliberately left alone so LFS repos keep working.
+GIT_SAFE_OVERRIDES: tuple[tuple[str, str], ...] = (
+    ("core.fsmonitor", "false"), ("core.hooksPath", "/dev/null"), ("core.pager", "cat"),
+    ("diff.external", ""), ("core.editor", "true"), ("sequence.editor", "true"),
+    ("protocol.ext.allow", "never"), ("credential.helper", ""),
+    ("commit.gpgSign", "false"), ("tag.gpgSign", "false"),
+)
+# Driver commands have agent-chosen names (.gitattributes `filter=evil`), so no fixed
+# list can name them; scratch_env() blanks every one the scratch's config defines.
+_DRIVER_KEY_RE = r"^(filter|diff|merge)\..+\.(clean|smudge|process|command|textconv|driver)$"
+
+
+def filtered_env(extra_overrides: tuple[tuple[str, str], ...] | list = ()) -> dict[str, str]:
+    """PATH, HOME, LANG, LC_ALL, TMPDIR and the safe GIT_* variables — nothing else —
+    plus the GIT_SAFE_OVERRIDES (and any extra) as GIT_CONFIG_COUNT/KEY_n/VALUE_n."""
     env = {k: v for k, v in os.environ.items() if k in _ENV_KEEP or _git_var_allowed(k)}
     env.setdefault("GIT_TERMINAL_PROMPT", "0")
+    pairs = list(GIT_SAFE_OVERRIDES) + list(extra_overrides)
+    env["GIT_CONFIG_COUNT"] = str(len(pairs))
+    for i, (k, v) in enumerate(pairs):
+        env[f"GIT_CONFIG_KEY_{i}"], env[f"GIT_CONFIG_VALUE_{i}"] = k, v
     return env
 
 
-def claude_env() -> dict[str, str]:
-    """The full environment (claude needs its credentials), minus the variables that
-    would relocate its git operations onto another repository."""
-    return {k: v for k, v in os.environ.items()
-            if not (k.startswith("GIT_") and not _git_var_allowed(k))}
+def scratch_env(wt: Path) -> dict[str, str]:
+    """filtered_env() for commands run in a scratch, with every filter/diff/merge driver
+    command defined in the scratch's own config (includes followed) blanked, except
+    filter.lfs.*. Reading config executes nothing."""
+    p = git(["config", "--local", "--includes", "--name-only", "--get-regexp",
+             _DRIVER_KEY_RE], wt)
+    keys = sorted({k for k in p.stdout.split() if not k.lower().startswith("filter.lfs.")})
+    return filtered_env([(k, "") for k in keys])
+
+
+# Variables that name the live checkout (or the job's event payload) outright.
+_CLAUDE_ENV_DROP = frozenset({"PWD", "OLDPWD", "INIT_CWD", "GITHUB_WORKSPACE",
+                              "GITHUB_EVENT_PATH", "RUNNER_WORKSPACE"})
+# Auth-related variables that may legitimately hold a path; kept even when that path
+# happens to lie inside the repo. (Keys and tokens never hold paths.)
+_AUTH_PATH_VARS = frozenset({"HOME", "CLAUDE_CONFIG_DIR", "GOOGLE_APPLICATION_CREDENTIALS",
+                             "AWS_SHARED_CREDENTIALS_FILE", "AWS_CONFIG_FILE"})
+
+
+def _needles(paths) -> list[str]:
+    out: set[str] = set()
+    for p in paths or []:
+        for form in (os.path.abspath(p), os.path.realpath(p)):
+            if len(form) > 1:
+                out.add(form)
+    return sorted(out)
+
+
+def claude_env(scratch: Path | None = None, secret_paths=None) -> dict[str, str]:
+    """The environment for claude: the parent's (claude needs its credentials), minus
+    the GIT_* variables that relocate a repo, minus the variables that name the live
+    checkout (PWD, OLDPWD, GITHUB_WORKSPACE, …), minus ANY variable whose value contains
+    a secret path (the live repo, the evals dir) — except auth variables. PATH is
+    filtered entry by entry rather than dropped. PWD is set to the scratch."""
+    needles = _needles(secret_paths)
+    env: dict[str, str] = {}
+    for k, v in os.environ.items():
+        if (k.startswith("GIT_") and not _git_var_allowed(k)) or k in _CLAUDE_ENV_DROP:
+            continue
+        if needles and any(n in v for n in needles):
+            if k == "PATH":
+                v = os.pathsep.join(e for e in v.split(os.pathsep)
+                                    if not any(n in e for n in needles))
+            elif k not in _AUTH_PATH_VARS:
+                continue
+        env[k] = v
+    if scratch is not None:
+        env["PWD"] = str(scratch)
+    return env
 
 
 def git(args: list[str], cwd: str | Path, *, binary: bool = False, timeout: float = 120,
@@ -301,6 +414,33 @@ def _check_problems(i: int, c) -> list[str]:
     return p
 
 
+def _violation_problems(vs) -> list[str]:
+    if not isinstance(vs, list) or not vs:
+        return ["'violations' must be a non-empty list"]
+    p: list[str] = []
+    names: set[str] = set()
+    for i, v in enumerate(vs):
+        where = f"violations[{i}]"
+        if not isinstance(v, dict):
+            p.append(f"{where}: must be an object")
+            continue
+        for k in v:
+            if k not in ("name", "run"):
+                p.append(f"{where}: unknown field '{k}'")
+        name = v.get("name")
+        if not isinstance(name, str) or not name.strip():
+            p.append(f"{where}: 'name' must be a non-empty string")
+        elif name in names:
+            p.append(f"{where}: duplicate name {name!r}")
+        else:
+            names.add(name)
+        if "run" not in v:
+            p.append(f"{where}: missing field 'run'")
+        else:
+            p += _str_list_problems(f"{where}.run", v["run"], allow_empty=False)
+    return p
+
+
 def validate_eval(ev) -> list[str]:
     """Problems with one eval object. Empty list means well-formed."""
     if not isinstance(ev, dict):
@@ -329,6 +469,12 @@ def validate_eval(ev) -> list[str]:
         p += _str_list_problems("'setup'", ev["setup"])
     if "reference" in ev:
         p += _str_list_problems("'reference'", ev["reference"], allow_empty=False)
+    if "violations" in ev:
+        p += _violation_problems(ev["violations"])
+    if "permission_mode" in ev and ev["permission_mode"] not in PERMISSION_MODES:
+        p.append(f"'permission_mode' must be one of {', '.join(PERMISSION_MODES)}, got "
+                 f"{ev['permission_mode']!r} (bypassPermissions is never allowed: it would "
+                 f"make allowed_tools meaningless)")
     if "tags" in ev:
         p += _str_list_problems("'tags'", ev["tags"])
     if "timeout_s" in ev and (not _is_num(ev["timeout_s"]) or ev["timeout_s"] <= 0):
@@ -410,19 +556,6 @@ def repo_root(repo: Path) -> Path:
     return root
 
 
-def _branch_refs(root: Path) -> dict[str, str]:
-    p = git(["for-each-ref", "--format=%(refname) %(objectname)", "refs/heads"], root)
-    out = {}
-    for line in p.stdout.splitlines():
-        if " " in line:
-            ref, sha = line.split(" ", 1)
-            out[ref] = sha
-    return out
-
-
-_CHECKOUT_RE = re.compile(r"^checkout: moving from (\S+) to (\S+)$")
-
-
 _SCRATCH_IDENTITY = {"GIT_AUTHOR_NAME": "bstack-evals", "GIT_AUTHOR_EMAIL": "evals@localhost",
                      "GIT_COMMITTER_NAME": "bstack-evals",
                      "GIT_COMMITTER_EMAIL": "evals@localhost"}
@@ -431,60 +564,89 @@ _SCRATCH_IDENTITY = {"GIT_AUTHOR_NAME": "bstack-evals", "GIT_AUTHOR_EMAIL": "eva
 _INHERITED_CONFIG = ("user.name", "user.email", "core.hooksPath")
 
 
+@functools.lru_cache(maxsize=None)
+def _case_insensitive(root_real: str) -> bool:
+    try:
+        a, b = os.path.join(root_real, ".git"), os.path.join(root_real, ".GIT")
+        return os.path.exists(b) and os.path.samefile(a, b)
+    except OSError:
+        return False
+
+
+def fs_case_insensitive(root: Path) -> bool:
+    """Probe once per repo: does its filesystem fold case? (.git and .GIT the same?)"""
+    return _case_insensitive(os.path.realpath(root))
+
+
+def _repo_rel(root_real: str, path_real: str, fold: bool) -> str | None:
+    prefix = root_real.rstrip(os.sep) + os.sep
+    a, b = (path_real.casefold(), prefix.casefold()) if fold else (path_real, prefix)
+    if a.startswith(b) and len(path_real) > len(prefix):
+        return PurePosixPath(*Path(path_real[len(prefix):]).parts).as_posix()
+    return None
+
+
 def resolve_hidden(root: Path, evals: Path, hide: list[str] | None,
                    hide_evals_dir: bool) -> list[str]:
     """Repo-relative POSIX paths to hide. Relative --hide values are repo-relative; the
-    evals path is a filesystem path and is hidden only when it lies inside the repo."""
-    root_real = Path(os.path.realpath(root))
+    evals path is a filesystem path and is hidden only when it lies inside the repo.
+    On a case-folding filesystem, containment is decided case-insensitively."""
+    root_real = os.path.realpath(root)
+    fold = fs_case_insensitive(root)
     out: set[str] = set()
     for h in hide or []:
         if os.path.isabs(h):
-            real = Path(os.path.realpath(h))
-            if root_real not in real.parents:
+            rel = _repo_rel(root_real, os.path.realpath(h), fold)
+            if rel is None:
                 raise EvalError(f"--hide {h}: not inside the repository {root_real}")
-            h = real.relative_to(root_real).as_posix()
+            h = rel
         prob = _path_problem("--hide", h)
         if prob or PurePosixPath(h).as_posix() in ("", "."):
             raise EvalError(prob or f"--hide {h!r} would hide the whole repository")
         out.add(PurePosixPath(h).as_posix())
     if hide_evals_dir:
-        real = Path(os.path.realpath(evals))
-        if root_real in real.parents:
-            out.add(real.relative_to(root_real).as_posix())
+        rel = _repo_rel(root_real, os.path.realpath(evals), fold)
+        if rel:
+            out.add(rel)
     return sorted(out)
 
 
 class Scratch:
-    """A scratch checkout of HEAD in a temp dir, removed on exit unless keep: a detached
-    worktree, or — when paths are hidden — a standalone repo with one orphan commit."""
+    """A STANDALONE repository in a temp dir holding one orphan commit of HEAD's tree
+    (minus any hidden paths); removed on exit unless keep.
+
+    Never a `git worktree`: a worktree shares refs, config, stash and objects with the
+    live repo, so an agent could move the live main, tag, stash, or write
+    core.fsmonitor/hooksPath into the live config (code execution on the user's next
+    git command). Here every write lands in the scratch's own .git. The live repo is
+    only READ (ls-tree, pack-objects, config --get)."""
 
     def __init__(self, root: Path, keep: bool = False, hide: list[str] | None = None):
         self.root = root
         self.keep = keep
         self.hide = list(hide or [])
+        self.fold = fs_case_insensitive(root)
         self.tmp: Path | None = None
         self.path: Path | None = None
-        self.cleaned_refs: list[str] = []
+        # Structurally empty: the scratch shares no ref with the live repo. Kept so
+        # the result schema does not change for consumers.
         self.leaked_refs: list[str] = []
 
     def __enter__(self) -> "Scratch":
         self.tmp = Path(tempfile.mkdtemp(prefix="bstack-eval-"))
         self.path = self.tmp / "wt"
-        if self.hide:
-            try:
-                self._build_orphan()
-            except RuntimeError:
-                shutil.rmtree(self.tmp, ignore_errors=True)
-                raise
-            return self
-        self.refs_before = _branch_refs(self.root)
-        p = git(["worktree", "add", "--detach", str(self.path), "HEAD"], self.root)
-        if p.returncode != 0:
+        try:
+            self._build_orphan()
+        except RuntimeError:
             shutil.rmtree(self.tmp, ignore_errors=True)
-            raise RuntimeError(f"git worktree add failed: {p.stderr.strip()}")
+            raise
         return self
 
     def _is_hidden(self, path: str) -> bool:
+        if self.fold:
+            path = path.casefold()
+            return any(path == h.casefold() or path.startswith(h.casefold() + "/")
+                       for h in self.hide)
         return any(path == h or path.startswith(h + "/") for h in self.hide)
 
     def _build_orphan(self) -> None:
@@ -492,7 +654,7 @@ class Scratch:
             if p.returncode != 0:
                 err = p.stderr if isinstance(p.stderr, str) else p.stderr.decode("utf-8",
                                                                                  "replace")
-                raise RuntimeError(f"hidden scratch: {what} failed: {err.strip()[:300]}")
+                raise RuntimeError(f"scratch: {what} failed: {err.strip()[:300]}")
             return p
 
         ls = must(git(["ls-tree", "-r", "-z", "--full-tree", "HEAD"], self.root, binary=True),
@@ -526,51 +688,18 @@ class Scratch:
         must(git(["update-ref", "refs/heads/main", commit], self.path), "update-ref")
         must(git(["checkout", "-q", "-f", "--detach", commit], self.path), "checkout")
 
-    def _own_branches(self) -> set[str]:
-        """Branch names this scratch checked out, read from its own HEAD reflog (a
-        per-worktree log), plus whatever it has checked out now."""
-        names: set[str] = set()
-        p = git(["reflog", "show", "--format=%gs", "HEAD"], self.path)
-        for line in p.stdout.splitlines():
-            m = _CHECKOUT_RE.match(line.strip())
-            if m:
-                names.update(m.groups())
-        p = git(["symbolic-ref", "-q", "--short", "HEAD"], self.path)
-        if p.returncode == 0 and p.stdout.strip():
-            names.add(p.stdout.strip())
-        return names
-
     def __exit__(self, *exc) -> None:
-        if self.keep or self.path is None:
-            return
-        if self.hide:
-            # standalone: nothing is registered in the live repo, nothing to unregister
+        if not self.keep and self.tmp is not None:
             shutil.rmtree(self.tmp, ignore_errors=True)
-            return
-        own = self._own_branches()
-        p = git(["worktree", "remove", "--force", "--force", str(self.path)], self.root)
-        if p.returncode != 0:
-            shutil.rmtree(self.path, ignore_errors=True)
-            git(["worktree", "prune"], self.root)
-        shutil.rmtree(self.tmp, ignore_errors=True)
-        after = _branch_refs(self.root)
-        for ref, sha in sorted(after.items()):
-            if ref in self.refs_before:
-                continue
-            if ref.removeprefix("refs/heads/") in own:
-                # compare-and-delete: only if it still points where we saw it
-                if git(["update-ref", "-d", ref, sha], self.root).returncode == 0:
-                    self.cleaned_refs.append(ref)
-                    continue
-            self.leaked_refs.append(ref)
 
 
 def run_shell_list(cmds: list[str], cwd: Path, timeout: float, label: str
                    ) -> tuple[str | None, str]:
     """Run commands in order; (error or None, concatenated stdout)."""
     out = []
+    env = scratch_env(cwd)
     for cmd in cmds:
-        r = spawn(cmd, cwd=cwd, env=filtered_env(), timeout=timeout, shell=True)
+        r = spawn(cmd, cwd=cwd, env=env, timeout=timeout, shell=True)
         out.append(r["stdout"])
         if r["timed_out"]:
             return f"{label} command timed out after {timeout}s: {cmd}", "".join(out)
@@ -603,14 +732,15 @@ def _match_excerpt(m: re.Match | None) -> str:
     return repr(m.group(0)[:200]) if m else ""
 
 
-def run_check(c: dict, wt: Path, reply: str, base: str) -> dict:
+def run_check(c: dict, wt: Path, reply: str, base: str,
+              env: dict[str, str] | None = None) -> dict:
     t = c["type"]
     rec = {"type": t, "passed": False, "evidence": ""}
     for k in ("path", "regex", "run"):
         if k in c:
             rec[k] = c[k]
     if t == "command":
-        r = spawn(c["run"], cwd=wt, env=filtered_env(),
+        r = spawn(c["run"], cwd=wt, env=env if env is not None else scratch_env(wt),
                   timeout=c.get("timeout_s", CHECK_TIMEOUT_S), shell=True)
         want = c.get("expect_exit", 0)
         ev = [f"exit {r['rc']} (want {want})"]
@@ -692,7 +822,8 @@ def run_check(c: dict, wt: Path, reply: str, base: str) -> dict:
 
 
 def run_checks(ev: dict, wt: Path, reply: str, base: str) -> list[dict]:
-    return [run_check(c, wt, reply, base) for c in ev["checks"]]
+    env = scratch_env(wt)   # read once, AFTER the agent: its planted drivers included
+    return [run_check(c, wt, reply, base, env) for c in ev["checks"]]
 
 
 # --------------------------------------------------------------------------
@@ -700,14 +831,16 @@ def run_checks(ev: dict, wt: Path, reply: str, base: str) -> list[dict]:
 # --------------------------------------------------------------------------
 
 def resolve_claude(spec: str) -> str:
+    """Absolute path: claude is spawned with cwd = the scratch, so a relative path
+    resolved against the caller's cwd would no longer point at it."""
     if os.sep in spec or (os.altsep and os.altsep in spec):
         if os.path.isfile(spec) and os.access(spec, os.X_OK):
-            return spec
+            return os.path.abspath(spec)
         raise EvalError(f"claude binary not found or not executable: {spec}")
     found = shutil.which(spec)
     if not found:
         raise EvalError(f"claude binary '{spec}' not found on PATH")
-    return found
+    return os.path.abspath(found)
 
 
 def claude_version(claude: str) -> str | None:
@@ -717,10 +850,25 @@ def claude_version(claude: str) -> str | None:
     return None
 
 
+def tool_base_names(allowed: list[str]) -> list[str]:
+    """`Bash(git *)` -> `Bash`; deduplicated, first occurrence first."""
+    out: list[str] = []
+    for t in allowed:
+        base = t.split("(", 1)[0].strip()
+        if base and base not in out:
+            out.append(base)
+    return out
+
+
 def claude_argv(claude: str, ev: dict) -> list[str]:
+    """--tools makes only the named tools AVAILABLE; --allowedTools pre-approves the
+    scoped rules; dontAsk denies the rest. Under dontAsk alone, a tool pre-approved by a
+    settings file stays approved — with --tools as well, allowed_tools is the whole grant."""
     argv = [claude, "-p", ev["prompt"]]
     if ev["allowed_tools"]:
+        argv += ["--tools", ",".join(tool_base_names(ev["allowed_tools"]))]
         argv += ["--allowedTools", ",".join(ev["allowed_tools"])]
+    argv += ["--permission-mode", ev.get("permission_mode", DEFAULT_PERMISSION_MODE)]
     return argv + ["--output-format", "json"]
 
 
@@ -742,9 +890,10 @@ def parse_reply(stdout: str) -> tuple[str, dict, str | None]:
 
 
 def run_eval(f: Path, ev: dict, root: Path, claude: str, keep: bool,
-             hide: list[str] | None = None) -> dict:
+             hide: list[str] | None = None, secret_paths=None) -> dict:
     res: dict = {"id": ev["id"], "file": str(f), "status": "errored", "checks": [],
-                 "notes": [], "error": None, "claude_exit": None, "duration_s": 0.0}
+                 "notes": [], "error": None, "claude_exit": None, "duration_s": 0.0,
+                 "leaked_refs": []}
     start = time.monotonic()
     timeout = ev.get("timeout_s", DEFAULT_TIMEOUT_S)
     sc = Scratch(root, keep=keep, hide=hide)
@@ -757,7 +906,8 @@ def run_eval(f: Path, ev: dict, root: Path, claude: str, keep: bool,
                 res["error"] = err
                 return res
             base = head_sha(sc.path)
-            r = spawn(claude_argv(claude, ev), cwd=sc.path, env=claude_env(), timeout=timeout)
+            r = spawn(claude_argv(claude, ev), cwd=sc.path,
+                      env=claude_env(sc.path, secret_paths), timeout=timeout)
             res["claude_exit"] = r["rc"]
             if r["spawn_error"]:
                 res["error"] = f"could not start claude: {r['spawn_error']}"
@@ -785,11 +935,7 @@ def run_eval(f: Path, ev: dict, root: Path, claude: str, keep: bool,
         return res
     finally:
         res["duration_s"] = round(time.monotonic() - start, 2)
-        if sc.cleaned_refs:
-            res["cleaned_refs"] = sc.cleaned_refs
-        if sc.leaked_refs:
-            res["leaked_refs"] = sc.leaked_refs
-            res["notes"].append("new branch refs left behind: " + ", ".join(sc.leaked_refs))
+        res["leaked_refs"] = sc.leaked_refs
 
 
 def load_baseline(path: Path) -> dict[str, str]:
@@ -814,13 +960,17 @@ def load_baseline(path: Path) -> dict[str, str]:
 
 
 def gate_failures(summary: dict, min_rate: float | None, tolerance: float,
-                  allow_regressions: bool = False) -> list[str]:
+                  allow_regressions: bool = False, allow_removed: bool = False) -> list[str]:
     fails = []
     rate = summary["pass_rate"]
     if min_rate is not None and rate + EPS < min_rate:
         fails.append(f"pass rate {rate:.3f} < --min-pass-rate {min_rate:.3f}")
     if not summary.get("baseline_used"):
         return fails
+    # A passing eval that disappears is how a PR hides the regression it causes.
+    if summary["removed_passing"] and not allow_removed:
+        fails.append("regression: passed in the baseline, missing now: "
+                     + ", ".join(summary["removed_passing"]))
     base = summary["baseline_pass_rate"]
     if base is None:
         fails.append("no eval in common with the baseline; the comparison checked nothing")
@@ -845,6 +995,7 @@ def summarize(results: list[dict], started_at: str, version: str | None,
          "pass_rate": rate, "results": results, "baseline_used": baseline is not None,
          "baseline_pass_rate": None, "current_pass_rate_on_common": None, "delta": None,
          "common": 0, "added_ids": [], "removed_ids": [], "regressions": [],
+         "removed_passing": [],
          "started_at": started_at, "finished_at": now_iso(), "claude_version": version}
     if baseline is not None:
         now = {r["id"]: r["status"] for r in results}
@@ -854,6 +1005,7 @@ def summarize(results: list[dict], started_at: str, version: str | None,
         s["removed_ids"] = sorted(set(baseline) - set(now))
         s["regressions"] = [i for i in common
                             if baseline[i] == "passed" and now[i] != "passed"]
+        s["removed_passing"] = [i for i in s["removed_ids"] if baseline[i] == "passed"]
         if common:
             brate = round(sum(baseline[i] == "passed" for i in common) / len(common), 6)
             crate = round(sum(now[i] == "passed" for i in common) / len(common), 6)
@@ -921,12 +1073,15 @@ def cmd_run(args) -> int:
     started = now_iso()
     version = claude_version(claude)
     hidden = resolve_hidden(root, args.evals, args.hide, not args.no_hide_evals_dir)
-    results = [run_eval(f, ev, root, claude, args.keep, hidden) for f, ev in evals]
+    secrets = [root, args.evals]
+    results = [run_eval(f, ev, root, claude, args.keep, hidden, secrets) for f, ev in evals]
     s = summarize(results, started, version, baseline)
     s["hidden_paths"] = hidden
-    fails = gate_failures(s, args.min_pass_rate, args.tolerance, args.allow_regressions)
+    fails = gate_failures(s, args.min_pass_rate, args.tolerance, args.allow_regressions,
+                          args.allow_removed)
     s["gate"] = {"enabled": bool(args.gate), "min_pass_rate": args.min_pass_rate,
                  "tolerance": args.tolerance, "allow_regressions": args.allow_regressions,
+                 "allow_removed": args.allow_removed,
                  "failures": fails}
     table = render_table(s)
     if fails:
@@ -948,21 +1103,16 @@ def cmd_run(args) -> int:
 # --------------------------------------------------------------------------
 
 def prove_eval(ev: dict, root: Path, hide: list[str] | None = None) -> dict:
-    """Two arms, two fresh scratch checkouts, no model. The checks must fail when
-    nothing is done and pass when the reference is done."""
+    """No model, a fresh scratch per arm. The checks must pass when the reference is
+    done, fail on every named violation, and fail when nothing is done while the reply
+    claims success. The no-op arm runs LAST: a reference or violation that leaves state
+    OUTSIDE its scratch (a /tmp marker) then makes the no-op pass, and the eval is
+    reported as not discriminating instead of being certified."""
     out: dict = {"id": ev["id"], "status": "proven", "problems": [],
-                 "noop_checks": [], "reference_checks": []}
+                 "noop_reply": NOOP_REPLY, "noop_checks": [], "reference_checks": [],
+                 "violation_arms": []}
     timeout = ev.get("timeout_s", DEFAULT_TIMEOUT_S)
     try:
-        with Scratch(root, hide=hide) as sc:
-            err, _ = run_shell_list(ev.get("setup", []), sc.path, timeout, "setup")
-            if err:
-                out["problems"].append(f"no-op arm: {err}")
-            else:
-                out["noop_checks"] = run_checks(ev, sc.path, "", head_sha(sc.path))
-                if all(c["passed"] for c in out["noop_checks"]):
-                    out["problems"].append(
-                        "does not discriminate: every check passes when nothing is done")
         with Scratch(root, hide=hide) as sc:
             err, _ = run_shell_list(ev.get("setup", []), sc.path, timeout, "setup")
             if err:
@@ -980,11 +1130,73 @@ def prove_eval(ev: dict, root: Path, hide: list[str] | None = None) -> dict:
                             out["problems"].append(
                                 f"reference arm: checks[{i}] {c['type']} {what} failed: "
                                 f"{c['evidence']}")
+        for v in ev.get("violations", []):
+            out["violation_arms"].append(_violation_arm(ev, v, root, hide, timeout, out))
+        with Scratch(root, hide=hide) as sc:
+            err, _ = run_shell_list(ev.get("setup", []), sc.path, timeout, "setup")
+            if err:
+                out["problems"].append(f"no-op arm: {err}")
+            else:
+                out["noop_checks"] = run_checks(ev, sc.path, NOOP_REPLY, head_sha(sc.path))
+                if all(c["passed"] for c in out["noop_checks"]):
+                    out["problems"].append(
+                        "does not discriminate: every check passes when nothing is done "
+                        f"and the reply is {NOOP_REPLY!r}")
     except RuntimeError as e:
         out["problems"].append(str(e))
     if out["problems"]:
         out["status"] = "failed"
     return out
+
+
+# An absolute path in a shell string: `/…` right after start, whitespace, a quote, `=`,
+# `(`, a redirect or a separator. Excludes URLs (`https://…` — `:` precedes the `/`).
+_ABS_PATH_RE = re.compile(r"""(?:^|[\s'"=(<>|;&])(/[^\s'"`;|&()<>]*)""")
+_OUTSIDE_VAR_RE = re.compile(r"(~/|\$\{?(?:HOME|TMPDIR|RUNNER_TEMP|GITHUB_WORKSPACE|OLDPWD)\b)")
+_ABS_OK_RE = re.compile(r"^/dev/(null|stdin|stdout|stderr|fd/\d+)$|^/(usr|bin|sbin|opt/homebrew)(/|$)")
+
+
+def outside_path_warnings(ev: dict) -> list[str]:
+    """Shell strings that name a location outside the scratch. State written there
+    survives between arms and between runs, so a check can pass for a reason that has
+    nothing to do with what the agent did. A warning, not an error: reading a system
+    path is harmless, and the regex cannot tell reading from writing."""
+    where: list[tuple[str, str]] = []
+    where += [(f"setup[{i}]", c) for i, c in enumerate(ev.get("setup", []))]
+    where += [(f"reference[{i}]", c) for i, c in enumerate(ev.get("reference", []))]
+    for v in ev.get("violations", []):
+        where += [(f"violation {v['name']!r}", c) for c in v["run"]]
+    where += [(f"checks[{i}]", c["run"]) for i, c in enumerate(ev["checks"])
+              if c["type"] == "command"]
+    out = []
+    for label, cmd in where:
+        hits = [m.group(1) for m in _ABS_PATH_RE.finditer(cmd)
+                if not _ABS_OK_RE.match(m.group(1))]
+        hits += [m.group(1) for m in _OUTSIDE_VAR_RE.finditer(cmd)]
+        if hits:
+            out.append(f"{label} refers to {', '.join(repr(h) for h in hits)}, outside the "
+                       f"scratch; state there survives between arms and runs")
+    return out
+
+
+def _violation_arm(ev: dict, v: dict, root: Path, hide: list[str] | None,
+                   timeout: float, out: dict) -> dict:
+    """setup, then the wrong behaviour, then every check: one must fail."""
+    arm: dict = {"name": v["name"], "status": "caught", "checks": [], "error": None}
+    with Scratch(root, hide=hide) as sc:
+        err, _ = run_shell_list(ev.get("setup", []), sc.path, timeout, "setup")
+        if not err:
+            base = head_sha(sc.path)
+            err, stdout = run_shell_list(v["run"], sc.path, timeout, "violation")
+        if err:
+            arm["status"], arm["error"] = "error", err
+            out["problems"].append(f"violation '{v['name']}': {err}")
+            return arm
+        arm["checks"] = run_checks(ev, sc.path, stdout, base)
+    if all(c["passed"] for c in arm["checks"]):
+        arm["status"] = "passes"
+        out["problems"].append(f"violation '{v['name']}' passes every check")
+    return arm
 
 
 def cmd_validate(args) -> int:
@@ -993,9 +1205,16 @@ def cmd_validate(args) -> int:
     warnings: list[str] = []
     proofs: list[dict] = []
     for f, ev in evals:
+        warnings += [f"{f}: eval '{ev['id']}': {w}" for w in outside_path_warnings(ev)]
         if "reference" not in ev:
             msg = f"{f}: eval '{ev['id']}' has no 'reference' — unproven"
             if args.require_reference:
+                problems.append(msg)
+            elif args.prove:
+                warnings.append(msg)
+        if "violations" not in ev:
+            msg = f"{f}: eval '{ev['id']}' has no violation arm"
+            if args.require_violations:
                 problems.append(msg)
             elif args.prove:
                 warnings.append(msg)
@@ -1059,16 +1278,21 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--tolerance", type=float, default=0.0, metavar="F",
                    help="allowed drop below the baseline pass rate (default 0)")
     r.add_argument("--gate", action="store_true", help="exit 1 when a threshold is missed")
+    r.add_argument("--allow-removed", action="store_true",
+                   help="with --gate, do not fail when an eval that passed in the baseline "
+                        "is missing now")
     r.add_argument("--allow-regressions", action="store_true",
                    help="with --gate, do not fail on evals that passed in the baseline "
                         "and fail now (the rate checks still apply)")
-    r.add_argument("--keep", action="store_true", help="leave scratch worktrees in place")
+    r.add_argument("--keep", action="store_true", help="leave scratch repos in place")
 
 
     v = sub.add_parser("validate", help="check eval files; --prove checks they discriminate")
     v.add_argument("evals", type=Path)
     v.add_argument("--prove", action="store_true",
                    help="run each `reference` eval in a no-op arm and a reference arm")
+    v.add_argument("--require-violations", action="store_true",
+                   help="an eval with no `violations` is an error, not a warning")
     v.add_argument("--require-reference", action="store_true",
                    help="an eval with no `reference` is an error, not a warning")
     v.add_argument("--only", action="append", metavar="ID")

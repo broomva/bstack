@@ -50,8 +50,10 @@ jobs:
             branch="spec/$name"
             git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1 && continue
             git switch -q -c "$branch" origin/main
-            "$CLAUDE_BIN" -p "Read $f and produce a requirements and design spec for integrating it into this codebase. Apply the skills available to you so it conforms to our standards. Write it to $spec. Describe clearly any areas of concern, especially where you cannot satisfy contradicting policies. Do not edit any other file." \
-              --allowedTools "Read,Grep,Glob,Write($spec)" --output-format json > "$RUNNER_TEMP/$name.json"
+            # stdin from /dev/null: `claude -p` reads piped stdin, which here is this loop's file list.
+            env -u GH_TOKEN "$CLAUDE_BIN" -p "Read $f and produce a requirements and design spec for integrating it into this codebase. Apply the skills available to you so it conforms to our standards. Write it to $spec. Describe clearly any areas of concern, especially where you cannot satisfy contradicting policies. Do not edit any other file." \
+              --allowedTools "Read,Grep,Glob,Write($spec)" --permission-mode dontAsk --output-format json \
+              < /dev/null > "$RUNNER_TEMP/$name.json"
             [ -f "$spec" ] || { echo "no spec written for $f"; git switch -q main; continue; }
             git add "$spec"
             git -c user.name="intent-to-spec" -c user.email="intent-to-spec@users.noreply.github.com" commit -q -m "spec: $name (from $f)"

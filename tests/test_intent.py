@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -222,6 +223,38 @@ class TestLint(Base):
         self.assertEqual(run("lint", str(self.tmp / "nope.md"))[0], 2)
 
 
+class TestWrapped(Base):
+    def wrap(self, text: str, width: int = 72) -> str:
+        """Reflow every prose paragraph the way prettier --prose-wrap / `gq` would."""
+        out = []
+        for para in text.split("\n\n"):
+            if para.startswith("#") or para.startswith("Author:"):
+                out.append(para)
+            else:
+                out.append(textwrap.fill(" ".join(para.split()), width=width))
+        return "\n\n".join(out)
+
+    def test_template_reflowed_at_72_columns_still_fails_on_every_placeholder(self):
+        run("new", "wrapped", "--author", "A", "--title", "T", "--dir", str(self.tmp),
+            "--date", "2026-01-02")
+        f = self.tmp / "2026-01-02-wrapped.md"
+        wrapped = self.wrap(f.read_text())
+        self.assertTrue(any(len(ln) <= 72 and ln.startswith("<") and not ln.endswith(">")
+                            for ln in wrapped.split("\n")),
+                        "fixture must actually split a placeholder across lines")
+        f.write_text(wrapped)
+        rc, out, _ = run("lint", str(f))
+        self.assertEqual(rc, 1, out)
+        self.assertEqual(out.count("unfilled placeholder"), len(intent.SECTIONS), out)
+        # reported on the line where the placeholder starts, rejoined onto one line
+        self.assertIn("unfilled placeholder <What is wrong or missing today, who feels it, "
+                      "and the evidence that it is real.>", out)
+
+    def test_brackets_in_different_paragraphs_are_not_one_placeholder(self):
+        text = FILLED.replace("None.", "If a < b holds, stop.\n\nOtherwise c > d.")
+        self.assertEqual(self.lint(text), [])
+
+
 class TestStatus(Base):
     def test_status_prints_the_header_status(self):
         rc, out, _ = run("status", str(self.write(FILLED)))
@@ -243,6 +276,21 @@ class TestStatus(Base):
         expected = crlf.replace("Status: draft.", "Status: accepted.").encode()
         self.assertEqual(after, expected)
         self.assertEqual(run("status", str(p))[1].strip(), "accepted")
+
+    def test_set_status_with_a_comment_on_the_header_line(self):
+        head = "Author: Ada Lovelace. Status: draft. <!-- draft | accepted | rejected -->"
+        p = self.write(FILLED.replace("Author: Ada Lovelace. Status: draft.", head))
+        rc, out, err = run("set-status", str(p), "accepted")
+        self.assertEqual(rc, 0, err)
+        self.assertIn("Author: Ada Lovelace. Status: accepted. <!-- draft | accepted | "
+                      "rejected -->", p.read_text())
+        self.assertEqual(run("status", str(p))[1].strip(), "accepted")
+
+    def test_set_status_when_a_comment_ends_on_the_header_line(self):
+        p = self.write(FILLED.replace("Author: Ada", "<!-- note\n-->Author: Ada"))
+        rc, out, err = run("set-status", str(p), "rejected")
+        self.assertEqual(rc, 0, err)
+        self.assertIn("-->Author: Ada Lovelace. Status: rejected.", p.read_text())
 
     def test_set_status_rejects_unknown_status_and_leaves_file(self):
         p = self.write(FILLED)
