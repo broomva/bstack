@@ -9,7 +9,8 @@
 #
 # The model returns text; a program writes the file. The diagnosis runs in a throwaway
 # clone that holds no credentials, with Read/Grep/Glob only (no shell, no MCP servers).
-# The workflow appends its reply to the intent. Only the PR step holds a token.
+# The workflow appends its reply to the intent. Only the steps that talk to GitHub hold a
+# token.
 #
 # The shipped metric is CI failure rate over this repo's workflow runs. Point BANDS_FILE
 # at a different .control/bands/*.yaml and replace the series step for another metric.
@@ -24,6 +25,10 @@ permissions:
   contents: write
   pull-requests: write
   actions: read
+
+concurrency:
+  group: control-bands
+  cancel-in-progress: false
 
 jobs:
   bands:
@@ -62,7 +67,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           KEY: ${{ steps.check.outputs.key }}
         run: |
-          n=$(gh pr list --state open --head "bands/$KEY" --json number -q 'length')
+          # Only an open PR from this repo counts; a fork PR on the same branch name must not
+          # suppress intents.
+          n=$(gh pr list --state open --head "bands/$KEY" --json number,isCrossRepository \
+                -q '[.[] | select(.isCrossRepository | not)] | length')
           if [ "${n:-0}" -gt 0 ]; then echo "open=true" >> "$GITHUB_OUTPUT"; echo "an intent PR for $KEY is already open"; else echo "open=false" >> "$GITHUB_OUTPUT"; fi
       - name: Write the intent, diagnose in a throwaway clone
         id: diag

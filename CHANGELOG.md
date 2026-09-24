@@ -21,7 +21,8 @@ proven red:
     NotebookEdit, and Bash commands whose write target is locked.
   - `verify` is the gate:
     - It fails on content drift, on a lock without a hash, and on a lock commit whose content
-      no longer matches its trailer (`commit --amend -a`).
+      no longer matches its trailer (`commit --amend --no-edit`; an amend with `-m` replaces
+      the message and so drops the lock, which is visible only in review).
     - It exits 3 on any `Test-Unlock:` release, and stays red until a person acts.
     - It parses trailers in-process from raw commits, so no git config can hide a lock.
     - It fails closed (exit 2) on any scan error.
@@ -45,7 +46,7 @@ proven red:
 - **`bstack bands`** (P11). A deterministic Western Electric control-band detector with no
   model in it.
   - At 2σ and 3σ it writes the next `intent.md`; `intent --json` gives a `dedupe_key`.
-  - The diagnosis has Read, Grep and Glob only: no shell, no MCP servers.
+  - The diagnosis has Read, Grep, Glob and LS only: no shell, no MCP servers.
   - The template runs the diagnosis in a throwaway clone without credentials. The model
     returns text, and the workflow writes it.
   - The series drops the incomplete current day.

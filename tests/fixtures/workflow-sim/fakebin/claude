@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+"""Fake `claude` for tests/workflow-templates.test.sh (BRO-2542). Never calls a model and
+never writes a file outside $SIM: the templates must write the reply themselves.
+
+Logs one JSON line per call to $SIM/claude.log: argv, cwd, whether GH_TOKEN (or
+GITHUB_TOKEN) was set, the bytes read from stdin, whether stdin was /dev/null, whether
+the cwd's git config carries a credential, the files under .bands/, and the reply.
+
+stdin is checked two ways. Reading it catches a caller that feeds it data. fstat catches a
+caller that hands over its own loop input: with one intent left in a `while read` loop that
+input is at EOF, so it reads as empty, yet it is not /dev/null.
+
+$SIM/claude.mode picks the reply: `ok` or `error`. A missing mode is a violation.
+"""
+import glob
+import json
+import os
+import stat
+import sys
+
+SIM = os.environ["SIM"]
+
+
+def is_devnull(fd):
+    try:
+        a, b = os.fstat(fd), os.stat(os.devnull)
+    except OSError:
+        return False
+    return stat.S_ISCHR(a.st_mode) and a.st_rdev == b.st_rdev
+
+
+devnull = is_devnull(0)
+data = sys.stdin.buffer.read() if not sys.stdin.closed else b""
+cfg = open(".git/config").read().lower() if os.path.isfile(".git/config") else ""
+calls = sum(1 for _ in open(os.path.join(SIM, "claude.log"))) if os.path.exists(
+    os.path.join(SIM, "claude.log")) else 0
+
+mode_path = os.path.join(SIM, "claude.mode")
+mode = open(mode_path).read().strip() if os.path.exists(mode_path) else None
+prompt = sys.argv[sys.argv.index("-p") + 1] if "-p" in sys.argv[1:-1] else ""
+nonce = f"call-{calls + 1}"
+
+if mode == "ok" and "requirements and design spec" in prompt:
+    reply = {"type": "result", "is_error": False,
+             "result": f"# Spec\n\nFAKE-SPEC {nonce}: drafted from `{prompt.split()[1]}`.\n"}
+elif mode == "ok":
+    reply = {"type": "result", "is_error": False,
+             "result": f"## Diagnosis\n\nFAKE-DIAGNOSIS {nonce}: a flaky runner.\n"}
+elif mode == "error":
+    reply = {"type": "result", "is_error": True, "result": "API Error: 529 overloaded"}
+else:
+    with open(os.path.join(SIM, "violations.log"), "a") as f:
+        f.write(json.dumps({"argv": sys.argv[1:], "why": f"claude.mode is {mode!r}"}) + "\n")
+    sys.exit(2)
+
+with open(os.path.join(SIM, "claude.log"), "a") as f:
+    f.write(json.dumps({
+        "argv": sys.argv[1:],
+        "cwd": os.path.realpath(os.getcwd()),
+        "GH_TOKEN": bool(os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")),
+        "stdin_bytes": len(data),
+        "stdin_devnull": devnull,
+        "gitconfig_has_cred": any(x in cfg for x in ("extraheader", "authorization",
+                                                     "credential", "token")),
+        "bands_files": sorted(os.path.basename(p) for p in glob.glob(".bands/*")),
+        "mode": mode,
+        "reply": reply["result"],
+    }) + "\n")
+
+print(json.dumps(reply))
+sys.exit(1 if reply["is_error"] else 0)

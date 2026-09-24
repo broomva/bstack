@@ -83,9 +83,9 @@ it. This reference adds what they lacked:
    pre-approved runbook. The detector is a unit-tested program with no model in it. *Held by*
    `bstack bands`:
    - The model returns text; a program writes the file.
-   - The diagnosis runs in a throwaway clone that holds no credentials. It has Read, Grep and
-     Glob only: no shell (`--restricted`) and no MCP servers. The workflow pre-fetches the
-     data it reads and appends its reply to the intent.
+   - The diagnosis runs in a throwaway clone that holds no credentials. It has Read, Grep,
+     Glob and LS only: no shell (`--restricted`) and no MCP servers. The workflow copies the
+     run list and the band result into the clone and appends the reply to the intent.
    - The series drops the incomplete current day.
    - An undersized baseline reports `insufficient_baseline`, never `none`.
 8. **Governance hooks live on a surface the organization trusts.** Under

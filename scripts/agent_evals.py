@@ -68,7 +68,7 @@ cover: an eval's shell check still runs whatever PROGRAM it names, and the agent
 have planted one (a script in the scratch, a shim earlier on a relative PATH entry).
 Write checks against git plumbing or absolute system tools, never scratch-local scripts.
 
-A check that cannot fail is not a check. `validate --prove` runs every eval that has a
+An eval that cannot fail is not an eval. `validate --prove` runs every eval that has a
 `reference`, without claude, one fresh scratch per arm, in this order:
   1. reference arm — setup, the reference commands (their stdout stands in for the
      reply), all checks: every check must PASS;
