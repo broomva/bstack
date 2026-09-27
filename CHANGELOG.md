@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.41.0 — unreleased
+## 0.41.0 — 2026-09-27
 
 ### feat(sdlc): the AI-native SDLC playbook's twelve plays, held by mechanisms rather than prose
 
@@ -71,6 +71,147 @@ sink in a template becomes a sink in every repo that copies it.
 
 `references/primitives.md` gains the matching clauses: P2 Surface, P3 Artifact chain, P4
 Plan sync, P11 rules 8–10, and P20 Review policy file.
+
+## 0.40.5 — 2026-09-27
+
+### feat(doctor): §27 reports skills whose executed code diverges from origin/main (BRO-2369)
+
+A merge to a skills repo's `main` does not deploy a skill. An installed skill is
+usually a symlink into a checkout, and what actually runs is whatever branch
+that checkout is parked on — so a merged fix can sit inert with nothing
+reporting it. BRO-2368 is the measured instance: 89 skills running three commits
+behind main, with three merged lint and bookkeeping GATE fixes dead on disk.
+
+`scripts/lib/skill-drift.py` compares the **working tree** against `origin/main`,
+per skill. Commit topology was the first design and was wrong in both
+directions: it called a checkout current while its files were modified on disk,
+and it called every skill in a repo drifted because one commit touched
+`README.md`.
+
+The rule the module is built around: **a skill it cannot evaluate is reported
+UNKNOWN, never current.** This check exists because the failure mode is a silent
+pass, so a checker resolving ambiguity toward "fine" would reproduce the bug it
+was written to catch. Concretely:
+
+- No `origin/master` fallback. Comparing against a stale ref and then printing
+  "current with origin/main" would invent a clean answer out of a missing one.
+- `core.fsmonitor=false` on every git call. A dead fsmonitor daemon makes git
+  report a clean tree while files are modified, which would understate drift
+  silently.
+- `assume-unchanged` and `skip-worktree` paths are **UNVERIFIABLE**, not clean.
+  Those flags exist to make a modified file invisible to git, so `diff` reports
+  nothing while the file on disk differs and the skill runs code no comparison
+  can see.
+- A dangling symlink is caught by `resolve(strict=True)`, since a dead link
+  still prints a plausible path under `readlink`.
+- One skill reached through two roots (`~/.claude/skills/x` →
+  `~/.agents/skills/x`) is ONE skill, keyed on the resolved path.
+
+Three ways the check could report a *positive clean verdict* on a skill that
+does not match, all found in review and all now pinned by regression cases:
+
+- **Renames.** git detects renames by default, and for a rename `--name-only`
+  prints only the DESTINATION. Moving a skill's only file out of its directory
+  produced a diff naming a path outside the skill and nothing inside it, so the
+  skill read as current. `--no-renames` lists both sides.
+- **Non-ASCII paths.** Without `-z`, git C-quotes any path containing a byte
+  >= 0x80, a quote, a backslash or a control character —
+  `"skills/alpha/NARI\303\221O.txt"` — and the prefix test never matches, so the
+  path is dropped and the skill reads as current. This was live on this machine:
+  a tracked file under `colombia-conflict` carries an N-tilde. All three git
+  calls now pass `-z` and split on NUL, which also fixes the identical blind
+  spot in the `assume-unchanged` detection. `-z` output is deliberately not
+  stripped, because a path may legitimately begin or end with a space.
+- **Stale refs.** An `origin/main` that exists but was never refreshed is not a
+  comparison, it is a comparison against a fiction. Measured here: a clone with
+  no `FETCH_HEAD`, whose `packed-refs` was last written 61 days earlier, had an
+  `origin/main` **180 commits** behind upstream — and its 23 skills were being
+  counted inside "match origin/main". Ref age now comes from **`FETCH_HEAD`'s
+  mtime, guarded by its content**, and beyond `--stale-days` (default 30) the
+  repo is UNKNOWN rather than a basis for comparison. Still no network.
+
+  Every other candidate was measured and every one lies toward "fresh":
+  `packed-refs` is rewritten by `git pack-refs`, hence by `git gc`, which
+  `gc.auto` fires unattended (200d → 0d with no fetch); the reflog *file's*
+  mtime is reset by `gc` too, since gc runs `reflog expire` (100d → 0d); and the
+  reflog's *content*, while immune to all of that, answers the wrong question —
+  it records when the ref last MOVED, so a repo fetching daily from a quiet
+  upstream reads as ancient. `FETCH_HEAD` is written by any fetch that reached a
+  remote, including one that changed nothing, and survives `gc` intact
+  (77d → 77d). Its weakness is that *any* remote writes it, so its content is
+  checked for origin's own URL — normalised, because git strips the trailing
+  `.git` when it writes the file. A future mtime is treated as undatable rather
+  than clamped to zero: clamping resolves an anomaly toward "freshly fetched",
+  the one move this module exists to refuse. `--git-common-dir`, not
+  `--absolute-git-dir`, because `FETCH_HEAD` lives in the common directory and a
+  linked worktree's own gitdir has none of these files.
+
+A symlink in a skills root that resolves to a file is also reported rather than
+dropped: it has the shape of an installed skill, and it was the one entry the
+scan discarded with no counter and no line.
+
+Advisory only, like §4b, §4c, §12 and §28: it prints `[info]` and calls neither
+`ok()` nor `gap()`, so the doctor totals and `--strict` are unaffected. Drift is
+a deployment fact, not a contract violation, and a doctor that failed on it
+would block unrelated work. Read-only and offline — it reads whatever ref the
+last fetch left and never fetches.
+
+Performance: repo roots are resolved by walking for `.git` rather than spawning
+`git rev-parse` per skill. 408 of 523 installed skills here have no repo above
+them at all, and spawning git only to be told so dominated the runtime.
+
+`§27` was reserved by 0.40.1's §28, which skipped the number to avoid a merge
+conflict; both sections now sit in order.
+
+16-case suite in `tests/skill-drift.test.sh`, including negative controls that
+fail a checker which flags everything and a checker which flags nothing.
+
+## 0.40.4 — 2026-09-23
+
+### fix(prompts): what the hooks and primitive text tell the model, re-read for Opus 5.5 (BRO-2536)
+
+A `/claude-api prompt-audit` of the workspace this ships into found text that
+was accurate for older models or older releases and now misleads the current
+one. This release carries the parts that live in bstack.
+
+- **The upgrade nudge pointed at the path that breaks vendored installs.**
+  `bstack-autoupdate-hook.sh` told every session on a vendored install with an
+  upgrade available to run
+  `npx skills add -g broomva/bstack`, and `bin/bstack`'s three fallbacks said the
+  same. That command can leave an install holding only SKILL.md, without
+  `bin/`, `scripts/` or hooks. The nudge now names `<install>/bin/bstack
+  upgrade` (verified release tarball; `bstack` need not be on PATH) and
+  `bstack-upgrade/SKILL.md` (clones main); the fallbacks, which print to a
+  terminal, give the manual clone. That manual flow now resolves a symlinked
+  install path first, so it replaces the install rather than the link.
+- **The posture line is one sentence instead of two.** It keeps the arc,
+  the next slice, the pause criterion (only a cross-repo, destructive or
+  public-API-breaking decision) and how to complete the arc. The criterion
+  stays per-turn: the arc-continuation Stop hook blocks only empty turns,
+  `No response requested.` turns and handbacks without an ask block, so
+  nothing else enforces it.
+- **P12/P19 no longer state an Opus 4.6 measurement as a trigger.** P19's
+  persist row also routes P12's "≥3 failed fixes" restart, so the two agree. "Exceeds
+  ~1h" and "~100K tokens" came from METR's Opus 4.6 horizon. Current models run
+  a 1M context with automatic compaction in Claude Code. P12 now triggers on
+  work that must outlive the session and on repeated failed fixes, in
+  `references/primitives.md`, `references/primitives.yaml`, `SKILL.md`,
+  `references/dogfood-patterns.md` and both templates; the METR figure stays as
+  dated context.
+- **Four "Mental checklist before declaring done" paragraphs removed** from
+  `references/primitives.md`. Each restated the trigger list above it as
+  self-check questions, which current models over-apply.
+- **Templates:** the scaffolded AGENTS.md says the primitives with a Reflexive
+  Trigger Rule rely on the agent (not every rule is hook-enforced); the
+  plugin-precedence step says `/kg load` instead of the grep the P6 retrieval
+  rule forbids.
+- **Existing workspaces are not rewritten by an upgrade.** `bstack repair`
+  backfills only the philosophy and retrieval-discipline sections, so a
+  workspace scaffolded from an earlier template keeps its P12/P19 text until
+  edited by hand.
+- **Tests:** `tests/autoupdate-vendored-guidance.test.sh` (new) pins the upgrade
+  guidance in the hook and all three `bin/bstack` fallbacks;
+  `tests/loop-stall-hooks.test.sh` pins the pause criterion in the posture line.
 
 ## 0.40.3 — 2026-09-12
 
@@ -199,7 +340,6 @@ a property of being *optional*, so any future optional key needs the same reset.
 Tests M1/M2 pin both directions: an ambient value cannot raise the lane, and a
 configured budget still wins. M1 reproduces `"correction_budget": 999` against
 the pre-fix gate.
-
 
 ## 0.40.1 — 2026-09-07
 

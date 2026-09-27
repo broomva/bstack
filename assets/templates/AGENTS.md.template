@@ -2,7 +2,7 @@
 
 ## Self-Meta Definition
 
-This file IS the control harness for agents operating in this workspace. Reading this file is not optional — it is the first action an agent takes. The rules here are enforced by pre-commit hooks, Claude Code hooks, and the control audit (`make control-audit`).
+This file IS the control harness for agents operating in this workspace. Codex loads it directly; Claude Code loads `CLAUDE.md`, which points here for each primitive's full rule. Some rules here are enforced by pre-commit hooks, Claude Code hooks, and the control audit (`make control-audit`); the ones with a Reflexive Trigger Rule rely on the agent applying them.
 
 **If you are an agent reading this**: you are part of a self-improving system. Your session will be captured, indexed, and used to improve future agents. The bstack consciousness substrate is always active.
 
@@ -187,7 +187,7 @@ Reference: `bstack/references/dogfood-patterns.md` for the per-stack surfaces ma
 
 ### P12 — Persist: Persistent Loop Discipline (Cross-Context Restart Loop)
 
-**What**: Reflexive discipline binding every agent to *restart the context window when it rots*, while preserving state in the filesystem. Long-horizon work (>1h, the METR 80%-reliability ceiling) decays inside a single conversation as the context window passes ~100K tokens.
+**What**: Reflexive discipline binding every agent to *restart the context window when it rots*, while preserving state in the filesystem. Work that must outlive one session needs state that survives the conversation.
 
 **How**: `python3 skills/persist/scripts/persist.py iterate <PROMPT.md>` substrate. Each iteration spawns a fresh agent context; state persists in PROMPT.md + git tree + state.jsonl. Validation backpressure from compilers/tests/linters, not model self-grading.
 
@@ -195,11 +195,10 @@ Reference: `bstack/references/dogfood-patterns.md` for the per-stack surfaces ma
 
 **Reflexive Trigger Rule**: P12 is a reflex. Apply without being prompted:
 
-1. Before any work that may exceed ~1h of unsupervised agent time — write PROMPT.md, call `persist iterate`. Don't try >1h work in-context.
-2. When session token usage crosses ~100K — restart, don't continue in the rotted context.
-3. When the same fix has been attempted ≥3 times without convergence — stop in-context; spawn fresh persist loop.
-4. When orchestrating long-horizon work — default to persist + periodic checkpoints; compose with P5 worktrees.
-5. When the user says "run this in the background for an hour" — that's persist territory.
+1. Before starting work that must outlive this session — write PROMPT.md. Call `persist iterate` when it should run unattended (an overnight run); when it is paused for a later session, leave PROMPT.md for the session that resumes it.
+2. When the same fix has been attempted ≥3 times without convergence — stop in-context; spawn fresh persist loop.
+3. When orchestrating long-horizon work — default to persist + periodic checkpoints; compose with P5 worktrees.
+4. When the user says "run this in the background for an hour" — that's persist territory.
 
 ### P13 — Dream: Dream Cycle Discipline (Tier-Crossing Consolidation)
 
@@ -341,7 +340,7 @@ Candidates live in `research/entities/pattern/bstack-engine.md` (or equivalent l
 
 |  | Within session | Across sessions |
 |---|---|---|
-| **External trigger** (event-driven) | **Wait (P9)** `p9 watch --background` (CI/deploy/build blocking) | **Persist (P12)** `persist iterate PROMPT.md` (cross-context-rot, >1h) |
+| **External trigger** (event-driven) | **Wait (P9)** `p9 watch --background` (CI/deploy/build blocking) | **Persist (P12)** `persist iterate PROMPT.md` (work that outlives the session) |
 | **Internal trigger** (condition or time) | **`/goal <condition>`** (Haiku evaluator per turn) | **`/loop <interval>`** (Claude Code time-trigger) |
 
 **N>1 plane** (parallel-agent work):
@@ -356,7 +355,7 @@ Decision logic:
 1. Verifiable end state + bounded session + condition fits 4000 chars → `/goal <pipeline-completion-condition>`
 2. External completion event blocking (CI, deploy, build) → Wait (P9) `p9 watch --background` + drain wait-queue
 3. Time-triggered recurring routine → `/loop <interval> <slash-command>`
-4. >1h work OR cross-session OR context window approaching ~100K → Persist (P12) `persist iterate PROMPT.md` with budget
+4. Cross-session required, or a fresh-context restart after ≥3 non-converging attempts (P12 trigger 2) → Persist (P12) `persist iterate PROMPT.md` with budget
 5. Independent in-session subtasks with no shared mutable writes → Fanout (P5) — multiple `Agent` calls in one message
 6. N independent plan files for cross-session parallel fan-out (spec sub-phases, multi-crate work) → `bstack wave dispatch <plan...>` — atomic validate + worktree per plan
 7. **Inside the N>1 × across-session × external-trigger cell, the tiebreak is the worktree axis**: each peer needs its own branch and worktree → `bstack wave dispatch <plan...>`; peers coordinate in ONE worktree (parallel PR sweep, several ready tickets, a fixer beside an adversarial reviewer) → `bstack fleet up <roster>` — atomic roster validation, a durable brief per peer, pid-keyed liveness, teardown that never deletes the only record of an unreclaimed fleet. Independent *in-session* subtasks stay at rule 5 (Fanout (P5) `Agent` calls).
@@ -369,7 +368,7 @@ Compositions are dynamic: Persist iterations can invoke `/goal` for sub-tasks; `
 
 1. Pre-flight of substantive autonomous work — state chosen mechanism + cite cube cell (session-scope × trigger-source × agent-count).
 2. Before returning control mid-arc — verify no mechanism would keep the arc closed.
-3. At mechanism boundary crossings (goal hits >1h, context ~100K, in-session N>1 work needs across-session fan-out) — explicit transition, not drift.
+3. At mechanism boundary crossings (an in-session goal turns out to need more than one session, in-session N>1 work needs across-session fan-out) — explicit transition, not drift.
 4. When composing mechanisms — surface the composition tree, don't compose silently.
 5. Tempted to type "continue please" or wait for user prompts — STOP. That's the ritual P19 makes impossible.
 
@@ -427,7 +426,7 @@ The most common collision: plugin skills that mandate user interaction before ac
 
 1. Before any "interview-the-user" plugin skill fires, apply **Dep-Chain (P14)** + **Snapshot (P15)** over:
    - Workspace memory files (auto-memory directory; persona, project state, feedback)
-   - `research/entities/{concept,pattern,tool,person,project}/` — knowledge graph (grep by topic before asking)
+   - `research/entities/{concept,pattern,tool,person,project}/` — knowledge graph (`/kg load <topic>` before asking)
    - `docs/` (per-project) — architecture, specs, plans, conversations
    - Task-mentioned files (CV, spec, ticket body, PR diff)
 2. Synthesize what's already known from those sources.

@@ -118,6 +118,7 @@ If `$STASH_OUTPUT` contains "Saved working directory", warn the user.
 
 **For vendored installs:**
 ```bash
+_BSTACK_ROOT=$(cd "$_BSTACK_ROOT" && pwd -P)  # a symlinked path would move the link, not the install
 PARENT=$(dirname "$_BSTACK_ROOT")
 TMP_DIR=$(mktemp -d)
 git clone --depth 1 https://github.com/broomva/bstack.git "$TMP_DIR/bstack"
