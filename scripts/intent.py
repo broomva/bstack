@@ -10,6 +10,7 @@ record through the commit itself.
     lint <file>...          every required section present and filled, status valid
     status <file>           print the Status from the header line
     set-status <file> <s>   rewrite the header's Status in place (nothing else changes)
+    pending                 every accepted intent with no spec yet, from the files alone
 
 Invariant: an intent that lints clean has a title, an author, a recognised status, and
 all five required sections with real content. A placeholder is one of the TEMPLATE's
@@ -313,6 +314,51 @@ def cmd_set_status(args) -> int:
     return 0
 
 
+NAME_RE = re.compile(r"[A-Za-z0-9._-]+")
+
+
+def pending(intent_dir: Path, specs_dir: Path) -> tuple[list[tuple[str, str]], list[str]]:
+    """Every accepted intent in intent_dir with no specs_dir/<name>.md, in name order,
+    and a warning for each file skipped.
+
+    Computed from the files alone, never from what one push changed: a caller that runs
+    this on any commit gets the whole work list, so a cancelled, failed or missed run
+    leaves its intents to the next one. A name is the file stem and must match NAME_RE,
+    because callers read `path name` lines with `read` and build `spec/<name>` from it;
+    symlinks are skipped, because their content lives outside the directory."""
+    found: list[tuple[str, str]] = []
+    skipped: list[str] = []
+    if not intent_dir.is_dir():
+        return found, skipped
+    for path in sorted(intent_dir.glob("*.md")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        try:
+            status = parse(_read(path))["status"]
+        except (IntentError, UnicodeDecodeError):
+            skipped.append(f"{path}: unreadable")
+            continue
+        if status != "accepted" or (specs_dir / f"{path.stem}.md").exists():
+            continue
+        if not NAME_RE.fullmatch(path.stem):
+            skipped.append(f"{path}: name must match {NAME_RE.pattern} to become spec/<name>")
+            continue
+        found.append((str(path), path.stem))
+    return found, skipped
+
+
+def cmd_pending(args) -> int:
+    found, skipped = pending(Path(args.dir), Path(args.specs))
+    for msg in skipped:
+        print(f"intent: skipped {msg}", file=sys.stderr)
+    if args.json:
+        print(json.dumps([{"file": f, "name": n} for f, n in found]))
+    else:
+        for f, n in found:
+            print(f"{f} {n}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="bstack-intent", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -341,10 +387,16 @@ def main(argv: list[str] | None = None) -> int:
     ss.add_argument("file")
     ss.add_argument("status", help=" | ".join(STATUSES))
 
+    pd = sub.add_parser("pending", help="accepted intents with no spec yet (path and name "
+                                         "per line)")
+    pd.add_argument("--dir", default="intent")
+    pd.add_argument("--specs", default="docs/specs")
+    pd.add_argument("--json", action="store_true")
+
     args = ap.parse_args(argv)
     try:
         return {"new": cmd_new, "lint": cmd_lint, "status": cmd_status,
-                "set-status": cmd_set_status}[args.cmd](args)
+                "set-status": cmd_set_status, "pending": cmd_pending}[args.cmd](args)
     except IntentError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2

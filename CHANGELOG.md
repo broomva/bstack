@@ -58,13 +58,18 @@ proven red:
   Under that key, user, project and local hooks are blocked, and so is `/goal`.
   `--fail-on-critical` exits 1 when a governance hook would be blocked.
 - **`bstack intent`** (Tickets, P3). `new`, `lint`, `status` and `set-status` for the
-  Stage-1 artifact.
+  Stage-1 artifact, and `pending`: every accepted intent with no spec yet, read from the
+  files. `intent-to-spec.yml` takes its work list from `pending`, not from the push, so a
+  run GitHub cancelled in the concurrency group, or a draft that failed, is picked up by
+  the next run.
 
 Templates in `references/templates/`:
 - `intent.md`, `plan.md`, `REVIEW.md`
 - `bands.example.yaml`, `eval.example.json`, `managed-settings.example.json`
 - six workflows (`sdlc-gates`, `agent-evals`, `ci-triage`, `bands`, `intent-to-spec`,
-  `linear-backlink`)
+  `linear-backlink`). `tests/workflow-templates.test.sh` runs `bands` and
+  `intent-to-spec` end to end against a fake `gh` and `claude` (10 scenarios), and
+  `tests/fixtures/workflow-sim/mutants.py` shows each reverted fix turning its scenario red.
 
 `tests/workflow-injection-safety.test.sh` now scans the workflow templates too, because a
 sink in a template becomes a sink in every repo that copies it.

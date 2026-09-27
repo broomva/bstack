@@ -12,7 +12,7 @@
 # is evaluated rather than assumed.
 #
 # There is deliberately NO skip path. A missing git, jq or PyYAML FAILS the run, and so
-# does a run in which fewer than 8 scenarios reached their assertions.
+# does a run in which fewer than 10 scenarios reached their assertions.
 #
 # WF_BANDS / WF_INTENT point the scenarios at another copy of a template;
 # tests/fixtures/workflow-sim/mutants.py uses them to show that each reverted fix goes red.
@@ -29,8 +29,8 @@ SIMDIR="$BSTACK_REPO/tests/fixtures/workflow-sim"
 WF_BANDS="${WF_BANDS:-$BSTACK_REPO/references/templates/workflows/bands.yml}"
 WF_INTENT="${WF_INTENT:-$BSTACK_REPO/references/templates/workflows/intent-to-spec.yml}"
 BANDS_EXAMPLE="$BSTACK_REPO/references/templates/bands.example.yaml"
-SCENARIOS="1 2 3 4 5 6 7 8"
-MIN_SCENARIOS=8
+SCENARIOS="1 2 3 4 5 6 7 8 9 10"
+MIN_SCENARIOS=10
 MIN_ASSERTS=5
 NAME="alpha-widget"
 
@@ -390,6 +390,48 @@ ok "no spec file written" test ! -e "$S/co1/docs/specs/$NAME.md"
 ok "a warning names the intent" contains "$(step_stdout)" "::warning::no spec drafted for intent/$NAME.md"
 eq "0 pr creates" 0 "$(lines "$S/pr_create.log")"
 ok "no spec/<name> pushed" not oref "$S" "spec/$NAME"
+no_violations
+finish
+
+# The work list comes from the repo (intent.py pending), not from the push: GitHub
+# cancels a run that is waiting in the concurrency group when a newer one queues, and a
+# failed draft has no run of its own to retry it.
+S="$ROOT/intent-cancelled"
+NAME2="beta-widget"
+begin 9 "intent-to-spec: a cancelled run's intent is drafted by the next run"
+{ new_sim "$S" && seed_commit "$S" seed &&
+    write_intent "$S/seed/intent/$NAME.md" "Operators cannot see the widget's state." &&
+    seed_commit "$S" "intent: $NAME" &&
+    BEFORE="$(oref "$S" main)" &&
+    write_intent "$S/seed/intent/$NAME2.md" "Operators cannot see the second widget either." &&
+    seed_commit "$S" "intent: $NAME2" &&
+    checkout "$S" co1 0; } || assert_fail "fixture setup"
+# Only the second push's run happens; the first push's run was cancelled while waiting.
+run_sim "$WF_INTENT" "$S" co1 vars.SDLC_INTENT_TO_SPEC=true "github.event.before=$BEFORE"
+eq "job succeeds" success "$(job .result)"
+eq "2 claude calls: the cancelled push's intent and this push's" 2 "$(lines "$S/claude.log")"
+eq "2 pr creates" 2 "$(lines "$S/pr_create.log")"
+ok "spec/<first> is on origin" test -n "$(oref "$S" "spec/$NAME")"
+ok "spec/<second> is on origin" test -n "$(oref "$S" "spec/$NAME2")"
+no_violations
+finish
+
+S="$ROOT/intent-error"
+begin 10 "intent-to-spec: a failed draft is retried by the next run"
+# Scenario 8 left this repo with an accepted intent, no spec and no PR (claude errored).
+echo ok > "$S/claude.mode"
+C0="$(lines "$S/claude.log")"
+P0="$(lines "$S/pr_create.log")"
+BEFORE="$(oref "$S" main)"
+{ printf '# Intents\n\nOne file per intent.\n' > "$S/seed/intent/README.md" &&
+    seed_commit "$S" "intent: add a README" &&
+    checkout "$S" co2 0; } || assert_fail "fixture setup"
+run_sim "$WF_INTENT" "$S" co2 vars.SDLC_INTENT_TO_SPEC=true "github.event.before=$BEFORE"
+eq "job succeeds" success "$(job .result)"
+eq "1 new claude call, for the intent whose draft failed" $((C0 + 1)) "$(lines "$S/claude.log")"
+ok "the retried call names the intent" contains "$(lastcall '.argv[1]')" "intent/$NAME.md"
+eq "1 new pr create" $((P0 + 1)) "$(lines "$S/pr_create.log")"
+eq "the PR's head is spec/<name>" "spec/$NAME" "$(lastpr .head)"
 no_violations
 finish
 

@@ -323,6 +323,74 @@ class TestStatus(Base):
         self.assertEqual(p.read_text(), "# Intent: x\n\nno header\n")
 
 
+class TestPending(Base):
+    """`pending` builds the intent-to-spec work list from the files, never from a push."""
+
+    def intent(self, name: str, status: str) -> Path:
+        d = self.tmp / "intent"
+        d.mkdir(exist_ok=True)
+        p = d / name
+        p.write_text(FILLED.replace("Status: draft.", f"Status: {status}."))
+        return p
+
+    def pending(self, *extra: str) -> tuple[int, str, str]:
+        return run("pending", "--dir", str(self.tmp / "intent"),
+                   "--specs", str(self.tmp / "docs" / "specs"), *extra)
+
+    def test_lists_accepted_intents_without_a_spec_and_nothing_else(self):
+        a = self.intent("2026-09-01-alpha.md", "accepted")
+        self.intent("2026-09-02-beta.md", "accepted")
+        self.intent("2026-09-03-draft.md", "draft")
+        self.intent("2026-09-04-rejected.md", "rejected")
+        (self.tmp / "intent" / "README.md").write_text("# Intents\n\nOne file per intent.\n")
+        specs = self.tmp / "docs" / "specs"
+        specs.mkdir(parents=True)
+        (specs / "2026-09-02-beta.md").write_text("# spec\n")
+        rc, out, _ = self.pending()
+        self.assertEqual((rc, out.splitlines()), (0, [f"{a} 2026-09-01-alpha"]))
+
+    def test_an_intent_becomes_pending_again_when_its_spec_is_gone(self):
+        a = self.intent("2026-09-01-alpha.md", "accepted")
+        specs = self.tmp / "docs" / "specs"
+        specs.mkdir(parents=True)
+        spec = specs / "2026-09-01-alpha.md"
+        spec.write_text("# spec\n")
+        self.assertEqual(self.pending()[1], "")
+        spec.unlink()
+        self.assertEqual(self.pending()[1].splitlines(), [f"{a} 2026-09-01-alpha"])
+
+    def test_a_status_line_inside_a_code_fence_does_not_count(self):
+        d = self.tmp / "intent"
+        d.mkdir()
+        (d / "README.md").write_text(
+            "# Intents\n\n```\nAuthor: Example. Status: accepted.\n```\n")
+        self.assertEqual(self.pending()[1], "")
+
+    def test_a_name_unsafe_for_a_branch_or_read_is_skipped_with_a_warning(self):
+        self.intent("a b.md", "accepted")
+        self.intent("x;y.md", "accepted")
+        ok = self.intent("2026-09-01-ok.md", "accepted")
+        rc, out, err = self.pending()
+        self.assertEqual((rc, out.splitlines()), (0, [f"{ok} 2026-09-01-ok"]))
+        self.assertIn("a b.md", err)
+        self.assertIn("x;y.md", err)
+
+    def test_a_symlinked_intent_is_skipped(self):
+        target = self.tmp / "elsewhere.md"
+        target.write_text(FILLED.replace("Status: draft.", "Status: accepted."))
+        (self.tmp / "intent").mkdir()
+        (self.tmp / "intent" / "2026-09-01-link.md").symlink_to(target)
+        self.assertEqual(self.pending()[1], "")
+
+    def test_missing_intent_dir_is_an_empty_list_not_an_error(self):
+        self.assertEqual(self.pending()[:2], (0, ""))
+
+    def test_json_shape(self):
+        a = self.intent("2026-09-01-alpha.md", "accepted")
+        rc, out, _ = self.pending("--json")
+        self.assertEqual((rc, json.loads(out)), (0, [{"file": str(a), "name": "2026-09-01-alpha"}]))
+
+
 class TestShippedTemplate(Base):
     def test_template_has_the_course_shape(self):
         text = TEMPLATE.read_text()

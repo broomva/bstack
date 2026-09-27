@@ -1,10 +1,15 @@
 # Intent → spec — copy to .github/workflows/intent-to-spec.yml (bstack ≥ 0.41.0).
 #
 # Tickets (P3) artifact chain: "an accepted intent.md triggers the requirements and
-# design pass". When an intent lands on the default branch with `Status: accepted`, has
-# no spec yet, and has no open spec PR, `claude -p` drafts docs/specs/<intent-name>.md
-# and the workflow opens it as a PR. The product owner reviews the spec; they do not
-# write it.
+# design pass". On every push to the default branch that touches intent/, and on demand
+# (workflow_dispatch), every intent with `Status: accepted`, no docs/specs/<name>.md and
+# no open spec PR gets a draft: `claude -p` writes the spec text and the workflow opens it
+# as a PR. The product owner reviews the spec; they do not write it.
+#
+# The work list comes from the repo, not from the push (`intent.py pending`). A run that
+# was cancelled (a newer run in the concurrency group cancels the one waiting), failed or
+# missed leaves its intents to the next run. So closing a spec PR does not stop the
+# drafting: set the intent's Status to rejected or superseded instead.
 #
 # The model returns text; a program writes the file. The draft is produced in a throwaway
 # clone with no credentials, using Read/Grep/Glob only (no shell, no MCP servers). Only
@@ -19,6 +24,7 @@ on:
     branches: [main]
     paths:
       - 'intent/**.md'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -45,24 +51,21 @@ jobs:
       - name: Which accepted intents need a spec?
         env:
           GH_TOKEN: ${{ github.token }}
-          BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
           : > "$RUNNER_TEMP/todo.txt"
-          git diff --name-only --no-ext-diff "$BEFORE" HEAD -- 'intent/*.md' > "$RUNNER_TEMP/changed.txt"
-          while read -r f; do
-            [ -f "$f" ] || continue
-            status=$(python3 "$RUNNER_TEMP/bstack/scripts/intent.py" status "$f" || true)
-            [ "$status" = "accepted" ] || { echo "skip $f: status is '$status'"; continue; }
-            name=$(basename "$f" .md)
-            [ -e "docs/specs/$name.md" ] && { echo "skip $f: docs/specs/$name.md exists"; continue; }
+          # Accepted, and no docs/specs/<name>.md: computed from the checkout, so this run
+          # also picks up what a cancelled or failed run left behind.
+          python3 "$RUNNER_TEMP/bstack/scripts/intent.py" pending --dir intent --specs docs/specs \
+            > "$RUNNER_TEMP/candidates.txt"
+          while read -r f name; do
             # An open spec PR from this repo (not a fork) already covers it. A branch left
             # behind by a closed or merged PR does not.
             n=$(gh pr list --state open --head "spec/$name" --json number,isCrossRepository \
-                  -q '[.[] | select(.isCrossRepository | not)] | length')
+                  -q '[.[] | select(.isCrossRepository | not)] | length' < /dev/null)
             [ "${n:-0}" -gt 0 ] && { echo "skip $f: spec/$name already has an open PR"; continue; }
             echo "$f $name" >> "$RUNNER_TEMP/todo.txt"
-          done < "$RUNNER_TEMP/changed.txt"
+          done < "$RUNNER_TEMP/candidates.txt"
       - name: Draft each spec in a throwaway clone (no token in this step)
         env:
           CLAUDE_BIN: ${{ vars.CLAUDE_BIN || 'claude' }}

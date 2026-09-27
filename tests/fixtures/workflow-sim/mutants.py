@@ -49,6 +49,18 @@ MUTANTS = [
     ("intent-to-spec: drop < /dev/null", "intent-to-spec.yml",
      r'--output-format json < /dev/null > "\$RUNNER_TEMP/\$name\.json"',
      '--output-format json > "$RUNNER_TEMP/$name.json"', "5"),
+    ("intent-to-spec: the work list comes from the push, not the repo", "intent-to-spec.yml",
+     r'python3 "\$RUNNER_TEMP/bstack/scripts/intent\.py" pending --dir intent --specs docs/specs \\\n\s+> "\$RUNNER_TEMP/candidates\.txt"',
+     'git diff --name-only --no-ext-diff HEAD~1 HEAD -- "intent/*.md" | while read -r c; do '
+     's=$(python3 "$RUNNER_TEMP/bstack/scripts/intent.py" status "$c" || true); '
+     '[ "$s" = accepted ] && echo "$c $(basename "$c" .md)"; done > "$RUNNER_TEMP/candidates.txt" || true',
+     "9"),
+    ("intent-to-spec: the push work list misses a failed draft", "intent-to-spec.yml",
+     r'python3 "\$RUNNER_TEMP/bstack/scripts/intent\.py" pending --dir intent --specs docs/specs \\\n\s+> "\$RUNNER_TEMP/candidates\.txt"',
+     'git diff --name-only --no-ext-diff HEAD~1 HEAD -- "intent/*.md" | while read -r c; do '
+     's=$(python3 "$RUNNER_TEMP/bstack/scripts/intent.py" status "$c" || true); '
+     '[ "$s" = accepted ] && echo "$c $(basename "$c" .md)"; done > "$RUNNER_TEMP/candidates.txt" || true',
+     "10"),
     # Two more, so the violation log and the token observation each have a kill on record.
     ("intent-to-spec: restore `gh auth setup-git` (error swallowed)", "intent-to-spec.yml",
      r'(\n(\s+))(while read -r f name; do\n\s+branch="spec/\$name")',
@@ -63,7 +75,7 @@ def run(bands, intent):
     env = dict(os.environ, WF_BANDS=bands, WF_INTENT=intent)
     p = subprocess.run(["bash", TEST], env=env, capture_output=True, text=True)
     out = p.stdout + p.stderr
-    verdicts = dict(re.findall(r"^  scenario (\d): (PASS|FAIL)$", out, re.M))
+    verdicts = dict(re.findall(r"^  scenario (\d+): (PASS|FAIL)$", out, re.M))
     return p.returncode, verdicts, out
 
 
@@ -77,7 +89,9 @@ def first_fail(out, scenario):
 scratch = tempfile.mkdtemp(prefix="workflow-mutants-")
 print(f"scratch: {scratch}")
 rc, verdicts, out = run(os.path.join(WF, "bands.yml"), os.path.join(WF, "intent-to-spec.yml"))
-baseline_ok = rc == 0 and len(verdicts) == 8 and set(verdicts.values()) == {"PASS"}
+# The scenario list the test itself declares, not a count kept here by hand.
+EXPECTED = set(re.search(r'^SCENARIOS="([^"]*)"$', open(TEST).read(), re.M).group(1).split())
+baseline_ok = rc == 0 and set(verdicts) == EXPECTED and set(verdicts.values()) == {"PASS"}
 print(f"baseline (unmutated): exit {rc}, {verdicts}  -> {'green' if baseline_ok else 'NOT GREEN'}")
 if not baseline_ok:
     print(out)
@@ -99,7 +113,7 @@ for i, (label, tpl, pattern, repl, want) in enumerate(MUTANTS):
         continue
     open(path, "w").write(new)
     rc, verdicts, out = run(os.path.join(d, "bands.yml"), os.path.join(d, "intent-to-spec.yml"))
-    red = ",".join(sorted(k for k, v in verdicts.items() if v == "FAIL")) or "none"
+    red = ",".join(sorted((k for k, v in verdicts.items() if v == "FAIL"), key=int)) or "none"
     killed = rc != 0 and verdicts.get(want) == "FAIL"
     all_killed &= killed
     print(f"{label:<72} {want:>4}  {red:<10} {'KILLED' if killed else 'SURVIVED':<9} "

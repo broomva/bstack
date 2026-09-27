@@ -27,8 +27,8 @@ it. This reference adds what they lacked:
 
 | Stage | Play | Primitive | bstack mechanism |
 |---|---|---|---|
-| Plan | Capture `intent.md` | Tickets (P3) | `bstack intent new\|lint\|set-status`; `references/templates/intent.md`; an `intent/` home in the repo |
-| Design | Requirements + design → `spec.md` | Audience (P18), Tickets (P3) | `docs/specs/`; `workflows/intent-to-spec.yml` fires on an accepted intent (off by default) |
+| Plan | Capture `intent.md` | Tickets (P3) | `bstack intent new\|lint\|set-status\|pending`; `references/templates/intent.md`; an `intent/` home in the repo |
+| Design | Requirements + design → `spec.md` | Audience (P18), Tickets (P3) | `docs/specs/`; `workflows/intent-to-spec.yml` drafts every accepted intent with no spec (`intent pending`; off by default) |
 | Build | Plan mode → `plan.md` | Dep-Chain (P14), Pipeline (P4) | `references/templates/plan.md`; `bstack plan-drift` |
 | Build | `CLAUDE.md` | Crystallize (P16) | kept; see divergences |
 | Build | Skills as institutional knowledge | Lens (P17), Crystallize (P16) | skills monorepo; trigger evals (`role-x eval`) |
