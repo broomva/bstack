@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.40.4 — 2026-09-23
+
+### fix(prompts): what the hooks and primitive text tell the model, re-read for Opus 5.5 (BRO-2536)
+
+A `/claude-api prompt-audit` of the workspace this ships into found text that
+was accurate for older models or older releases and now misleads the current
+one. This release carries the parts that live in bstack.
+
+- **The upgrade nudge pointed at the path that breaks vendored installs.**
+  `bstack-autoupdate-hook.sh` told every session on a vendored install with an
+  upgrade available to run
+  `npx skills add -g broomva/bstack`, and `bin/bstack`'s three fallbacks said the
+  same. That command can leave an install holding only SKILL.md, without
+  `bin/`, `scripts/` or hooks. The nudge now names `<install>/bin/bstack
+  upgrade` (verified release tarball; `bstack` need not be on PATH) and
+  `bstack-upgrade/SKILL.md` (clones main); the fallbacks, which print to a
+  terminal, give the manual clone. That manual flow now resolves a symlinked
+  install path first, so it replaces the install rather than the link.
+- **The posture line is one sentence instead of two.** It keeps the arc,
+  the next slice, the pause criterion (only a cross-repo, destructive or
+  public-API-breaking decision) and how to complete the arc. The criterion
+  stays per-turn: the arc-continuation Stop hook blocks only empty turns,
+  `No response requested.` turns and handbacks without an ask block, so
+  nothing else enforces it.
+- **P12/P19 no longer state an Opus 4.6 measurement as a trigger.** P19's
+  persist row also routes P12's "≥3 failed fixes" restart, so the two agree. "Exceeds
+  ~1h" and "~100K tokens" came from METR's Opus 4.6 horizon. Current models run
+  a 1M context with automatic compaction in Claude Code. P12 now triggers on
+  work that must outlive the session and on repeated failed fixes, in
+  `references/primitives.md`, `references/primitives.yaml`, `SKILL.md`,
+  `references/dogfood-patterns.md` and both templates; the METR figure stays as
+  dated context.
+- **Four "Mental checklist before declaring done" paragraphs removed** from
+  `references/primitives.md`. Each restated the trigger list above it as
+  self-check questions, which current models over-apply.
+- **Templates:** the scaffolded AGENTS.md says the primitives with a Reflexive
+  Trigger Rule rely on the agent (not every rule is hook-enforced); the
+  plugin-precedence step says `/kg load` instead of the grep the P6 retrieval
+  rule forbids.
+- **Existing workspaces are not rewritten by an upgrade.** `bstack repair`
+  backfills only the philosophy and retrieval-discipline sections, so a
+  workspace scaffolded from an earlier template keeps its P12/P19 text until
+  edited by hand.
+- **Tests:** `tests/autoupdate-vendored-guidance.test.sh` (new) pins the upgrade
+  guidance in the hook and all three `bin/bstack` fallbacks;
+  `tests/loop-stall-hooks.test.sh` pins the pause criterion in the posture line.
+
 ## 0.40.3 — 2026-09-12
 
 ### feat(asks): the ask ledger ships with the skill that requires it, and one command sees every arc

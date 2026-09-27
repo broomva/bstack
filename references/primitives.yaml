@@ -141,8 +141,8 @@ primitives:
     mechanism:
       type: skill
       spec: "broomva/persist — cross-context restart loop; state in filesystem (PROMPT.md + git + state.jsonl)"
-    invariant: "At long-horizon work (>1h), restart fresh; backpressure from compilers/tests/linters, not model self-grading"
-    failure_mode: "long-horizon work decaying as the context window rots"
+    invariant: "For work that must outlive one session, restart fresh; backpressure from compilers/tests/linters, not model self-grading"
+    failure_mode: "work that must outlive one session losing its state when the session ends"
     skill_repo: broomva/persist
     introduced_in: 0.1.0
 

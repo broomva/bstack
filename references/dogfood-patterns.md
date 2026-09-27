@@ -324,7 +324,7 @@ Ranked by P11 utility for dogfooding-from-client-POV. All are existing skills; t
 | **xcrun simctl** | n/a | ✅ simulator | ✓ recordVideo | partial | iOS simulator drive (Expo / React Native) |
 | **curl + jq** | n/a | n/a | n/a | n/a | API state assertions, smoke checks |
 | **/p9** | n/a | n/a | n/a | n/a | Productive-wait while CI / deploy runs |
-| **/persist** | n/a | n/a | n/a | n/a | Long-horizon dogfood loops (>1h, across sessions) |
+| **/persist** | n/a | n/a | n/a | n/a | Long-horizon dogfood loops (across sessions) |
 | **BrightData** | ✓ residential proxy | ✗ | ✗ | ✗ | Scale crawling (not typical dogfood, but for production-traffic-class validation) |
 
 **Two rules** the inventory enforces:
@@ -385,7 +385,7 @@ Once a stack is detected, the Dogfood Plan section anchors at one of:
 | **P14** Dep-Chain | The Dogfood Plan's *Entry surface* row IS the downstream-consumers entry into the dep-chain enumeration |
 | **P15** Snapshot | Dogfood Plan references the deploy state surfaced in the snapshot (preview URL, dev server port) |
 | **P18** Audience | Plan is markdown (agent-loaded); receipt screenshots are PNGs (binary, sidecar `.meta.yaml` per P18 Category C) |
-| **P19** Orchestrate | Long dogfood loops (>1h) → `persist iterate` (P12 mechanism); in-session multi-flow → P5 fanout |
+| **P19** Orchestrate | Dogfood loops that outlive the session → `persist iterate` (P12 mechanism); in-session multi-flow → P5 fanout |
 | **P20** Cross-Review | Dogfood receipt is one of the inputs cross-review evaluates: "did the writer actually exercise this, or did they ship blind?" |
 
 ---
