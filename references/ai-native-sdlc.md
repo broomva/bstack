@@ -28,7 +28,7 @@ it. This reference adds what they lacked:
 | Stage | Play | Primitive | bstack mechanism |
 |---|---|---|---|
 | Plan | Capture `intent.md` | Tickets (P3) | `bstack intent new\|lint\|set-status\|pending`; `references/templates/intent.md`; an `intent/` home in the repo |
-| Design | Requirements + design → `spec.md` | Audience (P18), Tickets (P3) | `docs/specs/`; `workflows/intent-to-spec.yml` drafts every accepted intent with no spec (`intent pending`; off by default) |
+| Design | Requirements + design → `spec.md` | Audience (P18), Tickets (P3) | `docs/specs/`; `workflows/intent-to-spec.yml` lists every accepted intent with no spec (`intent pending`); a person drafts it |
 | Build | Plan mode → `plan.md` | Dep-Chain (P14), Pipeline (P4) | `references/templates/plan.md`; `bstack plan-drift` |
 | Build | `CLAUDE.md` | Crystallize (P16) | kept; see divergences |
 | Build | Skills as institutional knowledge | Lens (P17), Crystallize (P16) | skills monorepo; trigger evals (`role-x eval`) |
@@ -43,8 +43,10 @@ it. This reference adds what they lacked:
 ## Principles, each with its enforcement
 
 1. **The committed artifact is the trigger and the record.** An accepted `intent.md` starts
-   the design pass. An approved spec starts plan mode. A breached band writes the next
-   `intent.md`. *Held by* `bstack intent`, and by the `intent-to-spec` and `bands` templates.
+   the design pass: `intent-to-spec` lists it, with the command that drafts its spec, until
+   `docs/specs/<name>.md` exists. An approved spec starts plan mode. A breached band writes
+   the next `intent.md`. *Held by* `bstack intent`, and by the `intent-to-spec` and `bands`
+   templates.
 2. **Link both directions.** Commits carry the ticket ID forward. After merge, the PR URL and
    merge SHA go back onto the ticket. A one-way link is not linkage. *Held by* the P3 reflex
    and `workflows/linear-backlink.yml`.
@@ -108,6 +110,7 @@ it. This reference adds what they lacked:
 | Findings never approve or block; a code owner approves | A P20 verdict ≥7/10 gates auto-merge; the gates are the trust | Both keep separation of duties: the writing model cannot be the sole judge |
 | "An adversarial reviewing agent" as the Stage-6 gate | Cross-model where available (Stratum A), fresh-context otherwise (Stratum B) | A reviewer from the same model family shares the writer's blind spots |
 | Gate merges on the eval pass rate | Advisory until a baseline is recorded (`bstack evals baseline`), then `--gate` | A gate with no baseline has no setpoint |
+| An accepted `intent.md` triggers the requirements and design pass | The trigger lists the intent and the command that drafts its spec; a person runs it | Drafting unattended needs a queue that drains past a draft that keeps failing, retries, and remembers a declined spec. Listing needs none of that and opens nothing |
 
 ## Measurements (git is the store)
 

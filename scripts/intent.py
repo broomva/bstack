@@ -314,9 +314,10 @@ def cmd_set_status(args) -> int:
     return 0
 
 
-# A name becomes the branch spec/<name>, so it must be a valid ref component: no leading
-# dot, no "..", no trailing "." or ".lock" (git check-ref-format), and nothing a shell
-# `read` would split.
+# A name ends up in a command a person copies (`> docs/specs/<name>.md`) and, by
+# convention, in a spec/<name> branch. So it must be a valid ref component (no leading
+# dot, no "..", no trailing "." or ".lock"; git check-ref-format) and hold nothing a shell
+# would interpret or a `read` would split.
 NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*")
 
 
@@ -331,7 +332,7 @@ def pending(intent_dir: Path, specs_dir: Path) -> tuple[list[tuple[str, str]], l
     Computed from the files alone, never from what one push changed: a caller that runs
     this on any commit gets the whole work list, so a cancelled, failed or missed run
     leaves its intents to the next one. A name is the file stem and must be branch_safe,
-    because callers read `path name` lines with `read` and build spec/<name> from it. A
+    because callers read `path name` lines with `read` and put the name in a command. A
     symlinked intent is skipped (its content lives outside the directory), and a spec
     path that is a symlink, dangling or not, counts as present: nothing is drafted
     through it."""

@@ -12,7 +12,7 @@
 # is evaluated rather than assumed.
 #
 # There is deliberately NO skip path. A missing git, jq or PyYAML FAILS the run, and so
-# does a run in which fewer than 12 scenarios reached their assertions.
+# does a run in which fewer than 8 scenarios reached their assertions.
 #
 # WF_BANDS / WF_INTENT point the scenarios at another copy of a template;
 # tests/fixtures/workflow-sim/mutants.py uses them to show that each reverted fix goes red.
@@ -29,8 +29,8 @@ SIMDIR="$BSTACK_REPO/tests/fixtures/workflow-sim"
 WF_BANDS="${WF_BANDS:-$BSTACK_REPO/references/templates/workflows/bands.yml}"
 WF_INTENT="${WF_INTENT:-$BSTACK_REPO/references/templates/workflows/intent-to-spec.yml}"
 BANDS_EXAMPLE="$BSTACK_REPO/references/templates/bands.example.yaml"
-SCENARIOS="1 2 3 4 5 6 7 8 9 10 11 12"
-MIN_SCENARIOS=12
+SCENARIOS="1 2 3 4 5 6 7 8"
+MIN_SCENARIOS=8
 MIN_ASSERTS=5
 NAME="alpha-widget"
 
@@ -315,161 +315,74 @@ no_violations
 finish
 
 # ── intent-to-spec.yml ───────────────────────────────────────────────────
+# Report-only: it lists accepted intents with no spec and opens nothing.
+summary() { cat "$S/summary.md" 2>/dev/null; }
+step_stderr() { jq -r '[.steps[] | .stderr // empty] | join("\n")' "$S/job.json" 2>/dev/null; }
+origin_refs() { hgit --git-dir "$S/origin.git" for-each-ref --format='%(refname) %(objectname)'; }
+opens_nothing() {
+    eq "no claude call" 0 "$(lines "$S/claude.log")"
+    eq "no gh call" 0 "$(lines "$S/gh.log")"
+    eq "origin's refs are unchanged" "$1" "$(origin_refs)"
+}
+# set_status FILE STATUS — rewrite the fixture's header status.
+set_status() { sed -i.bak "s/Status: accepted\./Status: $2./" "$1" && rm -f "$1.bak"; }
+
 S="$ROOT/intent"
-begin 5 "intent-to-spec: one accepted intent without a spec"
+begin 5 "intent-to-spec: an accepted intent with no spec is listed, and nothing is opened"
 setup_intent "$S" || assert_fail "fixture setup"
-run_sim "$WF_INTENT" "$S" co1 vars.SDLC_INTENT_TO_SPEC=true "github.event.before=$INTENT_BEFORE"
+REFS="$(origin_refs)"
+run_sim "$WF_INTENT" "$S" co1
 eq "job succeeds" success "$(job .result)"
-eq "exactly 1 claude call" 1 "$(lines "$S/claude.log")"
-RT="$(job .runner_temp)"
-eq "claude's cwd is the throwaway clone" "$(real "$RT/src-$NAME")" "$(lastcall .cwd)"
-ok "claude's prompt names the intent" contains "$(lastcall '.argv[1]')" "intent/$NAME.md"
-eq "claude sees no GH_TOKEN" false "$(lastcall .GH_TOKEN)"
-eq "claude's stdin is empty" 0 "$(lastcall .stdin_bytes)"
-eq "claude's stdin is /dev/null, not the loop's input" true "$(lastcall .stdin_devnull)"
-eq "the clone's git config holds no credential" false "$(lastcall .gitconfig_has_cred)"
-eq "exactly 1 pr create" 1 "$(lines "$S/pr_create.log")"
-eq "the PR's head is spec/<name>" "spec/$NAME" "$(lastpr .head)"
-TIP="$(oref "$S" "spec/$NAME")"
-ok "spec/<name> is on origin" test -n "$TIP"
-eq "docs/specs/<name>.md on the branch is claude's reply, written by the workflow" \
-    "$(lastcall .reply)" "$(hgit --git-dir "$S/origin.git" show "$TIP:docs/specs/$NAME.md" 2>/dev/null)"
-eq "spec/<name> is one commit on main" "$(oref "$S" main)" \
-    "$(hgit --git-dir "$S/origin.git" rev-parse -q --verify "$TIP^" 2>/dev/null)"
+ok "the summary names the intent" contains "$(summary)" "intent/$NAME.md"
+ok "the summary gives the command that writes the spec" contains "$(summary)" "> docs/specs/$NAME.md"
+ok "a notice names the intent" contains "$(step_stdout)" "::notice::intent/$NAME.md is accepted"
+opens_nothing "$REFS"
 no_violations
 finish
 
-begin 6 "intent-to-spec: PR closed, branch left on origin, intent revised"
-close_pr "spec/$NAME"
-OLD="$(oref "$S" "spec/$NAME")"
-BEFORE="$(oref "$S" main)"
-write_intent "$S/seed/intent/$NAME.md" "Revised: operators cannot see the widget's state or its history." &&
-    seed_commit "$S" "intent: revise $NAME" || assert_fail "fixture setup"
-eq "precondition: no open PR on spec/<name>" 0 "$(open_prs "spec/$NAME")"
-ok "precondition: the left-behind branch has a commit main does not" \
-    not hgit --git-dir "$S/origin.git" merge-base --is-ancestor "$OLD" refs/heads/main
-C0="$(lines "$S/claude.log")"
-P0="$(lines "$S/pr_create.log")"
-checkout "$S" co2 0 || assert_fail "fixture setup"
-run_sim "$WF_INTENT" "$S" co2 vars.SDLC_INTENT_TO_SPEC=true "github.event.before=$BEFORE"
-eq "job succeeds" success "$(job .result)"
-eq "1 new claude call" $((C0 + 1)) "$(lines "$S/claude.log")"
-eq "1 new pr create" $((P0 + 1)) "$(lines "$S/pr_create.log")"
-eq "the new PR's head is spec/<name>" "spec/$NAME" "$(lastpr .head)"
-NEW="$(oref "$S" "spec/$NAME")"
-ok "the replacement is not a fast-forward of the old tip (the push needed --force)" \
-    not hgit --git-dir "$S/origin.git" merge-base --is-ancestor "$OLD" "$NEW"
-eq "the replaced spec is the new reply" "$(lastcall .reply)" \
-    "$(hgit --git-dir "$S/origin.git" show "$NEW:docs/specs/$NAME.md" 2>/dev/null)"
-no_violations
-finish
-
-S="$ROOT/intent-open"
-begin 7 "intent-to-spec: an open non-fork PR on spec/<name>"
+S="$ROOT/intent-spec"
+begin 6 "intent-to-spec: a spec on main takes the intent off the list"
 setup_intent "$S" || assert_fail "fixture setup"
-jq -n --arg h "spec/$NAME" \
-    '[{number: 5, headRefName: $h, state: "OPEN", isCrossRepository: false}]' > "$S/prs.json"
-run_sim "$WF_INTENT" "$S" co1 vars.SDLC_INTENT_TO_SPEC=true "github.event.before=$INTENT_BEFORE"
+{ mkdir -p "$S/seed/docs/specs" && printf '# Spec\n' > "$S/seed/docs/specs/$NAME.md" &&
+    seed_commit "$S" "spec: $NAME" && checkout "$S" co2 0; } || assert_fail "fixture setup"
+REFS="$(origin_refs)"
+run_sim "$WF_INTENT" "$S" co2
 eq "job succeeds" success "$(job .result)"
-ok "the skip is logged" contains "$(step_stdout)" "skip intent/$NAME.md: spec/$NAME already has an open PR"
-eq "0 claude calls" 0 "$(lines "$S/claude.log")"
-eq "0 pr creates" 0 "$(lines "$S/pr_create.log")"
-ok "no spec/<name> pushed" not oref "$S" "spec/$NAME"
+ok "the summary says none" contains "$(summary)" "None."
+ok "the intent is not listed" not contains "$(summary)" "intent/$NAME.md"
+opens_nothing "$REFS"
 no_violations
 finish
 
-S="$ROOT/intent-error"
-begin 8 "intent-to-spec: claude replies with an error"
-setup_intent "$S" || assert_fail "fixture setup"
-echo error > "$S/claude.mode"
-run_sim "$WF_INTENT" "$S" co1 vars.SDLC_INTENT_TO_SPEC=true "github.event.before=$INTENT_BEFORE"
-eq "job fails: a failed draft is not a green run" failure "$(job .result)"
-ok "the failure says what failed" contains "$(step_stdout)" "1 draft(s) and 0 PR(s) failed"
-eq "exactly 1 claude call, answered with an error" "1 error" \
-    "$(lines "$S/claude.log") $(lastcall .mode)"
-ok "no spec file written" test ! -e "$S/co1/docs/specs/$NAME.md"
-ok "a warning names the intent" contains "$(step_stdout)" "::warning::no spec drafted for intent/$NAME.md"
-eq "0 pr creates" 0 "$(lines "$S/pr_create.log")"
-ok "no spec/<name> pushed" not oref "$S" "spec/$NAME"
-no_violations
-finish
-
-# The work list comes from the repo (intent.py pending), not from the push: GitHub
-# cancels a run that is waiting in the concurrency group when a newer one queues, and a
-# failed draft has no run of its own to retry it.
-S="$ROOT/intent-cancelled"
-NAME2="beta-widget"
-begin 9 "intent-to-spec: a cancelled run's intent is drafted by the next run"
+S="$ROOT/intent-status"
+begin 7 "intent-to-spec: only accepted intents are listed"
 { new_sim "$S" && seed_commit "$S" seed &&
-    write_intent "$S/seed/intent/$NAME.md" "Operators cannot see the widget's state." &&
-    seed_commit "$S" "intent: $NAME" &&
-    BEFORE="$(oref "$S" main)" &&
-    write_intent "$S/seed/intent/$NAME2.md" "Operators cannot see the second widget either." &&
-    seed_commit "$S" "intent: $NAME2" &&
-    checkout "$S" co1 0; } || assert_fail "fixture setup"
-# Only the second push's run happens; the first push's run was cancelled while waiting.
-run_sim "$WF_INTENT" "$S" co1 vars.SDLC_INTENT_TO_SPEC=true "github.event.before=$BEFORE"
+    write_intent "$S/seed/intent/2026-09-01-a-widget.md" "A is accepted." &&
+    write_intent "$S/seed/intent/2026-09-02-b-widget.md" "B is a draft." &&
+    set_status "$S/seed/intent/2026-09-02-b-widget.md" draft &&
+    write_intent "$S/seed/intent/2026-09-03-c-widget.md" "C was rejected." &&
+    set_status "$S/seed/intent/2026-09-03-c-widget.md" rejected &&
+    seed_commit "$S" "intent: three widgets" && checkout "$S" co1 0; } || assert_fail "fixture setup"
+REFS="$(origin_refs)"
+run_sim "$WF_INTENT" "$S" co1
 eq "job succeeds" success "$(job .result)"
-eq "2 claude calls: the cancelled push's intent and this push's" 2 "$(lines "$S/claude.log")"
-eq "2 pr creates" 2 "$(lines "$S/pr_create.log")"
-ok "spec/<first> is on origin" test -n "$(oref "$S" "spec/$NAME")"
-ok "spec/<second> is on origin" test -n "$(oref "$S" "spec/$NAME2")"
-no_violations
+ok "the accepted one is listed" contains "$(summary)" "intent/2026-09-01-a-widget.md"
+ok "the draft is not" not contains "$(summary)" "b-widget"
+ok "the rejected one is not" not contains "$(summary)" "c-widget"
+opens_nothing "$REFS"
 finish
 
-S="$ROOT/intent-error"
-begin 10 "intent-to-spec: a failed draft is retried by the next run"
-# Scenario 8 left this repo with an accepted intent, no spec and no PR (claude errored).
-echo ok > "$S/claude.mode"
-C0="$(lines "$S/claude.log")"
-P0="$(lines "$S/pr_create.log")"
-BEFORE="$(oref "$S" main)"
-{ printf '# Intents\n\nOne file per intent.\n' > "$S/seed/intent/README.md" &&
-    seed_commit "$S" "intent: add a README" &&
-    checkout "$S" co2 0; } || assert_fail "fixture setup"
-run_sim "$WF_INTENT" "$S" co2 vars.SDLC_INTENT_TO_SPEC=true "github.event.before=$BEFORE"
-eq "job succeeds" success "$(job .result)"
-eq "1 new claude call, for the intent whose draft failed" $((C0 + 1)) "$(lines "$S/claude.log")"
-ok "the retried call names the intent" contains "$(lastcall '.argv[1]')" "intent/$NAME.md"
-eq "1 new pr create" $((P0 + 1)) "$(lines "$S/pr_create.log")"
-eq "the PR's head is spec/<name>" "spec/$NAME" "$(lastpr .head)"
-no_violations
-finish
-
-S="$ROOT/intent-stale"
-begin 11 "intent-to-spec: a queued run's checkout is behind a spec that merged meanwhile"
-setup_intent "$S" || assert_fail "fixture setup"
-# The checkout (co1) is the push's own commit. While the run waited, the spec merged.
-{ mkdir -p "$S/seed/docs/specs" && printf '# Spec\n\nMerged while the run waited.\n' \
-    > "$S/seed/docs/specs/$NAME.md" && seed_commit "$S" "spec: $NAME (merged)"; } ||
-    assert_fail "fixture setup"
-ok "precondition: the checkout has no spec" test ! -e "$S/co1/docs/specs/$NAME.md"
-run_sim "$WF_INTENT" "$S" co1 vars.SDLC_INTENT_TO_SPEC=true "github.event.before=$INTENT_BEFORE"
-eq "job succeeds" success "$(job .result)"
-eq "0 claude calls: the work list was read at the latest main" 0 "$(lines "$S/claude.log")"
-eq "0 pr creates" 0 "$(lines "$S/pr_create.log")"
-ok "no spec/<name> pushed" not oref "$S" "spec/$NAME"
-no_violations
-finish
-
-S="$ROOT/intent-backlog"
-begin 12 "intent-to-spec: a backlog drains at most 3 per run, oldest first"
+S="$ROOT/intent-unsafe"
+begin 8 "intent-to-spec: a name that cannot become spec/<name> is reported, not listed"
 { new_sim "$S" && seed_commit "$S" seed &&
-    for n in a-widget b-widget c-widget d-widget; do
-        write_intent "$S/seed/intent/2026-09-01-$n.md" "Operators cannot see $n."
-    done &&
-    seed_commit "$S" "intent: four widgets" && checkout "$S" co1 0; } || assert_fail "fixture setup"
-run_sim "$WF_INTENT" "$S" co1 vars.SDLC_INTENT_TO_SPEC=true
+    write_intent "$S/seed/intent/bad..name.md" "Two dots cannot be a branch name." &&
+    seed_commit "$S" "intent: bad name" && checkout "$S" co1 0; } || assert_fail "fixture setup"
+REFS="$(origin_refs)"
+run_sim "$WF_INTENT" "$S" co1
 eq "job succeeds" success "$(job .result)"
-eq "3 claude calls: the default cap" 3 "$(lines "$S/claude.log")"
-eq "3 pr creates" 3 "$(lines "$S/pr_create.log")"
-ok "the 4th is deferred, not dropped" contains "$(step_stdout)" "defer intent/2026-09-01-d-widget.md"
-ok "the oldest go first: no spec/<d> yet" not oref "$S" "spec/2026-09-01-d-widget"
-checkout "$S" co2 0 || assert_fail "fixture setup"
-run_sim "$WF_INTENT" "$S" co2 vars.SDLC_INTENT_TO_SPEC=true
-eq "the next run drafts the deferred one" 4 "$(lines "$S/claude.log")"
-ok "spec/<d> is on origin" test -n "$(oref "$S" "spec/2026-09-01-d-widget")"
-no_violations
+ok "the skip is in the step log" contains "$(step_stderr)" "intent/bad..name.md: the name cannot become the branch"
+ok "the summary says none" contains "$(summary)" "None."
+opens_nothing "$REFS"
 finish
 
 # ── accounting: every scenario ran, none was skipped ─────────────────────

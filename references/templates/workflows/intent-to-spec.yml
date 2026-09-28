@@ -1,29 +1,18 @@
 # Intent → spec — copy to .github/workflows/intent-to-spec.yml (bstack ≥ 0.41.0).
 #
 # Tickets (P3) artifact chain: "an accepted intent.md triggers the requirements and
-# design pass". Every intent at the top of intent/ with `Status: accepted`, no
-# docs/specs/<name>.md and no open spec PR gets a draft: `claude -p` writes the spec text
-# and the workflow opens it as a PR. The product owner reviews the spec; they do not
-# write it. The spec for intent/<name>.md lives at docs/specs/<name>.md, whoever writes it.
+# design pass". This workflow is the trigger, not the pass. On every push to the default
+# branch that touches intent/, daily, and on demand, it lists each intent at the top of
+# intent/ with `Status: accepted` and no docs/specs/<name>.md in the job summary, with a
+# command that drafts one. A person runs it, reviews the draft, and opens the PR that
+# adds docs/specs/<name>.md. The spec for intent/<name>.md lives there, whoever writes it.
 #
-# The work list comes from the repo, not from the push (`intent.py pending`), read at the
-# LATEST main: a queued run's own commit can be behind a spec that merged while it waited.
-# So a run that was cancelled (a newer run in the concurrency group cancels the one
-# waiting), failed or missed leaves its intents to the next run, and the daily schedule
-# retries even when no one pushes. Each run drafts at most SDLC_INTENT_TO_SPEC_MAX
-# intents (default 3), oldest first, each call capped at 15 minutes, so a backlog drains
-# over several runs instead of timing out in one. A failed draft fails the job.
-#
-# Closing a spec PR does not stop the drafting: set the intent's Status to rejected or
-# superseded instead.
-#
-# The model returns text; a program writes the file. The draft is produced in a throwaway
-# clone with no credentials, using Read/Grep/Glob only (no shell, no MCP servers). Only
-# the steps that talk to GitHub hold a token; bstack's own code runs in steps without one.
-#
-# Off by default, because it spends model time on every accepted intent. Enable it by
-# setting the repository variable SDLC_INTENT_TO_SPEC=true.
-
+# It opens nothing: no model call, no write token, no branch, no PR. Drafting unattended
+# would need a queue that drains past a draft that keeps failing, retries, and remembers
+# a declined spec; triggering the pass needs none of that. The list is read from the files
+# (`bstack intent pending`), so a cancelled or failed run loses nothing: the next run lists
+# the same intents. To take an intent off the list without a spec, set its Status to
+# rejected or superseded.
 name: Intent to spec
 
 on:
@@ -36,135 +25,42 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  pull-requests: write
-
-concurrency:
-  group: intent-to-spec
-  cancel-in-progress: false
+  contents: read
 
 jobs:
-  spec:
-    if: vars.SDLC_INTENT_TO_SPEC == 'true'
-    runs-on: ${{ vars.AGENT_EVAL_RUNNER_LABELS && fromJSON(vars.AGENT_EVAL_RUNNER_LABELS) || 'self-hosted' }}
-    timeout-minutes: 60
+  pending:
+    runs-on: ${{ vars.CI_RUNNER_LABELS && fromJSON(vars.CI_RUNNER_LABELS) || 'ubuntu-latest' }}
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
           persist-credentials: false
-      - name: Move to the latest main (a queued run's commit can be stale)
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          git -c credential.helper= -c 'credential.helper=!gh auth git-credential' \
-            fetch -q origin +refs/heads/main:refs/remotes/origin/main
-          git checkout -q --detach origin/main
       - name: Fetch bstack
         env:
           BSTACK_REF: v0.41.0
         run: git clone --quiet --depth 1 --branch "$BSTACK_REF" https://github.com/broomva/bstack.git "$RUNNER_TEMP/bstack"
-      - name: Which accepted intents have no spec? (no token in this step)
+      - name: List accepted intents with no spec
         run: |
           set -euo pipefail
+          # Skipped files (a symlink, an unreadable file, a name that cannot become a
+          # branch) are reported on stderr, which stays in this log.
           python3 "$RUNNER_TEMP/bstack/scripts/intent.py" pending --dir intent --specs docs/specs \
-            > "$RUNNER_TEMP/candidates.txt" 2> "$RUNNER_TEMP/pending.err"
-          while IFS= read -r line; do echo "::warning::$line"; done < "$RUNNER_TEMP/pending.err"
-      - name: Drop the ones with an open spec PR; keep at most the per-run cap
-        env:
-          GH_TOKEN: ${{ github.token }}
-          MAX: ${{ vars.SDLC_INTENT_TO_SPEC_MAX || '3' }}
-        run: |
-          set -euo pipefail
-          : > "$RUNNER_TEMP/todo.txt"
-          while read -r f name; do
-            # An open spec PR from this repo (not a fork) already covers it. A branch left
-            # behind by a closed or merged PR does not.
-            n=$(gh pr list --state open --head "spec/$name" --json number,isCrossRepository \
-                  -q '[.[] | select(.isCrossRepository | not)] | length' < /dev/null)
-            [ "${n:-0}" -gt 0 ] && { echo "skip $f: spec/$name already has an open PR"; continue; }
-            if [ "$(wc -l < "$RUNNER_TEMP/todo.txt")" -ge "$MAX" ]; then
-              echo "defer $f: this run's cap of $MAX is reached"
-              continue
+            > "$RUNNER_TEMP/pending.txt"
+          {
+            echo "### Accepted intents with no spec"
+            echo
+            if [ -s "$RUNNER_TEMP/pending.txt" ]; then
+              echo "Draft each one, review it, and open a PR that adds the spec:"
+              echo
+              echo '```sh'
+              while read -r f name; do
+                echo "claude -p 'Read $f and write a requirements and design spec for it. Return the whole spec, in markdown, as your reply.' > docs/specs/$name.md"
+              done < "$RUNNER_TEMP/pending.txt"
+              echo '```'
+            else
+              echo "None."
             fi
-            echo "$f $name" >> "$RUNNER_TEMP/todo.txt"
-          done < "$RUNNER_TEMP/candidates.txt"
-      - name: Draft each spec in a throwaway clone (no token in this step)
-        id: draft
-        env:
-          CLAUDE_BIN: ${{ vars.CLAUDE_BIN || 'claude' }}
-        run: |
-          set -euo pipefail
-          export PATH="$HOME/.local/bin:$PATH"
-          : > "$RUNNER_TEMP/drafted.txt"
-          failed=0
+          } >> "$GITHUB_STEP_SUMMARY"
           while read -r f name; do
-            src="$RUNNER_TEMP/src-$name"
-            git clone --quiet --no-local . "$src"
-            # stdin from /dev/null: `claude -p` reads piped stdin, which here is this loop's
-            # input. perl's alarm caps the call at 15 minutes (macOS has no `timeout`).
-            (cd "$src" && perl -e 'alarm shift; exec @ARGV or die "exec: $!"' 900 \
-              "$CLAUDE_BIN" -p "Read $f and write a requirements and design spec for integrating it into this codebase. Apply the skills available to you so it conforms to our standards. Describe clearly any areas of concern, especially where you cannot satisfy contradicting policies. Return the whole spec, in markdown, as your reply; do not write any file." \
-              --tools "Read Grep Glob" --allowedTools "Read,Grep,Glob" --restricted --strict-mcp-config \
-              --permission-mode dontAsk --output-format json < /dev/null > "$RUNNER_TEMP/$name.json") || true
-            if ! python3 - "$RUNNER_TEMP/$name.json" "docs/specs/$name.md" <<'PY'
-          import json, os, sys
-          try:
-              data = json.load(open(sys.argv[1]))
-          except (OSError, ValueError):
-              raise SystemExit(1)
-          reply = (data.get("result") or "").strip()
-          if data.get("is_error") or not reply:
-              raise SystemExit(1)
-          os.makedirs(os.path.dirname(sys.argv[2]), exist_ok=True)
-          # A new file only: never through a symlink, never over something already there.
-          fd = os.open(sys.argv[2], os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
-          with os.fdopen(fd, "w") as out:
-              out.write(reply + "\n")
-          PY
-            then
-              echo "::warning::no spec drafted for $f"
-              failed=$((failed + 1))
-              continue
-            fi
-            echo "$f $name" >> "$RUNNER_TEMP/drafted.txt"
-          done < "$RUNNER_TEMP/todo.txt"
-          echo "failed=$failed" >> "$GITHUB_OUTPUT"
-      - name: Open one PR per drafted spec
-        id: prs
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          failed=0
-          open_pr() {
-            local f=$1 name=$2 branch="spec/$2"
-            git switch -q -C "$branch" origin/main || return 1
-            git add "docs/specs/$name.md" || return 1
-            git -c user.name="intent-to-spec" -c user.email="intent-to-spec@users.noreply.github.com" \
-              commit -q -m "spec: $name (from $f)" || return 1
-            # One-shot helper: nothing is written to the runner's git config. The bot's branch
-            # can outlive a closed or merged PR (the earlier check ruled out an open one), so it
-            # is replaced; a closed PR's commits stay reachable at refs/pull/<n>/head.
-            git -c credential.helper= -c 'credential.helper=!gh auth git-credential' \
-              push -q --force origin "$branch" || return 1
-            gh pr create --head "$branch" --title "spec: $name" --body "Drafted by \`claude -p\` from the accepted \`$f\`. Review against the intent: does it solve the stated problem, and are the open questions answered or carried forward? Resolve flagged concerns with their policy owners before engineering plans against it." < /dev/null || return 1
-          }
-          while read -r f name; do
-            # One intent's failure does not stop the others; the job fails at the end.
-            if ! open_pr "$f" "$name"; then
-              echo "::error::no PR opened for $f"
-              failed=$((failed + 1))
-            fi
-            git switch -q --detach origin/main
-          done < "$RUNNER_TEMP/drafted.txt"
-          echo "failed=$failed" >> "$GITHUB_OUTPUT"
-      - name: A failed draft or PR fails the job
-        if: steps.draft.outputs.failed != '0' || steps.prs.outputs.failed != '0'
-        env:
-          DRAFTS: ${{ steps.draft.outputs.failed }}
-          PRS: ${{ steps.prs.outputs.failed }}
-        run: |
-          echo "::error::$DRAFTS draft(s) and $PRS PR(s) failed; the next run retries them"
-          exit 1
+            echo "::notice::$f is accepted and has no docs/specs/$name.md"
+          done < "$RUNNER_TEMP/pending.txt"

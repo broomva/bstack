@@ -36,43 +36,14 @@ MUTANTS = [
      r'--intent \.bands/intent\.md --result "\$RUNNER_TEMP/result\.json"\) > "\$RUNNER_TEMP/argv\.json"',
      'python3 "$RUNNER_TEMP/bstack/scripts/bands.py" diagnose-cmd "$BANDS_FILE" '
      '--intent .bands/intent.md --result "$RUNNER_TEMP/result.json" > "$RUNNER_TEMP/argv.json"', "1"),
-    ("intent-to-spec: drop --force", "intent-to-spec.yml",
-     r'push -q --force origin "\$branch"', 'push -q origin "$branch"', "6"),
-    ("intent-to-spec: git ls-remote branch check replaces the open-PR check", "intent-to-spec.yml",
-     r'n=\$\(gh pr list --state open --head "spec/\$name" .*?\n.*?\n\s+\[ "\$\{n:-0\}" -gt 0 \] && \{ echo "skip \$f: spec/\$name already has an open PR"; continue; \}',
-     'git ls-remote --exit-code --heads origin "spec/$name" >/dev/null 2>&1 '
-     '&& { echo "skip $f: spec/$name exists on origin"; continue; }', "6"),
-    ("intent-to-spec: old git ls-remote skip in the PR step", "intent-to-spec.yml",
-     r'(\n(\s+))git switch -q -C "\$branch" origin/main',
-     # Inside open_pr() a skip is `return 0`: `continue` in a function skips nothing.
-     r'\1git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1 && return 0'
-     r'\1git switch -q -C "$branch" origin/main', "6"),
-    ("intent-to-spec: drop < /dev/null", "intent-to-spec.yml",
-     r'--output-format json < /dev/null > "\$RUNNER_TEMP/\$name\.json"',
-     '--output-format json > "$RUNNER_TEMP/$name.json"', "5"),
-    # Also turns 10 red: a push-derived list has no entry to retry a failed draft.
-    ("intent-to-spec: the work list comes from the push, not the repo", "intent-to-spec.yml",
-     r'python3 "\$RUNNER_TEMP/bstack/scripts/intent\.py" pending --dir intent --specs docs/specs \\\n\s+> "\$RUNNER_TEMP/candidates\.txt"',
-     'git diff --name-only --no-ext-diff HEAD~1 HEAD -- "intent/*.md" | while read -r c; do '
-     's=$(python3 "$RUNNER_TEMP/bstack/scripts/intent.py" status "$c" || true); '
-     '[ "$s" = accepted ] && echo "$c $(basename "$c" .md)"; done > "$RUNNER_TEMP/candidates.txt" || true',
-     "9"),
-    ("intent-to-spec: no move to the latest main", "intent-to-spec.yml",
-     r"git -c credential\.helper= -c 'credential\.helper=!gh auth git-credential' \\\n\s+fetch -q origin \+refs/heads/main:refs/remotes/origin/main\n\s+git checkout -q --detach origin/main",
-     "true", "11"),
     ("intent-to-spec: pending reads specs from the wrong place", "intent-to-spec.yml",
-     r"pending --dir intent --specs docs/specs", "pending --dir intent --specs docs/nowhere", "11"),
-    ("intent-to-spec: no per-run cap", "intent-to-spec.yml",
-     r'-ge "\$MAX"', '-ge 999', "12"),
-    ("intent-to-spec: a failed draft leaves the job green", "intent-to-spec.yml",
-     r'the next run retries them"\n(\s+)exit 1', r'the next run retries them"\n\1exit 0', "8"),
-    # Two more, so the violation log and the token observation each have a kill on record.
-    ("intent-to-spec: restore `gh auth setup-git` (error swallowed)", "intent-to-spec.yml",
-     r'(\n(\s+))(open_pr\(\) \{)',
-     r'\1gh auth setup-git || true\1\3', "5"),
-    ("intent-to-spec: the draft step holds GH_TOKEN", "intent-to-spec.yml",
-     r"(\n(\s+)CLAUDE_BIN: \$\{\{ vars\.CLAUDE_BIN \|\| 'claude' \}\})",
-     r"\1\n\2GH_TOKEN: ${{ github.token }}", "5"),
+     r"pending --dir intent --specs docs/specs", "pending --dir intent --specs docs/nowhere", "6"),
+    ("intent-to-spec: lists every intent, not the accepted ones", "intent-to-spec.yml",
+     r'python3 "\$RUNNER_TEMP/bstack/scripts/intent\.py" pending --dir intent --specs docs/specs \\\n\s+> "\$RUNNER_TEMP/pending\.txt"',
+     'for f in intent/*.md; do echo "$f $(basename "$f" .md)"; done > "$RUNNER_TEMP/pending.txt"', "7"),
+    ("intent-to-spec: the report makes a gh call", "intent-to-spec.yml",
+     r'(\n(\s+))(while read -r f name; do\n\s+echo "::notice::)',
+     r'\1gh pr list --state open > /dev/null 2>&1 || true\1\3', "5"),
 ]
 
 

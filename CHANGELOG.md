@@ -60,31 +60,35 @@ proven red:
 - **`bstack intent`** (Tickets, P3). `new`, `lint`, `status` and `set-status` for the
   Stage-1 artifact, and `pending`: every accepted intent with no spec yet, read from the
   files, with names restricted to what `git check-ref-format` accepts as `spec/<name>`.
-  `intent-to-spec.yml` takes its work list from `pending` at the latest main, not from
-  the push, so a run GitHub cancelled in the concurrency group, a queued run whose commit
-  went stale, or a draft that failed, is handled by the next run; a daily schedule retries
-  without a push. It drafts at most `SDLC_INTENT_TO_SPEC_MAX` intents per run (default
-  3), each call capped at 15 minutes, and a failed draft or PR fails the job.
+  `intent-to-spec.yml` is report-only: on a push to `intent/`, daily and on demand, it
+  lists `pending` in the job summary with the command that drafts each spec. It calls no
+  model and holds no write token, so it opens nothing. A person drafts, reviews and opens
+  the PR.
 
 Templates in `references/templates/`:
 - `intent.md`, `plan.md`, `REVIEW.md`
 - `bands.example.yaml`, `eval.example.json`, `managed-settings.example.json`
 - six workflows (`sdlc-gates`, `agent-evals`, `ci-triage`, `bands`, `intent-to-spec`,
   `linear-backlink`). `tests/workflow-templates.test.sh` runs `bands` and
-  `intent-to-spec` end to end against a fake `gh` and `claude` (12 scenarios), and
+  `intent-to-spec` end to end against a fake `gh` and `claude` (8 scenarios), and
   `tests/fixtures/workflow-sim/mutants.py` shows each reverted fix turning its scenario red.
-  bstack's own code runs in steps that hold no token.
-- Fork PRs never reach a self-hosted runner: `agent-evals` runs pull_request events only
-  when the head repo is this repo (the eval files' setup, reference and command checks
-  are shell), and `ci-triage` skips runs whose head is a fork.
-  `tests/workflow-fork-guard.test.sh` checks every template for this, and shows that
-  removing each guard is caught.
+- `agent-evals` and `ci-triage`, the two templates whose jobs default to a self-hosted
+  runner and run on a pull_request or workflow_run, skip events whose head is a fork:
+  `agent-evals` runs the eval files' setup, reference and command checks as shell, and
+  `ci-triage` hands a run's logs to a model. `sdlc-gates` and `linear-backlink` default to
+  GitHub-hosted runners and run bstack's scripts over a fork's files, not its commands.
+  `tests/workflow-fork-guard.test.sh` evaluates each such job's `if:` for a fork's event
+  and for this repo's, and checks that every step running bstack's own code holds no
+  token; each guard, weakened three ways, and each token, added back, is flagged.
 
 `tests/workflow-injection-safety.test.sh` now scans the workflow templates too, because a
 sink in a template becomes a sink in every repo that copies it.
 
 `references/primitives.md` gains the matching clauses: P2 Surface, P3 Artifact chain, P4
 Plan sync, P11 rules 8–10, and P20 Review policy file.
+
+The plugin manifests (`.claude-plugin/plugin.json`, `marketplace.json`) move to 0.41.0.
+They had stayed at 0.35.0, and this release adds a PreToolUse hook to the plugin.
 
 ## 0.40.5 — 2026-09-27
 
