@@ -74,7 +74,9 @@ env.update({k: sub(str(v)) for k, v in (step.get("env") or {}).items()})
 env.update(extra)
 
 if "run" in step:
-    r = subprocess.run(["bash", "-e", "-c", sub(step["run"])], env=env, cwd=env.get("W_CWD") or None)
+    # The runner's own invocation: bash --noprofile --norc -eo pipefail {0}.
+    r = subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", sub(step["run"])],
+                       env=env, cwd=env.get("W_CWD") or None)
     print(r.returncode)
 else:
     script = sub(step["with"]["script"])
@@ -193,16 +195,31 @@ for combo in "0 0 0" "0 1 0" "0 2 1" "0 127 1" "0 _ 1" "1 0 1"; do
   else bad "W5: compute=$1 rate='${rs}' -> exit $got, want $3"; fi
 done
 
-# W6 — the install step never reads bstack out of the PR checkout.
-python3 - "$TEMPLATE" <<'PY' && ok "W6: the install step never resolves bstack from the PR checkout" || bad "W6: the install step reads a bstack path from the PR checkout"
-import sys, yaml
-wf = yaml.safe_load(open(sys.argv[1]))
-step = next(s for s in wf["jobs"]["stability-check"]["steps"] if s.get("name", "").startswith("Install bstack"))
-code = [l for l in step["run"].splitlines() if l.strip() and not l.strip().startswith("#")]
-text = "\n".join(code)
-sys.exit(0 if ".agents" not in text and "$PWD" not in text and "git clone" in text
-            and "https://github.com/broomva/bstack.git" in text else 1)
-PY
+# W6 — the install step, RUN inside a fake PR checkout that offers a vendored
+# bstack at every plausible path, must resolve BSTACK outside that checkout and
+# fetch it from github.com/broomva/bstack. A stub git on PATH records the clone
+# and creates the directory; nothing touches the network.
+PRCO="$TMP/pr-checkout"; RT="$TMP/runner-temp"; STUBBIN="$TMP/stubbin"
+mkdir -p "$PRCO/.agents/skills/bstack/scripts" "$PRCO/vendor/bstack/scripts" "$PRCO/bstack/scripts" "$RT" "$STUBBIN"
+cat > "$STUBBIN/git" <<'SH'
+#!/usr/bin/env bash
+echo "$*" >> "$W_GITLOG"
+if [ "$1" = clone ]; then mkdir -p "${@: -1}/scripts"; fi
+exit 0
+SH
+chmod +x "$STUBBIN/git"
+: > "$TMP/genv"; : > "$TMP/gitlog"
+drive "$TEMPLATE" "Install bstack" '{}' "{\"W_CWD\": \"$PRCO\", \"PATH\": \"$STUBBIN:$PATH\", \"RUNNER_TEMP\": \"$RT\", \"GITHUB_ENV\": \"$TMP/genv\", \"GITHUB_RUN_ID\": \"1\", \"GITHUB_RUN_ATTEMPT\": \"1\", \"GITHUB_WORKSPACE\": \"$PRCO\", \"W_GITLOG\": \"$TMP/gitlog\"}" >/dev/null 2>&1
+got="$(sed -n 's/^BSTACK=//p' "$TMP/genv" | tail -1)"
+real_got="$(cd "$got" 2>/dev/null && pwd -P)"; real_co="$(cd "$PRCO" && pwd -P)"
+case "$real_got" in
+  "") bad "W6: the install step set no usable BSTACK (got '$got')" ;;
+  "$real_co"|"$real_co"/*) bad "W6: BSTACK resolves inside the PR checkout: $got" ;;
+  *)
+    if grep -q 'clone .*https://github.com/broomva/bstack.git' "$TMP/gitlog"; then
+      ok "W6: run inside a PR checkout offering vendored copies, BSTACK is a fresh clone outside it"
+    else bad "W6: BSTACK is outside the checkout but was not cloned from broomva/bstack"; fi ;;
+esac
 
 # W7 — mutation proof: the same harness, pointed at a copy of this template
 # with the two pre-fix sinks put back (the output pasted into the JS literal,

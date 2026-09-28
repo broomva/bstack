@@ -466,7 +466,16 @@ echo "L3 rate gate — a PR's own python modules are never imported (BRO-2651 ro
 # exiting 0. Both scripts the workflow runs are covered: this gate and
 # compute-lambda.sh. Control: the same shim IS imported by a plain `python3 -`
 # from that directory, so the case cannot pass because the shim never loads.
+# A module compiled into the interpreter cannot be shadowed from a directory
+# (math is built in on Linux CPython, a separate file on macOS), so it is
+# skipped there; the positive control below would otherwise report the case as
+# vacuous, which is exactly what it caught in CI. tomllib is pure Python on
+# every build, so at least one module is always exercised.
 for mod in tomllib math; do
+  if "$REAL_PY" -I -c "import sys; sys.exit(0 if '$mod' in sys.builtin_module_names else 1)"; then
+    echo "  [info] Q-$mod: built into this interpreter, cannot be shadowed; skipped"
+    continue
+  fi
   newmark
   Q="$(fresh_ws)"
   printf 'import os\nopen(%s, "w").close()\n' "'$M'" > "$Q/$mod.py"
@@ -523,8 +532,8 @@ BROOMVA_WORKSPACE="$O14" bash "$GATE" --window=3600 >/dev/null 2>&1
 check "O14b: a normal --window still works (exit 0)" 0 $?
 rm -rf "$O14"
 # O15 — a pattern that looks like a grep option is a path, not an option.
-O15="$(config_ws '["CLAUDE.md", "--output=/dev/null"]' 86400)"
-printf 'x\n' > "$O15/--output=/dev/null" 2>/dev/null || true
+O15="$(config_ws '["CLAUDE.md", "--output=x"]' 86400)"
+printf 'x\n' > "$O15/--output=x"
 git -C "$O15" add -A >/dev/null 2>&1; git -C "$O15" commit -qm add >/dev/null 2>&1
 printf '# t\n' >> "$O15/CLAUDE.md"; git -C "$O15" add CLAUDE.md
 err="$(cd "$O15" && BROOMVA_WORKSPACE="$O15" bash "$GATE" --staged 2>&1 >/dev/null)"

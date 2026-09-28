@@ -121,7 +121,7 @@ jobs:
             // fence longer than any backtick run inside keeps that text from
             // closing the code block and writing its own markdown.
             const fence = (t) => "`".repeat(
-              Math.max(3, ...(t.match(/`+/g) || []).map((r) => r.length + 1)));
+              (t.match(/`+/g) || []).reduce((n, r) => Math.max(n, r.length + 1), 3));
             const body = [
               "## L3 stability gate report",
               "",

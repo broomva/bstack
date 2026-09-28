@@ -9,11 +9,15 @@ with `eval`. A pattern of `"$(cmd)"` or a `tau_a` of `"86400; cmd"` ran `cmd`. T
 `stability-check` workflow runs the gate on the PR head, so a PR that changed one value in
 a data file could run commands on the runner, including a self-hosted one.
 
-**Scope of the claim.** A `pull_request` workflow runs the YAML from the PR itself, so
-anyone who can push a same-repo branch can still edit the workflow and run code on its
-runner. This release closes the inconspicuous routes: a config value, a committed Python
-module, or a vendored bstack. After it, running code takes a visible edit to
-`.github/workflows/`, which a repo can protect (CODEOWNERS, `require_human`). It is
+**Scope of the claim.** A `pull_request` workflow runs the YAML from the PR itself, before
+any review. So anyone who can push a same-repo branch, or whose fork PR is approved to
+run, can still edit the workflow and run code on its runner. CODEOWNERS and
+`require_human` gate the merge, not that first run.
+
+This release closes the routes that do not look like code: a config value, a committed
+Python module, or a vendored bstack. What remains is an edit to `.github/workflows/`,
+which is visible in the diff. The controls that act before the run are the repository's
+fork-PR approval setting and keeping untrusted PRs off self-hosted runners. This is
 defense in depth, not a sandbox for the self-hosted pool.
 
 - **`l3-rate-gate.sh`**: no `eval`. Python reads the TOML, validates every value, and prints
@@ -35,12 +39,18 @@ defense in depth, not a sandbox for the self-hosted pool.
 - `--window` must be numeric and at most one year. `--json` escapes the patterns. A
   pattern beginning with `--` reaches `grep` as a path, not an option.
 - With no TOML parser (Python < 3.11 and no `tomli`), the defaults apply as before, now
-  with a warning, because nothing was read.
+  with a warning, because nothing was read. Under `-I`, a `tomli` installed with
+  `pip install --user` is not found. Install it into the interpreter's own site-packages.
 - **`gh-workflow-l3-stability.yml.template`**:
   - bstack is always cloned from GitHub. It is never read from `.agents/skills/bstack` in
     the checkout (the PR head). A vendored copy from the base commit was also rejected:
     nothing checks its version, so a stale copy would keep running the `eval` this release
     removes.
+  - The clone follows the default branch and is not pinned. That is a deliberate choice:
+    it is how every installed copy received this fix without action. The cost is that
+    whatever is on `broomva/bstack` main runs on every consumer's runner, and a consumer's
+    required check can change result with no change on their side. A repo that wants a
+    pin can clone a tag at or after `v0.41.1` and verify the checked-out SHA.
   - Step output reaches `github-script` through `env:`. It had been pasted into a
     JavaScript template literal, where a backtick or `${...}` in a config value ran as
     JavaScript.
@@ -59,9 +69,10 @@ defense in depth, not a sandbox for the self-hosted pool.
     - fourteen malformed configs that must name the key they refuse;
     - benign-equivalence cases.
   - `tests/l3-stability-workflow.test.sh` (new) **executes** the template's steps. It
-    substitutes `${{ }}` the way GitHub does, runs bash steps under bash and the
-    github-script body under node, and includes mutants that put the old sinks back to
-    prove the harness sees them.
+    substitutes `${{ }}` the way GitHub does, runs bash steps with the runner's
+    `-eo pipefail` and the github-script body under node, and runs the install step
+    inside a fake PR checkout with a stub `git`. It includes mutants that put the old
+    sinks back to prove the harness sees them.
   - `tests/workflow-injection-safety.test.sh` now scans `script:` blocks and
     `assets/templates/gh-workflow-*.yml.template`.
 
