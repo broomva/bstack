@@ -177,19 +177,10 @@ else
   fi
 fi
 
-# 1e. The l3-stability template must not execute bstack out of the PR head. Its
-#     checkout IS the PR head, so a vendored .agents/skills/bstack read from the
-#     working tree is code the PR author chose (BRO-2651). The vendored copy is
-#     taken from the base commit instead.
-l3="$REPO_ROOT/assets/templates/gh-workflow-l3-stability.yml.template"
-if grep -qE '\[ -d "?\.agents/skills/bstack"? \]|BSTACK="?\.agents/skills/bstack' "$l3"; then
-  bad "1e. l3-stability template resolves bstack from the PR checkout's .agents/skills/bstack"
-elif grep -q 'git archive "\$BASE_SHA" \.agents/skills/bstack' "$l3" \
-     && grep -qE '^\s+BASE_SHA: \$\{\{ github\.event\.pull_request\.base\.sha \}\}' "$l3"; then
-  ok "1e. l3-stability template takes a vendored bstack from the BASE commit, never the PR head"
-else
-  bad "1e. l3-stability template: expected the vendored bstack to come from git archive of BASE_SHA"
-fi
+# 1e. Where the l3-stability template gets bstack from, and what its steps do
+#     with PR-derived output, is asserted by EXECUTING the template in
+#     tests/l3-stability-workflow.test.sh (W1-W7). A regex over its text would
+#     only recognise the spellings someone already thought of.
 
 # ---------------------------------------------------------------------------
 # 2. The specific sink that broke v0.37.2 is gone, and its replacement is wired.

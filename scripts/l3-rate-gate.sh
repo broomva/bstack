@@ -140,9 +140,15 @@ if [ -f "$CONFIG" ] && command -v python3 >/dev/null 2>&1; then
     # A missing TOML parser is not a malformed config: the defaults apply, and
     # a warning is printed because nothing was read.
     #
+    # python3 -I (isolated mode) is load-bearing. `python3 -` puts the current
+    # directory first on sys.path, and in CI the current directory is the PR
+    # checkout: a tomllib.py or math.py committed at its root would be imported
+    # in place of the standard library and run as code. -I leaves the current
+    # directory, PYTHONPATH and user site-packages off sys.path.
+    #
     # Quoting note: no backticks in this heredoc. It is nested inside $(), where a
     # literal backtick is a bash-3.2 parse hazard (tests/bash32-parse-safety.test.sh).
-    CONFIG_RECORDS="$(python3 - "$CONFIG" <<'PYEOF'
+    CONFIG_RECORDS="$(python3 -I - "$CONFIG" <<'PYEOF'
 import math, sys
 
 try:
@@ -277,6 +283,15 @@ fi
 
 # Cast tau_a to integer seconds (it may be a float in TOML)
 TAU_A_L3_INT=$(printf '%.0f' "$TAU_A_L3" 2>/dev/null || echo "86400")
+# The config's ceiling applies to --window too: past it the cutoff arithmetic
+# overflows and the window silently covers all of history or none of it.
+case "$TAU_A_L3_INT" in
+    ''|*[!0-9]*) echo "l3-rate-gate: window is not a whole number of seconds" >&2; exit 2 ;;
+esac
+if [ "${#TAU_A_L3_INT}" -gt 8 ] || [ "$TAU_A_L3_INT" -gt 31536000 ]; then
+    echo "l3-rate-gate: window of $TAU_A_L3_INT s exceeds one year (31536000 s)" >&2
+    exit 2
+fi
 
 # Check git availability
 if ! command -v git >/dev/null 2>&1; then
@@ -336,7 +351,7 @@ if [ "$INCLUDE_STAGED" = "1" ]; then
     # yet (first commit ever), every path is a creation → exempt.
     staged_now="$(git diff --cached --name-only 2>/dev/null)"
     for path in "${L3_PATHS[@]}"; do
-        if printf '%s\n' "$staged_now" | grep -qFx "$path"; then
+        if printf '%s\n' "$staged_now" | grep -qFx -- "$path"; then
             if git cat-file -e "HEAD:$path" 2>/dev/null; then
                 COUNT_STAGED=$((COUNT_STAGED + 1))
                 STAGED_FILES="$STAGED_FILES $path"

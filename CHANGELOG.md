@@ -6,35 +6,62 @@
 
 `scripts/l3-rate-gate.sh` built shell text from `.control/rcs-parameters.toml` and ran it
 with `eval`. A pattern of `"$(cmd)"` or a `tau_a` of `"86400; cmd"` ran `cmd`. The
-`stability-check` workflow runs the gate on the PR head, so anyone able to open a PR that
-touched the parameters file could run commands on the runner, including a self-hosted one.
+`stability-check` workflow runs the gate on the PR head, so a PR that changed one value in
+a data file could run commands on the runner, including a self-hosted one.
+
+**Scope of the claim.** A `pull_request` workflow runs the YAML from the PR itself, so
+anyone who can push a same-repo branch can still edit the workflow and run code on its
+runner. This release closes the inconspicuous routes: a config value, a committed Python
+module, or a vendored bstack. After it, running code takes a visible edit to
+`.github/workflows/`, which a repo can protect (CODEOWNERS, `require_human`). It is
+defense in depth, not a sandbox for the self-hosted pool.
 
 - **`l3-rate-gate.sh`**: no `eval`. Python reads the TOML, validates every value, and prints
-  `KEY<TAB>VALUE` records. Bash assigns them with plain assignments and re-checks the
-  numeric ones. Patterns must be non-empty strings with no control characters, so a
-  newline cannot forge a record. `tau_a` must be a number from 1 to 31536000 seconds, and
-  `correction_budget` an integer from 0 to 1000.
+  `KEY<TAB>VALUE` records. Bash assigns them with plain assignments, re-checks the numeric
+  ones, and refuses unknown keys.
+  - Patterns must be non-empty strings with no control characters, so a newline cannot
+    forge a record. At most 256.
+  - `tau_a` must be a number from 1 to 31536000 seconds, and `correction_budget` an
+    integer from 0 to 1000.
+- **`python3 -I`** in `l3-rate-gate.sh` and `compute-lambda.sh`. `python3 -` put the
+  current directory first on `sys.path`, and in CI that directory is the PR checkout, so a
+  committed `tomllib.py` or `math.py` replaced the standard library and ran. Both steps
+  still exited 0.
 - **Malformed config now fails CLOSED** with exit 2 (the code the header already
-  reserved), even under `--warn-only`. Before, unparseable TOML, a wrong type or a
-  bad value was dropped for the defaults in silence.
+  reserved), even under `--warn-only`. The message names the key. Before, it was replaced
+  by the defaults in silence.
 - `TAU_A_L3` and `L3_PATHS` are reset before the read, like `CORRECTION_BUDGET` already
   was, so an ambient `TAU_A_L3=5` cannot shrink the window when the config omits `tau_a`.
-- `--window` must be numeric. `--json` escapes the patterns, so it stays valid JSON.
+- `--window` must be numeric and at most one year. `--json` escapes the patterns. A
+  pattern beginning with `--` reaches `grep` as a path, not an option.
 - With no TOML parser (Python < 3.11 and no `tomli`), the defaults apply as before, now
-  with a warning, because nothing was read. `tomli` is tried as a fallback.
+  with a warning, because nothing was read.
 - **`gh-workflow-l3-stability.yml.template`**:
-  - A vendored `.agents/skills/bstack` is taken from the PR's **base** commit
-    (`git archive $BASE_SHA`), never the PR head. Without a vendored copy, bstack is
-    cloned from GitHub.
-  - Script output reaches `github-script` through `env:`. It had been pasted into a
+  - bstack is always cloned from GitHub. It is never read from `.agents/skills/bstack` in
+    the checkout (the PR head). A vendored copy from the base commit was also rejected:
+    nothing checks its version, so a stale copy would keep running the `eval` this release
+    removes.
+  - Step output reaches `github-script` through `env:`. It had been pasted into a
     JavaScript template literal, where a backtick or `${...}` in a config value ran as
     JavaScript.
-  - The `$GITHUB_OUTPUT` heredoc delimiter is random per run.
-  - Exit 2 from the rate gate (an unreadable config) fails the check.
+  - The report's code fences are longer than any backtick run in the output.
+  - The `$GITHUB_OUTPUT` heredoc delimiter is random per run, so an output line reading
+    `EOF` cannot forge `status=`.
+  - A rate-gate status other than 0 or 1 (unreadable config, crash, missing script, empty)
+    fails the check.
 - **Tests**:
-  - `tests/l3-rate-gate.test.sh`: five payloads, each with a positive control proving it
-    executes under the old `eval` shape. Also a carried-verbatim check, eleven malformed
-    configs that must name the key they refuse, and benign-equivalence cases.
+  - `tests/l3-rate-gate.test.sh`, 18 → 76 cases:
+    - five payloads, each with a positive control proving it runs under the old `eval`
+      shape, plus a carried-verbatim check;
+    - shadow `tomllib.py`/`math.py` for both scripts, with a control proving each loads
+      under plain `python3 -`;
+    - hostile reader output, driven through a `python3` shim, for the shell-side checks;
+    - fourteen malformed configs that must name the key they refuse;
+    - benign-equivalence cases.
+  - `tests/l3-stability-workflow.test.sh` (new) **executes** the template's steps. It
+    substitutes `${{ }}` the way GitHub does, runs bash steps under bash and the
+    github-script body under node, and includes mutants that put the old sinks back to
+    prove the harness sees them.
   - `tests/workflow-injection-safety.test.sh` now scans `script:` blocks and
     `assets/templates/gh-workflow-*.yml.template`.
 
@@ -42,10 +69,9 @@ touched the parameters file could run commands on the runner, including a self-h
 
 - A parameters file the old gate silently ignored now stops the gate with exit 2.
   `bash scripts/l3-rate-gate.sh` prints the key it refuses.
-- Workflows installed earlier are copies. Re-run `bash scripts/install-l3-stability.sh`
-  after removing `.github/workflows/l3-stability.yml`, or apply the template diff by hand.
-  A repo that vendors bstack under `.agents/skills/bstack` must also update that copy,
-  because the workflow runs the base commit's vendored copy.
+- Installed workflows are copies. Remove `.github/workflows/l3-stability.yml` and re-run
+  `bash scripts/install-l3-stability.sh`, or apply the template diff by hand.
+  (`--force` would also overwrite `.control/rcs-parameters.toml`.)
 
 ## 0.41.0 — 2026-09-27
 

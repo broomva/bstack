@@ -38,33 +38,21 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install bstack (trusted copy, never the PR's own)
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      - name: Install bstack (from GitHub, never from the PR)
         run: |
           set -euo pipefail
           # The scripts that JUDGE this PR must not come from this PR (BRO-2651).
-          # The checkout above is the PR head, so a vendored .agents/skills/bstack
-          # read from it is code the PR author chose, and running it runs their
-          # commands on the runner. A vendored copy is taken from the BASE
-          # commit instead (already reviewed and merged); without one, bstack is
-          # cloned from GitHub. The config the scripts read still comes from the
-          # PR, and they parse it as data.
+          # The checkout above is the PR head, so any bstack read from it, a
+          # vendored .agents/skills/bstack included, is code the PR author chose.
+          # A vendored copy from the BASE commit is no better: nothing checks
+          # its version, so a stale one keeps running a gate this very fix
+          # replaced. bstack is therefore always cloned from its default branch,
+          # which is how a consumer receives a security fix without acting. The
+          # PR's config is still read, and the scripts parse it as data.
           DEST="${RUNNER_TEMP:-$(mktemp -d)}/bstack-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           rm -rf "$DEST"
-          mkdir -p "$DEST"
-          BSTACK=""
-          if [ -n "${BASE_SHA:-}" ] \
-             && git fetch --no-tags --depth=1 origin "$BASE_SHA" \
-             && [ "$(git cat-file -t "$BASE_SHA:.agents/skills/bstack" 2>/dev/null)" = tree ]; then
-            git archive "$BASE_SHA" .agents/skills/bstack | tar -x -C "$DEST"
-            [ -f "$DEST/.agents/skills/bstack/scripts/l3-rate-gate.sh" ] && BSTACK="$DEST/.agents/skills/bstack"
-          fi
-          if [ -z "$BSTACK" ]; then
-            git clone --depth 1 https://github.com/broomva/bstack.git "$DEST/clone"
-            BSTACK="$DEST/clone"
-          fi
-          echo "BSTACK=$BSTACK" >> "$GITHUB_ENV"
+          git clone --depth 1 https://github.com/broomva/bstack.git "$DEST"
+          echo "BSTACK=$DEST" >> "$GITHUB_ENV"
 
       - name: Compute lambda (RCS stability budget)
         id: compute
@@ -123,26 +111,31 @@ jobs:
             const verdict =
               computeStatus !== "0"
                 ? "🔴 **lambda_i <= 0** — composite system unstable; do not merge"
-                : rateStatus === "2"
-                ? "🔴 **parameters config unreadable or malformed** — the rate gate refused it; do not merge"
+                : rateStatus !== "0" && rateStatus !== "1"
+                ? "🔴 **rate gate did not run to a verdict** (exit " + rateStatus + ") — config unreadable or malformed; do not merge"
                 : rateStatus !== "0"
                   ? "🟡 **L3 rate exceeded** — RCS stability budget assumes <= 1 governance commit per tau_a_3 window"
                   : "🟢 **All gates pass** — composite stable, rate within budget";
 
+            // The results quote the PR's config (level names, the path). A
+            // fence longer than any backtick run inside keeps that text from
+            // closing the code block and writing its own markdown.
+            const fence = (t) => "`".repeat(
+              Math.max(3, ...(t.match(/`+/g) || []).map((r) => r.length + 1)));
             const body = [
               "## L3 stability gate report",
               "",
               verdict,
               "",
               "### Per-level lambda (compute-lambda.sh)",
-              "```",
+              fence(compute),
               compute,
-              "```",
+              fence(compute),
               "",
               "### L3 rate gate (l3-rate-gate.sh)",
-              "```",
+              fence(rate),
               rate,
-              "```",
+              fence(rate),
               "",
               "<sub>bstack Gate G2 — see `.github/workflows/l3-stability.yml`. RCS background: https://github.com/broomva/bstack/blob/main/references/primitives.md</sub>",
             ].join("\n");
@@ -161,14 +154,17 @@ jobs:
         run: |
           # Fail the check if lambda <= 0 (unstable) — this is the gate.
           # L3 rate exceeded (exit 1) is informational (passes here; pre-commit
-          # blocks locally). Exit 2 is not a rate verdict: the parameters config
-          # could not be read, so nothing was checked, and that fails closed.
+          # blocks locally). Any other status is not a rate verdict: exit 2 is
+          # an unreadable or malformed config, and a crash, a missing script or
+          # an empty status means nothing was checked. All of them fail closed.
           if [ "$COMPUTE_STATUS" != "0" ]; then
             echo "FAIL: lambda_i <= 0; composite unstable"
             exit 1
           fi
-          if [ "$RATE_STATUS" = "2" ]; then
-            echo "FAIL: l3-rate-gate could not read the parameters config (exit 2)"
-            exit 1
-          fi
+          case "$RATE_STATUS" in
+            0|1) ;;
+            *)
+              echo "FAIL: l3-rate-gate did not reach a verdict (exit '$RATE_STATUS')"
+              exit 1 ;;
+          esac
           echo "OK: all lambda_i > 0"

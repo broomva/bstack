@@ -76,7 +76,10 @@ if ! command -v python3 >/dev/null 2>&1; then
     exit 4
 fi
 
-python3 - "$CONFIG" "$FORMAT" "$STRICT" <<'PYEOF'
+# -I (isolated): `python3 -` would put the current directory first on
+# sys.path, and in CI that is the PR checkout, where a committed tomllib.py or
+# math.py would be imported and run in place of the standard library (BRO-2651).
+python3 -I - "$CONFIG" "$FORMAT" "$STRICT" <<'PYEOF'
 import sys, math, json
 try:
     import tomllib

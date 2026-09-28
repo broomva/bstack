@@ -433,20 +433,107 @@ else
   echo "  [FAIL] P3: defaults not applied — got: $(printf '%s' "$got" | grep -E 'window|l3_paths')"; fail=$((fail + 1))
 fi
 rm -rf "$P3"
+# A python3 shim first on PATH. The gate runs `python3 -I`, which ignores
+# PYTHONPATH, so the only way to change what the reader sees is to change the
+# interpreter. The shim prepends $SHIM_PRELUDE to the program on stdin and
+# execs the real python3 with the same arguments.
+REAL_PY="$(command -v python3)"
+SHIMDIR="$(mktemp -d)"
+cat > "$SHIMDIR/python3" <<SH
+#!/usr/bin/env bash
+prog="\$(cat)"
+printf '%s\n%s\n' "\${SHIM_PRELUDE:-}" "\$prog" | exec "$REAL_PY" "\$@"
+SH
+chmod +x "$SHIMDIR/python3"
+
 # P4 — no TOML parser at all: nothing is read, so nothing can execute; the
-# defaults apply with a warning. Simulated by shadowing tomllib and tomli.
+# defaults apply with a warning.
 newmark
 P4="$(config_ws "[\"\$(touch $M)\"]" "\"1; touch $M\"")"
-SHADOW="$(mktemp -d)"
-printf 'raise ImportError("shadowed for the test")\n' > "$SHADOW/tomllib.py"
-cp "$SHADOW/tomllib.py" "$SHADOW/tomli.py"
-err="$(PYTHONPATH="$SHADOW" BROOMVA_WORKSPACE="$P4" bash "$GATE" 2>&1 >/dev/null)"; rc=$?
+err="$(SHIM_PRELUDE='import sys; sys.modules["tomllib"] = None; sys.modules["tomli"] = None' \
+  PATH="$SHIMDIR:$PATH" BROOMVA_WORKSPACE="$P4" bash "$GATE" 2>&1 >/dev/null)"; rc=$?
 if [ "$rc" = 0 ] && [ ! -e "$M" ] && printf '%s' "$err" | grep -q 'no TOML parser'; then
   echo "  [pass] P4: no parser -> defaults, a warning, and no execution"; pass=$((pass + 1))
 else
   echo "  [FAIL] P4: rc=$rc marker=$([ -e "$M" ] && echo yes || echo no) err=$err"; fail=$((fail + 1))
 fi
-rm -rf "$P4" "$SHADOW" "$(dirname "$M")"
+rm -rf "$P4" "$(dirname "$M")"
+
+echo "L3 rate gate — a PR's own python modules are never imported (BRO-2651 round 2)"
+# `python3 -` puts the current directory first on sys.path. In CI the current
+# directory is the PR checkout, so a tomllib.py or math.py committed at its
+# root replaced the standard library and ran as code, with the gate still
+# exiting 0. Both scripts the workflow runs are covered: this gate and
+# compute-lambda.sh. Control: the same shim IS imported by a plain `python3 -`
+# from that directory, so the case cannot pass because the shim never loads.
+for mod in tomllib math; do
+  newmark
+  Q="$(fresh_ws)"
+  printf 'import os\nopen(%s, "w").close()\n' "'$M'" > "$Q/$mod.py"
+  ( cd "$Q" && printf 'import %s\n' "$mod" | "$REAL_PY" - ) >/dev/null 2>&1
+  if [ -e "$M" ]; then
+    echo "  [pass] Q-$mod control: a plain python3 - imports the PR's $mod.py"; pass=$((pass + 1)); rm -f "$M"
+  else
+    echo "  [FAIL] Q-$mod control: the shadow module never loaded, so the case is vacuous"; fail=$((fail + 1))
+  fi
+  ( cd "$Q" && BROOMVA_WORKSPACE="$Q" bash "$GATE" --json ) >/dev/null 2>&1
+  if [ -e "$M" ]; then
+    echo "  [FAIL] Q-$mod: l3-rate-gate imported the PR's $mod.py"; fail=$((fail + 1)); rm -f "$M"
+  else
+    echo "  [pass] Q-$mod: l3-rate-gate does not import the PR's $mod.py"; pass=$((pass + 1))
+  fi
+  ( cd "$Q" && BROOMVA_WORKSPACE="$Q" bash "$SCRIPT_DIR/scripts/compute-lambda.sh" --human ) >/dev/null 2>&1
+  if [ -e "$M" ]; then
+    echo "  [FAIL] Q-$mod: compute-lambda imported the PR's $mod.py"; fail=$((fail + 1))
+  else
+    echo "  [pass] Q-$mod: compute-lambda does not import the PR's $mod.py"; pass=$((pass + 1))
+  fi
+  rm -rf "$Q" "$(dirname "$M")"
+done
+
+echo "L3 rate gate — the shell side trusts no record (BRO-2651 round 2)"
+# The reader validates in python; bash re-checks what reaches arithmetic and
+# refuses unknown keys. Those checks are unreachable through a correct reader,
+# so each case replaces the reader's output with a hostile record set via the
+# shim (the prelude prints the records and exits before the real program).
+hostile() { # hostile <name> <want-exit> <records-printf-format>
+  local d rc; newmark; d="$(fresh_ws)"
+  SHIM_PRELUDE="import sys; sys.stdout.write('$3'.replace('@M', '$M')); sys.exit(0)" \
+    PATH="$SHIMDIR:$PATH" BROOMVA_WORKSPACE="$d" bash "$GATE" --json >/dev/null 2>&1; rc=$?
+  check "$1" "$2" "$rc"
+  if [ -e "$M" ]; then echo "  [FAIL] $1: marker exists"; fail=$((fail + 1)); fi
+  rm -rf "$d" "$(dirname "$M")"
+}
+hostile "R1: a non-numeric TAU_A_L3 record is refused (exit 2)"        2 'TAU_A_L3\t1;touch @M\n'
+hostile "R2: a non-numeric CORRECTION_BUDGET record is refused (exit 2)" 2 'CORRECTION_BUDGET\t$(touch @M)\n'
+hostile "R3: an unknown record key is refused (exit 2)"                2 'L3_PATHS\tx\n'
+hostile "R4: a PATH record is assigned as data, never run (exit 0)"    0 'PATH\t$(touch @M)\nPATH\t`touch @M`\n'
+rm -rf "$SHIMDIR"
+
+# O13 — the pattern count is capped.
+O13="$(config_ws "[$(python3 -c 'print(",".join(["\"p%d\"" % i for i in range(257)]))')]" 86400)"
+BROOMVA_WORKSPACE="$O13" bash "$GATE" >/dev/null 2>&1
+check "O13: 257 patterns fail closed (exit 2)" 2 $?
+rm -rf "$O13"
+# O14 — --window has the config's one-year ceiling; past it the cutoff overflows.
+O14="$(config_ws '["CLAUDE.md"]' 86400)"
+BROOMVA_WORKSPACE="$O14" bash "$GATE" --window=99999999999999999999999 >/dev/null 2>&1
+check "O14: an overflowing --window is refused (exit 2)" 2 $?
+BROOMVA_WORKSPACE="$O14" bash "$GATE" --window=3600 >/dev/null 2>&1
+check "O14b: a normal --window still works (exit 0)" 0 $?
+rm -rf "$O14"
+# O15 — a pattern that looks like a grep option is a path, not an option.
+O15="$(config_ws '["CLAUDE.md", "--output=/dev/null"]' 86400)"
+printf 'x\n' > "$O15/--output=/dev/null" 2>/dev/null || true
+git -C "$O15" add -A >/dev/null 2>&1; git -C "$O15" commit -qm add >/dev/null 2>&1
+printf '# t\n' >> "$O15/CLAUDE.md"; git -C "$O15" add CLAUDE.md
+err="$(cd "$O15" && BROOMVA_WORKSPACE="$O15" bash "$GATE" --staged 2>&1 >/dev/null)"
+if printf '%s' "$err" | grep -qi 'unrecognized option\|invalid option'; then
+  echo "  [FAIL] O15: a pattern reached grep as an option: $err"; fail=$((fail + 1))
+else
+  echo "  [pass] O15: a pattern starting with -- is not parsed as a grep option"; pass=$((pass + 1))
+fi
+rm -rf "$O15"
 
 echo "Passed: $pass  Failed: $fail"
 [ "$fail" -eq 0 ] && echo "All tests passed." || exit 1
