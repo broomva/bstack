@@ -52,10 +52,17 @@ jobs:
           if not pat:
               summary.write("LINEAR_ID_PATTERN is not set; set it to your team keys, e.g. "
                             "(BRO|ENG)-[0-9]+. Nothing was linked.\n"); raise SystemExit(0)
+          try:
+              rx, rx_branch = re.compile(pat), re.compile(pat, re.I)
+          except re.error as e:
+              summary.write(f"LINEAR_ID_PATTERN {pat!r} is not a valid regex ({e}). "
+                            "Nothing was linked.\n"); raise SystemExit(1)
           body = env.get("PR_BODY", "").splitlines()
           named = body[:1] + [l for l in body if re.match(r"\s*(Closes|Fixes|Resolves|Ticket|Linear)\b", l, re.I)]
-          ids = set(re.findall(pat, "\n".join([env.get("PR_TITLE", "")] + named)))
-          ids |= {m.upper() for m in re.findall(pat, env.get("PR_BRANCH", ""), flags=re.I)}
+          # group(0), the whole match: findall would return a capture group, so a pattern
+          # like (BRO|ENG)-[0-9]+ would yield BRO instead of BRO-12.
+          ids = {m.group(0) for m in rx.finditer("\n".join([env.get("PR_TITLE", "")] + named))}
+          ids |= {m.group(0).upper() for m in rx_branch.finditer(env.get("PR_BRANCH", ""))}
           ids = sorted(ids)
           if not ids:
               summary.write("No ticket ID found in the PR title, body or branch.\n"); raise SystemExit(0)

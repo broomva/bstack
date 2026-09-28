@@ -430,12 +430,14 @@ class TestBaseAndErrors(RepoCase):
                    "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.pager",
                    "GIT_CONFIG_VALUE_0": "evil", "GIT_EXTERNAL_DIFF": "evil",
                    "GIT_EXEC_PATH": "/elsewhere/bin", "GIT_CEILING_DIRECTORIES": "/"}
+        planted.update({"GIT_CONFIG_GLOBAL": "/elsewhere/gitconfig",
+                        "GIT_CONFIG_SYSTEM": "/elsewhere/gitconfig"})
         with mock.patch.dict(os.environ, {**planted, "GIT_TRACE": "0",
-                                          "GIT_CONFIG_GLOBAL": "/dev/null"}):
+                                          "GIT_CONFIG_NOSYSTEM": "1"}):
             env = plan_drift.git_env()
         for k in planted:
             self.assertNotIn(k, env)
-        self.assertEqual((env.get("GIT_TRACE"), env.get("GIT_CONFIG_GLOBAL")), ("0", "/dev/null"))
+        self.assertEqual((env.get("GIT_TRACE"), env.get("GIT_CONFIG_NOSYSTEM")), ("0", "1"))
 
     def test_an_exported_git_dir_does_not_redirect_the_analysis(self):
         other = self.td / "other"

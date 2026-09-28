@@ -5,7 +5,8 @@
 # never reaches the network):
 #   - without LINEAR_ID_PATTERN nothing is linked, and the summary says why;
 #   - with a team-key pattern, "SHA-256" in a title is not a ticket, and a lowercase
-#     branch ID is.
+#     branch ID is; a pattern with a capture group still yields whole IDs; an invalid
+#     pattern fails with a named error.
 # Structure: the trigger is pull_request_target, which hands a fork's merged PR the secret,
 # so no step may check out or run code. A copy with a checkout step added is flagged, to
 # show that the check can fail.
@@ -105,6 +106,15 @@ rc, out, err = backlink(ID_PATTERN="BRO-[0-9]+",
                         PR_BODY="Implements BRO-3.\nIt relates to BRO-99.\nCloses BRO-5")
 check("the first body line and a Closes line count; a later citation does not",
       rc == 0 and "BRO-3" in out and "BRO-5" in out and "BRO-99" not in out, out + err)
+
+rc, out, err = backlink(ID_PATTERN="(BRO|ENG)-[0-9]+", PR_TITLE="Fix BRO-12 and ENG-3",
+                        PR_BRANCH="feature/eng-4-x")
+check("the documented multi-team pattern (a capture group) yields whole IDs",
+      rc == 0 and all(i in out for i in ("BRO-12", "ENG-3", "ENG-4")), out + err)
+
+rc, out, err = backlink(ID_PATTERN="(BRO", PR_TITLE="Fix BRO-12")
+check("an invalid pattern fails with a named error, not a traceback",
+      rc == 1 and "is not a valid regex" in out and "Traceback" not in err, out + err)
 
 print()
 print("── Summary ────────────────────────────────────────────────────────")

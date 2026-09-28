@@ -70,7 +70,7 @@ Templates in `references/templates/`:
 - `bands.example.yaml`, `eval.example.json`, `managed-settings.example.json`
 - six workflows (`sdlc-gates`, `agent-evals`, `ci-triage`, `bands`, `intent-to-spec`,
   `linear-backlink`). `tests/workflow-templates.test.sh` runs `bands` and
-  `intent-to-spec` end to end against a fake `gh` and `claude` (8 scenarios), and
+  `intent-to-spec` end to end against a fake `gh` and `claude` (9 scenarios), and
   `tests/fixtures/workflow-sim/mutants.py` shows each reverted fix turning its scenario red.
 - `agent-evals` and `ci-triage`, the two templates whose jobs default to a self-hosted
   runner and run on a pull_request or workflow_run, skip events whose head is a fork:
@@ -93,12 +93,16 @@ Fixed from the PR's review threads:
   e.g. `(BRO|ENG)-[0-9]+`). The old default `[A-Z]{2,5}-[0-9]+` read "SHA-256" in a title
   as a ticket; without the variable the job links nothing and says so. It triggers on
   `pull_request_target`, so a merged PR from a fork also gets the secret. That is safe
-  because it checks out nothing and runs no repository code; `tests/linear-backlink.test.sh`
-  checks both properties.
+  because it checks out nothing and runs no repository code. IDs are whole matches, so a
+  pattern with a capture group such as `(BRO|ENG)-[0-9]+` yields `BRO-12`, not `BRO`; an
+  invalid pattern fails the job with a named error. `tests/linear-backlink.test.sh`
+  checks each of these.
 - One rule for which `GIT_*` variables reach git: `scripts/git_env_policy.py`, used by
   `agent_evals`, `plan_drift` and `test_lock`. `plan_drift` and `test_lock` passed every
   `GIT_*`, so an exported `GIT_DIR` redirected them to another repository, and
-  `GIT_CONFIG_*` or `GIT_EXEC_PATH` injected config or programs.
+  `GIT_CONFIG_*` or `GIT_EXEC_PATH` injected config or programs. `GIT_CONFIG_GLOBAL` and
+  `GIT_CONFIG_SYSTEM` are denied too: a config they point at can set `core.hooksPath`, so
+  `test-lock commit` would run a planted hook. `GIT_CONFIG_NOSYSTEM` passes.
 - `plan_drift`: its `git log` passes `--no-show-signature` (`log.showSignature` would run
   `gpg.program`); an invalid glob in a plan is a usage error (exit 2), not drift; a `Plan:`
   path from the PR body must resolve inside the checkout, or it is recorded and not read.

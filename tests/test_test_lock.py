@@ -1013,7 +1013,8 @@ class GitHygieneTests(Base):
         names = {line.split("=", 1)[0] for line in Path(dump).read_text().splitlines() if "=" in line}
         self.assertNotIn("SECRET_TOKEN", names)
         self.assertNotIn("PYTHONDONTWRITEBYTECODE", names)
-        self.assertIn("GIT_CONFIG_GLOBAL", names)  # GIT_* crosses over
+        self.assertNotIn("GIT_CONFIG_GLOBAL", names)   # a config-file selector: denied
+        self.assertIn("GIT_CONFIG_NOSYSTEM", names)     # it only removes config: allowed
         self.assertIn("HOME", names)
 
 
@@ -1050,13 +1051,38 @@ class GitEnvPolicyTests(Base):
         for value in ("/nonexistent-git-exec", "bstack.planted", "/nonexistent-hooks"):
             self.assertNotIn(value, text)
 
+    def test_a_selected_global_config_cannot_redirect_hooks(self):
+        # GIT_CONFIG_GLOBAL / GIT_CONFIG_SYSTEM are pointers the caller's environment
+        # chooses; a config there can set core.hooksPath, and `commit` runs hooks.
+        marker = os.path.join(self.r.tmp, "planted-hook-ran")
+        hooks = os.path.join(self.r.tmp, "planted-hooks")
+        os.makedirs(hooks)
+        with open(os.path.join(hooks, "pre-commit"), "w") as fh:
+            fh.write(f'#!/bin/sh\ntouch "{marker}"\n')
+        os.chmod(os.path.join(hooks, "pre-commit"), 0o755)
+        cfg = os.path.join(self.r.tmp, "planted.gitconfig")
+        with open(cfg, "w") as fh:
+            fh.write(f"[core]\n\thooksPath = {hooks}\n")
+        # Positive control: git itself honours the selected config and runs the hook.
+        subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", "control"],
+                       cwd=self.r.root, env=self.r.env(GIT_CONFIG_GLOBAL=cfg), check=True,
+                       capture_output=True)
+        self.assertTrue(os.path.exists(marker), "the fixture must make git run the hook")
+        os.unlink(marker)
+        for var in ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"):
+            self.assertExit(self.r.run("commit", TEST, "-m", f"lock via {var}",
+                                       **{var: cfg, "GIT_CONFIG_NOSYSTEM": "0"}), 0)
+            self.assertFalse(os.path.exists(marker), f"{var} redirected the hooks")
+
     def test_the_policy_is_the_one_every_script_uses(self):
         for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_CONFIG_PARAMETERS",
                      "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
                      "GIT_EXTERNAL_DIFF", "GIT_EXEC_PATH", "GIT_CEILING_DIRECTORIES"):
             self.assertFalse(tl.git_var_allowed(name), name)
         self.assertEqual(tl.git_var_allowed.__module__.rsplit(".", 1)[-1], "git_env_policy")
-        self.assertTrue(tl.git_var_allowed("GIT_CONFIG_GLOBAL"))
+        for name in ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"):
+            self.assertFalse(tl.git_var_allowed(name), name)
+        self.assertTrue(tl.git_var_allowed("GIT_CONFIG_NOSYSTEM"))   # it only removes config
 
 
 class SigningEnvTests(Base):

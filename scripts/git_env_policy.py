@@ -8,12 +8,13 @@ A GIT_* variable passes through unless it does one of two things:
     GIT_DIR, a "repo-scoped" call would read, and a hook would write, the wrong
     repository without any error;
   - injects configuration or a program. GIT_CONFIG_PARAMETERS and GIT_CONFIG_COUNT with
-    GIT_CONFIG_KEY_n/VALUE_n set config that outranks every file. GIT_EXTERNAL_DIFF and
-    GIT_EXEC_PATH name programs git runs.
+    GIT_CONFIG_KEY_n/VALUE_n set config that outranks every file. GIT_CONFIG_GLOBAL and
+    GIT_CONFIG_SYSTEM point git at an arbitrary config file, which can set core.hooksPath
+    (so `test-lock commit` would run a planted hook). GIT_EXTERNAL_DIFF and GIT_EXEC_PATH
+    name programs git runs.
 
-GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM and GIT_CONFIG_NOSYSTEM pass. They choose which of
-the operator's config files git reads, the same trust as HOME, which every caller keeps.
-The test suites use them to switch the operator's config off.
+GIT_CONFIG_NOSYSTEM passes: it only removes config. The global config git reads is the
+one under HOME, which every caller keeps; a test that wants none sets HOME to a temp dir.
 """
 from __future__ import annotations
 
@@ -23,7 +24,8 @@ GIT_ENV_DENY = frozenset({
     "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE",
     "GIT_PREFIX", "GIT_CEILING_DIRECTORIES",
     # injected configuration or programs
-    "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_EXTERNAL_DIFF", "GIT_EXEC_PATH",
+    "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM",
+    "GIT_EXTERNAL_DIFF", "GIT_EXEC_PATH",
 })
 GIT_ENV_DENY_PREFIX = ("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")
 
