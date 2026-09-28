@@ -70,7 +70,7 @@ Templates in `references/templates/`:
 - `bands.example.yaml`, `eval.example.json`, `managed-settings.example.json`
 - six workflows (`sdlc-gates`, `agent-evals`, `ci-triage`, `bands`, `intent-to-spec`,
   `linear-backlink`). `tests/workflow-templates.test.sh` runs `bands` and
-  `intent-to-spec` end to end against a fake `gh` and `claude` (9 scenarios), and
+  `intent-to-spec` end to end against a fake `gh` and `claude` (11 scenarios), and
   `tests/fixtures/workflow-sim/mutants.py` shows each reverted fix turning its scenario red.
 - `agent-evals` and `ci-triage`, the two templates whose jobs default to a self-hosted
   runner and run on a pull_request or workflow_run, skip events whose head is a fork:
@@ -98,7 +98,8 @@ Fixed from the PR's review threads:
   invalid pattern fails the job with a named error. `tests/linear-backlink.test.sh`
   checks each of these.
 - One rule for which `GIT_*` variables reach git: `scripts/git_env_policy.py`, used by
-  `agent_evals`, `plan_drift` and `test_lock`. `plan_drift` and `test_lock` passed every
+  `agent_evals`, `intent`, `plan_drift` and `test_lock` (older scripts that run git, such
+  as fleet and wave, are not covered yet). `plan_drift` and `test_lock` passed every
   `GIT_*`, so an exported `GIT_DIR` redirected them to another repository, and
   `GIT_CONFIG_*` or `GIT_EXEC_PATH` injected config or programs. `GIT_CONFIG_GLOBAL` and
   `GIT_CONFIG_SYSTEM` are denied too: a config they point at can set `core.hooksPath`, so
@@ -110,7 +111,8 @@ Fixed from the PR's review threads:
   does not clear either. They now name what does: remove the commit or move `--base` past
   it.
 - `agent_evals`: a git timeout while building a scratch reports the eval `errored`, not a
-  traceback. `bands.yml`: a missing `claude` or a timed-out diagnosis takes the failure
+  traceback. `bands.yml`: a missing `claude`, a timed-out diagnosis, or a reply that is
+  not an object with a text result (JSON `null`, a `null` result) takes the failure
   branch, so the intent PR still carries the failure.
 
 The plugin manifests (`.claude-plugin/plugin.json`, `marketplace.json`) move to 0.41.0.

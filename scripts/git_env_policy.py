@@ -1,7 +1,9 @@
 """git_env_policy.py — which GIT_* variables may reach a git child process (BRO-2542).
 
-One rule, imported by every bstack script that runs git (agent_evals, plan_drift,
-test_lock), so the three cannot drift apart.
+One rule, imported by the scripts that filter git's environment (agent_evals, intent,
+plan_drift, test_lock), so they cannot drift apart. Older scripts that also run git
+(fleet, wave, the leverage sensors, lib/skill-drift) still inherit the caller's
+environment; they are not covered by this rule yet.
 
 A GIT_* variable passes through unless it does one of two things:
   - points git at ANOTHER repository. Run from inside a hook or a CI step that exports

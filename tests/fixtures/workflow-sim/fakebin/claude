@@ -10,7 +10,8 @@ stdin is checked two ways. Reading it catches a caller that feeds it data. fstat
 caller that hands over its own loop input: with one intent left in a `while read` loop that
 input is at EOF, so it reads as empty, yet it is not /dev/null.
 
-$SIM/claude.mode picks the reply: `ok` or `error`. A missing mode is a violation.
+$SIM/claude.mode picks the reply: `ok`, `error`, or a malformed shape (`json-null`: the
+JSON value null; `result-null`: an object whose result is null). A missing mode is a violation.
 """
 import glob
 import json
@@ -48,6 +49,10 @@ elif mode == "ok":
              "result": f"## Diagnosis\n\nFAKE-DIAGNOSIS {nonce}: a flaky runner.\n"}
 elif mode == "error":
     reply = {"type": "result", "is_error": True, "result": "API Error: 529 overloaded"}
+elif mode == "json-null":
+    reply = None
+elif mode == "result-null":
+    reply = {"type": "result", "is_error": False, "result": None}
 else:
     with open(os.path.join(SIM, "violations.log"), "a") as f:
         f.write(json.dumps({"argv": sys.argv[1:], "why": f"claude.mode is {mode!r}"}) + "\n")
@@ -64,8 +69,8 @@ with open(os.path.join(SIM, "claude.log"), "a") as f:
                                                      "credential", "token")),
         "bands_files": sorted(os.path.basename(p) for p in glob.glob(".bands/*")),
         "mode": mode,
-        "reply": reply["result"],
+        "reply": reply.get("result") if isinstance(reply, dict) else None,
     }) + "\n")
 
 print(json.dumps(reply))
-sys.exit(1 if reply["is_error"] else 0)
+sys.exit(1 if isinstance(reply, dict) and reply.get("is_error") else 0)

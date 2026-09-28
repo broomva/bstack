@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -321,6 +322,32 @@ class TestStatus(Base):
         p = self.write("# Intent: x\n\nno header\n")
         self.assertEqual(run("set-status", str(p), "accepted")[0], 1)
         self.assertEqual(p.read_text(), "# Intent: x\n\nno header\n")
+
+
+class TestAuthorFromGit(Base):
+    def test_a_planted_git_config_override_does_not_become_the_author(self):
+        home = self.tmp / "home"
+        home.mkdir()
+        (home / ".gitconfig").write_text("[user]\n\tname = Real Author\n")
+        planted = {"HOME": str(home), "GIT_CONFIG_NOSYSTEM": "1",
+                   "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "user.name",
+                   "GIT_CONFIG_VALUE_0": "Planted Author",
+                   "GIT_CONFIG_PARAMETERS": "'user.name=Planted Author'"}
+        # Outside any repository: a repo's local config would outrank HOME's.
+        cwd = os.getcwd()
+        os.chdir(self.tmp)
+        self.addCleanup(os.chdir, cwd)
+        with mock.patch.dict(os.environ, planted):
+            # Positive control: plain git honours the override.
+            got = subprocess.run(["git", "config", "user.name"], capture_output=True,
+                                 text=True).stdout.strip()
+            self.assertEqual(got, "Planted Author")
+            rc, out, _ = run("new", "author-probe", "--dir", str(self.tmp / "intent"),
+                             "--date", "2026-09-27")
+        self.assertEqual(rc, 0)
+        text = Path(out.strip()).read_text()
+        self.assertIn("Author: Real Author.", text)
+        self.assertNotIn("Planted", text)
 
 
 class TestPending(Base):

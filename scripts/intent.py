@@ -42,6 +42,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+try:
+    from git_env_policy import git_var_allowed  # run as a script: scripts/ is on sys.path
+except ImportError:  # imported as scripts.<module>
+    from scripts.git_env_policy import git_var_allowed
+
 SECTIONS = ("Problem", "Proposed outcome", "Affected users and systems",
             "Constraints", "Open questions")
 STATUSES = ("draft", "accepted", "rejected", "superseded")
@@ -195,11 +200,11 @@ def _read(path: Path) -> str:
 
 
 def git_user_name() -> str | None:
-    """`git config user.name`, run with a filtered environment and fsmonitor off."""
+    """`git config user.name`, run with fsmonitor off and an environment filtered by
+    git_env_policy: GIT_CONFIG_COUNT/KEY/VALUE could otherwise override user.name, which
+    `new` writes into the intent as its author."""
     env = {k: v for k, v in os.environ.items()
-           if k in ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR")
-           or (k.startswith("GIT_") and k not in ("GIT_DIR", "GIT_WORK_TREE",
-                                                   "GIT_CONFIG_PARAMETERS"))}
+           if k in ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR") or git_var_allowed(k)}
     try:
         p = subprocess.run(["git", "-c", "core.fsmonitor=false", "config", "user.name"],
                            env=env, stdin=subprocess.DEVNULL, capture_output=True,

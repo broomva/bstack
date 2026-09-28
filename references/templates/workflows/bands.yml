@@ -109,7 +109,11 @@ jobs:
           reply, failed = "", rc != 0
           try:
               data = json.loads(stdout)
-              reply, failed = data.get("result", ""), failed or bool(data.get("is_error"))
+              # Only an object with a text result is a reply; JSON null, or a null result,
+              # takes the failure branch like any other malformed output.
+              if not isinstance(data, dict) or not isinstance(data.get("result"), str):
+                  raise ValueError("no text result in claude's JSON")
+              reply, failed = data["result"], failed or bool(data.get("is_error"))
           except ValueError:
               reply, failed = stdout, True
           reply = reply.strip()

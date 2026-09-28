@@ -12,7 +12,7 @@
 # is evaluated rather than assumed.
 #
 # There is deliberately NO skip path. A missing git, jq or PyYAML FAILS the run, and so
-# does a run in which fewer than 9 scenarios reached their assertions.
+# does a run in which fewer than 11 scenarios reached their assertions.
 #
 # WF_BANDS / WF_INTENT point the scenarios at another copy of a template;
 # tests/fixtures/workflow-sim/mutants.py uses them to show that each reverted fix goes red.
@@ -29,8 +29,8 @@ SIMDIR="$BSTACK_REPO/tests/fixtures/workflow-sim"
 WF_BANDS="${WF_BANDS:-$BSTACK_REPO/references/templates/workflows/bands.yml}"
 WF_INTENT="${WF_INTENT:-$BSTACK_REPO/references/templates/workflows/intent-to-spec.yml}"
 BANDS_EXAMPLE="$BSTACK_REPO/references/templates/bands.example.yaml"
-SCENARIOS="1 2 3 4 5 6 7 8 9"
-MIN_SCENARIOS=9
+SCENARIOS="1 2 3 4 5 6 7 8 9 10 11"
+MIN_SCENARIOS=11
 MIN_ASSERTS=5
 NAME="alpha-widget"
 
@@ -326,6 +326,36 @@ FILE="$(job '.outputs["diag.file"] // ""')"
 INTENT="$(hgit --git-dir "$S/origin.git" show "$TIP:$FILE" 2>/dev/null)"
 ok "the intent says the diagnosis failed" contains "$INTENT" "diagnosis failed"
 ok "and names why" contains "$INTENT" "FileNotFoundError"
+no_violations
+finish
+
+S="$ROOT/bands-json-null"
+begin 10 "bands: claude replies with the JSON value null: the failure branch, not a crash"
+setup_bands "$S" || assert_fail "fixture setup"
+echo json-null > "$S/claude.mode"
+run_sim "$WF_BANDS" "$S" co1
+eq "job fails" failure "$(job .result)"
+eq "exactly 1 claude call" 1 "$(lines "$S/claude.log")"
+eq "exactly 1 pr create: the failure is still reported" 1 "$(lines "$S/pr_create.log")"
+TIP="$(oref "$S" "bands/$KEY")"
+FILE="$(job '.outputs["diag.file"] // ""')"
+ok "the intent says the diagnosis failed" contains \
+    "$(hgit --git-dir "$S/origin.git" show "$TIP:$FILE" 2>/dev/null)" "diagnosis failed"
+no_violations
+finish
+
+S="$ROOT/bands-result-null"
+begin 11 "bands: claude replies with an object whose result is null: the failure branch, not a crash"
+setup_bands "$S" || assert_fail "fixture setup"
+echo result-null > "$S/claude.mode"
+run_sim "$WF_BANDS" "$S" co1
+eq "job fails" failure "$(job .result)"
+eq "exactly 1 claude call" 1 "$(lines "$S/claude.log")"
+eq "exactly 1 pr create: the failure is still reported" 1 "$(lines "$S/pr_create.log")"
+TIP="$(oref "$S" "bands/$KEY")"
+FILE="$(job '.outputs["diag.file"] // ""')"
+ok "the intent says the diagnosis failed" contains \
+    "$(hgit --git-dir "$S/origin.git" show "$TIP:$FILE" 2>/dev/null)" "diagnosis failed"
 no_violations
 finish
 
