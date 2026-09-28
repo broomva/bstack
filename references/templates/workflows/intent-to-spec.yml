@@ -1,0 +1,66 @@
+# Intent → spec — copy to .github/workflows/intent-to-spec.yml (bstack ≥ 0.41.0).
+#
+# Tickets (P3) artifact chain: "an accepted intent.md triggers the requirements and
+# design pass". This workflow is the trigger, not the pass. On every push to the default
+# branch that touches intent/, daily, and on demand, it lists each intent at the top of
+# intent/ with `Status: accepted` and no docs/specs/<name>.md in the job summary, with a
+# command that drafts one. A person runs it, reviews the draft, and opens the PR that
+# adds docs/specs/<name>.md. The spec for intent/<name>.md lives there, whoever writes it.
+#
+# It opens nothing: no model call, no write token, no branch, no PR. Drafting unattended
+# would need a queue that drains past a draft that keeps failing, retries, and remembers
+# a declined spec; triggering the pass needs none of that. The list is read from the files
+# (`bstack intent pending`), so a cancelled or failed run loses nothing: the next run lists
+# the same intents. To take an intent off the list without a spec, set its Status to
+# rejected or superseded.
+name: Intent to spec
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'intent/*.md'
+  schedule:
+    - cron: '23 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pending:
+    runs-on: ${{ vars.CI_RUNNER_LABELS && fromJSON(vars.CI_RUNNER_LABELS) || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Fetch bstack
+        env:
+          BSTACK_REF: v0.41.0
+        run: git clone --quiet --depth 1 --branch "$BSTACK_REF" https://github.com/broomva/bstack.git "$RUNNER_TEMP/bstack"
+      - name: List accepted intents with no spec
+        run: |
+          set -euo pipefail
+          # Skipped files (a symlink, an unreadable file, a name that cannot become a
+          # branch) are reported on stderr, which stays in this log.
+          python3 "$RUNNER_TEMP/bstack/scripts/intent.py" pending --dir intent --specs docs/specs \
+            > "$RUNNER_TEMP/pending.txt"
+          {
+            echo "### Accepted intents with no spec"
+            echo
+            if [ -s "$RUNNER_TEMP/pending.txt" ]; then
+              echo "Draft each one, review it, and open a PR that adds the spec:"
+              echo
+              echo '```sh'
+              while read -r f name; do
+                echo "claude -p 'Read $f and write a requirements and design spec for it. Return the whole spec, in markdown, as your reply.' > docs/specs/$name.md"
+              done < "$RUNNER_TEMP/pending.txt"
+              echo '```'
+            else
+              echo "None."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          while read -r f name; do
+            echo "::notice::$f is accepted and has no docs/specs/$name.md"
+          done < "$RUNNER_TEMP/pending.txt"

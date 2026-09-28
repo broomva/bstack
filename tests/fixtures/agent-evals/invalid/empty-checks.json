@@ -1,0 +1,10 @@
+{
+  "id": "empty-checks",
+  "description": "d",
+  "source": "s",
+  "prompt": "p",
+  "allowed_tools": [
+    "Read"
+  ],
+  "checks": []
+}

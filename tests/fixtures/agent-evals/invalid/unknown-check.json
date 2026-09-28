@@ -1,0 +1,15 @@
+{
+  "id": "unknown-check",
+  "description": "d",
+  "source": "s",
+  "prompt": "p",
+  "allowed_tools": [
+    "Read"
+  ],
+  "checks": [
+    {
+      "type": "file_exists",
+      "path": "a"
+    }
+  ]
+}

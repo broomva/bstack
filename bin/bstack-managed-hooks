@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# bstack-managed-hooks — which hooks survive allowManagedHooksOnly? (BRO-2542).
+# Thin shim that dispatches to scripts/managed_hooks.py, mirroring the
+# bstack-fleet shim pattern. Forwards argv unchanged.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+MANAGED_HOOKS_PY="$SCRIPT_DIR/scripts/managed_hooks.py"
+
+if [ ! -f "$MANAGED_HOOKS_PY" ]; then
+  echo "bstack-managed-hooks: scripts/managed_hooks.py not found at $MANAGED_HOOKS_PY" >&2
+  exit 2
+fi
+
+exec python3 "$MANAGED_HOOKS_PY" "$@"

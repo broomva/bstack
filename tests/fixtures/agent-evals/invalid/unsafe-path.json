@@ -1,0 +1,16 @@
+{
+  "id": "unsafe-path",
+  "description": "d",
+  "source": "s",
+  "prompt": "p",
+  "allowed_tools": [
+    "Read"
+  ],
+  "checks": [
+    {
+      "type": "file_contains",
+      "path": "../outside.txt",
+      "regex": "x"
+    }
+  ]
+}

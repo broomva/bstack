@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# bstack-bands — deterministic control-band detector that writes intent.md (BRO-2542).
+#
+# Thin shim that dispatches to scripts/bands.py. Mirrors the bstack-fleet
+# shim pattern. Forwards argv unchanged.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BANDS_PY="$SCRIPT_DIR/scripts/bands.py"
+
+if [ ! -f "$BANDS_PY" ]; then
+  echo "bstack-bands: scripts/bands.py not found at $BANDS_PY" >&2
+  exit 1
+fi
+
+exec python3 "$BANDS_PY" "$@"

@@ -1,0 +1,12 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit",
+        "hooks": [
+          { "type": "command", "command": "bash scripts/format-on-save.sh" }
+        ]
+      }
+    ]
+  }
+}

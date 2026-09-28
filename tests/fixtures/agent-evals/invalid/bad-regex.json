@@ -1,0 +1,15 @@
+{
+  "id": "bad-regex",
+  "description": "d",
+  "source": "s",
+  "prompt": "p",
+  "allowed_tools": [
+    "Read"
+  ],
+  "checks": [
+    {
+      "type": "output_regex",
+      "regex": "(unclosed"
+    }
+  ]
+}

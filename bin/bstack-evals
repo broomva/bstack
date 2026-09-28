@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# bstack-evals — continuous evals of the agent's configuration (BRO-2542).
+#
+# Thin shim that dispatches to scripts/agent_evals.py. Mirrors the bstack-fleet
+# shim pattern. Forwards argv unchanged.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PY="$SCRIPT_DIR/scripts/agent_evals.py"
+
+if [ ! -f "$PY" ]; then
+  echo "bstack-evals: scripts/agent_evals.py not found at $PY" >&2
+  exit 1
+fi
+
+exec python3 "$PY" "$@"

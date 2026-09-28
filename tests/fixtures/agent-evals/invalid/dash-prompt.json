@@ -1,0 +1,15 @@
+{
+  "id": "dash-prompt",
+  "description": "d",
+  "source": "s",
+  "prompt": "--help me",
+  "allowed_tools": [
+    "Read"
+  ],
+  "checks": [
+    {
+      "type": "output_regex",
+      "regex": "ok"
+    }
+  ]
+}

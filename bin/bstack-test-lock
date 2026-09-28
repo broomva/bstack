@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# bstack-test-lock — lock a reproduction test with a git trailer so the fix
+# cannot weaken it (BRO-2542; the "failing test first" step of
+# https://academy.claude.com/courses/ai-native-sdlc-playbook/give-claude-a-feedback-loop).
+#
+# Thin shim that dispatches to scripts/test_lock.py. Mirrors the bstack-fleet
+# shim pattern. Forwards argv unchanged.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TEST_LOCK_PY="$SCRIPT_DIR/scripts/test_lock.py"
+
+if [ ! -f "$TEST_LOCK_PY" ]; then
+  echo "bstack-test-lock: scripts/test_lock.py not found at $TEST_LOCK_PY" >&2
+  exit 1
+fi
+
+exec python3 "$TEST_LOCK_PY" "$@"

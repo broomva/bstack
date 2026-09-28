@@ -1,5 +1,123 @@
 # Changelog
 
+## 0.41.0 — 2026-09-27
+
+### feat(sdlc): the AI-native SDLC playbook's twelve plays, held by mechanisms rather than prose
+
+Anthropic's *AI-native SDLC playbook* (Claude Academy course
+<https://academy.claude.com/courses/ai-native-sdlc-playbook/introduction>) names twelve
+plays. [references/ai-native-sdlc.md](references/ai-native-sdlc.md) maps each onto an
+existing primitive, so the count stays at twenty, and names the mechanism that holds it.
+Where bstack keeps its own rule (CLAUDE.md size, rule of three, gating on a cross-model
+verdict), the divergence is written down with its reason.
+
+Six commands, each with a unittest suite behind a no-skip wrapper and one-line mutations
+proven red:
+
+- **`bstack test-lock`** (Empirical, P11). The course's play, "a hook that blocks edits to
+  test files during a fix task", made tamper-evident.
+  - A failing test is committed under a `Test-Lock: <path> sha256=<hex>` trailer.
+  - The plugin's PreToolUse hook blocks writes to a locked test: Edit, Write, MultiEdit and
+    NotebookEdit, and Bash commands whose write target is locked.
+  - `verify` is the gate:
+    - It fails on content drift, on a lock without a hash, and on a lock commit whose content
+      no longer matches its trailer (`commit --amend --no-edit`; an amend with `-m` replaces
+      the message and so drops the lock, which is visible only in review).
+    - It exits 3 on any `Test-Unlock:` release, and stays red until a person acts.
+    - It parses trailers in-process from raw commits, so no git config can hide a lock.
+    - It fails closed (exit 2) on any scan error.
+  - It is **not** a security boundary against an agent that forges git objects with your
+    credentials or drops the lock commit. Both are visible only in review, and the CI run
+    on a fresh checkout is the real gate.
+- **`bstack evals`** (P11). Continuous evals of the agent's configuration over `claude -p`.
+  - Each eval runs in a standalone scratch repository holding one orphan commit of HEAD's
+    files, with the evals directory hidden.
+  - Git config the agent plants there (fsmonitor, hooks, and every filter, diff and merge
+    driver, LFS included) is neutralized for the commands the runner starts.
+  - The agent under test sees only the built-in tools its `allowed_tools` names, with no MCP
+    servers and `dontAsk`, in a path-scrubbed environment.
+  - `validate --prove` requires three things of every eval: the reference passes, each named
+    `violations` arm fails a check, and a no-op agent replying "I have completed the task."
+    fails. Violation arms are scored with the reference's passing reply, so only a state
+    check (file, git or command) can catch a violation. When only the reply catches the
+    no-op, prove warns.
+  - `--gate` fails on any per-eval regression over the evals both runs share, and on a
+    passing eval that was removed.
+- **`bstack bands`** (P11). A deterministic Western Electric control-band detector with no
+  model in it.
+  - At 2σ and 3σ it writes the next `intent.md`; `intent --json` gives a `dedupe_key`.
+  - The diagnosis has Read, Grep, Glob and LS only: no shell, no MCP servers.
+  - The template runs the diagnosis in a throwaway clone without credentials. The model
+    returns text, and the workflow writes it.
+  - The series drops the incomplete current day.
+  - A baseline too small to judge reports `insufficient_baseline`, never `none`.
+- **`bstack plan-drift`** (Pipeline, P4). Does the diff still match the plan's "Files that
+  change"? Each commit is judged against the plan as it stood at that commit, so a later
+  plan edit cannot hide an earlier departure.
+- **`bstack managed-hooks`** (Gate, P2). Which hooks survive `allowManagedHooksOnly`?
+  Under that key, user, project and local hooks are blocked, and so is `/goal`.
+  `--fail-on-critical` exits 1 when a governance hook would be blocked.
+- **`bstack intent`** (Tickets, P3). `new`, `lint`, `status` and `set-status` for the
+  Stage-1 artifact, and `pending`: every accepted intent with no spec yet, read from the
+  files, with names restricted to what `git check-ref-format` accepts as `spec/<name>`.
+  `intent-to-spec.yml` is report-only: on a push to `intent/`, daily and on demand, it
+  lists `pending` in the job summary with the command that drafts each spec. It calls no
+  model and holds no write token, so it opens nothing. A person drafts, reviews and opens
+  the PR.
+
+Templates in `references/templates/`:
+- `intent.md`, `plan.md`, `REVIEW.md`
+- `bands.example.yaml`, `eval.example.json`, `managed-settings.example.json`
+- six workflows (`sdlc-gates`, `agent-evals`, `ci-triage`, `bands`, `intent-to-spec`,
+  `linear-backlink`). `tests/workflow-templates.test.sh` runs `bands` and
+  `intent-to-spec` end to end against a fake `gh` and `claude` (11 scenarios), and
+  `tests/fixtures/workflow-sim/mutants.py` shows each reverted fix turning its scenario red.
+- `agent-evals` and `ci-triage`, the two templates whose jobs default to a self-hosted
+  runner and run on a pull_request or workflow_run, skip events whose head is a fork:
+  `agent-evals` runs the eval files' setup, reference and command checks as shell, and
+  `ci-triage` hands a run's logs to a model. `sdlc-gates` defaults to a GitHub-hosted
+  runner and runs bstack's scripts over a fork's files, not its commands;
+  `linear-backlink` checks out nothing and runs no repository code.
+  `tests/workflow-fork-guard.test.sh` evaluates each such job's `if:` for a fork's event
+  and for this repo's, and checks that every step running bstack's own code holds no
+  token; each guard, weakened three ways, and each token, added back, is flagged.
+
+`tests/workflow-injection-safety.test.sh` now scans the workflow templates too, because a
+sink in a template becomes a sink in every repo that copies it.
+
+`references/primitives.md` gains the matching clauses: P2 Surface, P3 Artifact chain, P4
+Plan sync, P11 rules 8–10, and P20 Review policy file.
+
+Fixed from the PR's review threads:
+- **`linear-backlink` needs `LINEAR_ID_PATTERN` now** (adopters: set it to your team keys,
+  e.g. `(BRO|ENG)-[0-9]+`). The old default `[A-Z]{2,5}-[0-9]+` read "SHA-256" in a title
+  as a ticket; without the variable the job links nothing and says so. It triggers on
+  `pull_request_target`, so a merged PR from a fork also gets the secret. That is safe
+  because it checks out nothing and runs no repository code. IDs are whole matches, so a
+  pattern with a capture group such as `(BRO|ENG)-[0-9]+` yields `BRO-12`, not `BRO`; an
+  invalid pattern fails the job with a named error. `tests/linear-backlink.test.sh`
+  checks each of these.
+- One rule for which `GIT_*` variables reach git: `scripts/git_env_policy.py`, used by
+  `agent_evals`, `intent`, `plan_drift` and `test_lock` (older scripts that run git, such
+  as fleet and wave, are not covered yet). `plan_drift` and `test_lock` passed every
+  `GIT_*`, so an exported `GIT_DIR` redirected them to another repository, and
+  `GIT_CONFIG_*` or `GIT_EXEC_PATH` injected config or programs. `GIT_CONFIG_GLOBAL` and
+  `GIT_CONFIG_SYSTEM` are denied too: a config they point at can set `core.hooksPath`, so
+  `test-lock commit` would run a planted hook. `GIT_CONFIG_NOSYSTEM` passes.
+- `plan_drift`: its `git log` passes `--no-show-signature` (`log.showSignature` would run
+  `gpg.program`); an invalid glob in a plan is a usage error (exit 2), not drift; a `Plan:`
+  path from the PR body must resolve inside the checkout, or it is recorded and not read.
+- `test_lock`: the release routes for a hashless or rewritten lock said "re-lock", which
+  does not clear either. They now name what does: remove the commit or move `--base` past
+  it.
+- `agent_evals`: a git timeout while building a scratch reports the eval `errored`, not a
+  traceback. `bands.yml`: a missing `claude`, a timed-out diagnosis, or a reply that is
+  not an object with a text result (JSON `null`, a `null` result) takes the failure
+  branch, so the intent PR still carries the failure.
+
+The plugin manifests (`.claude-plugin/plugin.json`, `marketplace.json`) move to 0.41.0.
+They had stayed at 0.35.0, and this release adds a PreToolUse hook to the plugin.
+
 ## 0.40.5 — 2026-09-27
 
 ### feat(doctor): §27 reports skills whose executed code diverges from origin/main (BRO-2369)

@@ -135,6 +135,25 @@ for f in "$WORKFLOW_DIR"/*.yml; do
 done
 [ "$untracked_n" -eq 0 ] && echo "  [info] no untracked workflows in the tree"
 
+# 1c. Workflow TEMPLATES are copied verbatim into adopters' .github/workflows/, so
+#     a sink in a template becomes a sink in every workspace that adopts it (BRO-2542).
+#     Scoped to tracked files for the same reason as test 1.
+templates=()
+while IFS= read -r f; do
+  [ -n "$f" ] && templates+=("$REPO_ROOT/$f")
+done < <(git -C "$REPO_ROOT" ls-files 'references/templates/workflows/*.yml' 2>/dev/null)
+if [ "${#templates[@]}" -eq 0 ]; then
+  echo "  [info] no tracked workflow templates to scan"
+else
+  hits="$(scan "${templates[@]}")"
+  if [ -z "$hits" ]; then
+    ok "1c. no \${{ }} inside any run: block across ${#templates[@]} workflow template(s)"
+  else
+    bad "1c. \${{ }} found inside run: block(s) of a workflow template — pass these through env:"
+    printf '        %s\n' "$hits"
+  fi
+fi
+
 # ---------------------------------------------------------------------------
 # 2. The specific sink that broke v0.37.2 is gone, and its replacement is wired.
 # ---------------------------------------------------------------------------
