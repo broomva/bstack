@@ -38,30 +38,51 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install bstack (skill snapshot)
+      - name: Install bstack (trusted copy, never the PR's own)
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          # Resolve bstack — for repos that have it vendored or use the GitHub fetch.
-          if [ -d ".agents/skills/bstack" ]; then
-            BSTACK=".agents/skills/bstack"
-          else
-            git clone --depth 1 https://github.com/broomva/bstack.git /tmp/bstack
-            BSTACK=/tmp/bstack
+          set -euo pipefail
+          # The scripts that JUDGE this PR must not come from this PR (BRO-2651).
+          # The checkout above is the PR head, so a vendored .agents/skills/bstack
+          # read from it is code the PR author chose, and running it runs their
+          # commands on the runner. A vendored copy is taken from the BASE
+          # commit instead (already reviewed and merged); without one, bstack is
+          # cloned from GitHub. The config the scripts read still comes from the
+          # PR, and they parse it as data.
+          DEST="${RUNNER_TEMP:-$(mktemp -d)}/bstack-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          rm -rf "$DEST"
+          mkdir -p "$DEST"
+          BSTACK=""
+          if [ -n "${BASE_SHA:-}" ] \
+             && git fetch --no-tags --depth=1 origin "$BASE_SHA" \
+             && [ "$(git cat-file -t "$BASE_SHA:.agents/skills/bstack" 2>/dev/null)" = tree ]; then
+            git archive "$BASE_SHA" .agents/skills/bstack | tar -x -C "$DEST"
+            [ -f "$DEST/.agents/skills/bstack/scripts/l3-rate-gate.sh" ] && BSTACK="$DEST/.agents/skills/bstack"
           fi
-          echo "BSTACK=$BSTACK" >> $GITHUB_ENV
+          if [ -z "$BSTACK" ]; then
+            git clone --depth 1 https://github.com/broomva/bstack.git "$DEST/clone"
+            BSTACK="$DEST/clone"
+          fi
+          echo "BSTACK=$BSTACK" >> "$GITHUB_ENV"
 
       - name: Compute lambda (RCS stability budget)
         id: compute
         run: |
           set +e
-          out=$(bash $BSTACK/scripts/compute-lambda.sh --human)
+          out=$(bash "$BSTACK"/scripts/compute-lambda.sh --human)
           status=$?
           echo "$out"
+          # The output quotes values from the PR's config, so a fixed EOF
+          # delimiter could be closed early by a config line reading EOF and
+          # followed by a forged status=0. The delimiter is random per run.
+          delim="EOF_$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
           {
-            echo "result<<EOF"
+            echo "result<<$delim"
             echo "$out"
-            echo "EOF"
+            echo "$delim"
             echo "status=$status"
-          } >> $GITHUB_OUTPUT
+          } >> "$GITHUB_OUTPUT"
           # Always continue so the comment step runs; final exit is below
           exit 0
 
@@ -69,30 +90,41 @@ jobs:
         id: rate
         run: |
           set +e
-          out=$(BROOMVA_WORKSPACE="$PWD" bash $BSTACK/scripts/l3-rate-gate.sh)
+          out=$(BROOMVA_WORKSPACE="$PWD" bash "$BSTACK"/scripts/l3-rate-gate.sh 2>&1)
           status=$?
           echo "$out"
+          delim="EOF_$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
           {
-            echo "result<<EOF"
+            echo "result<<$delim"
             echo "$out"
-            echo "EOF"
+            echo "$delim"
             echo "status=$status"
-          } >> $GITHUB_OUTPUT
+          } >> "$GITHUB_OUTPUT"
           exit 0
 
       - name: Comment on PR
         if: github.event.pull_request != null
         uses: actions/github-script@v7
+        # Values arrive through env:, never pasted into the script text. Pasted
+        # into a JS template literal, a config value holding a backtick or
+        # ${...} ran as JavaScript on the runner (BRO-2651).
+        env:
+          COMPUTE_RESULT: ${{ steps.compute.outputs.result }}
+          RATE_RESULT: ${{ steps.rate.outputs.result }}
+          COMPUTE_STATUS: ${{ steps.compute.outputs.status }}
+          RATE_STATUS: ${{ steps.rate.outputs.status }}
         with:
           script: |
-            const compute = `${{ steps.compute.outputs.result }}`;
-            const rate    = `${{ steps.rate.outputs.result }}`;
-            const computeStatus = `${{ steps.compute.outputs.status }}`;
-            const rateStatus    = `${{ steps.rate.outputs.status }}`;
+            const compute = process.env.COMPUTE_RESULT || "";
+            const rate    = process.env.RATE_RESULT || "";
+            const computeStatus = process.env.COMPUTE_STATUS || "";
+            const rateStatus    = process.env.RATE_STATUS || "";
 
             const verdict =
               computeStatus !== "0"
                 ? "🔴 **lambda_i <= 0** — composite system unstable; do not merge"
+                : rateStatus === "2"
+                ? "🔴 **parameters config unreadable or malformed** — the rate gate refused it; do not merge"
                 : rateStatus !== "0"
                   ? "🟡 **L3 rate exceeded** — RCS stability budget assumes <= 1 governance commit per tau_a_3 window"
                   : "🟢 **All gates pass** — composite stable, rate within budget";
@@ -123,11 +155,20 @@ jobs:
             });
 
       - name: Set final status
+        env:
+          COMPUTE_STATUS: ${{ steps.compute.outputs.status }}
+          RATE_STATUS: ${{ steps.rate.outputs.status }}
         run: |
           # Fail the check if lambda <= 0 (unstable) — this is the gate.
-          # L3 rate exceeded is informational (passes here; pre-commit blocks locally).
-          if [ "${{ steps.compute.outputs.status }}" != "0" ]; then
+          # L3 rate exceeded (exit 1) is informational (passes here; pre-commit
+          # blocks locally). Exit 2 is not a rate verdict: the parameters config
+          # could not be read, so nothing was checked, and that fails closed.
+          if [ "$COMPUTE_STATUS" != "0" ]; then
             echo "FAIL: lambda_i <= 0; composite unstable"
+            exit 1
+          fi
+          if [ "$RATE_STATUS" = "2" ]; then
+            echo "FAIL: l3-rate-gate could not read the parameters config (exit 2)"
             exit 1
           fi
           echo "OK: all lambda_i > 0"

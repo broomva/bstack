@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.41.1 — 2026-09-28
+
+### fix(security): the L3 rate gate reads its config as data, and the stability workflow stops running the PR's code (BRO-2651)
+
+`scripts/l3-rate-gate.sh` built shell text from `.control/rcs-parameters.toml` and ran it
+with `eval`. A pattern of `"$(cmd)"` or a `tau_a` of `"86400; cmd"` ran `cmd`. The
+`stability-check` workflow runs the gate on the PR head, so anyone able to open a PR that
+touched the parameters file could run commands on the runner, including a self-hosted one.
+
+- **`l3-rate-gate.sh`**: no `eval`. Python reads the TOML, validates every value, and prints
+  `KEY<TAB>VALUE` records. Bash assigns them with plain assignments and re-checks the
+  numeric ones. Patterns must be non-empty strings with no control characters, so a
+  newline cannot forge a record. `tau_a` must be a number from 1 to 31536000 seconds, and
+  `correction_budget` an integer from 0 to 1000.
+- **Malformed config now fails CLOSED** with exit 2 (the code the header already
+  reserved), even under `--warn-only`. Before, unparseable TOML, a wrong type or a
+  bad value was dropped for the defaults in silence.
+- `TAU_A_L3` and `L3_PATHS` are reset before the read, like `CORRECTION_BUDGET` already
+  was, so an ambient `TAU_A_L3=5` cannot shrink the window when the config omits `tau_a`.
+- `--window` must be numeric. `--json` escapes the patterns, so it stays valid JSON.
+- With no TOML parser (Python < 3.11 and no `tomli`), the defaults apply as before, now
+  with a warning, because nothing was read. `tomli` is tried as a fallback.
+- **`gh-workflow-l3-stability.yml.template`**:
+  - A vendored `.agents/skills/bstack` is taken from the PR's **base** commit
+    (`git archive $BASE_SHA`), never the PR head. Without a vendored copy, bstack is
+    cloned from GitHub.
+  - Script output reaches `github-script` through `env:`. It had been pasted into a
+    JavaScript template literal, where a backtick or `${...}` in a config value ran as
+    JavaScript.
+  - The `$GITHUB_OUTPUT` heredoc delimiter is random per run.
+  - Exit 2 from the rate gate (an unreadable config) fails the check.
+- **Tests**:
+  - `tests/l3-rate-gate.test.sh`: five payloads, each with a positive control proving it
+    executes under the old `eval` shape. Also a carried-verbatim check, eleven malformed
+    configs that must name the key they refuse, and benign-equivalence cases.
+  - `tests/workflow-injection-safety.test.sh` now scans `script:` blocks and
+    `assets/templates/gh-workflow-*.yml.template`.
+
+#### Migration
+
+- A parameters file the old gate silently ignored now stops the gate with exit 2.
+  `bash scripts/l3-rate-gate.sh` prints the key it refuses.
+- Workflows installed earlier are copies. Re-run `bash scripts/install-l3-stability.sh`
+  after removing `.github/workflows/l3-stability.yml`, or apply the template diff by hand.
+  A repo that vendors bstack under `.agents/skills/bstack` must also update that copy,
+  because the workflow runs the base commit's vendored copy.
+
 ## 0.41.0 — 2026-09-27
 
 ### feat(sdlc): the AI-native SDLC playbook's twelve plays, held by mechanisms rather than prose

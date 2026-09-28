@@ -81,7 +81,10 @@ for path in files:
     in_run = False
     run_indent = 0
     for lineno, line in enumerate(lines, 1):
-        m = re.match(r"^(\s*)run:\s*[|>][-+]?\s*$", line)
+        # script: is actions/github-script's body. It is JavaScript, and a
+        # ${{ }} pasted into a JS template literal executes exactly as one
+        # pasted into bash does (BRO-2651).
+        m = re.match(r"^(\s*)(?:run|script):\s*[|>][-+]?\s*$", line)
         if m:
             in_run = True
             run_indent = len(m.group(1))
@@ -154,6 +157,40 @@ else
   fi
 fi
 
+# 1d. The l3-stability template ships from assets/templates/, not
+#     references/templates/workflows/, so 1c never saw it. It pasted script
+#     output (which quotes the PR's own config) into a github-script template
+#     literal: JavaScript execution on the runner (BRO-2651).
+l3tmpl=()
+while IFS= read -r f; do
+  [ -n "$f" ] && l3tmpl+=("$REPO_ROOT/$f")
+done < <(git -C "$REPO_ROOT" ls-files 'assets/templates/gh-workflow-*.yml.template' 2>/dev/null)
+if [ "${#l3tmpl[@]}" -eq 0 ]; then
+  bad "1d. no tracked assets/templates/gh-workflow-*.yml.template found — scan would pass vacuously"
+else
+  hits="$(scan "${l3tmpl[@]}")"
+  if [ -z "$hits" ]; then
+    ok "1d. no \${{ }} inside any run:/script: block of ${#l3tmpl[@]} assets/ workflow template(s)"
+  else
+    bad "1d. \${{ }} found inside run:/script: block(s) of an assets/ workflow template — pass these through env:"
+    printf '        %s\n' "$hits"
+  fi
+fi
+
+# 1e. The l3-stability template must not execute bstack out of the PR head. Its
+#     checkout IS the PR head, so a vendored .agents/skills/bstack read from the
+#     working tree is code the PR author chose (BRO-2651). The vendored copy is
+#     taken from the base commit instead.
+l3="$REPO_ROOT/assets/templates/gh-workflow-l3-stability.yml.template"
+if grep -qE '\[ -d "?\.agents/skills/bstack"? \]|BSTACK="?\.agents/skills/bstack' "$l3"; then
+  bad "1e. l3-stability template resolves bstack from the PR checkout's .agents/skills/bstack"
+elif grep -q 'git archive "\$BASE_SHA" \.agents/skills/bstack' "$l3" \
+     && grep -qE '^\s+BASE_SHA: \$\{\{ github\.event\.pull_request\.base\.sha \}\}' "$l3"; then
+  ok "1e. l3-stability template takes a vendored bstack from the BASE commit, never the PR head"
+else
+  bad "1e. l3-stability template: expected the vendored bstack to come from git archive of BASE_SHA"
+fi
+
 # ---------------------------------------------------------------------------
 # 2. The specific sink that broke v0.37.2 is gone, and its replacement is wired.
 # ---------------------------------------------------------------------------
@@ -186,6 +223,21 @@ if [ -n "$(scan "$tmp/mutant.yml")" ]; then
   ok "3. mutation proof — scanner FAILS a reintroduced \${{ }} sink"
 else
   bad "3. scanner did not catch a reintroduced sink — the guard is vacuous"
+fi
+# 3b. The same for a github-script body: the shape the l3-stability template had.
+cat > "$tmp/mutant-script.yml" <<'YAML'
+jobs:
+  x:
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const rate = `${{ steps.rate.outputs.result }}`;
+YAML
+if [ -n "$(scan "$tmp/mutant-script.yml")" ]; then
+  ok "3b. mutation proof — scanner FAILS a \${{ }} pasted into a github-script body"
+else
+  bad "3b. scanner did not catch a github-script sink — script: blocks are unscanned"
 fi
 
 # ---------------------------------------------------------------------------
