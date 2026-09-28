@@ -1,5 +1,89 @@
 # Changelog
 
+## 0.41.1 — 2026-09-28
+
+### fix(security): the L3 rate gate reads its config as data, and the stability workflow stops running the PR's code (BRO-2651)
+
+`scripts/l3-rate-gate.sh` built shell text from `.control/rcs-parameters.toml` and ran it
+with `eval`. A pattern of `"$(cmd)"` or a `tau_a` of `"86400; cmd"` ran `cmd`. The
+`stability-check` workflow runs the gate on the PR head, so a PR that changed one value in
+a data file could run commands on the runner, including a self-hosted one.
+
+**Scope of the claim.** A `pull_request` workflow runs the YAML from the PR itself, before
+any review. So anyone who can push a same-repo branch, or whose fork PR is approved to
+run, can still edit the workflow and run code on its runner. CODEOWNERS and
+`require_human` gate the merge, not that first run.
+
+This release closes the routes that do not look like code: a config value, a committed
+Python module, or a vendored bstack. What remains is an edit to `.github/workflows/`,
+which is visible in the diff. The controls that act before the run are the repository's
+fork-PR approval setting and keeping untrusted PRs off self-hosted runners. This is
+defense in depth, not a sandbox for the self-hosted pool.
+
+- **`l3-rate-gate.sh`**: no `eval`. Python reads the TOML, validates every value, and prints
+  `KEY<TAB>VALUE` records. Bash assigns them with plain assignments, re-checks the numeric
+  ones, and refuses unknown keys.
+  - Patterns must be non-empty strings with no control characters, so a newline cannot
+    forge a record. At most 256.
+  - `tau_a` must be a number from 1 to 31536000 seconds, and `correction_budget` an
+    integer from 0 to 1000.
+- **`python3 -I`** in `l3-rate-gate.sh` and `compute-lambda.sh`. `python3 -` put the
+  current directory first on `sys.path`, and in CI that directory is the PR checkout, so a
+  committed `tomllib.py` or `math.py` replaced the standard library and ran. Both steps
+  still exited 0.
+- **Malformed config now fails CLOSED** with exit 2 (the code the header already
+  reserved), even under `--warn-only`. The message names the key. Before, it was replaced
+  by the defaults in silence.
+- `TAU_A_L3` and `L3_PATHS` are reset before the read, like `CORRECTION_BUDGET` already
+  was, so an ambient `TAU_A_L3=5` cannot shrink the window when the config omits `tau_a`.
+- `--window` must be numeric and at most one year. `--json` escapes the patterns. A
+  pattern beginning with `--` reaches `grep` as a path, not an option.
+- With no TOML parser (Python < 3.11 and no `tomli`), the defaults apply as before, now
+  with a warning, because nothing was read. Under `-I`, a `tomli` installed with
+  `pip install --user` is not found. Install it into the interpreter's own site-packages.
+- **`gh-workflow-l3-stability.yml.template`**:
+  - bstack is always cloned from GitHub. It is never read from `.agents/skills/bstack` in
+    the checkout (the PR head). A vendored copy from the base commit was also rejected:
+    nothing checks its version, so a stale copy would keep running the `eval` this release
+    removes.
+  - The clone follows the default branch and is not pinned. That is a deliberate choice:
+    it is how every installed copy received this fix without action. The cost is that
+    whatever is on `broomva/bstack` main runs on every consumer's runner, and a consumer's
+    required check can change result with no change on their side. A repo that wants a
+    pin can clone a tag at or after `v0.41.1` and verify the checked-out SHA.
+  - Step output reaches `github-script` through `env:`. It had been pasted into a
+    JavaScript template literal, where a backtick or `${...}` in a config value ran as
+    JavaScript.
+  - The report's code fences are longer than any backtick run in the output.
+  - The `$GITHUB_OUTPUT` heredoc delimiter is random per run, so an output line reading
+    `EOF` cannot forge `status=`.
+  - A rate-gate status other than 0 or 1 (unreadable config, crash, missing script, empty)
+    fails the check.
+- **Tests**:
+  - `tests/l3-rate-gate.test.sh`, 18 → 76 cases:
+    - five payloads, each with a positive control proving it runs under the old `eval`
+      shape, plus a carried-verbatim check;
+    - shadow `tomllib.py`/`math.py` for both scripts, with a control proving each loads
+      under plain `python3 -`;
+    - hostile reader output, driven through a `python3` shim, for the shell-side checks;
+    - fourteen malformed configs that must name the key they refuse;
+    - benign-equivalence cases.
+  - `tests/l3-stability-workflow.test.sh` (new) **executes** the template's steps. It
+    substitutes `${{ }}` the way GitHub does, runs bash steps with the runner's
+    `-eo pipefail` and the github-script body under node, and runs the install step
+    inside a fake PR checkout with a stub `git`. It includes mutants that put the old
+    sinks back to prove the harness sees them.
+  - `tests/workflow-injection-safety.test.sh` now scans `script:` blocks and
+    `assets/templates/gh-workflow-*.yml.template`.
+
+#### Migration
+
+- A parameters file the old gate silently ignored now stops the gate with exit 2.
+  `bash scripts/l3-rate-gate.sh` prints the key it refuses.
+- Installed workflows are copies. Remove `.github/workflows/l3-stability.yml` and re-run
+  `bash scripts/install-l3-stability.sh`, or apply the template diff by hand.
+  (`--force` would also overwrite `.control/rcs-parameters.toml`.)
+
 ## 0.41.0 — 2026-09-27
 
 ### feat(sdlc): the AI-native SDLC playbook's twelve plays, held by mechanisms rather than prose

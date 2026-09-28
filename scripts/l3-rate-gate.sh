@@ -108,58 +108,163 @@ DEFAULT_L3_PATHS=(
 )
 
 # Read L3 paths + tau_a from config (via Python for robust TOML parsing)
+#
+# Governance values come from the config or from the documented default --
+# never from the caller's environment. Optional keys are emitted only when the
+# config SETS them, so without this reset an ambient `CORRECTION_BUDGET=999`
+# survives into `${CORRECTION_BUDGET:-3}` and the correction lane becomes
+# unbounded: no config edit, no --no-verify, no trace in the commit message.
+# That defeats the first of the three bounds this lane's own header claims
+# ("the budget is finite, so a false claim buys 3 and not infinity"). The same
+# hole held for TAU_A_L3 whenever the L3 level omitted tau_a, and for all three
+# whenever no config was read at all, so all three are reset here. Any future
+# optional key must be reset here too.
+CORRECTION_BUDGET=
+TAU_A_L3=
+L3_PATHS=()
 if [ -f "$CONFIG" ] && command -v python3 >/dev/null 2>&1; then
-    # Governance values come from the config or from the documented default --
-    # never from the caller's environment. The python below emits
-    # CORRECTION_BUDGET only when the config SETS it, so without this reset an
-    # ambient `CORRECTION_BUDGET=999` survives into `${CORRECTION_BUDGET:-3}`
-    # and the correction lane becomes unbounded: no config edit, no --no-verify,
-    # no trace in the commit message. That defeats the first of the three bounds
-    # this lane's own header claims ("the budget is finite, so a false claim
-    # buys 3 and not infinity"). TAU_A_L3 is not exposed the same way only
-    # because the config always emits it -- the hole is a property of being
-    # OPTIONAL, so any future optional key must be reset here too.
-    CORRECTION_BUDGET=
-    eval "$(python3 - "$CONFIG" <<'PYEOF'
-import sys
+    # The config is DATA and is read as data (BRO-2651). This block used to
+    # print shell assignments and eval them, with each pattern wrapped in double
+    # quotes and tau_a pasted bare, so a config holding
+    #     patterns = ["$(touch /tmp/x)"]     or     tau_a = "86400; touch /tmp/x"
+    # ran the command. In CI the config comes from the PR head, so anyone able
+    # to open a PR could execute on the runner. Now python validates every value
+    # and prints tab-separated KEY<TAB>VALUE records; bash assigns each value
+    # with a plain assignment and re-checks the numeric ones. No value is ever
+    # parsed as shell. Control characters are refused in python, so a newline
+    # or tab inside a value cannot forge a record.
+    #
+    # A config that is present but malformed fails CLOSED with exit 2 (the code
+    # this header already reserves for it). It used to be dropped for the
+    # defaults in silence, which let a broken governance file relax its own gate.
+    # A missing TOML parser is not a malformed config: the defaults apply, and
+    # a warning is printed because nothing was read.
+    #
+    # python3 -I (isolated mode) is load-bearing. `python3 -` puts the current
+    # directory first on sys.path, and in CI the current directory is the PR
+    # checkout: a tomllib.py or math.py committed at its root would be imported
+    # in place of the standard library and run as code. -I leaves the current
+    # directory, PYTHONPATH and user site-packages off sys.path.
+    #
+    # Quoting note: no backticks in this heredoc. It is nested inside $(), where a
+    # literal backtick is a bash-3.2 parse hazard (tests/bash32-parse-safety.test.sh).
+    CONFIG_RECORDS="$(python3 -I - "$CONFIG" <<'PYEOF'
+import math, sys
+
 try:
     import tomllib
 except ImportError:
-    sys.exit(0)
+    try:
+        import tomli as tomllib
+    except ImportError:
+        print("NOPARSER\t-")
+        sys.exit(0)
+
+def bad(msg):
+    print("l3-rate-gate: malformed config " + sys.argv[1] + ": " + msg, file=sys.stderr)
+    sys.exit(3)
+
+def clean(s):
+    return not any(ord(c) < 32 or ord(c) == 127 for c in s)
 
 try:
     with open(sys.argv[1], "rb") as f:
         data = tomllib.load(f)
-except Exception:
-    sys.exit(0)
+except Exception as e:
+    bad("not valid TOML (" + type(e).__name__ + ")")
 
-l3_gate = data.get("gates", {}).get("l3_paths", {})
-l3_paths = l3_gate.get("patterns", [])
+gates = data.get("gates", {})
+if not isinstance(gates, dict):
+    bad("[gates] must be a table")
+l3_gate = gates.get("l3_paths", {})
+if not isinstance(l3_gate, dict):
+    bad("[gates.l3_paths] must be a table")
+
+patterns = l3_gate.get("patterns", [])
+if not isinstance(patterns, list):
+    bad("gates.l3_paths.patterns must be an array of strings")
+if len(patterns) > 256:
+    bad("gates.l3_paths.patterns has more than 256 entries")
+for p in patterns:
+    if not isinstance(p, str) or not p or len(p) > 1024 or not clean(p):
+        bad("every gates.l3_paths.patterns entry must be a non-empty string "
+            "of at most 1024 characters with no control characters")
+
+# bool is a subclass of int in Python, so a TOML correction_budget of true
+# passes an isinstance(..., int) check; it is refused explicitly.
 correction_budget = l3_gate.get("correction_budget")
+if correction_budget is not None:
+    if (
+        not isinstance(correction_budget, int)
+        or isinstance(correction_budget, bool)
+        or not 0 <= correction_budget <= 1000
+    ):
+        bad("gates.l3_paths.correction_budget must be an integer from 0 to 1000")
+
+levels = data.get("levels", [])
+if not isinstance(levels, list):
+    bad("levels must be an array of tables")
 tau_a_l3 = None
-for lvl in data.get("levels", []):
+for lvl in levels:
+    if not isinstance(lvl, dict):
+        bad("every [[levels]] entry must be a table")
     if lvl.get("id") == "L3":
         tau_a_l3 = lvl.get("tau_a")
         break
-
-# Emit bash-eval lines
-if l3_paths:
-    print("L3_PATHS=(" + " ".join(f'"{p}"' for p in l3_paths) + ")")
-# bool is a subclass of int in Python, so a TOML correction_budget of true
-# passed an isinstance(..., int) check and emitted CORRECTION_BUDGET=True --
-# a non-numeric value that makes every later [ n -gt ... ] comparison error.
-# Quoting note: no backticks in this heredoc. It is nested inside $(), where a
-# literal backtick is a bash-3.2 parse hazard (tests/bash32-parse-safety.test.sh).
-if (
-    isinstance(correction_budget, int)
-    and not isinstance(correction_budget, bool)
-    and correction_budget >= 0
-):
-    print(f"CORRECTION_BUDGET={correction_budget}")
 if tau_a_l3 is not None:
-    print(f"TAU_A_L3={tau_a_l3}")
+    # One year is far past any governance window; the ceiling also keeps the
+    # later cutoff arithmetic well inside a 64-bit shell integer.
+    if (
+        not isinstance(tau_a_l3, (int, float))
+        or isinstance(tau_a_l3, bool)
+        or not math.isfinite(tau_a_l3)
+        or not 1 <= tau_a_l3 <= 31536000
+    ):
+        bad("the tau_a of the L3 level must be a number of seconds from 1 to 31536000")
+
+for p in patterns:
+    print("PATH\t" + p)
+if correction_budget is not None:
+    print("CORRECTION_BUDGET\t" + str(correction_budget))
+if tau_a_l3 is not None:
+    # "%.0f" is what the shell applied to this value before, so a float tau_a
+    # rounds exactly as it did.
+    print("TAU_A_L3\t" + format(tau_a_l3, ".0f"))
 PYEOF
-)" || true
+)"
+    CONFIG_RC=$?
+    if [ "$CONFIG_RC" -ne 0 ]; then
+        echo "l3-rate-gate: cannot read parameters config $CONFIG (python exit $CONFIG_RC); refusing to fall back to defaults" >&2
+        exit 2
+    fi
+    TAB="$(printf '\t')"
+    while IFS= read -r record; do
+        [ -n "$record" ] || continue
+        key="${record%%"$TAB"*}"
+        value="${record#*"$TAB"}"
+        case "$key" in
+            PATH)
+                L3_PATHS+=("$value") ;;
+            CORRECTION_BUDGET|TAU_A_L3)
+                # Re-checked here so the shell never trusts the reader for the
+                # two values that later reach arithmetic.
+                case "$value" in
+                    ''|*[!0-9]*)
+                        echo "l3-rate-gate: config value $key is not a whole number" >&2
+                        exit 2 ;;
+                esac
+                if [ "$key" = "TAU_A_L3" ]; then TAU_A_L3="$value"; else CORRECTION_BUDGET="$value"; fi
+                ;;
+            NOPARSER)
+                echo "l3-rate-gate: no TOML parser (python >= 3.11 or tomli); $CONFIG was NOT read, using the default L3 paths and window" >&2
+                ;;
+            *)
+                echo "l3-rate-gate: unexpected record from the config reader" >&2
+                exit 2 ;;
+        esac
+    done <<EOF
+$CONFIG_RECORDS
+EOF
 fi
 
 # Apply fallbacks — `${arr[*]:-}` is bash-3.2-safe (macOS default)
@@ -168,11 +273,25 @@ if [ -z "${L3_PATHS[*]:-}" ]; then
 fi
 TAU_A_L3="${TAU_A_L3:-86400}"
 if [ -n "$WINDOW" ]; then
+    case "$WINDOW" in
+        *[!0-9.]*|.*|*.|*.*.*)
+            echo "l3-rate-gate: --window must be a number of seconds, got: $WINDOW" >&2
+            exit 2 ;;
+    esac
     TAU_A_L3="$WINDOW"
 fi
 
 # Cast tau_a to integer seconds (it may be a float in TOML)
 TAU_A_L3_INT=$(printf '%.0f' "$TAU_A_L3" 2>/dev/null || echo "86400")
+# The config's ceiling applies to --window too: past it the cutoff arithmetic
+# overflows and the window silently covers all of history or none of it.
+case "$TAU_A_L3_INT" in
+    ''|*[!0-9]*) echo "l3-rate-gate: window is not a whole number of seconds" >&2; exit 2 ;;
+esac
+if [ "${#TAU_A_L3_INT}" -gt 8 ] || [ "$TAU_A_L3_INT" -gt 31536000 ]; then
+    echo "l3-rate-gate: window of $TAU_A_L3_INT s exceeds one year (31536000 s)" >&2
+    exit 2
+fi
 
 # Check git availability
 if ! command -v git >/dev/null 2>&1; then
@@ -232,7 +351,7 @@ if [ "$INCLUDE_STAGED" = "1" ]; then
     # yet (first commit ever), every path is a creation → exempt.
     staged_now="$(git diff --cached --name-only 2>/dev/null)"
     for path in "${L3_PATHS[@]}"; do
-        if printf '%s\n' "$staged_now" | grep -qFx "$path"; then
+        if printf '%s\n' "$staged_now" | grep -qFx -- "$path"; then
             if git cat-file -e "HEAD:$path" 2>/dev/null; then
                 COUNT_STAGED=$((COUNT_STAGED + 1))
                 STAGED_FILES="$STAGED_FILES $path"
@@ -284,6 +403,14 @@ fi
 
 # Format output
 if [ "$FORMAT" = "json" ]; then
+    # Patterns are config data. The reader refuses control characters, which
+    # leaves backslash and double quote as the only characters JSON needs escaped.
+    L3_PATHS_JSON=""
+    for p in "${L3_PATHS[@]}"; do
+        p="${p//\\/\\\\}"
+        p="${p//\"/\\\"}"
+        L3_PATHS_JSON="$L3_PATHS_JSON${L3_PATHS_JSON:+,}\"$p\""
+    done
     cat <<EOF
 {
   "window_seconds": $TAU_A_L3_INT,
@@ -297,7 +424,7 @@ if [ "$FORMAT" = "json" ]; then
   "correction_budget": $CORRECTION_BUDGET,
   "exceeded_lane": "$EXCEEDED_LANE",
   "exceeded": $([ "$EXCEEDED" = "1" ] && echo "true" || echo "false"),
-  "l3_paths": [$(printf '"%s",' "${L3_PATHS[@]}" | sed 's/,$//')]
+  "l3_paths": [$L3_PATHS_JSON]
 }
 EOF
 else
