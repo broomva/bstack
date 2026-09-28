@@ -162,6 +162,11 @@ import tempfile
 import time
 from pathlib import Path, PurePosixPath
 
+try:
+    from git_env_policy import git_var_allowed  # run as a script: scripts/ is on sys.path
+except ImportError:  # imported as scripts.<module>
+    from scripts.git_env_policy import git_var_allowed
+
 REQUIRED_KEYS = ("id", "description", "source", "prompt", "allowed_tools", "checks")
 OPTIONAL_KEYS = ("setup", "reference", "violations", "permission_mode", "timeout_s", "tags")
 # type -> (required fields, optional fields), "type" itself excluded.
@@ -197,15 +202,7 @@ EXCERPT = 4000
 EPS = 1e-9
 
 _ENV_KEEP = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR")
-# GIT_* passes through, except variables that point git at ANOTHER repository (run
-# from inside a hook, GIT_DIR would aim every scratch command at the live repo) or
-# inject configuration (a filter or diff driver is an exec vector).
-_GIT_ENV_DENY = frozenset({
-    "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
-    "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE",
-    "GIT_PREFIX", "GIT_EXTERNAL_DIFF", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT",
-})
-_GIT_ENV_DENY_PREFIX = ("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")
+# Which GIT_* may reach a git child: one rule for every bstack script (git_env_policy).
 
 
 class EvalError(Exception):
@@ -217,8 +214,7 @@ class EvalError(Exception):
 # --------------------------------------------------------------------------
 
 def _git_var_allowed(k: str) -> bool:
-    return (k.startswith("GIT_") and k not in _GIT_ENV_DENY
-            and not k.startswith(_GIT_ENV_DENY_PREFIX))
+    return git_var_allowed(k)
 
 
 # Top-precedence git config for every shell and git process the RUNNER starts (setup,
@@ -682,6 +678,12 @@ class Scratch:
         except RuntimeError:
             shutil.rmtree(self.tmp, ignore_errors=True)
             raise
+        except (subprocess.SubprocessError, OSError) as e:
+            # A git read of the live repo timed out (pack-objects on a large tree) or could
+            # not start. Same path as any other build failure: the scratch is removed and
+            # the eval reports `errored`, never a traceback read as "gate failed".
+            shutil.rmtree(self.tmp, ignore_errors=True)
+            raise RuntimeError(f"could not build the scratch: {e}") from e
         return self
 
     def _is_hidden(self, path: str) -> bool:

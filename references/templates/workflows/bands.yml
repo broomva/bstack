@@ -99,16 +99,22 @@ jobs:
           if isinstance(spec, dict) and spec.get("skip"):
               raise SystemExit(0)
           argv = spec; argv[0] = claude
-          out = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=900, stdin=subprocess.DEVNULL)
-          reply, failed = "", out.returncode != 0
           try:
-              data = json.loads(out.stdout)
+              out = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=900, stdin=subprocess.DEVNULL)
+              rc, stdout, stderr = out.returncode, out.stdout, out.stderr
+          except (subprocess.TimeoutExpired, OSError) as e:
+              # A call past 900 s, or a CLAUDE_BIN that is not there: the same failure
+              # branch, so the intent PR still carries it and the job still fails.
+              rc, stdout, stderr = -1, "", f"{type(e).__name__}: {e}"
+          reply, failed = "", rc != 0
+          try:
+              data = json.loads(stdout)
               reply, failed = data.get("result", ""), failed or bool(data.get("is_error"))
           except ValueError:
-              reply, failed = out.stdout, True
+              reply, failed = stdout, True
           reply = reply.strip()
           if failed or not reply:
-              reply = "## Diagnosis\n\n_diagnosis failed (exit %d): %s_" % (out.returncode, (reply or out.stderr.strip())[:300])
+              reply = "## Diagnosis\n\n_diagnosis failed (exit %d): %s_" % (rc, (reply or stderr.strip())[:300])
               open(gh_out, "a").write("diag_failed=1\n")
           elif not reply.startswith("## Diagnosis"):
               reply = "## Diagnosis\n\n" + reply

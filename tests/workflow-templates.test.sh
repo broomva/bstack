@@ -12,7 +12,7 @@
 # is evaluated rather than assumed.
 #
 # There is deliberately NO skip path. A missing git, jq or PyYAML FAILS the run, and so
-# does a run in which fewer than 8 scenarios reached their assertions.
+# does a run in which fewer than 9 scenarios reached their assertions.
 #
 # WF_BANDS / WF_INTENT point the scenarios at another copy of a template;
 # tests/fixtures/workflow-sim/mutants.py uses them to show that each reverted fix goes red.
@@ -29,8 +29,8 @@ SIMDIR="$BSTACK_REPO/tests/fixtures/workflow-sim"
 WF_BANDS="${WF_BANDS:-$BSTACK_REPO/references/templates/workflows/bands.yml}"
 WF_INTENT="${WF_INTENT:-$BSTACK_REPO/references/templates/workflows/intent-to-spec.yml}"
 BANDS_EXAMPLE="$BSTACK_REPO/references/templates/bands.example.yaml"
-SCENARIOS="1 2 3 4 5 6 7 8"
-MIN_SCENARIOS=8
+SCENARIOS="1 2 3 4 5 6 7 8 9"
+MIN_SCENARIOS=9
 MIN_ASSERTS=5
 NAME="alpha-widget"
 
@@ -311,6 +311,21 @@ eq "exactly 1 pr create" 1 "$(lines "$S/pr_create.log")"
 eq "the PR's head is bands/<key>" "bands/$KEY" "$(lastpr .head)"
 ok "bands/<key> is on origin" test -n "$(oref "$S" "bands/$KEY")"
 eq "the new PR is from this repo" 1 "$(open_prs "bands/$KEY")"
+no_violations
+finish
+
+S="$ROOT/bands-missing"
+begin 9 "bands: claude is missing: the intent PR carries the failure, and the job fails"
+setup_bands "$S" || assert_fail "fixture setup"
+run_sim "$WF_BANDS" "$S" co1 "vars.CLAUDE_BIN=/nonexistent/claude"
+eq "job fails" failure "$(job .result)"
+eq "no claude call" 0 "$(lines "$S/claude.log")"
+eq "exactly 1 pr create: the failure is still reported" 1 "$(lines "$S/pr_create.log")"
+TIP="$(oref "$S" "bands/$KEY")"
+FILE="$(job '.outputs["diag.file"] // ""')"
+INTENT="$(hgit --git-dir "$S/origin.git" show "$TIP:$FILE" 2>/dev/null)"
+ok "the intent says the diagnosis failed" contains "$INTENT" "diagnosis failed"
+ok "and names why" contains "$INTENT" "FileNotFoundError"
 no_violations
 finish
 

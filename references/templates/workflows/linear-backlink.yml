@@ -4,13 +4,20 @@
 # when a PR merges, this attaches the PR URL and the merge SHA back onto every ticket
 # the PR names (title, body or branch). A one-way link is not linkage.
 #
-# Needs the secret LINEAR_API_KEY. Without it the job reports the IDs it would have
-# linked and exits 0, so a missing credential is visible in the summary, not silent.
-# ID_PATTERN is a regex for your team keys; the default matches any KEY-123.
+# Needs the secret LINEAR_API_KEY and the variable LINEAR_ID_PATTERN, a regex for your
+# team keys, e.g. (BRO|ENG)-[0-9]+. There is no default: a generic KEY-123 pattern reads
+# "SHA-256" or "UTF-8" in a title as tickets. Without either one, the job reports what it
+# would have linked and exits 0, so the gap is visible in the summary, not silent.
+#
+# Trigger: pull_request_target, so a merged PR from a fork also gets the secret. That is
+# safe here because this job never checks out or runs the PR's code: it reads the event's
+# fields through env: and runs only the Python below, from the base branch's copy of this
+# file. Keep it that way; a checkout of the PR head in this workflow would hand a fork the
+# secret.
 name: Linear back-link
 
 on:
-  pull_request:
+  pull_request_target:
     types: [closed]
 
 permissions:
@@ -24,7 +31,7 @@ jobs:
       - name: Attach PR + merge SHA to the tickets
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
-          ID_PATTERN: ${{ vars.LINEAR_ID_PATTERN || '[A-Z]{2,5}-[0-9]+' }}
+          ID_PATTERN: ${{ vars.LINEAR_ID_PATTERN }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
           PR_BRANCH: ${{ github.event.pull_request.head.ref }}
@@ -37,16 +44,19 @@ jobs:
           env = os.environ
           # A PR implements the tickets its title, branch, first body line, or a
           # Closes/Fixes/Resolves/Ticket line names. A ticket the body merely cites is
-          # evidence, not work done, and is not linked. Title and body match
-          # case-sensitively, so "UTF-8" or "SHA-256" in prose never read as tickets.
+          # evidence, not work done, and is not linked. Only IDs in the configured team
+          # keys count, so "SHA-256" in a title is not a ticket unless SHA is a team key.
           # The branch matches case-insensitively, because git branches are lowercase.
+          summary = open(env["GITHUB_STEP_SUMMARY"], "a")
+          pat = env.get("ID_PATTERN", "")
+          if not pat:
+              summary.write("LINEAR_ID_PATTERN is not set; set it to your team keys, e.g. "
+                            "(BRO|ENG)-[0-9]+. Nothing was linked.\n"); raise SystemExit(0)
           body = env.get("PR_BODY", "").splitlines()
           named = body[:1] + [l for l in body if re.match(r"\s*(Closes|Fixes|Resolves|Ticket|Linear)\b", l, re.I)]
-          pat = env["ID_PATTERN"]
           ids = set(re.findall(pat, "\n".join([env.get("PR_TITLE", "")] + named)))
           ids |= {m.upper() for m in re.findall(pat, env.get("PR_BRANCH", ""), flags=re.I)}
           ids = sorted(ids)
-          summary = open(env["GITHUB_STEP_SUMMARY"], "a")
           if not ids:
               summary.write("No ticket ID found in the PR title, body or branch.\n"); raise SystemExit(0)
           if not env.get("LINEAR_API_KEY"):

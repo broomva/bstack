@@ -652,6 +652,23 @@ class TestIsolation(Base):
         rc, s, _ = self.run_evals()
         self.assertEqual(s["results"][0]["status"], "passed", s["results"][0])
 
+    def test_a_git_timeout_while_building_the_scratch_is_an_errored_eval(self):
+        # pack-objects on a large tree can outlive git()'s timeout. The eval is reported
+        # errored, the scratch is removed, and the run does not stop with a traceback.
+        self.write_eval("t", "say ok", [{"type": "output_regex", "regex": "ok"}])
+        real = ae.git
+
+        def slow(args, cwd, **kw):
+            if args and args[0] == "pack-objects":
+                raise subprocess.TimeoutExpired(["git", *args], 120)
+            return real(args, cwd, **kw)
+
+        with mock.patch.object(ae, "git", side_effect=slow):
+            rc, s, out = self.run_evals()
+        self.assertEqual(s["results"][0]["status"], "errored", out)
+        self.assertIn("could not build the scratch", json.dumps(s["results"][0]))
+        self.assertEqual(self.scratch_dirs(), [])
+
     def test_leaked_refs_is_present_and_structurally_empty(self):
         self.write_eval("side", "say ok", [{"type": "output_regex", "regex": "ok"}],
                         setup=["git branch side-ref", "git tag side-tag"])

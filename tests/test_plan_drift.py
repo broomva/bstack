@@ -255,6 +255,22 @@ class TestDiscovery(RepoCase):
         self.assertEqual(r["plan_source"], "pr-body")
         self.assertEqual(r["status"], "match", r)
 
+    def test_a_pr_body_plan_outside_the_checkout_is_never_read(self):
+        outside = self.td / "outside.md"
+        outside.write_text(PLAN_AB)
+        self.write("src/a.py", "a = 1\n")
+        self.write("src/b.py", "b = 1\n")
+        (self.repo / "docs").mkdir()
+        (self.repo / "docs" / "link.md").symlink_to(outside)
+        self.commit("implement, with a symlink that leaves the repo")
+        body = self.td / "body.md"
+        for ref in (str(outside), "../outside.md", "docs/link.md"):
+            body.write_text(f"Does the thing.\n\nPlan: `{ref}`\n")
+            r = self.report("--pr-body", str(body))
+            self.assertEqual(r["status"], "no_plan", (ref, r))
+            self.assertEqual(r["pr_plan_rejected"], ref)
+            self.assertIsNone(r["plan"])
+
     def test_explicit_plan_flag_wins(self):
         self.write("plan.md", "## Files that change\n- `src/b.py`\n")
         self.write("docs/plans/real.md", PLAN_AB)
@@ -407,6 +423,69 @@ class TestBaseAndErrors(RepoCase):
         self.assertEqual(env.get("GIT_TRACE"), "0")
         self.assertTrue(set(env) <= {"PATH", "HOME", "LANG", "LC_ALL", "TMPDIR"}
                         | {k for k in env if k.startswith("GIT_")})
+
+    def test_git_env_denies_relocation_and_config_injection(self):
+        planted = {"GIT_DIR": "/elsewhere/.git", "GIT_WORK_TREE": "/elsewhere",
+                   "GIT_INDEX_FILE": "/elsewhere/index", "GIT_CONFIG_PARAMETERS": "'a.b=c'",
+                   "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.pager",
+                   "GIT_CONFIG_VALUE_0": "evil", "GIT_EXTERNAL_DIFF": "evil",
+                   "GIT_EXEC_PATH": "/elsewhere/bin", "GIT_CEILING_DIRECTORIES": "/"}
+        with mock.patch.dict(os.environ, {**planted, "GIT_TRACE": "0",
+                                          "GIT_CONFIG_GLOBAL": "/dev/null"}):
+            env = plan_drift.git_env()
+        for k in planted:
+            self.assertNotIn(k, env)
+        self.assertEqual((env.get("GIT_TRACE"), env.get("GIT_CONFIG_GLOBAL")), ("0", "/dev/null"))
+
+    def test_an_exported_git_dir_does_not_redirect_the_analysis(self):
+        other = self.td / "other"
+        other.mkdir()
+        subprocess.run(["git", "init", "-q", "-b", "main", str(other)], check=True,
+                       capture_output=True)
+        self.write("plan.md", PLAN_AB)
+        self.write("src/a.py", "a = 1\n")
+        self.write("src/b.py", "b = 1\n")
+        self.commit("implement")
+        with mock.patch.dict(os.environ, {"GIT_DIR": str(other / ".git")}):
+            r = self.report()
+        self.assertEqual((r["status"], r["plan"]), ("match", "plan.md"), r)
+
+    def test_log_never_runs_the_configured_gpg_program(self):
+        marker = self.td / "gpg-ran"
+        fake = self.td / "fake-gpg"
+        fake.write_text(f"#!/bin/sh\ntouch '{marker}'\nexit 1\n")
+        fake.chmod(0o755)
+        self.git("config", "log.showSignature", "true")
+        self.git("config", "gpg.program", str(fake))
+        self.write("plan.md", PLAN_AB)
+        self.write("src/a.py", "a = 1\n")
+        self.write("src/b.py", "b = 1\n")
+        head = self.commit("implement")
+        # Give the commit a signature header so that showing signatures runs gpg.program.
+        raw = self.git("cat-file", "commit", head)
+        head_end = raw.index("\n\n")
+        sig = ("gpgsig -----BEGIN PGP SIGNATURE-----\n \n iQEzBAABCAAdFiEE\n"
+               " -----END PGP SIGNATURE-----")
+        signed = raw[:head_end] + "\n" + sig + raw[head_end:]
+        new = subprocess.run(["git", "-C", str(self.repo), "hash-object", "-t", "commit", "-w",
+                              "--stdin"], input=signed, capture_output=True, text=True,
+                             check=True).stdout.strip()
+        self.git("update-ref", "refs/heads/feature", new)
+        # Positive control: git itself runs gpg.program for this commit.
+        self.git("log", "-1", "--format=%H", "feature")
+        self.assertTrue(marker.exists(), "the fixture must make `git log` run gpg.program")
+        marker.unlink()
+        self.report()
+        self.assertFalse(marker.exists(), "plan-drift ran the configured gpg.program")
+
+    def test_an_invalid_glob_in_the_plan_is_a_usage_error_not_drift(self):
+        self.write("plan.md", "## Files that change\n- `src/[z-a].py`\n")
+        self.write("src/a.py", "a = 1\n")
+        self.commit("bad plan")
+        for extra in ((), ("--strict",)):
+            rc, _, err = self.run_cli("--base", "main", *extra)
+            self.assertEqual(rc, 2, err)
+            self.assertIn("is not a valid glob", err)
 
     def test_shim_runs_as_a_subprocess(self):
         self.write("plan.md", PLAN_AB)

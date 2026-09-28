@@ -36,6 +36,8 @@ MUTANTS = [
      r'--intent \.bands/intent\.md --result "\$RUNNER_TEMP/result\.json"\) > "\$RUNNER_TEMP/argv\.json"',
      'python3 "$RUNNER_TEMP/bstack/scripts/bands.py" diagnose-cmd "$BANDS_FILE" '
      '--intent .bands/intent.md --result "$RUNNER_TEMP/result.json" > "$RUNNER_TEMP/argv.json"', "1"),
+    ("bands: a missing claude or a timeout escapes as a traceback", "bands.yml",
+     r"except \(subprocess\.TimeoutExpired, OSError\) as e:", "except ZeroDivisionError as e:", "9"),
     ("intent-to-spec: pending reads specs from the wrong place", "intent-to-spec.yml",
      r"pending --dir intent --specs docs/specs", "pending --dir intent --specs docs/nowhere", "6"),
     ("intent-to-spec: lists every intent, not the accepted ones", "intent-to-spec.yml",

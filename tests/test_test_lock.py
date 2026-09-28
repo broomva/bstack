@@ -716,6 +716,32 @@ class LockHashTests(Base):
         self.assertEqual([v["kind"] for v in json.loads(p.stdout)["violations"]], ["lock-rewritten"])
         self.assertIn("lock commit rewritten", self.r.run("verify").stdout)
 
+    def test_a_later_hashed_lock_does_not_clear_a_hashless_one(self):
+        # Superseding would let an agent strip a hash and re-pin weakened content, so a
+        # re-lock must NOT clear it, and the printed route must not promise that it does.
+        self.r.cli_lock(TEST)
+        self.r.commit("hand-written lock", "Test-Lock: src/app.py", allow_empty=True)
+        self.r.write("src/app.py", "def fix():\n    return 3\n")
+        self.r.cli_lock("src/app.py")
+        p = self.r.run("verify", "--json")
+        self.assertExit(p, 1)
+        v = [x for x in json.loads(p.stdout)["violations"] if x["kind"] == "lock-without-hash"]
+        self.assertEqual(len(v), 1, p.stdout)
+        route = v[0]["release_route"]
+        self.assertIn("--base", route)
+        self.assertNotRegex(route, r"^a human re-locks")
+
+    def test_a_later_lock_does_not_clear_a_rewritten_one(self):
+        self.r.cli_lock(TEST)
+        self.r.write(TEST, WEAK)
+        self.r.git("commit", "-q", "--amend", "--no-edit", "-a")
+        self.r.cli_lock(TEST)   # the route text once offered this as the release
+        p = self.r.run("verify", "--json")
+        self.assertExit(p, 1)
+        v = [x for x in json.loads(p.stdout)["violations"] if x["kind"] == "lock-rewritten"]
+        self.assertEqual(len(v), 1, p.stdout)
+        self.assertIn("--base", v[0]["release_route"])
+
     def test_probe20b_fixup_autosquash_fails_verify(self):
         self.r.cli_lock(TEST)
         self.r.write(TEST, WEAK)
@@ -814,10 +840,12 @@ class HookCapTests(Base):
         self.r.lock(TEST)
 
     def _timed(self, cmd: str, code: int) -> None:
+        # The bound is on the analyzer, where the linear-time claim applies, measured in
+        # process; interpreter start-up and git spawns on a loaded runner are not it.
         start = time.monotonic()
-        p = self.r.bash(cmd)
+        tl.analyze(cmd, self.r.root)
         self.assertLess(time.monotonic() - start, 1.0)
-        self.assertExit(p, code)
+        self.assertExit(self.r.bash(cmd), code)
 
     def test_over_cap_without_a_locked_path_is_allowed(self):
         cmd = "echo " + "x " * 40000
@@ -917,10 +945,9 @@ class HookPerfAndRecoveryTests(Base):
         cmd = ": test-unlock: " + "git " * 20000 + f"; echo x > {TEST}"
         self.assertGreater(len(cmd), 80_000)
         start = time.monotonic()
-        p = self.r.bash(cmd)
-        elapsed = time.monotonic() - start
-        self.assertExit(p, 2)
-        self.assertLess(elapsed, 1.0)
+        tl.analyze(cmd, self.r.root)   # the parser's cost, in process
+        self.assertLess(time.monotonic() - start, 1.0)
+        self.assertExit(self.r.bash(cmd), 2)
 
     def test_restoring_from_the_lock_commit_is_allowed(self):
         lock = self.r.cli_lock(TEST)
@@ -988,6 +1015,48 @@ class GitHygieneTests(Base):
         self.assertNotIn("PYTHONDONTWRITEBYTECODE", names)
         self.assertIn("GIT_CONFIG_GLOBAL", names)  # GIT_* crosses over
         self.assertIn("HOME", names)
+
+
+class GitEnvPolicyTests(Base):
+    """git_env_policy: nothing that points git at another repository, or injects config
+    or a program, reaches a git child (BRO-2542, review of bstack#125)."""
+
+    def test_an_exported_git_dir_does_not_blind_verify_or_the_hook(self):
+        other = os.path.join(self.r.tmp, "other")
+        subprocess.run(["git", "init", "-q", "-b", "main", other], check=True,
+                       capture_output=True)
+        self.r.cli_lock(TEST)
+        self.r.write(TEST, WEAK)
+        self.r.commit("weaken")
+        planted = {"GIT_DIR": os.path.join(other, ".git"), "GIT_WORK_TREE": other}
+        self.assertExit(self.r.run("verify", **planted), 1)
+        self.assertExit(self.r.hook("Edit", {"file_path": os.path.join(self.r.root, TEST),
+                                             "old_string": "a", "new_string": "b"},
+                                    **planted), 2)
+
+    def test_injected_config_and_programs_do_not_reach_git(self):
+        # A planted GIT_EXEC_PATH would break every git call if it crossed over.
+        planted = {"GIT_EXEC_PATH": "/nonexistent-git-exec", "GIT_EXTERNAL_DIFF": "/nonexistent",
+                   "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.hooksPath",
+                   "GIT_CONFIG_VALUE_0": "/nonexistent-hooks",
+                   "GIT_CONFIG_PARAMETERS": "'bstack.planted=yes'"}
+        dump = os.path.join(self.r.tmp, "env.txt")
+        hook = os.path.join(self.r.root, ".git", "hooks", "pre-commit")
+        with open(hook, "w") as fh:
+            fh.write(f'#!/bin/sh\nenv > "{dump}"\n')
+        os.chmod(hook, 0o755)
+        self.assertExit(self.r.run("commit", TEST, "-m", "lock", **planted), 0)
+        text = Path(dump).read_text()   # the repo's own hook ran: hooksPath was not redirected
+        for value in ("/nonexistent-git-exec", "bstack.planted", "/nonexistent-hooks"):
+            self.assertNotIn(value, text)
+
+    def test_the_policy_is_the_one_every_script_uses(self):
+        for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_CONFIG_PARAMETERS",
+                     "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
+                     "GIT_EXTERNAL_DIFF", "GIT_EXEC_PATH", "GIT_CEILING_DIRECTORIES"):
+            self.assertFalse(tl.git_var_allowed(name), name)
+        self.assertEqual(tl.git_var_allowed.__module__.rsplit(".", 1)[-1], "git_env_policy")
+        self.assertTrue(tl.git_var_allowed("GIT_CONFIG_GLOBAL"))
 
 
 class SigningEnvTests(Base):

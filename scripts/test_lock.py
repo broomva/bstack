@@ -90,8 +90,8 @@ would block every edit in every repository, while `verify` fails closed.
 
 Git hygiene: every git call runs with `core.fsmonitor=false` and
 `--no-replace-objects`, diff-like calls with `--no-ext-diff --no-textconv`, and
-a filtered environment (PATH, HOME, LANG, LC_ALL, TMPDIR, GIT_*): a
-repository's config can otherwise execute code, and a hook must not hand it the
+a filtered environment (PATH, HOME, LANG, LC_ALL, TMPDIR, and the GIT_* that
+git_env_policy allows): a repository's config can otherwise execute code, and a hook must not hand it the
 session's secrets. Only `commit` adds SSH_AUTH_SOCK, GNUPGHOME and GPG_TTY, so a
 signed commit still signs. `commit` writes its trailers into the message itself
 (no `--trailer`, so no trailer.*.cmd runs and no trailer.*.ifmissing drops one)
@@ -128,6 +128,11 @@ import subprocess
 import sys
 from dataclasses import asdict, dataclass, field
 from typing import Callable, Sequence
+
+try:
+    from git_env_policy import git_var_allowed  # run as a script: scripts/ is on sys.path
+except ImportError:  # imported as scripts.<module>
+    from scripts.git_env_policy import git_var_allowed
 
 LOCK_KEY = "Test-Lock"
 UNLOCK_KEY = "Test-Unlock"
@@ -173,7 +178,7 @@ def git_env(signing: bool = False) -> dict[str, str]:
     config-driven commands run inside it, so nothing else crosses over. The
     signing agent sockets cross only for the `commit` subcommand."""
     keep = _ENV_KEEP + (_SIGNING_ENV if signing else ())
-    return {k: v for k, v in os.environ.items() if k in keep or k.startswith("GIT_")}
+    return {k: v for k, v in os.environ.items() if k in keep or git_var_allowed(k)}
 
 
 def _git(args: Sequence[str], cwd: str, *, stdin: bytes | None = None,
@@ -226,10 +231,8 @@ def repo_root(start: str) -> str | None:
 
 
 def _inside_a_repository(d: str) -> bool:
-    """A `.git` entry at or above `d`, or GIT_DIR set: decided on the filesystem,
-    not by parsing git's (localised) error text."""
-    if os.environ.get("GIT_DIR"):
-        return True
+    """A `.git` entry at or above `d`: decided on the filesystem, not by parsing git's
+    (localised) error text. GIT_DIR does not count: git_env() never passes it on."""
     while True:
         if os.path.lexists(os.path.join(d, ".git")):
             return True
@@ -707,16 +710,21 @@ def committed_violations(s: Scan) -> tuple[dict[str, Lock], list[Violation], lis
                 lk.sha, lk.path, "lock-without-hash", lk.path, lk.sha,
                 f"lock without content hash: its {LOCK_KEY} trailer carries no sha256, so a "
                 "rewrite of the lock commit would go unseen",
-                "a human re-locks the test with `bstack test-lock commit`, which records the "
-                "hash", [lk.sha]))
+                "the hashless lock stays a violation while its commit is in the range: a later "
+                "hashed lock does not supersede it (that would let a hash be stripped and weaker "
+                "content re-pinned). A human removes the commit from the branch (rebase), or "
+                "verifies with --base past it, then locks again with `bstack test-lock commit`",
+                [lk.sha]))
             continue
         if content_digest(s.root, _tree_rows(s.root, lk.sha, lk.path), lk.path) != lk.digest:
             violations.append(Violation(
                 lk.sha, lk.path, "lock-rewritten", lk.path, lk.sha,
                 f"lock commit rewritten: the content at {lk.sha[:SHORT]} no longer matches the "
                 f"sha256 its {LOCK_KEY} trailer recorded",
-                "restore the original lock commit (the reflog has it), or a human re-locks the "
-                "test in a commit visible in review", [lk.sha]))
+                "restore the original lock commit (the reflog has it). A later lock does not "
+                "supersede a rewritten one: otherwise a human removes the rewritten commit "
+                "from the branch, or verifies with --base past it, and locks again in a commit "
+                "visible in review", [lk.sha]))
             continue
         if at_end != at_lock:
             kinds = [t[2] for t in sp.touches]

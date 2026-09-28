@@ -75,8 +75,9 @@ Templates in `references/templates/`:
 - `agent-evals` and `ci-triage`, the two templates whose jobs default to a self-hosted
   runner and run on a pull_request or workflow_run, skip events whose head is a fork:
   `agent-evals` runs the eval files' setup, reference and command checks as shell, and
-  `ci-triage` hands a run's logs to a model. `sdlc-gates` and `linear-backlink` default to
-  GitHub-hosted runners and run bstack's scripts over a fork's files, not its commands.
+  `ci-triage` hands a run's logs to a model. `sdlc-gates` defaults to a GitHub-hosted
+  runner and runs bstack's scripts over a fork's files, not its commands;
+  `linear-backlink` checks out nothing and runs no repository code.
   `tests/workflow-fork-guard.test.sh` evaluates each such job's `if:` for a fork's event
   and for this repo's, and checks that every step running bstack's own code holds no
   token; each guard, weakened three ways, and each token, added back, is flagged.
@@ -86,6 +87,27 @@ sink in a template becomes a sink in every repo that copies it.
 
 `references/primitives.md` gains the matching clauses: P2 Surface, P3 Artifact chain, P4
 Plan sync, P11 rules 8–10, and P20 Review policy file.
+
+Fixed from the PR's review threads:
+- **`linear-backlink` needs `LINEAR_ID_PATTERN` now** (adopters: set it to your team keys,
+  e.g. `(BRO|ENG)-[0-9]+`). The old default `[A-Z]{2,5}-[0-9]+` read "SHA-256" in a title
+  as a ticket; without the variable the job links nothing and says so. It triggers on
+  `pull_request_target`, so a merged PR from a fork also gets the secret. That is safe
+  because it checks out nothing and runs no repository code; `tests/linear-backlink.test.sh`
+  checks both properties.
+- One rule for which `GIT_*` variables reach git: `scripts/git_env_policy.py`, used by
+  `agent_evals`, `plan_drift` and `test_lock`. `plan_drift` and `test_lock` passed every
+  `GIT_*`, so an exported `GIT_DIR` redirected them to another repository, and
+  `GIT_CONFIG_*` or `GIT_EXEC_PATH` injected config or programs.
+- `plan_drift`: its `git log` passes `--no-show-signature` (`log.showSignature` would run
+  `gpg.program`); an invalid glob in a plan is a usage error (exit 2), not drift; a `Plan:`
+  path from the PR body must resolve inside the checkout, or it is recorded and not read.
+- `test_lock`: the release routes for a hashless or rewritten lock said "re-lock", which
+  does not clear either. They now name what does: remove the commit or move `--base` past
+  it.
+- `agent_evals`: a git timeout while building a scratch reports the eval `errored`, not a
+  traceback. `bands.yml`: a missing `claude` or a timed-out diagnosis takes the failure
+  branch, so the intent PR still carries the failure.
 
 The plugin manifests (`.claude-plugin/plugin.json`, `marketplace.json`) move to 0.41.0.
 They had stayed at 0.35.0, and this release adds a PreToolUse hook to the plugin.

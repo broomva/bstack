@@ -70,6 +70,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+try:
+    from git_env_policy import git_var_allowed  # run as a script: scripts/ is on sys.path
+except ImportError:  # imported as scripts.<module>
+    from scripts.git_env_policy import git_var_allowed
+
 DEFAULT_PLANS_GLOBS = ("**/plan.md", "docs/plans/*.md")
 DEFAULT_IGNORE = ("CHANGELOG.md",)
 BASE_FALLBACKS = ("origin/HEAD", "origin/main")
@@ -138,7 +143,19 @@ def glob_to_regex(pattern: str) -> re.Pattern[str]:
         else:
             out.append(re.escape(c))
         i += 1
-    return re.compile("^" + "".join(out) + "$")
+    try:
+        return re.compile("^" + "".join(out) + "$")
+    except re.error as e:   # e.g. `[z-a]`: an input error (exit 2), not drift (exit 1)
+        raise DriftError(f"plan entry {pattern!r} is not a valid glob: {e}") from None
+
+
+def _inside(root: Path, rel: str) -> bool:
+    """True when `rel` is a relative path that resolves, symlinks followed, inside root."""
+    if Path(rel).is_absolute():
+        return False
+    real_root = Path(root).resolve()
+    target = (real_root / rel).resolve()
+    return target == real_root or real_root in target.parents
 
 
 def is_glob(entry: str) -> bool:
@@ -224,7 +241,9 @@ def plan_ref_from_pr_body(text: str) -> str | None:
 # --- git --------------------------------------------------------------------
 
 def git_env() -> dict[str, str]:
-    return {k: v for k, v in os.environ.items() if k in _ENV_KEEP or k.startswith("GIT_")}
+    """PATH, HOME, LANG, LC_ALL, TMPDIR and the GIT_* variables git_env_policy allows:
+    nothing that points git at another repository or injects config."""
+    return {k: v for k, v in os.environ.items() if k in _ENV_KEEP or git_var_allowed(k)}
 
 
 def _git(root: Path | str, *args: str, check: bool = True) -> tuple[int, str]:
@@ -277,7 +296,9 @@ def changed_files(root: Path, mb: str) -> list[str]:
 
 
 def commits_in_range(root: Path, mb: str) -> list[tuple[str, str, list[str]]]:
-    _, out = _git(root, "log", "--reverse", "--no-merges", "--format=%H%x00%s%x00", f"{mb}..HEAD")
+    # --no-show-signature: log.showSignature=true would run the configured gpg.program.
+    _, out = _git(root, "log", "--no-show-signature", "--reverse", "--no-merges",
+                  "--format=%H%x00%s%x00", f"{mb}..HEAD")
     parts = out.split("\0")
     commits: list[tuple[str, str, list[str]]] = []
     for i in range(0, len(parts) - 1, 2):
@@ -336,6 +357,11 @@ def analyze(repo: Path, base: str | None = None, plan: str | None = None,
     }
 
     pr_ref = plan_ref_from_pr_body(pr_body) if pr_body else None
+    if pr_ref is not None and not _inside(root, pr_ref):
+        # The PR body is attacker-controlled: a Plan: path that leaves the checkout
+        # (absolute, "..", or a symlink out) is recorded and never read.
+        report["pr_plan_rejected"] = pr_ref
+        pr_ref = None
     if plan:
         chosen, source = plan, "flag"
     else:
