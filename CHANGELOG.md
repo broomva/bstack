@@ -59,17 +59,26 @@ proven red:
   `--fail-on-critical` exits 1 when a governance hook would be blocked.
 - **`bstack intent`** (Tickets, P3). `new`, `lint`, `status` and `set-status` for the
   Stage-1 artifact, and `pending`: every accepted intent with no spec yet, read from the
-  files. `intent-to-spec.yml` takes its work list from `pending`, not from the push, so a
-  run GitHub cancelled in the concurrency group, or a draft that failed, is picked up by
-  the next run.
+  files, with names restricted to what `git check-ref-format` accepts as `spec/<name>`.
+  `intent-to-spec.yml` takes its work list from `pending` at the latest main, not from
+  the push, so a run GitHub cancelled in the concurrency group, a queued run whose commit
+  went stale, or a draft that failed, is handled by the next run; a daily schedule retries
+  without a push. It drafts at most `SDLC_INTENT_TO_SPEC_MAX` intents per run (default
+  3), each call capped at 15 minutes, and a failed draft or PR fails the job.
 
 Templates in `references/templates/`:
 - `intent.md`, `plan.md`, `REVIEW.md`
 - `bands.example.yaml`, `eval.example.json`, `managed-settings.example.json`
 - six workflows (`sdlc-gates`, `agent-evals`, `ci-triage`, `bands`, `intent-to-spec`,
   `linear-backlink`). `tests/workflow-templates.test.sh` runs `bands` and
-  `intent-to-spec` end to end against a fake `gh` and `claude` (10 scenarios), and
+  `intent-to-spec` end to end against a fake `gh` and `claude` (12 scenarios), and
   `tests/fixtures/workflow-sim/mutants.py` shows each reverted fix turning its scenario red.
+  bstack's own code runs in steps that hold no token.
+- Fork PRs never reach a self-hosted runner: `agent-evals` runs pull_request events only
+  when the head repo is this repo (the eval files' setup, reference and command checks
+  are shell), and `ci-triage` skips runs whose head is a fork.
+  `tests/workflow-fork-guard.test.sh` checks every template for this, and shows that
+  removing each guard is caught.
 
 `tests/workflow-injection-safety.test.sh` now scans the workflow templates too, because a
 sink in a template becomes a sink in every repo that copies it.

@@ -12,7 +12,7 @@
 # is evaluated rather than assumed.
 #
 # There is deliberately NO skip path. A missing git, jq or PyYAML FAILS the run, and so
-# does a run in which fewer than 10 scenarios reached their assertions.
+# does a run in which fewer than 12 scenarios reached their assertions.
 #
 # WF_BANDS / WF_INTENT point the scenarios at another copy of a template;
 # tests/fixtures/workflow-sim/mutants.py uses them to show that each reverted fix goes red.
@@ -29,8 +29,8 @@ SIMDIR="$BSTACK_REPO/tests/fixtures/workflow-sim"
 WF_BANDS="${WF_BANDS:-$BSTACK_REPO/references/templates/workflows/bands.yml}"
 WF_INTENT="${WF_INTENT:-$BSTACK_REPO/references/templates/workflows/intent-to-spec.yml}"
 BANDS_EXAMPLE="$BSTACK_REPO/references/templates/bands.example.yaml"
-SCENARIOS="1 2 3 4 5 6 7 8 9 10"
-MIN_SCENARIOS=10
+SCENARIOS="1 2 3 4 5 6 7 8 9 10 11 12"
+MIN_SCENARIOS=12
 MIN_ASSERTS=5
 NAME="alpha-widget"
 
@@ -383,7 +383,8 @@ begin 8 "intent-to-spec: claude replies with an error"
 setup_intent "$S" || assert_fail "fixture setup"
 echo error > "$S/claude.mode"
 run_sim "$WF_INTENT" "$S" co1 vars.SDLC_INTENT_TO_SPEC=true "github.event.before=$INTENT_BEFORE"
-eq "job succeeds" success "$(job .result)"
+eq "job fails: a failed draft is not a green run" failure "$(job .result)"
+ok "the failure says what failed" contains "$(step_stdout)" "1 draft(s) and 0 PR(s) failed"
 eq "exactly 1 claude call, answered with an error" "1 error" \
     "$(lines "$S/claude.log") $(lastcall .mode)"
 ok "no spec file written" test ! -e "$S/co1/docs/specs/$NAME.md"
@@ -432,6 +433,42 @@ eq "1 new claude call, for the intent whose draft failed" $((C0 + 1)) "$(lines "
 ok "the retried call names the intent" contains "$(lastcall '.argv[1]')" "intent/$NAME.md"
 eq "1 new pr create" $((P0 + 1)) "$(lines "$S/pr_create.log")"
 eq "the PR's head is spec/<name>" "spec/$NAME" "$(lastpr .head)"
+no_violations
+finish
+
+S="$ROOT/intent-stale"
+begin 11 "intent-to-spec: a queued run's checkout is behind a spec that merged meanwhile"
+setup_intent "$S" || assert_fail "fixture setup"
+# The checkout (co1) is the push's own commit. While the run waited, the spec merged.
+{ mkdir -p "$S/seed/docs/specs" && printf '# Spec\n\nMerged while the run waited.\n' \
+    > "$S/seed/docs/specs/$NAME.md" && seed_commit "$S" "spec: $NAME (merged)"; } ||
+    assert_fail "fixture setup"
+ok "precondition: the checkout has no spec" test ! -e "$S/co1/docs/specs/$NAME.md"
+run_sim "$WF_INTENT" "$S" co1 vars.SDLC_INTENT_TO_SPEC=true "github.event.before=$INTENT_BEFORE"
+eq "job succeeds" success "$(job .result)"
+eq "0 claude calls: the work list was read at the latest main" 0 "$(lines "$S/claude.log")"
+eq "0 pr creates" 0 "$(lines "$S/pr_create.log")"
+ok "no spec/<name> pushed" not oref "$S" "spec/$NAME"
+no_violations
+finish
+
+S="$ROOT/intent-backlog"
+begin 12 "intent-to-spec: a backlog drains at most 3 per run, oldest first"
+{ new_sim "$S" && seed_commit "$S" seed &&
+    for n in a-widget b-widget c-widget d-widget; do
+        write_intent "$S/seed/intent/2026-09-01-$n.md" "Operators cannot see $n."
+    done &&
+    seed_commit "$S" "intent: four widgets" && checkout "$S" co1 0; } || assert_fail "fixture setup"
+run_sim "$WF_INTENT" "$S" co1 vars.SDLC_INTENT_TO_SPEC=true
+eq "job succeeds" success "$(job .result)"
+eq "3 claude calls: the default cap" 3 "$(lines "$S/claude.log")"
+eq "3 pr creates" 3 "$(lines "$S/pr_create.log")"
+ok "the 4th is deferred, not dropped" contains "$(step_stdout)" "defer intent/2026-09-01-d-widget.md"
+ok "the oldest go first: no spec/<d> yet" not oref "$S" "spec/2026-09-01-d-widget"
+checkout "$S" co2 0 || assert_fail "fixture setup"
+run_sim "$WF_INTENT" "$S" co2 vars.SDLC_INTENT_TO_SPEC=true
+eq "the next run drafts the deferred one" 4 "$(lines "$S/claude.log")"
+ok "spec/<d> is on origin" test -n "$(oref "$S" "spec/2026-09-01-d-widget")"
 no_violations
 finish
 

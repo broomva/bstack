@@ -6,6 +6,9 @@
 # The logs are fetched by the workflow; Claude gets only Read and Grep over them, with
 # no repository checkout, so it cannot write, push, or run commands.
 #
+# Failures of a run whose head is a fork are not triaged: the logs are the fork's output,
+# and this job runs on a runner logged in to a subscription.
+#
 # Edit `workflows:` below to the names of the workflows to triage.
 name: CI triage
 
@@ -21,7 +24,7 @@ permissions:
 
 jobs:
   triage:
-    if: github.event.workflow_run.conclusion == 'failure'
+    if: github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ${{ vars.AGENT_EVAL_RUNNER_LABELS && fromJSON(vars.AGENT_EVAL_RUNNER_LABELS) || 'self-hosted' }}
     timeout-minutes: 20
     steps:

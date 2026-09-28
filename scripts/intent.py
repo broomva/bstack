@@ -314,34 +314,51 @@ def cmd_set_status(args) -> int:
     return 0
 
 
-NAME_RE = re.compile(r"[A-Za-z0-9._-]+")
+# A name becomes the branch spec/<name>, so it must be a valid ref component: no leading
+# dot, no "..", no trailing "." or ".lock" (git check-ref-format), and nothing a shell
+# `read` would split.
+NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*")
+
+
+def branch_safe(name: str) -> bool:
+    return NAME_RE.fullmatch(name) is not None and not name.endswith(".lock")
 
 
 def pending(intent_dir: Path, specs_dir: Path) -> tuple[list[tuple[str, str]], list[str]]:
-    """Every accepted intent in intent_dir with no specs_dir/<name>.md, in name order,
-    and a warning for each file skipped.
+    """Every accepted intent at the top of intent_dir with no specs_dir/<name>.md, in name
+    order, and a warning for each accepted-or-unreadable file skipped.
 
     Computed from the files alone, never from what one push changed: a caller that runs
     this on any commit gets the whole work list, so a cancelled, failed or missed run
-    leaves its intents to the next one. A name is the file stem and must match NAME_RE,
-    because callers read `path name` lines with `read` and build `spec/<name>` from it;
-    symlinks are skipped, because their content lives outside the directory."""
+    leaves its intents to the next one. A name is the file stem and must be branch_safe,
+    because callers read `path name` lines with `read` and build spec/<name> from it. A
+    symlinked intent is skipped (its content lives outside the directory), and a spec
+    path that is a symlink, dangling or not, counts as present: nothing is drafted
+    through it."""
     found: list[tuple[str, str]] = []
     skipped: list[str] = []
-    if not intent_dir.is_dir():
-        return found, skipped
     for path in sorted(intent_dir.glob("*.md")):
-        if path.is_symlink() or not path.is_file():
+        if path.is_symlink():
+            skipped.append(f"{path}: a symlink; intents must be regular files")
+            continue
+        if not path.is_file():
             continue
         try:
             status = parse(_read(path))["status"]
-        except (IntentError, UnicodeDecodeError):
+        except IntentError:
             skipped.append(f"{path}: unreadable")
             continue
-        if status != "accepted" or (specs_dir / f"{path.stem}.md").exists():
+        if status != "accepted":
             continue
-        if not NAME_RE.fullmatch(path.stem):
-            skipped.append(f"{path}: name must match {NAME_RE.pattern} to become spec/<name>")
+        spec = specs_dir / f"{path.stem}.md"
+        if spec.is_symlink():
+            skipped.append(f"{path}: {spec} is a symlink; not drafting through it")
+            continue
+        if spec.exists():
+            continue
+        if not branch_safe(path.stem):
+            skipped.append(f"{path}: the name cannot become the branch spec/<name> "
+                           "(letters, digits, '_', '-', single inner dots; no '.lock' end)")
             continue
         found.append((str(path), path.stem))
     return found, skipped

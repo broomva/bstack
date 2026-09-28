@@ -10,7 +10,7 @@
 # The model returns text; a program writes the file. The diagnosis runs in a throwaway
 # clone that holds no credentials, with Read/Grep/Glob only (no shell, no MCP servers).
 # The workflow appends its reply to the intent. Only the steps that talk to GitHub hold a
-# token.
+# token; bstack's own code runs in steps without one.
 #
 # The shipped metric is CI failure rate over this repo's workflow runs. Point BANDS_FILE
 # at a different .control/bands/*.yaml and replace the series step for another metric.
@@ -44,12 +44,14 @@ jobs:
         env:
           BSTACK_REF: v0.41.0
         run: git clone --quiet --depth 1 --branch "$BSTACK_REF" https://github.com/broomva/bstack.git "$RUNNER_TEMP/bstack"
-      - name: Build the series (the complete days only)
+      - name: List the workflow runs
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
           gh run list --repo "$REPO" --limit 1000 --json conclusion,createdAt,status,name,url > "$RUNNER_TEMP/runs.json"
+      - name: Build the series, complete days only (no token in this step)
+        run: |
           python3 "$RUNNER_TEMP/bstack/scripts/bands.py" series ci-failure-rate --runs-json "$RUNNER_TEMP/runs.json" > "$RUNNER_TEMP/series.json"
       - name: Check the band (deterministic, no model)
         id: check

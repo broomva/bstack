@@ -367,20 +367,52 @@ class TestPending(Base):
         self.assertEqual(self.pending()[1], "")
 
     def test_a_name_unsafe_for_a_branch_or_read_is_skipped_with_a_warning(self):
-        self.intent("a b.md", "accepted")
-        self.intent("x;y.md", "accepted")
+        # git check-ref-format rejects spec/.draft, spec/v1.lock, spec/x. and spec/a..b;
+        # `read` would split "a b"; ";" is shell.
+        bad = ["a b.md", "x;y.md", ".draft.md", "v1.lock.md", "x..md", "a..b.md"]
+        for name in bad:
+            self.intent(name, "accepted")
         ok = self.intent("2026-09-01-ok.md", "accepted")
+        dotted = self.intent("v1.2.md", "accepted")
         rc, out, err = self.pending()
-        self.assertEqual((rc, out.splitlines()), (0, [f"{ok} 2026-09-01-ok"]))
-        self.assertIn("a b.md", err)
-        self.assertIn("x;y.md", err)
+        self.assertEqual((rc, out.splitlines()), (0, [f"{ok} 2026-09-01-ok", f"{dotted} v1.2"]))
+        for name in bad:
+            self.assertIn(name, err)
+
+    def test_branch_safe_never_accepts_a_name_git_rejects(self):
+        names = [".draft", "v1.lock", "x.", "a..b", "a b", "x;y", "-lead", "x@y", "x~y",
+                 "x^y", "x:y", "x?y", "x*y", "x[y", "2026-09-01-alpha", "v1.2", "a.b.c"]
+        for n in names:
+            git_ok = subprocess.run(["git", "check-ref-format", "--branch", f"spec/{n}"],
+                                    capture_output=True).returncode == 0
+            if intent.branch_safe(n):
+                self.assertTrue(git_ok, n)
+        self.assertTrue(intent.branch_safe("2026-09-01-alpha"))
+
+    def test_an_unreadable_intent_is_skipped_with_a_warning(self):
+        (self.tmp / "intent").mkdir()
+        (self.tmp / "intent" / "2026-09-01-bad.md").write_bytes(b"# Intent: x\n\xff\xfe\n")
+        rc, out, err = self.pending()
+        self.assertEqual((rc, out), (0, ""))
+        self.assertIn("2026-09-01-bad.md: unreadable", err)
+
+    def test_a_spec_path_that_is_a_symlink_counts_as_present(self):
+        self.intent("2026-09-01-alpha.md", "accepted")
+        specs = self.tmp / "docs" / "specs"
+        specs.mkdir(parents=True)
+        (specs / "2026-09-01-alpha.md").symlink_to(self.tmp / "nowhere.md")   # dangling
+        rc, out, err = self.pending()
+        self.assertEqual((rc, out), (0, ""))
+        self.assertIn("is a symlink; not drafting through it", err)
 
     def test_a_symlinked_intent_is_skipped(self):
         target = self.tmp / "elsewhere.md"
         target.write_text(FILLED.replace("Status: draft.", "Status: accepted."))
         (self.tmp / "intent").mkdir()
         (self.tmp / "intent" / "2026-09-01-link.md").symlink_to(target)
-        self.assertEqual(self.pending()[1], "")
+        rc, out, err = self.pending()
+        self.assertEqual((rc, out), (0, ""))
+        self.assertIn("2026-09-01-link.md: a symlink", err)
 
     def test_missing_intent_dir_is_an_empty_list_not_an_error(self):
         self.assertEqual(self.pending()[:2], (0, ""))

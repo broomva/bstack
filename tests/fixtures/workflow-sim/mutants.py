@@ -44,26 +44,31 @@ MUTANTS = [
      '&& { echo "skip $f: spec/$name exists on origin"; continue; }', "6"),
     ("intent-to-spec: old git ls-remote skip in the PR step", "intent-to-spec.yml",
      r'(\n(\s+))git switch -q -C "\$branch" origin/main',
-     r'\1git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1 && continue'
+     # Inside open_pr() a skip is `return 0`: `continue` in a function skips nothing.
+     r'\1git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1 && return 0'
      r'\1git switch -q -C "$branch" origin/main', "6"),
     ("intent-to-spec: drop < /dev/null", "intent-to-spec.yml",
      r'--output-format json < /dev/null > "\$RUNNER_TEMP/\$name\.json"',
      '--output-format json > "$RUNNER_TEMP/$name.json"', "5"),
+    # Also turns 10 red: a push-derived list has no entry to retry a failed draft.
     ("intent-to-spec: the work list comes from the push, not the repo", "intent-to-spec.yml",
      r'python3 "\$RUNNER_TEMP/bstack/scripts/intent\.py" pending --dir intent --specs docs/specs \\\n\s+> "\$RUNNER_TEMP/candidates\.txt"',
      'git diff --name-only --no-ext-diff HEAD~1 HEAD -- "intent/*.md" | while read -r c; do '
      's=$(python3 "$RUNNER_TEMP/bstack/scripts/intent.py" status "$c" || true); '
      '[ "$s" = accepted ] && echo "$c $(basename "$c" .md)"; done > "$RUNNER_TEMP/candidates.txt" || true',
      "9"),
-    ("intent-to-spec: the push work list misses a failed draft", "intent-to-spec.yml",
-     r'python3 "\$RUNNER_TEMP/bstack/scripts/intent\.py" pending --dir intent --specs docs/specs \\\n\s+> "\$RUNNER_TEMP/candidates\.txt"',
-     'git diff --name-only --no-ext-diff HEAD~1 HEAD -- "intent/*.md" | while read -r c; do '
-     's=$(python3 "$RUNNER_TEMP/bstack/scripts/intent.py" status "$c" || true); '
-     '[ "$s" = accepted ] && echo "$c $(basename "$c" .md)"; done > "$RUNNER_TEMP/candidates.txt" || true',
-     "10"),
+    ("intent-to-spec: no move to the latest main", "intent-to-spec.yml",
+     r"git -c credential\.helper= -c 'credential\.helper=!gh auth git-credential' \\\n\s+fetch -q origin \+refs/heads/main:refs/remotes/origin/main\n\s+git checkout -q --detach origin/main",
+     "true", "11"),
+    ("intent-to-spec: pending reads specs from the wrong place", "intent-to-spec.yml",
+     r"pending --dir intent --specs docs/specs", "pending --dir intent --specs docs/nowhere", "11"),
+    ("intent-to-spec: no per-run cap", "intent-to-spec.yml",
+     r'-ge "\$MAX"', '-ge 999', "12"),
+    ("intent-to-spec: a failed draft leaves the job green", "intent-to-spec.yml",
+     r'the next run retries them"\n(\s+)exit 1', r'the next run retries them"\n\1exit 0', "8"),
     # Two more, so the violation log and the token observation each have a kill on record.
     ("intent-to-spec: restore `gh auth setup-git` (error swallowed)", "intent-to-spec.yml",
-     r'(\n(\s+))(while read -r f name; do\n\s+branch="spec/\$name")',
+     r'(\n(\s+))(open_pr\(\) \{)',
      r'\1gh auth setup-git || true\1\3', "5"),
     ("intent-to-spec: the draft step holds GH_TOKEN", "intent-to-spec.yml",
      r"(\n(\s+)CLAUDE_BIN: \$\{\{ vars\.CLAUDE_BIN \|\| 'claude' \}\})",

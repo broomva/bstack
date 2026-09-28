@@ -13,6 +13,11 @@
 #
 # Advisory until a baseline exists: record one with `bstack evals baseline`, then set
 # continue-on-error: false and add --gate.
+#
+# Fork PRs never run here. `validate --prove` and `run` execute the eval files' setup,
+# reference and command checks as shell, so a PR from a fork that adds an eval would run
+# its own commands on this runner, which is logged in to a subscription. The job-level
+# `if:` below runs pull_request events only when the head repo is this repo.
 name: Agent evals
 
 on:
@@ -36,6 +41,7 @@ concurrency:
 
 jobs:
   evals:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ${{ vars.AGENT_EVAL_RUNNER_LABELS && fromJSON(vars.AGENT_EVAL_RUNNER_LABELS) || 'self-hosted' }}
     timeout-minutes: 180
     continue-on-error: true

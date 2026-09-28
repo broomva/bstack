@@ -20,7 +20,7 @@ BSTACK_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODULE="tests.test_intent"
 SCRIPT="$BSTACK_REPO/scripts/intent.py"
 TEMPLATE="$BSTACK_REPO/references/templates/intent.md"
-MIN_TESTS=42
+MIN_TESTS=45
 
 PASS=0
 FAIL=0

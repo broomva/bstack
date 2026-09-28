@@ -75,6 +75,8 @@ it. This reference adds what they lacked:
    - An eval must *discriminate*. `validate --prove` requires its reference solution to pass,
      each named `violations` arm (a plausible wrong behaviour) to fail a check, and a no-op
      agent that only replies "I have completed the task." to fail.
+   - The eval files are shell (setup, reference, command checks), so a fork's pull request
+     never runs them: `agent-evals.yml` requires the head repo to be this repo.
 6. **The review policy is a committed file, and the writer never approves.** `REVIEW.md` names
    the passes (bugs · security · compliance against `spec.md` + `plan.md`), defines Important,
    and caps nits. *Held by* P20.
