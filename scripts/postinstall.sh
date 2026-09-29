@@ -138,7 +138,7 @@ echo "  [ok] No secrets staged"
 if git diff --cached --name-only | grep -q '^docs/conversations/' 2>/dev/null; then
   if [ -f "$REPO/scripts/conversation-history.py" ] && command -v python3 >/dev/null 2>&1; then
     echo "  [info] Regenerating conversation index..."
-    (cd "$REPO" && python3 scripts/conversation-history.py 2>/dev/null) || true
+    (cd "$REPO" && python3 -I scripts/conversation-history.py 2>/dev/null) || true
     git add docs/conversations/Conversations.md 2>/dev/null || true
   fi
 fi
@@ -177,10 +177,10 @@ if [ ! -f "$TARGET/scripts/control-gate-hook.sh" ]; then
 # Reads gates dynamically from .control/policy.yaml
 
 EVENT=$(cat)
-TOOL_NAME=$(echo "$EVENT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_name',''))" 2>/dev/null || echo "")
+TOOL_NAME=$(echo "$EVENT" | python3 -I -c "import sys,json; print(json.load(sys.stdin).get('tool_name',''))" 2>/dev/null || echo "")
 
 if [ "$TOOL_NAME" = "Bash" ]; then
-  COMMAND=$(echo "$EVENT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('command',''))" 2>/dev/null || echo "")
+  COMMAND=$(echo "$EVENT" | python3 -I -c "import sys,json; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('command',''))" 2>/dev/null || echo "")
   CMD_LEN=${#COMMAND}
 
   if [ "$CMD_LEN" -lt 500 ]; then
@@ -188,8 +188,10 @@ if [ "$TOOL_NAME" = "Bash" ]; then
     POLICY="$REPO_ROOT/.control/policy.yaml"
 
     if [ -f "$POLICY" ] && command -v python3 >/dev/null 2>&1; then
-      RESULT=$(python3 -c "
-import yaml, re, sys
+      RESULT=$(python3 -I -c "
+import site, sys
+sys.path.append(site.getusersitepackages())  # -I hides user site; PyYAML may live there
+import yaml, re
 try:
     with open('$POLICY') as f:
         policy = yaml.safe_load(f)
@@ -273,10 +275,10 @@ if [ ! -f "$TARGET/scripts/regression-gate-hook.sh" ]; then
 # and prompts Claude to run agent-browser E2E tests for affected features.
 
 EVENT=$(cat)
-TOOL_NAME=$(echo "$EVENT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_name',''))" 2>/dev/null || echo "")
+TOOL_NAME=$(echo "$EVENT" | python3 -I -c "import sys,json; print(json.load(sys.stdin).get('tool_name',''))" 2>/dev/null || echo "")
 [ "$TOOL_NAME" = "Bash" ] || exit 0
 
-COMMAND=$(echo "$EVENT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('command',''))" 2>/dev/null || echo "")
+COMMAND=$(echo "$EVENT" | python3 -I -c "import sys,json; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('command',''))" 2>/dev/null || echo "")
 echo "$COMMAND" | grep -qE '^\s*git commit' || exit 0
 echo "$COMMAND" | grep -qE '\-\-amend|\-\-allow-empty' && exit 0
 
@@ -299,7 +301,7 @@ fi
 # Skip if [skip-regression] in commit message
 echo "$COMMAND" | grep -q '\[skip-regression\]' && exit 0
 
-RESULT=$(python3 -c "
+RESULT=$(python3 -I -c "
 import json, fnmatch, subprocess, sys
 staged = subprocess.check_output(['git', 'diff', '--cached', '--name-only'], cwd='$REPO_ROOT', text=True).strip().split('\n')
 staged = [f for f in staged if f]
@@ -330,7 +332,7 @@ print('\n'.join(lines))
 " 2>/dev/null)
 
 if [ -n "$RESULT" ]; then
-  ESCAPED=$(echo "$RESULT" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))" 2>/dev/null)
+  ESCAPED=$(echo "$RESULT" | python3 -I -c "import sys,json; print(json.dumps(sys.stdin.read()))" 2>/dev/null)
   echo "{\"decision\": \"ask\", \"message\": $ESCAPED}"
   exit 0
 fi

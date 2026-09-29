@@ -29,7 +29,14 @@ POLICY="$REPO_ROOT/.control/policy.yaml"
 
 command -v python3 >/dev/null 2>&1 || exit 0  # cannot evaluate -> allow (fail-open, non-blocking)
 
-VERDICT="$(python3 - "$INPUT" "$POLICY" <<'PYEOF'
+# python3 -I, never bare python3 (BRO-2652). This hook runs with the session's cwd,
+# i.e. whatever repository the session is in. A bare python3 - puts that directory
+# first on sys.path (python3 FILE puts the script's directory there), so a json.py
+# or re.py committed to the repo replaced the stdlib module, ran as code, and could
+# erase a BLOCK verdict: an empty VERDICT is an allow. -I drops cwd, the script dir,
+# PYTHONPATH and user site.
+# tests/hook-python-isolation.test.sh plants those modules and fails on any leak.
+VERDICT="$(python3 -I - "$INPUT" "$POLICY" <<'PYEOF'
 import sys, json, re
 
 raw = sys.argv[1] if len(sys.argv) > 1 else "{}"

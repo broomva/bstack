@@ -54,13 +54,13 @@ if [ -f "$STAMP" ]; then
 fi
 mkdir -p "$(dirname "$STAMP")"; touch "$STAMP"
 
-# P6 catalog generator. Workspace-vendored copy first, then the GLOBAL install
-# dirs that `npx skills add -g` actually writes to — the resolution the retired
-# catalog hook lacked. Empty when bookkeeping is not installed: the chain then
-# simply skips the step (never an error).
+# P6 catalog generator, from the GLOBAL install dirs `npx skills add -g` writes
+# to. Empty when bookkeeping is not installed: the chain then simply skips the
+# step (never an error). NOT from "$REPO_ROOT/skills/...": that is the session's
+# own repo, where a NEW file matches no merge-gate rule, so resolving a script
+# there would run whatever a merged PR added (BRO-2652 P20 r1).
 BOOKKEEPING=""
-for _bk in "$REPO_ROOT/skills/bookkeeping/scripts/bookkeeping.py" \
-           "$HOME/.claude/skills/bookkeeping/scripts/bookkeeping.py" \
+for _bk in "$HOME/.claude/skills/bookkeeping/scripts/bookkeeping.py" \
            "$HOME/.agents/skills/bookkeeping/scripts/bookkeeping.py"; do
   [ -f "$_bk" ] && { BOOKKEEPING="$_bk"; break; }
 done
@@ -72,7 +72,10 @@ BRIDGE="$REPO_ROOT/scripts/conversation-history.py"
 if [ -f "$BRIDGE" ] && command -v python3 >/dev/null 2>&1; then
   (
     cd "$REPO_ROOT" || exit 0
-    python3 "$BRIDGE" >/dev/null 2>&1
+    # -I (BRO-2652): $BRIDGE's own directory is the workspace's scripts/, where a
+    # NEW json.py matches no merge-gate rule even though editing the script would.
+    # bookkeeping below stays unisolated: see tests/hook_python_sites.py.
+    python3 -I "$BRIDGE" >/dev/null 2>&1
     [ -n "$BOOKKEEPING" ] && python3 "$BOOKKEEPING" index >/dev/null 2>&1
     exit 0
   ) &
@@ -84,8 +87,10 @@ fi
 # (INPUT was already read above -- stdin cannot be consumed twice.)
 CONV_DIR="$REPO_ROOT/docs/conversations"
 mkdir -p "$CONV_DIR" 2>/dev/null || exit 0
+# python3 -I (BRO-2652): cwd is the session's repo; a bare python3 - would put it
+# first on sys.path, so a committed json.py or time.py would run here.
 if command -v python3 >/dev/null 2>&1; then
-  python3 - "$INPUT" "$CONV_DIR/Conversations.md" <<'PYEOF' 2>/dev/null || true
+  python3 -I - "$INPUT" "$CONV_DIR/Conversations.md" <<'PYEOF' 2>/dev/null || true
 import sys, json, time
 raw = sys.argv[1] if len(sys.argv) > 1 else "{}"
 out = sys.argv[2]
