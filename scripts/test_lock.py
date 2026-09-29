@@ -137,7 +137,7 @@ else:
     # and nothing is added to sys.path at all.
     import importlib.util as _ilu
     _spec = _ilu.spec_from_file_location(
-        "git_env_policy", os.path.join(os.path.dirname(os.path.abspath(__file__)), "git_env_policy.py"))
+        "git_env_policy", os.path.join(os.path.dirname(os.path.realpath(__file__)), "git_env_policy.py"))
     _gep = _ilu.module_from_spec(_spec)
     _spec.loader.exec_module(_gep)
     git_var_allowed = _gep.git_var_allowed

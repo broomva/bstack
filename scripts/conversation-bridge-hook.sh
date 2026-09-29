@@ -54,13 +54,13 @@ if [ -f "$STAMP" ]; then
 fi
 mkdir -p "$(dirname "$STAMP")"; touch "$STAMP"
 
-# P6 catalog generator. Workspace-vendored copy first, then the GLOBAL install
-# dirs that `npx skills add -g` actually writes to — the resolution the retired
-# catalog hook lacked. Empty when bookkeeping is not installed: the chain then
-# simply skips the step (never an error).
+# P6 catalog generator, from the GLOBAL install dirs `npx skills add -g` writes
+# to. Empty when bookkeeping is not installed: the chain then simply skips the
+# step (never an error). NOT from "$REPO_ROOT/skills/...": that is the session's
+# own repo, where a NEW file matches no merge-gate rule, so resolving a script
+# there would run whatever a merged PR added (BRO-2652 P20 r1).
 BOOKKEEPING=""
-for _bk in "$REPO_ROOT/skills/bookkeeping/scripts/bookkeeping.py" \
-           "$HOME/.claude/skills/bookkeeping/scripts/bookkeeping.py" \
+for _bk in "$HOME/.claude/skills/bookkeeping/scripts/bookkeeping.py" \
            "$HOME/.agents/skills/bookkeeping/scripts/bookkeeping.py"; do
   [ -f "$_bk" ] && { BOOKKEEPING="$_bk"; break; }
 done

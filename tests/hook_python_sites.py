@@ -12,7 +12,11 @@ One source of truth for two tests:
 
 Usage (ROOT is a bstack checkout or a copy of one):
   hook_python_sites.py ROOT reachable   the hook-reachable files, one per line
-  hook_python_sites.py ROOT sites       path<TAB>line<TAB>isolated(0|1)<TAB>text
+  hook_python_sites.py ROOT sites       path<TAB>line<TAB>isolated(0|1)<TAB>text<TAB>kind
+                                        kind = hook (a reachable file, driven by the
+                                        event suite) or generated (a hook body a
+                                        generator writes, or a settings snippet an
+                                        installer merges: scanned, never followed)
   hook_python_sites.py ROOT check       exit 1 on any un-isolated site not listed in
                                         ALLOWED_UNISOLATED, or a stale entry there
 
@@ -22,6 +26,12 @@ and, transitively, every bstack file those name: in shell, any foo.sh / foo.py /
 bin/foo on a non-comment line; in python, an imported sibling module or a quoted
 "foo.py" (a sibling loaded by path). A root that cannot be read fails the check: the
 list must never shrink in silence.
+
+Generated = hook bodies that a generator writes rather than ships (the heredocs in
+scripts/postinstall.sh) and the settings snippets installers merge into a workspace
+(assets/templates/settings.json*.snippet). Their text is scanned for sites, but
+their references are not followed, because a generator also names scripts that only
+an operator runs.
 """
 import json
 import os
@@ -44,14 +54,21 @@ TEXT_ONLY_MENTIONS = {
 # through its first argument). Each needs a reason a reviewer can check.
 ALLOWED_UNISOLATED = {
     ("scripts/conversation-bridge-hook.sh", 'python3 "$BOOKKEEPING"'):
-        "runs the bookkeeping skill (not part of this repo). bookkeeping.py puts its "
-        "own directory first on sys.path itself (sys.path.insert(0, _SCRIPTS_DIR)), so "
-        "-I here would not isolate it, and it would hide the user-site packages it "
-        "imports lazily (PyYAML). cwd is not on sys.path for python3 FILE",
+        "runs the GLOBAL bookkeeping skill install (~/.claude or ~/.agents skills "
+        "dir; never the session's repo). bookkeeping.py puts its own directory first "
+        "on sys.path itself (sys.path.insert(0, _SCRIPTS_DIR)), so -I here would not "
+        "isolate it, and it would hide the user-site packages it imports lazily "
+        "(PyYAML). cwd is not on sys.path for python3 FILE",
 }
 
-# `python3` as a command word, then its first argument.
-INVOKE_RE = re.compile(r"(?<![\w./-])(?:exec\s+)?python3?(?:\.\d+)?(?=\s)\s+(\S+)")
+# `python3` as a command word (bare, python3.X, or path-qualified such as
+# /usr/bin/python3), then its first argument. A $PY / "$PYTHON_BIN" style variable
+# in command position counts too.
+INVOKE_RE = re.compile(
+    r"(?<![\w.-])(?:exec\s+)?(?:[\w./~-]*/)?python3?(?:\.\d+)?(?=\s)\s+(\S+)"
+    r"|(?<![\w])\"?\$\{?PY(?:THON)?3?(?:_BIN)?\}?\"?(?=\s)\s+(\S+)")
+GENERATED_FILES = ("scripts/postinstall.sh",)
+SNIPPET_GLOB = "assets/templates/settings.json*.snippet"
 PY_SPAWN_RE = re.compile(r"sys\.executable|[\"']python3?(?:\.\d+)?[\"']")
 
 
@@ -119,9 +136,49 @@ def reachable(root):
     return sorted(seen)
 
 
-def sites(root):
-    """(path, line, isolated, text) for every python invocation in a reachable file."""
+def generated(root):
+    import glob
+    snippets = sorted(os.path.relpath(p, root) for p in glob.glob(os.path.join(root, SNIPPET_GLOB)))
+    missing = [r for r in GENERATED_FILES if not os.path.isfile(os.path.join(root, r))]
+    if missing:
+        raise SystemExit(f"hook_python_sites: generated files do not exist: {missing}")
+    if not snippets:
+        raise SystemExit(f"hook_python_sites: no settings snippets match {SNIPPET_GLOB}")
+    return list(GENERATED_FILES) + snippets
+
+
+def _shell_sites(rel, lines, kind):
     out = []
+    for i, line in enumerate(lines, 1):
+        if line.lstrip().startswith("#"):
+            continue
+        for m in INVOKE_RE.finditer(line):
+            if line[:m.start()].rstrip().endswith("command -v"):
+                continue
+            arg = m.group(1) or m.group(2)
+            if not (arg[0] in "-\"'$\\<" or "/" in arg or arg.endswith(".py")):
+                continue  # prose: "python3 required", "python3 not available"
+            text = m.group(0).replace("exec ", "", 1).strip()
+            out.append((rel, i, arg == "-I", text, kind))
+    return out
+
+
+def _snippet_sites(rel, lines):
+    """A snippet's hook commands: python3 launches, and a .py run by its shebang."""
+    out = _shell_sites(rel, lines, "generated")
+    for i, line in enumerate(lines, 1):
+        m = re.search(r'"command":\s*"([^"]*)"', line)
+        if m and re.match(r"\S+\.py(\s|$)", m.group(1).strip()):
+            out.append((rel, i, False, m.group(1).split()[0], "generated"))
+    return out
+
+
+def sites(root):
+    """(path, line, isolated, text, kind) for every python invocation a hook can run."""
+    out = []
+    for rel in generated(root):
+        lines = _read(root, rel).splitlines()
+        out += _snippet_sites(rel, lines) if rel.endswith(".snippet") else _shell_sites(rel, lines, "generated")
     for rel in reachable(root):
         lines = _read(root, rel).splitlines()
         for i, line in enumerate(lines, 1):
@@ -129,18 +186,9 @@ def sites(root):
                 if PY_SPAWN_RE.search(line) and not line.lstrip().startswith("#"):
                     window = " ".join(lines[i - 1:i + 2])
                     iso = "'-I'" in window or '"-I"' in window
-                    out.append((rel, i, iso, line.strip()))
-                continue
-            if line.lstrip().startswith("#"):
-                continue
-            for m in INVOKE_RE.finditer(line):
-                if line[:m.start()].rstrip().endswith("command -v"):
-                    continue
-                arg = m.group(1)
-                if not (arg[0] in "-\"'$\\" or "/" in arg or arg.endswith(".py")):
-                    continue  # prose: "python3 required", "python3 not available"
-                text = m.group(0).replace("exec ", "", 1).strip()
-                out.append((rel, i, arg == "-I", text))
+                    out.append((rel, i, iso, line.strip(), "hook"))
+        if not rel.endswith(".py"):
+            out += _shell_sites(rel, lines, "hook")
     return out
 
 
@@ -150,7 +198,7 @@ def _key(rel, text):
 
 def check(root):
     bad, used = [], set()
-    for rel, line, iso, text in sites(root):
+    for rel, line, iso, text, _kind in sites(root):
         if iso:
             continue
         k = _key(rel, text)
@@ -176,8 +224,8 @@ def main(argv):
         print("\n".join(reachable(root)))
         return 0
     if mode == "sites":
-        for rel, line, iso, text in sites(root):
-            print(f"{rel}\t{line}\t{int(iso)}\t{text}")
+        for rel, line, iso, text, kind in sites(root):
+            print(f"{rel}\t{line}\t{int(iso)}\t{text}\t{kind}")
         return 0
     return check(root)
 

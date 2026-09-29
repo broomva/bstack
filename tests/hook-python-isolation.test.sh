@@ -347,8 +347,39 @@ if [ "${HOOK_ISO_SKIP_STATIC:-0}" != 1 ]; then
         bad "static: un-isolated python site(s) reachable from a hook"
     fi
     printf '%s\n' "$out" | sed 's/^/  /'
+    # The enumerator's own spelling coverage, both polarities: a regex that stops
+    # matching would otherwise pass every real file in silence.
+    if hpy -c '
+import sys
+sys.path.append(sys.argv[1])
+import hook_python_sites as h
+shell = [
+    ("/usr/bin/python3 -c x", False), ("python3.12 -c x", False), ("python3 <<EOF", False),
+    ("\"$PY\" - <<EOF", False), ("${PYTHON_BIN} x.py", False), ("\"$PY\" -I -", True),
+    ("exec python3 -I \"$D/x.py\"", True), ("x=$(python3 -I - <<EOF", True),
+]
+none = ["echo python3 required", "command -v python3 >/dev/null", "# python3 -c x"]
+bad = []
+for line, iso in shell:
+    got = h._shell_sites("f", [line], "hook")
+    if len(got) != 1 or got[0][2] != iso:
+        bad.append((line, got))
+for line in none:
+    if h._shell_sites("f", [line], "hook"):
+        bad.append((line, "false positive"))
+snip = h._snippet_sites("s", ["\"command\": \"$R/scripts/x.py --t 1\"", "\"command\": \"python3 -I $R/y.py\""])
+if sorted((x[1], x[2]) for x in snip) != [(1, False), (2, True)]:
+    bad.append(("snippet", snip))
+if bad:
+    print(bad)
+    sys.exit(1)
+' "$REPO/tests"; then
+        ok "static: the enumerator sees every spelling (fixtures, both polarities)"
+    else
+        bad "static: the enumerator missed a spelling (fixtures)"
+    fi
     n="$(hpy "$REPO/tests/hook_python_sites.py" "$SRC" sites | awk -F'\t' '$3==1' | wc -l | tr -d ' ')"
-    [ "$n" -ge 12 ] && ok "static: $n isolated sites enumerated (>= the 12 known)" \
+    [ "$n" -ge 22 ] && ok "static: $n isolated sites enumerated (>= the 22 known: 13 hook + 9 generated)" \
         || bad "static: only $n isolated sites enumerated — the enumeration shrank"
 fi
 

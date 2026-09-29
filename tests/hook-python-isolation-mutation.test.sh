@@ -30,7 +30,10 @@ pass=0; fail=0
 ok()  { echo "  [pass] $1"; pass=$((pass + 1)); }
 bad() { echo "  [FAIL] $1"; fail=$((fail + 1)); }
 
-hpy "$SITES_PY" "$REPO" sites | awk -F'\t' '$3 == 1 { print $1 "\t" $2 }' > "$T/sites.tsv"
+hpy "$SITES_PY" "$REPO" sites | awk -F'\t' '$3 == 1 && $5 == "hook" { print $1 "\t" $2 }' > "$T/sites.tsv"
+# Generated sites (postinstall.sh heredocs, settings snippets) run only after an
+# install, so no hook event reaches them here: the static check must kill those.
+hpy "$SITES_PY" "$REPO" sites | awk -F'\t' '$3 == 1 && $5 == "generated" { print $1 "\t" $2 }' > "$T/gen.tsv"
 N="$(wc -l < "$T/sites.tsv" | tr -d ' ')"
 echo "hook python isolation — mutation proof over $N isolated sites"
 [ "$N" -ge 12 ] || bad "only $N isolated sites enumerated (expected >= 12)"
@@ -68,10 +71,10 @@ PY
 make_mutant() {
     local d="$T/m/$1"
     mkdir -p "$d"
-    cp -R "$REPO/scripts" "$REPO/hooks" "$REPO/bin" "$d/"
+    cp -R "$REPO/scripts" "$REPO/hooks" "$REPO/bin" "$REPO/assets" "$d/"
     hpy "$T/mutate.py" "$d" "$2" "$3" "$4" || return 1
     local changed
-    changed="$(diff -r "$REPO/scripts" "$d/scripts"; diff -r "$REPO/hooks" "$d/hooks")"
+    changed="$(diff -r "$REPO/scripts" "$d/scripts"; diff -r "$REPO/hooks" "$d/hooks"; diff -r "$REPO/assets" "$d/assets")"
     [ -n "$changed" ] || { echo "mutant $1 is identical to the source" >&2; return 1; }
 }
 
@@ -137,6 +140,19 @@ for id in $IDS; do
         sed 's/^/        /' "$T/log/$id.out" | tail -20
     fi
 done
+
+echo "  generated sites (static check must go RED):"
+g=0
+while IFS="$(printf '\t')" read -r rel line; do
+    g=$((g + 1)); id="gen$g"
+    if ! make_mutant "$id" "$rel" "$line" site; then bad "could not build mutant for $rel:$line"; continue; fi
+    if hpy "$SITES_PY" "$T/m/$id" check >/dev/null 2>&1; then
+        bad "$rel:$line (generated): mutant survived the static check"
+    else
+        ok "$rel:$line (generated): killed (static)"
+    fi
+done < "$T/gen.tsv"
+[ "$g" -ge 9 ] || bad "only $g generated sites enumerated (expected >= 9)"
 
 echo ""
 echo "hook-python-isolation-mutation: $pass passed, $fail failed"

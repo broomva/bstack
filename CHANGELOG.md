@@ -36,6 +36,19 @@ They are isolated as defense in depth.
     stamp writer and the workspace's own `scripts/conversation-history.py`. That
     script's directory is the workspace's `scripts/`, where a NEW `json.py` matches no
     merge-gate rule even though an edit to the script itself would.
+- **The hooks bstack installs rather than ships are isolated too (9 more sites).**
+  `scripts/postinstall.sh` writes its own `control-gate-hook.sh`, `regression-gate-hook.sh`
+  and pre-commit hook from heredocs. All 8 python calls there now carry `-I`, and the
+  gate's YAML evaluator appends the user site for PyYAML. Measured before the fix: that
+  generated gate allowed a force-push to main with a `json.py` in the cwd. After the
+  fix it blocks, on both the fallback path and the YAML-policy path, and no plant runs.
+  The non-plugin Stop hook in `assets/templates/settings.json.multi-layer-hooks.snippet`
+  ran `leverage-sensor.py` through its shebang. It now runs through `python3 -I`. The
+  hook dedup (`base()`) still resolves it to `leverage-sensor.py`.
+- **The bridge no longer resolves bookkeeping from the session's own repo.** The first
+  candidate used to be `$REPO_ROOT/skills/bookkeeping/scripts/bookkeeping.py`. A merged
+  PR that ADDED that file matched no merge-gate rule, and then ran on every Stop,
+  with or without `-I`. Only the global skill installs are tried now.
 - **`test_lock.py` loads `git_env_policy.py` by file path** when run as a script. Under
   `-I` its directory is no longer on `sys.path`, so the import would have failed and the
   hook would have stopped blocking. Nothing is added back to `sys.path`.
@@ -59,17 +72,34 @@ They are isolated as defense in depth.
     directories and on `PYTHONPATH`. Output, exit code and resulting state must be
     identical, and no marker may appear.
   - Positive controls prove each of the three vectors runs a plant without `-I`.
-  - A static check lists every python site a hook can reach and fails on any without
-    `-I`.
+  - A static check lists every python site a hook can reach, and every site in the hook
+    bodies a generator writes or a settings snippet merges, and fails on any site without
+    `-I`. It sees `python3`, `python3.X`, `/usr/bin/python3`, `"$PY"`/`${PYTHON_BIN}`,
+    `python3 <<EOF` and a `.py` run through its shebang. Fixture self-tests cover each
+    spelling in both polarities.
   - `tests/hook-python-isolation-mutation.test.sh` removes `-I` from one site at a
     time and requires RED from both the event run and the static check. It also reverts
-    the sibling load and each sensor's user-site re-add. 16 of 16 mutants are killed
-    locally. The two user-site mutants are skipped on a runner where PyYAML already
-    imports under `-I` (there is nothing to re-add there), so CI may report 14.
-- **Still open:** python calls in commands a person runs, such as `doctor.sh`,
-  `bootstrap.sh`, `repair.sh`, `postinstall.sh` and the `bin/` shims, still use bare
-  `python3 -` or `python3 -c`. They are not hooks and run only on request, but the class
-  is the same. Tracked separately.
+    the sibling load and each sensor's user-site re-add. The 9 generated sites (no hook
+    event reaches them before an install) must turn the static check RED. 25 of 25
+    mutants are killed locally. The two user-site mutants are skipped on a runner where
+    PyYAML already imports under `-I`, because there is nothing to re-add there, so CI
+    may report 23.
+- **Action required for existing workspaces.** `bstack bootstrap` and `bstack repair`
+  keep a hook script that already exists ("[keep] existing — preserved"). A workspace
+  bootstrapped on 0.41.1 or earlier therefore keeps its un-isolated
+  `scripts/control-gate-hook.sh` and `scripts/conversation-bridge-hook.sh`. Diff those
+  two files against this release's templates, and re-copy them. For each file:
+  `diff <workspace>/scripts/X "$BSTACK_REPO/scripts/X"`.
+- **Still open:**
+  - Python calls in commands a person runs, such as `doctor.sh`, `bootstrap.sh`,
+    `repair.sh` and the `bin/` shims, still use bare `python3 -` or `python3 -c`. They
+    are not hooks and run only on request, but the class is the same.
+  - `postinstall.sh` is a second writer of `control-gate-hook.sh`, and it still carries
+    that file's older command-length exemption. It should copy the canonical script.
+  - The bridge still runs the session repo's own `scripts/conversation-history.py` when
+    one exists (by design, "prefer a richer bridge"). Gating a NEW executable file in a
+    governed repo belongs to the merge gate.
+  - All three are tracked separately.
 
 ## 0.41.1 — 2026-09-28
 
