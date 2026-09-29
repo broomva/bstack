@@ -53,7 +53,13 @@ ARC="$HOME_DIR/$SAFE_SID.arc"
 
 shift 2 2>/dev/null || true
 
-STALE_SECONDS="${BROOMVA_ARC_STALE_SECONDS:-28800}" python3 - "$VERB" "$ARC" "$@" <<'PY'
+# python3 -I, never bare python3 (BRO-2652). This hook runs with the session's cwd,
+# i.e. whatever repository the session is in. A bare python3 - puts that directory
+# first on sys.path (python3 FILE puts the script's directory there), so a json.py
+# or re.py committed to the repo replaced the stdlib module, ran as code, and could
+# erase the hook's decision. -I drops cwd, the script dir, PYTHONPATH and user site.
+# tests/hook-python-isolation.test.sh plants those modules and fails on any leak.
+STALE_SECONDS="${BROOMVA_ARC_STALE_SECONDS:-28800}" python3 -I - "$VERB" "$ARC" "$@" <<'PY'
 import sys, json, os, time, datetime, tempfile, fcntl
 
 verb, arc_path, rest = sys.argv[1], sys.argv[2], sys.argv[3:]

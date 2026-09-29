@@ -1,5 +1,76 @@
 # Changelog
 
+## 0.41.2 — 2026-09-28
+
+### fix(security): hooks start Python isolated, so a module in the session's repo cannot replace the standard library (BRO-2652)
+
+Every bstack hook runs with the session's cwd, which is whatever repository the session
+is in. `python3 -` and `python3 -c` put that directory first on `sys.path`, and
+`python3 FILE` puts FILE's directory there. A `json.py`, `re.py` or `argparse.py` merged
+into the repo therefore replaced the standard library module and ran as code each time
+a hook fired, and the hook still exited 0. v0.41.1 fixed this in `l3-rate-gate.sh` and
+`compute-lambda.sh`. This release fixes the hooks.
+
+Measured on 0.41.1 with a planted `json.py` that writes a marker and raises
+`SystemExit(0)`, so it removes the decision without an error:
+
+- `control-gate-hook.sh`, the P2 gate that `bstack bootstrap` deploys, allowed
+  `git push --force origin main`. Exit 2 became exit 0.
+- `arc-continuation-hook.sh` stopped blocking a stalled arc and a handback with no ask.
+  `autonomous-posture-hook.sh` stopped starting the arc, and the conversation bridge
+  stopped writing its stamp.
+
+The `python3 FILE` sites (test-lock and both leverage sensors) read from the plugin's own
+`scripts/` directory, not the session's repo. A module planted there or on `PYTHONPATH`
+made test-lock stop blocking edits to a locked test, and blanked the SessionStart brief.
+They are isolated as defense in depth.
+
+- **`python3 -I` at 13 sites.** That is every python call reachable from
+  `hooks/hooks.json` or from a workspace hook `bstack bootstrap` deploys. `-I` leaves the
+  cwd, the script's directory, `PYTHONPATH` and the user site off `sys.path`:
+  - `arc-continuation-hook.sh` (4 sites), `autonomous-posture-hook.sh`,
+    `autonomous-arc.sh`
+  - `test-lock-hook.sh`, `knowledge-wakeup-hook.sh` (both sensors), and the Stop
+    `leverage-sensor.py` command in `hooks/hooks.json`
+  - `control-gate-hook.sh`, and in `conversation-bridge-hook.sh` both the fallback
+    stamp writer and the workspace's own `scripts/conversation-history.py`. That
+    script's directory is the workspace's `scripts/`, where a NEW `json.py` matches no
+    merge-gate rule even though an edit to the script itself would.
+- **`test_lock.py` loads `git_env_policy.py` by file path** when run as a script. Under
+  `-I` its directory is no longer on `sys.path`, so the import would have failed and the
+  hook would have stopped blocking. Nothing is added back to `sys.path`.
+- **The leverage sensors re-add the user site for PyYAML only, and at the end.** `-I`
+  hides a PyYAML installed with `pip install --user`. On `ImportError` the sensors append
+  `site.getusersitepackages()` to `sys.path`, so the standard library and the
+  interpreter's own site-packages still come first. Without this the policy file would
+  read as empty, and the ship sensor would record the default window.
+- **Not isolated, on purpose:** `conversation-bridge-hook.sh` still runs
+  `python3 "$BOOKKEEPING"` without `-I`. `bookkeeping.py` inserts its own directory
+  first on `sys.path` itself, so `-I` would not isolate it, and it would hide the
+  user-site packages it imports. `tests/hook_python_sites.py` lists it with this reason.
+- **Side effect:** `-I` also ignores `PYTHON*` variables such as `PYTHONIOENCODING` and
+  `PYTHONUTF8` in these hooks. With a C or POSIX locale, Python still switches to UTF-8
+  on its own.
+- **Tests:**
+  - `tests/hook-python-isolation.test.sh` drives the real hooks through
+    `hooks/hooks.json` in a scratch repo. There are 16 events, and each baseline must show
+    its decision: blocks, allows, the brief, the stored state.
+  - It then plants 76 candidate modules in the cwd, in the plugin's script
+    directories and on `PYTHONPATH`. Output, exit code and resulting state must be
+    identical, and no marker may appear.
+  - Positive controls prove each of the three vectors runs a plant without `-I`.
+  - A static check lists every python site a hook can reach and fails on any without
+    `-I`.
+  - `tests/hook-python-isolation-mutation.test.sh` removes `-I` from one site at a
+    time and requires RED from both the event run and the static check. It also reverts
+    the sibling load and each sensor's user-site re-add. 16 of 16 mutants are killed
+    locally. The two user-site mutants are skipped on a runner where PyYAML already
+    imports under `-I` (there is nothing to re-add there), so CI may report 14.
+- **Still open:** python calls in commands a person runs, such as `doctor.sh`,
+  `bootstrap.sh`, `repair.sh`, `postinstall.sh` and the `bin/` shims, still use bare
+  `python3 -` or `python3 -c`. They are not hooks and run only on request, but the class
+  is the same. Tracked separately.
+
 ## 0.41.1 — 2026-09-28
 
 ### fix(security): the L3 rate gate reads its config as data, and the stability workflow stops running the PR's code (BRO-2651)

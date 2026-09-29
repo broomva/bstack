@@ -84,9 +84,30 @@ def resolve_workspace(arg=None):
     return os.getcwd()
 
 
-def load_setpoints(path):
+def _import_yaml():
+    """PyYAML, imported without letting the caller's directories in (BRO-2652).
+
+    The hooks start this file with `python3 -I`: no cwd, script dir, PYTHONPATH or
+    user site-packages on sys.path, so a json.py or yaml.py in the session's repo
+    cannot replace a module. -I also hides a PyYAML installed with `pip install
+    --user`, so on ImportError the user site is APPENDED (never inserted first): the
+    standard library and the interpreter's own site-packages still win. If PyYAML is
+    still missing, ImportError propagates to load_setpoints, which reports it."""
     try:
         import yaml
+        return yaml
+    except ImportError:
+        import site
+        user_site = site.getusersitepackages()
+        if isinstance(user_site, str) and os.path.isdir(user_site) and user_site not in sys.path:
+            sys.path.append(user_site)
+        import yaml
+        return yaml
+
+
+def load_setpoints(path):
+    try:
+        yaml = _import_yaml()
         with open(path) as f:
             return yaml.safe_load(f) or {}
     except Exception as e:

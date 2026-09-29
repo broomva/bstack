@@ -19,8 +19,14 @@ INPUT="$(cat 2>/dev/null || echo '{}')"
 command -v python3 >/dev/null 2>&1 || exit 0
 [ -x "$ARC_HELPER" ] || exit 0
 
+# python3 -I, never bare python3 (BRO-2652). This hook runs with the session's cwd,
+# i.e. whatever repository the session is in. A bare python3 - puts that directory
+# first on sys.path (python3 FILE puts the script's directory there), so a json.py
+# or re.py committed to the repo replaced the stdlib module, ran as code, and could
+# erase the hook's decision. -I drops cwd, the script dir, PYTHONPATH and user site.
+# tests/hook-python-isolation.test.sh plants those modules and fails on any leak.
 # extract session_id (line 1) + single-line prompt (line 2) from the hook payload
-{ read -r SID; read -r PROMPT; } < <(python3 - "$INPUT" <<'PY'
+{ read -r SID; read -r PROMPT; } < <(python3 -I - "$INPUT" <<'PY'
 import sys, json
 try:
     d = json.loads(sys.argv[1])

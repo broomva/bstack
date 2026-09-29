@@ -27,7 +27,7 @@
           },
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/bstack-hook-guard.sh\" python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/leverage-sensor.py\" --throttle 21600",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/bstack-hook-guard.sh\" python3 -I \"${CLAUDE_PLUGIN_ROOT}/scripts/leverage-sensor.py\" --throttle 21600",
             "timeout": 25
           }
         ]

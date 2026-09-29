@@ -129,10 +129,18 @@ import sys
 from dataclasses import asdict, dataclass, field
 from typing import Callable, Sequence
 
-try:
-    from git_env_policy import git_var_allowed  # run as a script: scripts/ is on sys.path
-except ImportError:  # imported as scripts.<module>
-    from scripts.git_env_policy import git_var_allowed
+if __package__:  # imported as scripts.test_lock
+    from .git_env_policy import git_var_allowed
+else:
+    # Run as a script. The hook starts it with `python3 -I` (BRO-2652), which keeps
+    # this file's directory off sys.path, so the sibling is loaded by its file path
+    # and nothing is added to sys.path at all.
+    import importlib.util as _ilu
+    _spec = _ilu.spec_from_file_location(
+        "git_env_policy", os.path.join(os.path.dirname(os.path.abspath(__file__)), "git_env_policy.py"))
+    _gep = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_gep)
+    git_var_allowed = _gep.git_var_allowed
 
 LOCK_KEY = "Test-Lock"
 UNLOCK_KEY = "Test-Unlock"

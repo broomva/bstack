@@ -34,8 +34,14 @@ HANDBACK_CONSEC_MAX=1
 command -v python3 >/dev/null 2>&1 || exit 0
 [ -x "$ARC_HELPER" ] || exit 0
 
+# python3 -I, never bare python3 (BRO-2652). This hook runs with the session's cwd,
+# i.e. whatever repository the session is in. A bare python3 - puts that directory
+# first on sys.path (python3 FILE puts the script's directory there), so a json.py
+# or re.py committed to the repo replaced the stdlib module, ran as code, and could
+# erase the hook's decision. -I drops cwd, the script dir, PYTHONPATH and user site.
+# tests/hook-python-isolation.test.sh plants those modules and fails on any leak.
 # session_id (l1) + transcript_path (l2) + stop_hook_active (l3)
-{ read -r SID; read -r TRANSCRIPT; read -r STOP_ACTIVE; } < <(python3 - "$INPUT" <<'PY'
+{ read -r SID; read -r TRANSCRIPT; read -r STOP_ACTIVE; } < <(python3 -I - "$INPUT" <<'PY'
 import sys, json
 try:
     d = json.loads(sys.argv[1])
@@ -51,7 +57,7 @@ PY
 [ -n "${TRANSCRIPT:-}" ] && [ -f "$TRANSCRIPT" ] || exit 0
 "$ARC_HELPER" active "$SID" >/dev/null 2>&1 || exit 0   # arc active + not stale
 
-VERDICT="$(python3 - "$TRANSCRIPT" <<'PY'
+VERDICT="$(python3 -I - "$TRANSCRIPT" <<'PY'
 import sys, json, re, time, os, hashlib
 
 path = sys.argv[1]
@@ -352,7 +358,7 @@ case "$VERDICT" in
     HANDBACK)
         [ "$("$ARC_HELPER" try-block "$SID" "$HANDBACK_CONSEC_MAX" "$LIFE_MAX" handback_count 2>/dev/null)" = "BLOCK" ] || exit 0
         HB_REASON="This turn ends the arc on something only the human can resolve, but the message contains no answerable ask block. Before stopping: (1) climb the autonomy ladder - is the answer already on disk, in .control/preauth.yaml, resolvable by a fresh agent, reachable by another lane, or a REVERSIBLE default you should just take and log? (2) if any unblocked lane still exists, run it instead of stopping. (3) only if neither holds, rewrite per the handback skill: a '## Blocked on you' heading FIRST, every row an imperative addressed to the reader with options and a recommendation, each row carrying 'if you say nothing, I do X', plain language, ranked by what it unblocks - then the 9-item receipt underneath."
-        python3 - "$HB_REASON" <<'PYHB'
+        python3 -I - "$HB_REASON" <<'PYHB'
 import sys, json
 print(json.dumps({"decision": "block", "reason": sys.argv[1]}))
 PYHB
@@ -364,7 +370,7 @@ PYHB
         REASON="Autonomous arc${SLUG:+ $SLUG} is active and this turn ended without continuing it. 'No response requested' / an empty terminal is never a valid mid-arc stop. Reconcile git/PR/watcher state, then continue"
         [ -n "${NEXT:-}" ] && REASON="$REASON the next slice: $NEXT"
         REASON="$REASON. If the arc is genuinely finished, run \`autonomous-arc.sh complete $SID\` so this stops firing."
-        python3 - "$REASON" <<'PY'
+        python3 -I - "$REASON" <<'PY'
 import sys, json
 print(json.dumps({"decision": "block", "reason": sys.argv[1]}))
 PY
