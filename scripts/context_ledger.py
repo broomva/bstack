@@ -24,14 +24,19 @@ Same rule as the sensor it extends (h ⟂ U): every number comes from transcript
 STRUCTURE -- the attachment records the harness writes and the structured fields of
 tool_use inputs. No assistant text or thinking block is read, and neither is prose
 that a structured field carries: an Agent prompt, a Write body, a Grep pattern, a
-commit message inside a Bash command. A shell command is parsed into the program each
-segment runs; only a program's own arguments are read, and only for `kg load`,
-`ctx board` and the read verbs the sensor already allowlists.
+commit message or PR body inside a Bash command. A shell command is first stripped of
+heredoc bodies and `#` comments (quotes tracked, newlines kept), then split with shlex
+into the program each segment runs. Only a program's own arguments are read, and only
+for the read verbs the sensor allowlists, `kg load` and `ctx board`; a grep or sed
+pattern is not a path. The parser under-counts rather than over-counts: a path in a
+shell variable or a loop variable is missed.
 
 The ledger is SHADOW: measured, never graded. It cannot become `worst` and it emits no
-actuator. Its hard claim is its own liveness. A ledger that read sessions and billed
-no byte is `blind`; one that saw a record the model was shown (Claude Code's
-`rendered` field) and billed nothing from it is `partial`. Doctor §29 fails on both
+actuator. Its hard claim is its own liveness, and it reports `partial` whenever part of
+what the model was shown could not be billed: a record Claude Code's `rendered` field
+says was shown that billed nothing, an attachment type the ledger does not know, an
+unreadable part of a billed record, a dead subagent block, or a run cut off by its time
+budget. A ledger that billed no byte at all is `blind`. Doctor §29 fails on both
 (BRO-1696: a sensor that goes dark must fail as a gap, never pass as a quiet reading).
 
 leverage-sensor.py loads this file by PATH, not by import: the hooks start the sensor
@@ -41,8 +46,9 @@ import json
 import os
 import re
 import shlex
+import time
 
-SCHEMA = 2
+SCHEMA = 3
 
 # A hook's PLAIN stdout reaches the model on these two events only; that is the Claude
 # Code hook contract, and it decides billing. Stop and PreToolUse stdout is recorded in
@@ -61,10 +67,11 @@ KNOWN_HEADERS = (
 
 # Harness listings: attachment type → the field holding the listing. They are not
 # bstack's text, but they grow with what the owner installed, so they belong on the same
-# bill. A listing record that carries `rendered` is billed from it instead: a delta also
-# tells the model which MCP servers need auth or disconnected, and that notice is in no
-# listing field (10 such records in the 2026-09-29 window). Every other model-visible
-# attachment is reported, unattributed, under `unattributed_visible` rather than dropped.
+# bill. A listing record that carries `rendered` is billed from it instead, minus the
+# <system-reminder> tags: a delta also tells the model which MCP servers need auth or
+# disconnected, and that notice is in no listing field (10 such records in the
+# 2026-09-29 window). Hooks and memory are billed from their own fields, so no source
+# pays for Claude Code's per-record wrapper.
 HARNESS_FIELDS = {
     "skill_listing": "content",
     "mcp_instructions_delta": "addedBlocks",
@@ -73,13 +80,27 @@ HARNESS_FIELDS = {
 }
 BILLED_TYPES = frozenset({"hook_success", "hook_additional_context", "instructions",
                           "nested_memory", *HARNESS_FIELDS})
+# Attachment types the model may be shown that the ledger reports, unbilled, under
+# `unattributed_visible`: turn plumbing and harness state, not injected context. A
+# shown type in NEITHER set is renamed or new, and makes the ledger `partial` until it
+# is classified here -- a renamed hook_success must not read as a quiet window.
+KNOWN_UNBILLED = frozenset({
+    "queued_command", "total_tokens_reminder", "edited_text_file", "session_context",
+    "environment", "remote_session_change", "file", "silent_turn_reminder", "auto_mode",
+    "invoked_skills", "model", "date", "read_truncation_notice", "ultra_effort_enter",
+    "dynamic_skill", "compact_file_reference", "command_permissions",
+    "batching_reminder_sent", "thinking_drop", "hook_system_message", "hook_cancelled",
+    "prompt_snapshot", "deferred_tools_record",
+})
 
 POINTER_KINDS = ("kg", "specs", "ctx", "memory")
 REFLEX_KINDS = ("kg", "specs", "memory", "research")
 
 # Paths, matched the same way in injected text (a pointer) and in a tool's path (a use).
 KG_PATH_RE = re.compile(r"research/entities/([\w./-]+?)\.md\b")
-SPECS_PATH_RE = re.compile(r"\bdocs/specs/[\w./-]*[\w-]")
+# A specs pointer must name a file: MEMORY.md's naming template
+# `docs/specs/YYYY-MM-DD-<slug>.html` is not a spec, and was 14 of 14 "pointers".
+SPECS_PATH_RE = re.compile(r"\bdocs/specs/[\w./-]+\.(?:md|html?|pdf|txt|ya?ml|json|rst)\b")
 SPECS_READ_RE = re.compile(r"(?:^|/)(?:docs/)?specs/")
 MEMORY_LINK_RE = re.compile(r"\]\(([\w.-]+\.md)\)")
 MEMORY_PATH_RE = re.compile(r"\.claude/(?:projects/[^/]+/)?memory/([\w.-]+\.md)\b")
@@ -91,18 +112,41 @@ CTX_ROW_RE = re.compile(r"^- session ([0-9a-f]{8})\b(?:, Paseo agent ([0-9a-f]{8
 HEX8_RE = re.compile(r"(?<![0-9a-f])([0-9a-f]{8})")
 RESEARCH_POINTER_RE = re.compile(r"\bdeep[- ]research\b|\bWebSearch\b|\bWebFetch\b", re.IGNORECASE)
 
-KG_SKILLS = frozenset({"kg", "checkit"})
 RESEARCH_TOOLS = frozenset({"WebFetch", "WebSearch"})
 RESEARCH_SKILLS = frozenset({
     "deep-research", "technical-research", "alpha-research", "literature-review",
     "last30days", "autoresearch", "financial-deep-research",
     "deep-dive-research-orchestrator", "interceptor-research", "checkit",
 })
-# Programs a segment may be wrapped in before the one it runs.
+# Programs a segment may be wrapped in before the one it runs, and the wrapper flags
+# that take a value (`sudo -u me kg.py load x` runs kg.py, not `me`).
 _WRAPPERS = frozenset({"sudo", "env", "timeout", "nice", "nohup", "time", "command", "exec"})
+_WRAPPER_VALUE_FLAGS = {"sudo": {"-u", "-g", "-C", "-h", "-p", "-U", "-r", "-t"},
+                        "nice": {"-n"}, "env": {"-u", "-C", "-S"},
+                        "timeout": {"-s", "-k", "--signal", "--kill-after"}}
 _ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _PYTHON_RE = re.compile(r"^python(?:\d+(?:\.\d+)?)?$")
+_PYTHON_VALUE_FLAGS = frozenset({"-X", "-W"})
+_SHELLS = frozenset({"sh", "bash", "zsh", "dash"})
 _KG_LOAD_VALUE_OPTS = frozenset({"--n", "-n", "--type", "--terms", "--limit"})
+# Read verbs whose first positional argument is a pattern or script, not a path, and
+# the flags that take a value (a flag that supplies the pattern moves it out of the
+# positionals).
+_PATTERN_FIRST = frozenset({"grep", "egrep", "fgrep", "rg", "ag", "sed"})
+_PATTERN_FLAGS = {"grep": {"-e", "--regexp", "-f", "--file"}, "egrep": {"-e", "-f"},
+                  "fgrep": {"-e", "-f"}, "rg": {"-e", "--regexp", "-f", "--file"},
+                  "ag": set(), "sed": {"-e", "--expression", "-f", "--file"}}
+_VALUE_FLAGS = {"grep": {"-A", "-B", "-C", "-m", "-d", "-D", "--max-count"},
+                "egrep": {"-A", "-B", "-C", "-m"}, "fgrep": {"-A", "-B", "-C", "-m"},
+                "rg": {"-A", "-B", "-C", "-m", "-g", "--glob", "-t", "--type", "-T", "-M"},
+                "ag": {"-A", "-B", "-C", "-m", "-G"}, "head": {"-n", "-c"},
+                "tail": {"-n", "-c"}, "sed": set()}
+_HEREDOC_RE = re.compile(r"<<(-?)\s*(['\"]?)([A-Za-z_][\w.-]*)\2")
+
+# The ledger's share of the Stop run: the hook's timeout is 25s, and m1-m6 are computed
+# before the ledger starts, so a slow ledger must stop itself rather than let the
+# timeout take the whole record with it.
+DEFAULT_BUDGET_S = 12.0
 
 HEADLINE_KEYS = (
     "cl1_injected_bytes_per_session_p50",
@@ -203,6 +247,11 @@ def hook_text(att):
     return "", None
 
 
+def _unwrapped(shown):
+    """Rendered text without the <system-reminder> tags Claude Code wraps it in."""
+    return re.sub(r"</?system-reminder>\n?", "", shown).strip("\n")
+
+
 def attachment_texts(att, shown=""):
     """(source, event, text, origin) for each piece of text one attachment carries.
     `shown` is the record's rendered text, used for harness listings.
@@ -215,8 +264,8 @@ def attachment_texts(att, shown=""):
         if not text:
             return []
         event = att.get("hookEvent") if isinstance(att.get("hookEvent"), str) else None
-        return [(f"hook:{event or 'unknown'}:{source_tag(text, att.get('command'))}",
-                 event, text, origin)]
+        command = att.get("command") if isinstance(att.get("command"), str) else None
+        return [(f"hook:{event or 'unknown'}:{source_tag(text, command)}", event, text, origin)]
     if at == "hook_additional_context":
         event = att.get("hookEvent") if isinstance(att.get("hookEvent"), str) else None
         body = att.get("content")
@@ -226,16 +275,20 @@ def attachment_texts(att, shown=""):
         return [(f"hook:{event or 'unknown'}:{source_tag(e)}", event, e, "hac")
                 for e in entries if isinstance(e, str) and e.strip()]
     if at == "instructions":
-        return [(f"memory:{f.get('type') or 'unknown'}", None, f["content"], "file")
-                for f in att.get("files") or []
-                if isinstance(f, dict) and isinstance(f.get("content"), str)]
+        files = att.get("files")
+        # A file entry with no readable content is a dark part of a shown record: it is
+        # returned with text=None so the caller counts it rather than skipping it.
+        return [(f"memory:{f.get('type') or 'unknown'}" if isinstance(f, dict) else "memory:unknown",
+                 None, f.get("content") if isinstance(f, dict) and isinstance(f.get("content"), str)
+                 else None, "file")
+                for f in (files if isinstance(files, list) else [None])]
     if at == "nested_memory":
         body = att.get("content")
         if isinstance(body, dict) and isinstance(body.get("content"), str):
             return [(f"memory:nested-{body.get('type') or 'unknown'}", None, body["content"], "file")]
-        return []
+        return [("memory:nested-unknown", None, None, "file")]
     if at in HARNESS_FIELDS:
-        text = shown or _as_text(att.get(HARNESS_FIELDS[at]))
+        text = _unwrapped(shown) if shown else _as_text(att.get(HARNESS_FIELDS[at]))
         return [(f"harness:{at}", None, text, "listing")] if text else []
     return []
 
@@ -257,20 +310,74 @@ def text_pointers(source, text):
     return found, bool(RESEARCH_POINTER_RE.search(text))
 
 
-def shell_segments(cmd):
-    """The token lists of a shell command's segments, quotes respected.
+def strip_shell_noise(cmd):
+    """The command with heredoc bodies and `#` comments removed, and newlines kept.
 
-    A heredoc and everything after it are dropped: the body is authored text, and the
-    sensor's own read detection drops it the same way. An unparseable command (an
-    unbalanced quote) yields no segments -- an under-count, the safe direction."""
-    lex = shlex.shlex(cmd, posix=True, punctuation_chars=";&|()<>\n")
+    Quotes are tracked, so a `#` or `<<` inside a quoted string is left alone: a heredoc
+    inside `"$(cat <<'EOF' ...)"` stays inside its quoted argument, which no read verb
+    takes as a path. The newline that ends a comment is kept, so the next line is still
+    its own segment (shlex's own comment handling swallows it)."""
+    if "#" not in cmd and "<<" not in cmd:
+        return cmd
+    out, pending, quote = [], [], None
+    i, n = 0, len(cmd)
+    while i < n:
+        c = cmd[i]
+        if quote:
+            out.append(c)
+            if c == "\\" and quote == '"' and i + 1 < n:
+                out.append(cmd[i + 1])
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n:
+            out.append(cmd[i:i + 2])
+            i += 2
+            continue
+        if c in "'\"":
+            quote = c
+        elif c == "#" and (i == 0 or cmd[i - 1] in " \t\n;&|()"):
+            j = cmd.find("\n", i)
+            i = n if j < 0 else j
+            continue
+        elif cmd.startswith("<<", i) and not cmd.startswith("<<<", i):
+            m = _HEREDOC_RE.match(cmd, i)
+            if m:
+                pending.append(m.group(3))
+                out.append(" ")
+                i = m.end()
+                continue
+        elif c == "\n" and pending:
+            out.append(c)
+            i += 1
+            for delim in pending:      # each body runs to its own terminator line
+                while i < n:
+                    j = cmd.find("\n", i)
+                    line = cmd[i:] if j < 0 else cmd[i:j]
+                    i = n if j < 0 else j + 1
+                    if line.strip() == delim:
+                        break
+            pending = []
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def shell_segments(cmd):
+    """The token lists of a shell command's segments, quotes respected. An unparseable
+    command (an unbalanced quote) yields no segments -- an under-count, the safe
+    direction."""
+    lex = shlex.shlex(strip_shell_noise(cmd), posix=True, punctuation_chars=";&|()<>\n")
     lex.whitespace = " \t\r"
     lex.whitespace_split = True
+    lex.commenters = ""            # comments are already gone, newlines intact
     segs, seg = [], []
     try:
         for tok in lex:
-            if tok.startswith("<<"):
-                break
             if tok and all(c in ";&|()\n" for c in tok):
                 if seg:
                     segs.append(seg)
@@ -284,10 +391,11 @@ def shell_segments(cmd):
     return segs
 
 
-def segment_program(seg):
-    """(program, args) a segment runs: past VAR=value, wrappers such as `timeout 150`,
-    and a python interpreter, so `KG_NO_POLICY=1 timeout 150 python3 -I kg.py load x`
-    is ("kg.py", ["load", "x"]). `$CTX` is the ctx-core skill's documented alias."""
+def segment_programs(seg, depth=0):
+    """(program, args) for what one segment runs: past VAR=value, wrappers such as
+    `timeout 150` and their flag values, a python interpreter, `uv run`, and into
+    `sh -c "..."`. So `KG_NO_POLICY=1 timeout 150 python3 -I kg.py load x` is
+    ("kg.py", ["load", "x"]). `$CTX` is the ctx-core skill's documented alias."""
     i = 0
     while i < len(seg):
         tok = seg[i]
@@ -297,26 +405,69 @@ def segment_program(seg):
         base = os.path.basename(tok)
         if base in _WRAPPERS:
             i += 1
+            flags = _WRAPPER_VALUE_FLAGS.get(base, ())
             while i < len(seg) and seg[i].startswith("-"):
-                i += 1
+                i += 2 if seg[i] in flags else 1
             if base == "timeout" and i < len(seg) and re.match(r"^[\d.]+[smhd]?$", seg[i]):
                 i += 1
             continue
         break
     rest = seg[i:]
     if not rest:
-        return None, []
+        return []
     name, args = os.path.basename(rest[0]).lower(), rest[1:]
+    if name == "uv" and args[:1] == ["run"] and depth < 3:
+        return segment_programs(args[1:], depth + 1)
+    if name in _SHELLS and depth < 3:
+        for j, a in enumerate(args):
+            if re.match(r"^-[a-z]*c[a-z]*$", a) and j + 1 < len(args):
+                return [p for inner in shell_segments(args[j + 1])
+                        for p in segment_programs(inner, depth + 1)]
     if _PYTHON_RE.match(name):
         j = 0
         while j < len(args) and args[j].startswith("-"):
-            j += 1
+            if args[j] == "-c":
+                return []              # inline code, not a script
+            j += 2 if args[j] in _PYTHON_VALUE_FLAGS else 1
         if j >= len(args):
-            return name, []
+            return []
         name, args = os.path.basename(args[j]).lower(), args[j + 1:]
     if name in ("$ctx", "${ctx}"):
         name = "ctx"
-    return name, args
+    return [(name, args)]
+
+
+def read_targets(prog, args, vocab):
+    """Path arguments of one program, if it is a read: an allowlisted read verb, or git
+    in a read subcommand. Redirect targets are writes; a grep/sed pattern is not a path;
+    `git cat-file -e` checks existence without reading."""
+    if prog == "git":
+        subs = [a for a in args if not a.startswith("-")]
+        if not subs or subs[0] not in vocab["git_read_subs"]:
+            return []
+        if subs[0] == "cat-file" and ({"-e", "-t", "-s"} & set(args)):
+            return []
+        return [a for a in args[args.index(subs[0]) + 1:] if "/" in a and not a.startswith("-")]
+    if prog not in vocab["read_verbs"]:
+        return []
+    positional, pattern_given, skip, redirect = [], False, False, False
+    for a in args:
+        if redirect or skip:
+            redirect = skip = False
+            continue
+        if a and all(c in "<>&" for c in a):
+            redirect = True
+            continue
+        if a.startswith("-") and len(a) > 1:
+            if a in _PATTERN_FLAGS.get(prog, ()):
+                pattern_given = skip = True
+            elif a in _VALUE_FLAGS.get(prog, ()):
+                skip = True
+            continue
+        positional.append(a)
+    if prog in _PATTERN_FIRST and not pattern_given:
+        positional = positional[1:]
+    return [a for a in positional if "/" in a]
 
 
 def load_query_tokens(args):
@@ -342,11 +493,14 @@ class _Session:
     """One transcript file. Records are fed in order; `idx` is the order, `ts` the
     record's own timestamp (used only to order a parent against its subagents)."""
 
-    def __init__(self, path, kg_read_re, read_targets):
+    def __init__(self, path, kg_read_re, vocab):
         self.path = path
         self.kg_read_re = kg_read_re
-        self.read_targets = read_targets
+        self.vocab = vocab
         self.own_records = self.fork_copies = self.malformed = 0
+        self.unreadable_parts = 0   # parts of a billed record with no readable text
+        self.unknown_visible = {}   # shown attachment types the ledger does not know
+        self.billed_type_records = self.billed_type_rendered = 0
         self.turns = 0
         self._prompt_id = None
         self.candidates = []        # injections, billed in finish()
@@ -366,6 +520,18 @@ class _Session:
 
     # -- feeding ---------------------------------------------------------------------
     def feed(self, obj, idx):
+        """One record. A record whose shape the ledger cannot read is counted, never
+        allowed to take the rest of the window with it; a billed-type one also makes
+        the ledger `partial`, because what it carried went unbilled."""
+        try:
+            self._feed(obj, idx)
+        except (TypeError, AttributeError, ValueError, KeyError):
+            self.malformed += 1
+            att = obj.get("attachment") if isinstance(obj.get("attachment"), dict) else {}
+            if att.get("type") in BILLED_TYPES:
+                self.unreadable_parts += 1
+
+    def _feed(self, obj, idx):
         ts = obj.get("timestamp") if isinstance(obj.get("timestamp"), str) else ""
         t = obj.get("type")
         att = obj.get("attachment") if t == "attachment" else None
@@ -376,7 +542,8 @@ class _Session:
             self.fork_copies += 1
             if isinstance(att, dict):
                 for source, _, text, _ in attachment_texts(att):
-                    self._mark_pointed(source, text)
+                    if text:
+                        self._mark_pointed(source, text)
             return
         self.own_records += 1
         if t == "user":
@@ -388,14 +555,25 @@ class _Session:
             at = att.get("type")
             shown = rendered_text(obj.get("rendered"))
             if at in BILLED_TYPES:
+                texts = attachment_texts(att, shown)
+                # Coverage counts the records that carried injected text: a PreToolUse
+                # `{}` is a billed type too, but there is nothing on it to check.
+                if texts or shown:
+                    self.billed_type_records += 1
+                    self.billed_type_rendered += bool(shown)
                 if shown:
                     self.visible[idx] = at
-                for source, event, text, origin in attachment_texts(att, shown):
+                for source, event, text, origin in texts:
+                    if text is None:
+                        self.unreadable_parts += 1
+                        continue
                     self.candidates.append({"idx": idx, "ts": ts, "turn": self.turns - 1,
                                             "source": source, "event": event,
                                             "text": text, "origin": origin})
             elif shown:
-                u = self.unattributed_visible.setdefault(str(at), {"records": 0, "bytes": 0})
+                bucket = (self.unattributed_visible if at in KNOWN_UNBILLED
+                          else self.unknown_visible)
+                u = bucket.setdefault(str(at), {"records": 0, "bytes": 0})
                 u["records"] += 1
                 u["bytes"] += _nbytes(shown)
         elif t == "assistant":
@@ -540,18 +718,17 @@ class _Session:
             self._read_path(str(inp.get("pattern") or "") + " " + str(inp.get("path") or ""),
                             idx, ts, opened=False)
         elif name == "Bash":
-            cmd = str(inp.get("command") or "")
-            for target in self.read_targets(cmd.lower()):
-                self._read_path(target, idx, ts)
-            for seg in shell_segments(cmd):
-                prog, args = segment_program(seg)
-                if prog in ("kg", "kg.py") and args[:1] == ["load"]:
-                    self._kg_load(args[1:], idx, ts)
-                elif prog in ("ctx", "ctx.py") and args[:1] == ["board"]:
-                    self.board_cmds.append((idx, ts))
+            for seg in shell_segments(str(inp.get("command") or "")):
+                for prog, args in segment_programs(seg):
+                    for target in read_targets(prog, args, self.vocab):
+                        self._read_path(target, idx, ts)
+                    if prog in ("kg", "kg.py") and args[:1] == ["load"]:
+                        self._kg_load(args[1:], idx, ts)
+                    elif prog in ("ctx", "ctx.py") and args[:1] == ["board"]:
+                        self.board_cmds.append((idx, ts))
         elif name == "Skill":
             skill = str(inp.get("skill") or "").lower()
-            if skill in KG_SKILLS:
+            if skill in self.vocab["kg_skills"]:
                 self.reflexes.add("kg")
                 try:
                     args = shlex.split(str(inp.get("args") or ""))
@@ -594,8 +771,8 @@ class _Session:
         return False
 
 
-def read_session(path, iter_records, kg_read_re, read_targets):
-    s = _Session(path, kg_read_re, read_targets)
+def read_session(path, iter_records, kg_read_re, vocab):
+    s = _Session(path, kg_read_re, vocab)
     for idx, obj in enumerate(iter_records(path)):
         if isinstance(obj, dict):
             s.feed(obj, idx)
@@ -609,7 +786,7 @@ def _group(source):
     return source.split(":", 1)[0]
 
 
-def _aggregate(files, sessions):
+def _aggregate(files, sessions, truncated=False):
     live = [s for s in sessions if s.own_records]
     per_session_total, per_turn_total = [], []
     src, not_injected, unattributed = {}, {}, {}
@@ -652,29 +829,45 @@ def _aggregate(files, sessions):
     by_group = {}
     for name, a in src.items():
         by_group[_group(name)] = by_group.get(_group(name), 0) + a["bytes"]
-    unbilled = {}
+    unbilled, unknown = {}, {}
     for s in live:
         for at, n in s.unbilled_visible.items():
             unbilled[at] = unbilled.get(at, 0) + n
+        for at, v in s.unknown_visible.items():
+            u = unknown.setdefault(at, {"records": 0, "bytes": 0})
+            u["records"] += v["records"]
+            u["bytes"] += v["bytes"]
     unknown_event = sum(s.unknown_event for s in live)
+    unreadable = sum(s.unreadable_parts for s in sessions)
+    typed = sum(s.billed_type_records for s in live)
+    shown = sum(s.billed_type_rendered for s in live)
 
-    if not sessions:
+    # A run the time budget cut short is `partial` whatever it did read: what it did
+    # not read cannot be called absent.
+    if not files:
         status, reason = "no_data", "no session file in the window"
-    elif not live:
+    elif not live and not truncated:
         status, reason = "no_data", "every record in the window was a fork copy"
-    elif total == 0:
+    elif total == 0 and not truncated:
         status = "blind"
         reason = (f"read {len(live)} session(s), {sum(s.own_records for s in live)} records, "
                   "and billed 0 injected bytes — the attachment schema no longer matches")
-    elif unbilled or unknown_event:
+    elif unbilled or unknown_event or unknown or unreadable or truncated:
         # One source going dark while the others keep the total above zero is the same
         # failure one level down: the ledger would read `live` with role-x missing.
         status = "partial"
         parts = [f"{n} {at} record(s) the model was shown billed 0 bytes"
                  for at, n in sorted(unbilled.items())]
+        parts += [f"{v['records']} shown record(s) of attachment type {at!r}, which the "
+                  "ledger does not know (renamed or new: classify it in context_ledger.py)"
+                  for at, v in sorted(unknown.items())]
         if unknown_event:
             parts.append(f"{unknown_event} hook output(s) with no hookEvent")
-        reason = "; ".join(parts) + " — part of the attachment schema no longer matches"
+        if unreadable:
+            parts.append(f"{unreadable} unreadable part(s) of billed records")
+        if truncated:
+            parts.append(f"time budget reached after {len(sessions)} of {len(files)} files")
+        reason = "; ".join(parts)
     else:
         status, reason = "live", None
 
@@ -684,6 +877,11 @@ def _aggregate(files, sessions):
         "fork_copied_records_skipped": sum(s.fork_copies for s in sessions),
         "malformed_records": sum(s.malformed for s in sessions),
         "memory_observable": "memory" in by_group,
+        # How much of the window the `rendered` drift check can see: records written by
+        # Claude Code before 2.1.280 carry no `rendered`, and for them only the
+        # structural checks (unknown hookEvent, unreadable parts) apply.
+        "drift_check_coverage": {"billed_type_records": typed, "with_rendered": shown,
+                                 "share": _rate(shown, typed)},
         "totals": {
             "bytes": total, "est_tokens": total // 4,
             "by_group": {g: {"bytes": b, "est_tokens": b // 4} for g, b in sorted(by_group.items())},
@@ -693,6 +891,7 @@ def _aggregate(files, sessions):
         "not_injected": dict(sorted(not_injected.items(), key=lambda kv: -kv[1]["bytes"])),
         "unbilled_visible": dict(sorted(unbilled.items())),
         "unattributed_visible": dict(sorted(unattributed.items(), key=lambda kv: -kv[1]["bytes"])),
+        "unknown_visible": dict(sorted(unknown.items())),
         "follow_through": _follow_through(live),
         "reflexes": _reflexes(live),
     }
@@ -762,13 +961,19 @@ def _reflexes(sessions):
     return out
 
 
+def subagent_parent(path):
+    """The session id a subagent transcript belongs to: the directory above `subagents`,
+    for <id>/subagents/agent-*.jsonl and <id>/subagents/workflows/<wf>/agent-*.jsonl."""
+    parts = os.path.normpath(path).split(os.sep)
+    return parts[parts.index("subagents") - 1] if "subagents" in parts[1:] else None
+
+
 def _via_subagents(block, main, subs):
     """Parent pointers the parent never opened but one of its own subagents did, after
-    the pointer was injected. A subagent lives at <parent-id>/subagents/*.jsonl."""
+    the pointer was injected."""
     kids = {}
     for s in subs:
-        parent = os.path.basename(os.path.dirname(os.path.dirname(s.path)))
-        kids.setdefault(parent, []).append(s)
+        kids.setdefault(subagent_parent(s.path), []).append(s)
     for kind in POINTER_KINDS:
         n = 0
         for s in main:
@@ -782,15 +987,36 @@ def _via_subagents(block, main, subs):
         block["follow_through"]["by_kind"][kind]["followed_only_by_own_subagents"] = n
 
 
-def analyze_context(files, kg_read_re, read_targets, iter_records, subagent_files=()):
-    """The context_ledger block for one window of transcript files (and their subagents)."""
-    main = [read_session(p, iter_records, kg_read_re, read_targets) for p in files]
-    subs = [read_session(p, iter_records, kg_read_re, read_targets) for p in subagent_files]
-    block = _aggregate(files, main)
-    sub = _aggregate(subagent_files, subs)
+def _read_all(paths, iter_records, kg_read_re, vocab, deadline):
+    """Sessions read before the deadline, and whether it cut the list short."""
+    out = []
+    for p in paths:
+        if deadline is not None and time.monotonic() > deadline:
+            return out, True
+        out.append(read_session(p, iter_records, kg_read_re, vocab))
+    return out, False
+
+
+def analyze_context(files, kg_read_re, vocab, iter_records, subagent_files=(),
+                    budget_s=DEFAULT_BUDGET_S):
+    """The context_ledger block for one window of transcript files and their subagents.
+    `vocab` carries the sensor's read verbs, git read subcommands and kg skill names,
+    so the ledger and m5 read the same vocabulary. Main sessions are read first; the
+    time budget, when it runs out, cuts the subagents before them."""
+    deadline = None if budget_s is None else time.monotonic() + budget_s
+    main, main_cut = _read_all(files, iter_records, kg_read_re, vocab, deadline)
+    subs, sub_cut = _read_all(subagent_files, iter_records, kg_read_re, vocab, deadline)
+    block = _aggregate(files, main, main_cut)
+    sub = _aggregate(subagent_files, subs, sub_cut)
     _via_subagents(block, [s for s in main if s.own_records], [s for s in subs if s.own_records])
+    if block["status"] == "live" and sub["status"] in ("blind", "partial"):
+        # A dead subagent block is a dead half of the bill; doctor reads one status.
+        block["status"] = "partial"
+        block["status_reason"] = f"subagents {sub['status']}: {sub['status_reason']}"
     headline = dict.fromkeys(HEADLINE_KEYS)
-    if block["status"] in ("live", "partial"):
+    if block["status"] == "live":
+        # A partial window stores no headline: a value computed with a source missing
+        # would enter the metrics history as a drop nobody caused.
         headline = {
             HEADLINE_KEYS[0]: block["totals"]["per_session"]["median"],
             HEADLINE_KEYS[1]: block["follow_through"]["by_kind"]["kg"]["rate"],
@@ -798,7 +1024,8 @@ def analyze_context(files, kg_read_re, read_targets, iter_records, subagent_file
         }
     block["totals"]["bytes_including_subagents"] = block["totals"]["bytes"] + sub["totals"]["bytes"]
     subagents = {k: sub[k] for k in ("status", "status_reason", "files", "sessions", "turns",
-                                     "totals", "sources", "unbilled_visible")}
+                                     "totals", "sources", "unbilled_visible", "unknown_visible",
+                                     "drift_check_coverage")}
     subagents["follow_through"] = {"by_kind": sub["follow_through"]["by_kind"]}
     subagents["reflexes"] = {"any": sub["reflexes"]["any"]}
     return {
@@ -806,5 +1033,6 @@ def analyze_context(files, kg_read_re, read_targets, iter_records, subagent_file
         "scope": "main-session transcripts; subagent transcripts are measured under `subagents`",
         "turn_unit": "one Claude Code promptId (pre-promptId transcripts: one human prompt)",
         "token_estimate": TOKEN_ESTIMATE_NOTE,
+        "billing_unit": "the injected text itself; Claude Code's per-record wrapper is not billed",
         "subagents": subagents,
     }

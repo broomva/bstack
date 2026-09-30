@@ -20,7 +20,7 @@ set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO" || exit 1
-MIN_TESTS=73
+MIN_TESTS=89
 
 PASS=0; FAIL=0
 ok()  { PASS=$((PASS + 1)); echo "  [pass] $1"; }

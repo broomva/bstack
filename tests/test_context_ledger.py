@@ -50,9 +50,12 @@ BOARD = ("Shared board facts (ctx scope broomva, 3 events, last event 2026-09-29
          "These rows were recorded by hooks in other sessions of this scope.\n"
          "This session: 809eea3c, branch main, cwd ~/broomva.\n"
          "- session 3403ef08, Paseo agent f5307ce7, branch main, cwd ~/broomva, status DONE.\n")
+# Includes a link to the index itself and MEMORY.md's naming template for specs: neither
+# is a pointer (the index is already injected; the template names no file).
 MEMORY_INDEX = ("# Memory Index\n"
                 "- [Railway default](feedback_railway.md) — deploy target\n"
-                "- [Spec](project_spec.md) — see docs/specs/ctx-core.md\n")
+                "- [Spec](project_spec.md) — see docs/specs/ctx-core.md\n"
+                "- [This index](MEMORY.md) — human-read docs -> docs/specs/YYYY-MM-DD-<slug>.html\n")
 CLAUDE_MD = "# ~/broomva — Unified Workspace\nRead research/entities/pattern/bstack-engine.md first.\n"
 RAILWAY = "/Users/x/broomva/research/entities/persona/railway-deploy-default.md"
 
@@ -297,10 +300,13 @@ class Sources(LedgerCase):
 
     def test_harness_notice_is_billed_from_what_the_model_was_shown(self):
         # A delta with no added lines still tells the model which servers need auth.
-        notice = "<system-reminder>\nThe following MCP servers require authentication: x\n</system-reminder>"
-        cl = self.ledger(T().listing("deferred_tools_delta", "addedLines", [], rendered=notice))
+        notice = "The following MCP servers require authentication: x"
+        cl = self.ledger(T().listing("deferred_tools_delta", "addedLines", [],
+                                     rendered=f"<system-reminder>\n{notice}\n</system-reminder>"))
+        # Billed without Claude Code's wrapper tags, like every other source.
         self.assertEqual(self.src(cl, "harness:deferred_tools_delta")["bytes"], nb(notice))
         self.assertEqual(cl["status"], "live")
+        self.assertEqual(cl["drift_check_coverage"]["share"], 1.0)
 
     def test_other_visible_attachments_are_reported_unattributed(self):
         cl = self.ledger(T().prompt(pid="p1").hook("UserPromptSubmit", ROLE_X)
@@ -425,6 +431,32 @@ class FollowThrough(LedgerCase):
         self.assertEqual((mem["injected"], mem["followed"]), (2, 1))
         self.assertEqual(cl["follow_through"]["by_kind"]["specs"]["injected"], 1)
 
+    def test_specs_pointer_names_a_file(self):
+        # MEMORY.md's `docs/specs/YYYY-MM-DD-<slug>.html` template is not a pointer.
+        t = T().instructions(("/h/.claude/projects/w/memory/MEMORY.md", "AutoMem", MEMORY_INDEX)).prompt(pid="p1")
+        self.assertEqual(self.ledger(copy.deepcopy(t))["follow_through"]["by_kind"]["specs"]["injected"], 1)
+        cl = self.ledger(t.tool("Read", file_path="/w/docs/specs/ctx-core.md"))
+        self.assertEqual(cl["follow_through"]["by_kind"]["specs"]["followed"], 1)
+
+    def test_grep_and_sh_c_reads_count(self):
+        cl = self.ledger(self.rx()
+                         .tool("Bash", command="grep -n claim research/entities/persona/railway-deploy-default.md")
+                         .tool("Bash", command='bash -lc "cat research/entities/persona/auth-better-auth.md"'))
+        self.assertEqual(self.kg(cl)["followed"], 2)
+
+    def test_wrapper_flag_values_are_skipped(self):
+        cl = self.ledger(self.rx().tool("Bash", command="sudo -u me kg.py load persona/auth-better-auth"))
+        self.assertEqual(self.kg(cl)["followed"], 1)
+
+    def test_comment_keeps_the_next_line(self):
+        cl = self.ledger(self.rx().tool("Bash", command="cd ~/x  # don't forget\nkg.py load persona/auth-better-auth"))
+        self.assertEqual(self.kg(cl)["followed"], 1)
+
+    def test_existence_check_is_not_a_read(self):
+        cl = self.ledger(self.rx().tool(
+            "Bash", command="git cat-file -e main:research/entities/persona/railway-deploy-default.md"))
+        self.assertEqual(self.kg(cl)["followed"], 0)
+
     def test_reading_the_memory_index_is_a_reflex_not_an_entry_open(self):
         cl = self.ledger(T().prompt(pid="p1").tool("Read", file_path="/h/.claude/projects/w/memory/MEMORY.md"))
         self.assertEqual(cl["follow_through"]["opened"]["memory"]["opened"], 0)
@@ -523,10 +555,26 @@ class NoProse(LedgerCase):
             "Bash", command='git commit -m "peer 3403ef08 shipped; kg load auth-better-auth; ctx board"'))
         self.assertEqual((self.kg(cl)["followed"], self.ctx(cl)["followed"]), (0, 0))
 
+    def test_read_verb_inside_a_commit_message_is_not_a_read(self):
+        cl = self.ledger(self.board().tool(
+            "Bash", command='git commit -m "fix\n\ncat research/entities/persona/railway-deploy-default.md"'))
+        self.assertEqual(self.kg(cl)["followed"], 0)
+
     def test_pr_body_is_not_a_use(self):
         cl = self.ledger(self.board().tool(
-            "Bash", command='gh pr create --title t --body "kg.py load auth-better-auth && ctx board"'))
+            "Bash", command='gh pr create --title t --body "Summary; cat research/entities/persona/'
+                            'railway-deploy-default.md && kg.py load auth-better-auth && ctx board"'))
         self.assertEqual((self.kg(cl)["followed"], self.ctx(cl)["followed"]), (0, 0))
+
+    def test_bash_grep_pattern_is_not_a_read(self):
+        cl = self.ledger(self.board().tool(
+            "Bash", command='grep -rn "research/entities/persona/railway-deploy-default.md" docs/'))
+        self.assertEqual(self.kg(cl)["followed"], 0)
+
+    def test_comment_does_not_join_prose(self):
+        cl = self.ledger(self.board().tool(
+            "Bash", command='kg.py load a  # note\ngit commit -m "persona/auth-better-auth"'))
+        self.assertEqual(self.kg(cl)["followed"], 0)
 
     def test_grep_pattern_is_not_a_use(self):
         cl = self.ledger(self.board().tool("Grep", pattern="3403ef08", path="/Users/x/broomva"))
@@ -544,8 +592,15 @@ class NoProse(LedgerCase):
 
     def test_heredoc_body_is_not_a_use(self):
         cl = self.ledger(self.board().tool(
-            "Bash", command="cat > /tmp/brief.md <<'EOF'\nkg.py load auth-better-auth\nctx board\nEOF"))
+            "Bash", command="git commit -q -F - <<'MSG'\nwhy\ncat research/entities/persona/"
+                            "railway-deploy-default.md\nkg.py load auth-better-auth\nctx board\nMSG"))
         self.assertEqual((self.kg(cl)["followed"], self.ctx(cl)["followed"]), (0, 0))
+
+    def test_a_command_after_a_heredoc_still_counts(self):
+        cl = self.ledger(self.board().tool(
+            "Bash", command="cat > /tmp/n.md <<'EOF'\nbody\nEOF\nsed -n 1,9p research/entities/persona/"
+                            "railway-deploy-default.md"))
+        self.assertEqual(self.kg(cl)["followed"], 1)
 
 
 # --- 3. retrieval reflexes --------------------------------------------------------
@@ -593,6 +648,20 @@ class Subagents(LedgerCase):
         self.assertEqual(cl["subagents"]["totals"]["bytes"], nb(CLAUDE_MD))
         self.assertEqual(cl["totals"]["bytes_including_subagents"], nb(ROLE_X) + nb(CLAUDE_MD))
 
+    def test_dead_subagent_block_makes_the_ledger_partial(self):
+        sub = T("agent-a").prompt(pid="q1").tool("Read", file_path="/w/a.py").tool_result("q1")
+        cl = self.ledger(T("parent").prompt(pid="p1").hook("UserPromptSubmit", ROLE_X),
+                         subagents=[("s0/subagents/agent-a", sub)])
+        self.assertEqual(cl["subagents"]["status"], "blind")
+        self.assertEqual(cl["status"], "partial")
+        self.assertIn("subagents blind", cl["status_reason"])
+
+    def test_workflow_subagent_maps_to_its_parent(self):
+        parent = T("parent").prompt(pid="p1").at("2026-09-29T11:00:00.000Z").hook("UserPromptSubmit", ROLE_X)
+        sub = T("agent-b").prompt(pid="q1").at("2026-09-29T11:05:00.000Z").tool("Read", file_path=RAILWAY)
+        cl = self.ledger(parent, subagents=[("s0/subagents/workflows/wf_1/agent-b", sub)])
+        self.assertEqual(self.kg(cl)["followed_only_by_own_subagents"], 1)
+
     def test_parent_pointer_opened_only_by_its_subagent(self):
         parent = T("parent").prompt(pid="p1").at("2026-09-29T11:00:00.000Z").hook("UserPromptSubmit", ROLE_X)
         for ts, want in (("2026-09-29T11:05:00.000Z", 1), ("2026-09-29T10:55:00.000Z", 0)):
@@ -626,6 +695,39 @@ class Liveness(LedgerCase):
                          .hook("UserPromptSubmit", ROLE_X, drop=("hookEvent",)))
         self.assertEqual(cl["status"], "partial")
         self.assertIn("no hookEvent", cl["status_reason"])
+
+    def test_unknown_visible_type_is_partial(self):
+        # A renamed hook_success lands here; it must not read as a quiet window.
+        cl = self.ledger(T().skill_listing("- kg\n").prompt(pid="p1").other("hook_output", "[role-x intake] x"))
+        self.assertEqual(cl["status"], "partial")
+        self.assertIn("'hook_output'", cl["status_reason"])
+        self.assertEqual(cl["unknown_visible"]["hook_output"]["records"], 1)
+
+    def test_unreadable_part_of_a_billed_record_is_partial(self):
+        cl = self.ledger(T().prompt(pid="p1").raw({"type": "attachment", "attachment": {
+            "type": "instructions", "files": [{"path": "/w/CLAUDE.md", "type": "Project", "content": CLAUDE_MD},
+                                              {"path": "/m/MEMORY.md", "type": "AutoMem", "text": "moved"}]}}))
+        self.assertEqual(cl["status"], "partial")
+        self.assertEqual(self.src(cl, "memory:Project")["bytes"], nb(CLAUDE_MD))
+
+    def test_a_malformed_billed_record_is_partial_not_an_error(self):
+        cl = self.ledger(T().prompt(pid="p1").hook("UserPromptSubmit", ROLE_X)
+                         .raw({"type": "attachment", "attachment": {"type": "instructions", "files": 5}})
+                         .raw({"type": "attachment", "attachment": {"type": "hook_success", "hookEvent": "SessionStart",
+                                                                    "content": "[auth pre-flight] x", "command": ["a"]}}))
+        self.assertEqual(cl["status"], "partial")
+        self.src(cl, "hook:SessionStart:auth-preflight")
+
+    def test_time_budget_cuts_loudly(self):
+        paths = [T(f"s{i}").prompt(pid="p1").hook("UserPromptSubmit", ROLE_X).write(self.dir) for i in range(3)]
+        cl = SENSOR.context_ledger_block(paths, KG_RE, (), budget_s=0)
+        self.assertEqual(cl["status"], "partial")
+        self.assertIn("time budget", cl["status_reason"])
+
+    def test_partial_stores_no_headline(self):
+        cl = self.ledger(T().skill_listing("- kg\n").prompt(pid="p1").other("hook_output", "x"))
+        self.assertEqual(cl["status"], "partial")
+        self.assertTrue(all(v is None for v in cl["headline"].values()))
 
     def test_malformed_records_do_not_stop_the_ledger(self):
         cl = self.ledger(T().raw("not json at all").raw({"type": "assistant", "message": "text"})
@@ -711,9 +813,11 @@ class Cli(unittest.TestCase):
         self.live_transcript()
         T("agent-a").instructions(("/w/CLAUDE.md", "Project", CLAUDE_MD)).prompt(pid="q1").write(
             self.tr / "s1" / "subagents")
+        T("agent-b").instructions(("/w/CLAUDE.md", "Project", CLAUDE_MD)).prompt(pid="q1").write(
+            self.tr / "s1" / "subagents" / "workflows" / "wf_1")
         rec = json.loads(self.run_sensor(SCRIPTS, "--json"))
-        self.assertEqual(rec["context_ledger"]["subagents"]["files"], 1)
-        self.assertEqual(rec["context_ledger"]["subagents"]["totals"]["bytes"], nb(CLAUDE_MD))
+        self.assertEqual(rec["context_ledger"]["subagents"]["files"], 2)
+        self.assertEqual(rec["context_ledger"]["subagents"]["totals"]["bytes"], 2 * nb(CLAUDE_MD))
 
     def test_brief_and_closure_runs_skip_the_ledger(self):
         # These print no ledger and store nothing, and SessionStart runs --brief under a
@@ -759,7 +863,7 @@ class Cli(unittest.TestCase):
 class Doctor(unittest.TestCase):
     """doctor §29 fails on a DEAD ledger and never grades a value (BRO-1696)."""
 
-    DOCTOR = REPO / "scripts" / "doctor.sh"
+    DOCTOR = Path(os.environ.get("CONTEXT_LEDGER_DOCTOR") or REPO / "scripts" / "doctor.sh")
 
     def section(self, state, age_days=0):
         with tempfile.TemporaryDirectory() as ws:
@@ -826,6 +930,7 @@ class Doctor(unittest.TestCase):
                       self.section(self.ledger(status="no_data", status_reason="no session file")))
         out = self.section({"measured_at": "2026-09-29T00:00:00+00:00", "metrics": {}})
         self.assertIn("[info] leverage-state.json has no context_ledger block", out)
+        self.assertIn("predates the ledger", out)
         self.assertNotIn("[gap]", out)
 
     def test_stale_state_is_said(self):

@@ -93,7 +93,7 @@ metrics:
     level: L2
     status: shadow
     direction: lower_is_better
-    why: "Median bytes of injected context per main session: hook output, CLAUDE.md/MEMORY.md and harness listings. Token cost ≈ bytes/4, an estimate. Per-turn figures are in the block; their median is mostly role-x."
+    why: "Median bytes of injected context per main session: hook output, CLAUDE.md/MEMORY.md and harness listings. Mostly the session-start load, and subagents are not in it. Token cost ≈ bytes/4, an estimate. Per-turn and per-source figures are in the block."
 
   - id: cl2
     name: kg_pointer_follow_through_rate

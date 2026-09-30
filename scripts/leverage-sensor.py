@@ -388,10 +388,13 @@ def window_files(glob_pat, window_days):
     return [f for f in glob.glob(glob_pat) if os.path.getmtime(f) >= cutoff]
 
 
-def subagent_glob(glob_pat):
+def subagent_globs(glob_pat):
     """Claude Code writes a subagent's transcript to <project>/<session-id>/subagents/,
-    one level below the session files, so the session glob never reaches it."""
-    return os.path.join(os.path.dirname(glob_pat), "*", "subagents", "*.jsonl")
+    and a workflow's agents one level further down, so the session glob reaches
+    neither."""
+    root = os.path.dirname(glob_pat)
+    return (os.path.join(root, "*", "subagents", "*.jsonl"),
+            os.path.join(root, "*", "subagents", "workflows", "*", "*.jsonl"))
 
 
 def analyze(glob_pat, window_days, kg_read_re, files=None):
@@ -504,16 +507,21 @@ def _load_context_ledger():
     return mod
 
 
-def context_ledger_block(files, kg_read_re, subagent_files=()):
+def context_ledger_block(files, kg_read_re, subagent_files=(), budget_s=12.0):
     """The `context_ledger` block: injected-context bytes by source, pointer
     follow-through and retrieval reflexes. SHADOW -- it never grades.
 
     A failure here must not take m1-m6 down with it, and must not look like a quiet
     reading either: it returns status "error" with the reason, which doctor §29 fails
-    on. A block that is missing or all-null is how BRO-1696's dead sensor passed."""
+    on. A block that is missing or all-null is how BRO-1696's dead sensor passed.
+
+    The ledger reads shell commands with the SAME read-verb allowlist m5 uses, and
+    stops itself at `budget_s` (the Stop hook allows 25s, and m1-m6 are already
+    computed when the ledger starts), reporting `partial` rather than being killed."""
+    vocab = {"read_verbs": _READ_VERBS, "git_read_subs": _GIT_READ_SUBS, "kg_skills": KG_SKILLS}
     try:
         return _load_context_ledger().analyze_context(
-            files, kg_read_re, bash_read_targets, iter_lines, subagent_files)
+            files, kg_read_re, vocab, iter_lines, subagent_files, budget_s)
     except Exception as e:
         return {"status": "error", "headline": {},
                 "status_reason": _clip(f"{type(e).__name__}: {e}", MAX_WARNING_CHARS)}
@@ -1213,8 +1221,8 @@ def main():
     # use for the ledger, and the SessionStart path runs this way under a 10s timeout.
     ledger = {}
     if not (args.no_store and (args.brief or args.closure)):
-        ledger = context_ledger_block(files, kg_read_re,
-                                      window_files(subagent_glob(glob_pat), window))
+        ledger = context_ledger_block(files, kg_read_re, [
+            f for pat in subagent_globs(glob_pat) for f in window_files(pat, window)])
     # The ledger's headline values join `metrics` so evaluate() files them like any
     # other row -- as `shadow` under a stood-down setpoint, `no_setpoint` without one --
     # and so the blind-read nulling below covers them too.

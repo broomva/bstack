@@ -1919,8 +1919,11 @@ PY
         LIVE)
             ok "context ledger (shadow, not graded): $_cl_detail" ;;
         NOBLOCK)
-            [ "$QUIET" = "0" ] && echo "  [info] leverage-state.json has no context_ledger block — written by a sensor older than the ledger; the next Stop run adds it"
-            [ "$QUIET" = "0" ] && echo "         → or now: python3 -I $BSTACK_REPO/scripts/leverage-sensor.py --workspace $WORKSPACE"
+            # Info, not a gap: a deployment fact. The sensor that WROTE the state is
+            # older than this doctor -- usually a vendored install not yet upgraded,
+            # which the next Stop run does NOT fix on its own.
+            [ "$QUIET" = "0" ] && echo "  [info] leverage-state.json has no context_ledger block: the sensor that wrote it predates the ledger (bstack < 0.42.0)"
+            [ "$QUIET" = "0" ] && echo "         → upgrade the bstack install the Stop hook runs, or now: python3 -I $BSTACK_REPO/scripts/leverage-sensor.py --workspace $WORKSPACE"
             ;;
         NO_DATA)
             [ "$QUIET" = "0" ] && echo "  [info] context ledger: no session read this window ($_cl_detail) — nothing to measure, not a defect"
