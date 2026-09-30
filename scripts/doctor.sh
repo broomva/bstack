@@ -1903,6 +1903,15 @@ try:
             emit(status.upper(), reason)
         else:
             emit("UNKNOWN", "status " + repr(status) + " is not one this check reads")
+        sub = cl.get("subagents") if isinstance(cl.get("subagents"), dict) else {}
+        if sub.get("status") in ("blind", "partial"):
+            emit("SUB" + sub["status"].upper(), sub.get("status_reason") or "")
+        if status in ("live", "partial"):
+            cov = (cl.get("drift_check_coverage") or {}).get("share")
+            unknown = sorted((cl.get("unknown_visible") or {}).keys())
+            emit("NOTE", "renamed or new attachment types are NOT detected (reported, not alarmed); "
+                 "rendered-field drift-check coverage %s; unknown shown types: %s" % (
+                     cov, ", ".join(unknown) or "none"))
 except Exception as exc:  # noqa: BLE001 - report, never die
     emit("UNREADABLE", type(exc).__name__ + ": " + str(exc))
 PY
@@ -1911,39 +1920,46 @@ PY
     if [ "$_CL_RC" != "0" ] || [ -z "$_CL_REPORT" ]; then
         _CL_REPORT="$(printf 'UNREADABLE\tthe context-ledger probe did not run (python3 exited %s)' "$_CL_RC")"
     fi
-    IFS=$'\t' read -r _cl_kind _cl_detail <<< "$_CL_REPORT"
     if [ -z "$(find "$_CL_STATE" -mtime -7 2>/dev/null)" ]; then
         [ "$QUIET" = "0" ] && echo "  [info] leverage-state.json is older than 7 days — the ledger below is stale (see §23)"
     fi
-    case "$_cl_kind" in
-        LIVE)
-            ok "context ledger (shadow, not graded): $_cl_detail" ;;
-        NOBLOCK)
-            # Info, not a gap: a deployment fact. The sensor that WROTE the state is
-            # older than this doctor -- usually a vendored install not yet upgraded,
-            # which the next Stop run does NOT fix on its own.
-            [ "$QUIET" = "0" ] && echo "  [info] leverage-state.json has no context_ledger block: the sensor that wrote it predates the ledger (bstack < 0.42.0)"
-            [ "$QUIET" = "0" ] && echo "         → upgrade the bstack install the Stop hook runs, or now: python3 -I $BSTACK_REPO/scripts/leverage-sensor.py --workspace $WORKSPACE"
-            ;;
-        NO_DATA)
-            [ "$QUIET" = "0" ] && echo "  [info] context ledger: no session read this window ($_cl_detail) — nothing to measure, not a defect"
-            ;;
-        PARTIAL)
-            gap "context ledger is PARTIALLY BLIND — $_cl_detail" \
-                "a source the model was shown bills 0 bytes; compare that attachment type's records against scripts/context_ledger.py" ;;
-        BLIND)
-            gap "context ledger is BLIND — $_cl_detail" \
-                "compare a recent transcript's attachment records against scripts/context_ledger.py (hook_success / instructions); a ledger that reads 0 injected bytes is the BRO-1696 dead sensor" ;;
-        ERROR)
-            gap "context ledger FAILED — $_cl_detail" \
-                "run python3 -I $BSTACK_REPO/scripts/leverage-sensor.py --workspace $WORKSPACE --json and fix scripts/context_ledger.py" ;;
-        ALLNULL)
-            gap "context ledger is DEAD — $_cl_detail" \
-                "an all-null reading is a failure, not a quiet window (BRO-1696); re-run the sensor and inspect the block" ;;
-        *)
-            gap "context ledger state unreadable — $_cl_detail" \
-                "re-run the sensor: python3 -I $BSTACK_REPO/scripts/leverage-sensor.py --workspace $WORKSPACE" ;;
-    esac
+    while IFS=$'\t' read -r _cl_kind _cl_detail; do
+        [ -z "$_cl_kind" ] && continue
+        case "$_cl_kind" in
+            LIVE)
+                ok "context ledger (shadow, not graded): $_cl_detail" ;;
+            NOTE)
+                [ "$QUIET" = "0" ] && echo "  [info] context ledger: $_cl_detail" ;;
+            NOBLOCK)
+                # Info, not a gap: a deployment fact. The sensor that WROTE the state is
+                # older than this doctor -- usually a vendored install not yet upgraded,
+                # which the next Stop run does NOT fix on its own.
+                [ "$QUIET" = "0" ] && echo "  [info] leverage-state.json has no context_ledger block: the sensor that wrote it predates the ledger (bstack < 0.42.0)"
+                [ "$QUIET" = "0" ] && echo "         → upgrade the bstack install the Stop hook runs, or now: python3 -I $BSTACK_REPO/scripts/leverage-sensor.py --workspace $WORKSPACE"
+                ;;
+            NO_DATA)
+                [ "$QUIET" = "0" ] && echo "  [info] context ledger: no session read this window ($_cl_detail) — nothing to measure, not a defect"
+                ;;
+            PARTIAL)
+                gap "context ledger is PARTIALLY BLIND — $_cl_detail" \
+                    "a source the model was shown bills 0 bytes, or part of a record is unreadable; compare the named records against scripts/context_ledger.py" ;;
+            BLIND)
+                gap "context ledger is BLIND — $_cl_detail" \
+                    "compare a recent transcript's attachment records against scripts/context_ledger.py (hook_success / instructions); a ledger that reads 0 injected bytes is the BRO-1696 dead sensor" ;;
+            SUBBLIND|SUBPARTIAL)
+                gap "context ledger's subagent block is ${_cl_kind#SUB} — $_cl_detail" \
+                    "the subagent transcripts under <session>/subagents/ bill wrong; compare one against scripts/context_ledger.py" ;;
+            ERROR)
+                gap "context ledger FAILED — $_cl_detail" \
+                    "run python3 -I $BSTACK_REPO/scripts/leverage-sensor.py --workspace $WORKSPACE --json and fix scripts/context_ledger.py" ;;
+            ALLNULL)
+                gap "context ledger is DEAD — $_cl_detail" \
+                    "an all-null reading is a failure, not a quiet window (BRO-1696); re-run the sensor and inspect the block" ;;
+            *)
+                gap "context ledger state unreadable — $_cl_detail" \
+                    "re-run the sensor: python3 -I $BSTACK_REPO/scripts/leverage-sensor.py --workspace $WORKSPACE" ;;
+        esac
+    done <<< "$_CL_REPORT"
 fi
 
 # ── summary ─────────────────────────────────────────────────────────────────

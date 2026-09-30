@@ -16,37 +16,27 @@ ranked `worst`, and it emits no actuator.
 
 As with m1–m6, every number comes from transcript structure (h ⟂ U). The sources are
 the attachment records Claude Code writes and the structured fields of `tool_use`
-inputs. Prose inside those fields is not read: a Grep pattern, a Skill's free text, an
-MCP prompt, or a commit message, PR body or heredoc inside a Bash command.
-
-A shell command is first stripped of heredoc bodies and `#` comments, tracking quotes
-and keeping newlines. It is then split with shlex into the program each segment runs,
-looking through `timeout`, `sudo -u x`, `python3 -I`, `uv run` and `sh -c`. Only a
-program's own arguments are read, and only for:
-- the read verbs m5 uses (the same allowlist, passed in);
-- `kg load`;
-- `ctx board`.
-
-A grep or sed pattern is not a path, and `git cat-file -e` is not a read. The parser
-under-counts rather than over-counts: a path in a shell or loop variable is missed.
+inputs. No assistant text or thinking is read, and no prose field of a tool input is
+read either: an Agent prompt, a Write body, a Grep pattern, a Skill's free text.
 
 - **Bytes by source, per session and per turn**, reported as median and p90. Tokens
-  are estimated as bytes/4 and labelled as an estimate. Each source is billed its own
-  text, not Claude Code's per-record wrapper.
+  are estimated as bytes/4 and labelled as an estimate.
   - Hook output is keyed by event and source tag: `role-x-intake`, `ctx-core-board`,
     `self-improvement-loop` and `auth-preflight`, falling back to the hook's script
     name. This covers SessionStart and UserPromptSubmit stdout, JSON
-    `additionalContext`, and a hook's block `reason`.
+    `additionalContext`, and a hook's block `reason`. It is billed without Claude
+    Code's per-record wrapper.
   - CLAUDE.md, MEMORY.md and nested CLAUDE.md files are read from the `instructions`
     and `nested_memory` attachments, which carry their full text. When neither is
     present, `memory_observable` is false; it is never reported as zero.
   - Harness listings (skills, MCP instructions, agents, deferred tools) are billed
-    from `rendered` when present, minus its tags, so notices such as "MCP servers
-    need auth" count too.
-  - The other attachment types the model is shown (queued commands, token reminders,
-    edited-file notices, git status) are listed under `unattributed_visible`.
+    from `rendered` minus its tags when present, so they include the harness's own
+    header lines and notices such as "MCP servers need auth". Otherwise they are
+    billed from the listing field.
+  - Other shown attachment types are listed under `unattributed_visible`, and types
+    the ledger does not know under `unknown_visible`.
   - Subagent transcripts are measured in their own `subagents` block. That covers
-    `<session>/subagents/*.jsonl` and workflow agents one level down.
+    `<session>/subagents/*.jsonl` and workflow `agent-*.jsonl` files.
 - **Each injection is billed once.**
   - `hook_success` carries plain output in both `content` and `stdout`; only `content`
     is counted.
@@ -58,61 +48,77 @@ under-counts rather than over-counts: a path in a shell or loop variable is miss
   - Fork copies (records marked `forkedFrom`) are skipped: the parent already billed
     them. They still mark the fork as "pointed" for the reflex split.
 - **Pointer follow-through.** Pointers are KG entity paths, `docs/specs/` files, ctx
-  board session and agent ids, and MEMORY.md links. A specs pointer must name a file:
-  MEMORY.md's `docs/specs/YYYY-MM-DD-<slug>.html` naming template is not one. One
-  (session, pointer) pair counts as followed when a later tool call in the same
-  session used it:
-  - a Read or Grep of the path, or a shell read of it;
+  board session and agent ids, and MEMORY.md links. MEMORY.md's naming template is
+  not a specs pointer. One (session, pointer) pair counts as followed when a later
+  tool call in the same session used it:
+  - a Read or Grep of the path;
+  - a shell read of it;
   - `kg load` naming it; a one-word slug must be named with its type;
   - an MCP id field naming it;
   - `ctx board`.
 
-  Follow-through means the pointer was opened, not used: a persona/* entry carries its
-  claim inline. The block reports rates per source and per entity type, opens that
-  nothing injected (self-directed retrieval), and parent pointers opened only by the
-  session's own subagents.
+  **Shell reads count** because this harness reads with Bash: on 2026-09-30 all 19
+  followed KG pointers were `cat`/`sed`/`grep`. They are found by the sensor's own
+  `bash_read_targets`, the detector m5 is graded with. That gives one shell-read
+  detector for the whole sensor, with no second parser.
+
+  That detector does not respect quotes: a read verb starting a line of a commit
+  message or heredoc counts, and so does a grep pattern that is itself a path. So
+  the block also reports `followed_tools_only`, which leaves shell reads out. Of the
+  19, one matched through a heredoc line, a python script that opens the file.
+
+  `kg load` and `ctx board` are found by the program a segment actually runs:
+  shlex-split with quotes respected, dropping everything from a heredoc on.
+
+  Opened means opened, not used: a persona/* entry carries its claim inline. The block
+  reports rates per source and per entity type, self-directed opens, and parent
+  pointers opened only by the session's own subagents.
 - **Retrieval reflexes.** The share of sessions that read the KG, docs/specs or
   memory, or ran deep research, split by whether an injection pointed there. The
   split is observational, and the block says so.
 - **Headline shadow rows**, all at L2:
   - `cl1_injected_bytes_per_session_p50`. Mostly the session-start load, and main
-    sessions only. Per-turn and per-source figures are in the block.
+    sessions only.
   - `cl2_kg_pointer_follow_through_rate`
   - `cl3_retrieval_reflex_session_rate`
 
   The template adds them with `status: shadow` and no target. A shadow row with no
   target is a calibration measurement, not a stood-down shield, so the SessionStart
   brief leaves it out (`shadow_notes(brief=True)`). The value is then never injected
-  into the context of the agent it measures. The human view, the JSON and doctor §29
-  still show it to the operator.
-- **Liveness.** The ledger is `partial`, and stores no headline, when:
-  - a record Claude Code's `rendered` field says the model was shown billed 0 bytes;
-  - the model was shown an attachment type the ledger does not know, renamed or new
-    (a renamed `hook_success` must not read as a quiet window);
-  - part of a billed record is unreadable;
-  - hook output has no `hookEvent`;
-  - the subagent block is dead;
-  - its 12s time budget ran out.
+  into the context of the agent it measures. Operators see it in the human view, the
+  JSON and doctor.
+- **Liveness, with no tuned threshold.**
+  - **`blind`:** files were read and no byte was billed, or no record parsed.
+  - **`partial`, and no headline stored:**
+    - a record of a billed type that Claude Code's `rendered` field says the model
+      was shown billed nothing;
+    - part of a billed record is unreadable;
+    - hook output names no event;
+    - a file parsed to no record;
+    - the 12s time budget ran out.
+  - **Subagents:** the subagent block keeps its own status.
+  - **Not detected: a renamed or new attachment type.** The format is undocumented and
+    changes, and no fixed rule over it avoids both false alarms and silent misses. Such
+    a type is reported as data, and doctor says renames go undetected.
+    `drift_check_coverage` reports the share of injection-bearing records that carry
+    `rendered`: 84% on the owner's window.
 
-  It is `blind` when it billed nothing. Records written before Claude Code 2.1.280
-  carry no `rendered`, and `drift_check_coverage` says what share of the window the
-  `rendered` check can see: 84% on the owner's.
-
-  While this was built, the check caught a real miss: 10 harness deltas that carried
-  only an auth notice were billed 0 bytes.
-- **Doctor §29** fails on a dead ledger and never on a value (BRO-1696). These states
-  are gaps:
+  While this was built, the `rendered` check caught a real miss: 10 harness deltas
+  that carried only an auth notice were billed 0 bytes.
+- **Doctor §29** fails on a dead ledger and never on a value (BRO-1696). These are
+  gaps:
   - `blind`;
   - `partial`;
   - `error`: the ledger raised; m1–m6 still compute;
   - `live` with every headline value null;
+  - a dead subagent block;
   - an unknown status, or an unreadable block.
 
-  A state from a sensor older than the ledger is info, and so is a state older than
-  7 days.
+  It also prints the drift-check coverage and the renames disclaimer. A state from a
+  sensor older than the ledger is info, and so is a state older than 7 days.
 
-Measured on the owner's workspace over the last 7 days (2026-09-30T04:37Z): 91 main
-transcripts, 563 turns, and 158 subagent transcripts. 19,899 fork-copied records were
+Measured on the owner's workspace over the last 7 days (2026-09-30T05:16Z): 91 main
+transcripts, 563 turns, and 157 subagent transcripts. 19,899 fork-copied records were
 skipped.
 
 | Source | Events | Median/event | Share |
@@ -134,24 +140,25 @@ injections carry no hook output.
 
 **KG follow-through**
 - **Overall:** 19 of 2,566 pointers were followed (0.74%).
-- **role-x:** 16 of 2,397. **CLAUDE.md:** 4 of 166.
-- **Opened only by the session's own subagents:** 4 more.
+- **Without shell reads:** 0 of 2,566.
+- **role-x:** 17 of 2,397. **CLAUDE.md:** 3 of 166.
+- **Opened only by the session's own subagents:** 2 more.
 - **By entity type:** persona 3/602, pattern 7/1,019, concept 6/695, tool 3/208.
-- **Self-directed:** 84% of the 143 KG entities opened were never injected.
+- **Self-directed:** 84% of the 144 KG entities opened were never injected.
 
 **Other pointers**
-- **MEMORY.md links:** 34 of 13,560 followed.
+- **MEMORY.md links:** 33 of 13,560 followed; 2 without shell reads.
 - **ctx:** 0/9.
 - **specs:** no real pointer was injected.
 
 **Reflexes**
 - **Any reflex:** 58% of sessions.
-- **KG:** 47/88 pointed vs 0/3 unpointed. The 3 unpointed sessions are near-idle, so
+- **KG:** 46/88 pointed vs 0/3 unpointed. The 3 unpointed sessions are near-idle, so
   this is not an effect size.
 
 **Reconciled with the 2026-09-29 baseline** (1,508 role-x firings, 87 sessions, 2,850
 slugs, 49 opened = 1.7%). The baseline's method, run on the current window, gives
-1,511 firings, 87 sessions, 2,853 pairs and 48 opened (1.68%). The ledger's 0.67% for
+1,511 firings, 87 sessions, 2,853 pairs and 48 opened (1.68%). The ledger's 0.71% for
 role-x comes from two corrections:
 
 - **Fork copies.** 630 of those firings are copies re-counted from 7 forked session
@@ -159,12 +166,11 @@ role-x comes from two corrections:
   opened by the loose rule (1.59%).
 - **Stricter open detection.** The loose rule counts a path appearing anywhere in any
   tool input, at any time. That includes `git add` or commit of the entity, Edit
-  targets, Linear descriptions, Agent prompts, heredoc bodies, and reads before the
-  injection. Those are excluded, which leaves 16 of 2,397.
+  targets, Linear descriptions, Agent prompts, and reads before the injection. The
+  ledger counts reads after the injection only, which leaves 17 of 2,397.
 
-  The strict rule also misses a few real reads, through a loop variable. A hand
-  check found 2–3, so the true figure is about 18–19 of 2,397. The conclusion is
-  unchanged.
+  A few real reads go through a loop variable and are missed, so the true figure is
+  about 18–19 of 2,397. The conclusion is unchanged.
 
 The baseline's ~3,735 chars/turn is a per-firing figure (the mean is 3,872). There
 are more firings than turns because task notifications fire UserPromptSubmit inside a
@@ -172,28 +178,35 @@ turn.
 
 ### Notes
 
-- **m5 is blind to `kg.py load` run through Bash.** m5 is unchanged here. The ledger's
-  KG reflex does count it, so `cl3` and m5 can differ.
+- **m5 is blind to `kg.py load` run through Bash.** m5 is unchanged here. The ledger
+  counts it, so its KG reflex and m5 can differ.
 - **Cost:** the Stop run goes from 1.5s to about 5s over 378 MB of main and 143 MB of
   subagent transcripts. The ledger is capped at 12s of the 25s timeout and reports
   `partial` if it hits the cap. `--brief` and `--closure` runs with `--no-store`
   skip the ledger, which covers the SessionStart path.
 - **The ledger is a separate file,** `scripts/context_ledger.py`. It is loaded by path,
   because the hooks run the sensor under `python3 -I` (BRO-2652). It is stdlib only.
+- **Review history.** P20 ran three rounds (B+C, all 5–6/10). The continuation review
+  then returned STRUCTURAL: delete the justification. This release is the reshaped
+  artifact:
+  - rename detection was dropped for a disclaimer;
+  - the liveness checks are threshold-free;
+  - the ledger's own shell reader was cut in favour of m5's detector.
 - **No BRO ticket.** The Broomva Linear MCP was unauthenticated in the authoring
   session.
-- **Tests:** `tests/context-ledger.test.sh` runs 89 unittest cases:
+- **Tests:** `tests/context-ledger.test.sh` runs 93 unittest cases:
   - every source, both dedups, and twin pairing (order, batched, cross-turn);
-  - follow-through true positives and true negatives;
-  - read verbs, `kg load` and `ctx board` inside commit messages, PR bodies, heredocs
-    and comments;
+  - follow-through true positives and true negatives, shell reads and the strict
+    figure;
+  - the detector's known over-counts, pinned;
+  - `kg load` and `ctx board` inside prose;
   - a no-prose invariance check with a positive control;
-  - every `partial` cause, `blind`, and malformed records;
-  - subagents, including workflow agents;
+  - every liveness state, malformed and unparseable files;
+  - subagents and workflow agents;
   - the cached brief, and the CLI under `-I`;
   - doctor §29 in every state.
 
-  It also runs a 40-mutant proof over the ledger, the sensor and doctor §29. Each
+  It also runs a 45-mutant proof over the ledger, the sensor and doctor §29. Each
   mutant must fail its named test by assertion, after a positive control on an
   unmutated copy. The first mutant bills `stdout` on top of `content`, and the byte
   test goes red.

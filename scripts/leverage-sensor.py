@@ -393,8 +393,10 @@ def subagent_globs(glob_pat):
     and a workflow's agents one level further down, so the session glob reaches
     neither."""
     root = os.path.dirname(glob_pat)
+    # `agent-*` only: a workflow directory also holds its journal.jsonl, which records
+    # the workflow's steps and is not an agent transcript.
     return (os.path.join(root, "*", "subagents", "*.jsonl"),
-            os.path.join(root, "*", "subagents", "workflows", "*", "*.jsonl"))
+            os.path.join(root, "*", "subagents", "workflows", "*", "agent-*.jsonl"))
 
 
 def analyze(glob_pat, window_days, kg_read_re, files=None):
@@ -515,10 +517,11 @@ def context_ledger_block(files, kg_read_re, subagent_files=(), budget_s=12.0):
     reading either: it returns status "error" with the reason, which doctor §29 fails
     on. A block that is missing or all-null is how BRO-1696's dead sensor passed.
 
-    The ledger reads shell commands with the SAME read-verb allowlist m5 uses, and
-    stops itself at `budget_s` (the Stop hook allows 25s, and m1-m6 are already
-    computed when the ledger starts), reporting `partial` rather than being killed."""
-    vocab = {"read_verbs": _READ_VERBS, "git_read_subs": _GIT_READ_SUBS, "kg_skills": KG_SKILLS}
+    The ledger shares m5's kg skill names and m5's shell-read detector, so the sensor
+    has one way to read a shell command, and it stops itself at `budget_s` (the Stop
+    hook allows 25s, and m1-m6 are already computed when the ledger starts), reporting
+    `partial` rather than being killed."""
+    vocab = {"kg_skills": KG_SKILLS, "shell_read_targets": bash_read_targets}
     try:
         return _load_context_ledger().analyze_context(
             files, kg_read_re, vocab, iter_lines, subagent_files, budget_s)
@@ -1221,8 +1224,13 @@ def main():
     # use for the ledger, and the SessionStart path runs this way under a 10s timeout.
     ledger = {}
     if not (args.no_store and (args.brief or args.closure)):
-        ledger = context_ledger_block(files, kg_read_re, [
-            f for pat in subagent_globs(glob_pat) for f in window_files(pat, window)])
+        try:
+            sub_files = [f for pat in subagent_globs(glob_pat) for f in window_files(pat, window)]
+        except OSError:
+            # A transcript vanished between the glob and its mtime (a worktree janitor).
+            # The subagent block reads `no_data` for this run; m1-m6 are unaffected.
+            sub_files = []
+        ledger = context_ledger_block(files, kg_read_re, sub_files)
     # The ledger's headline values join `metrics` so evaluate() files them like any
     # other row -- as `shadow` under a stood-down setpoint, `no_setpoint` without one --
     # and so the blind-read nulling below covers them too.

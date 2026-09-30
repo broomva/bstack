@@ -84,8 +84,9 @@ metrics:
   # follow-through; retrieval reflexes). These three rows are its headline values.
   # `status: shadow` keeps them out of grading, ranking and the actuator. They carry
   # no target, because no reference has been calibrated yet, and a shadow row with no
-  # target is kept out of the SessionStart brief too: the agent being measured must
-  # not read its own score. Author a target only after the ledger has run for a few
+  # target is kept out of the SessionStart brief too, so its value is never injected
+  # into the context of the agent it measures (the operator sees it in the human view,
+  # the JSON and doctor). Author a target only after the ledger has run for a few
   # windows and the Layer-2 ablation says which way the numbers should move. doctor
   # §29 fails on a DEAD ledger (blind, partial, errored or all-null), never on a value.
   - id: cl1

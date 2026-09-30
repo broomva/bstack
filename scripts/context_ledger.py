@@ -24,20 +24,30 @@ Same rule as the sensor it extends (h ⟂ U): every number comes from transcript
 STRUCTURE -- the attachment records the harness writes and the structured fields of
 tool_use inputs. No assistant text or thinking block is read, and neither is prose
 that a structured field carries: an Agent prompt, a Write body, a Grep pattern, a
-commit message or PR body inside a Bash command. A shell command is first stripped of
-heredoc bodies and `#` comments (quotes tracked, newlines kept), then split with shlex
-into the program each segment runs. Only a program's own arguments are read, and only
-for the read verbs the sensor allowlists, `kg load` and `ctx board`; a grep or sed
-pattern is not a path. The parser under-counts rather than over-counts: a path in a
-shell variable or a loop variable is missed.
+Skill's free text. The one exception is stated below: shell reads are found by the
+sensor's own detector, which does not respect quotes.
+
+A pointer is followed by a Read or Grep of its path, a `kg load` naming it, an MCP id
+field naming it, or `ctx board` (the owner's definition), and also by a shell read of
+its path. This harness steers agents to Bash, and on 2026-09-30 every KG pointer that a
+session opened was opened with `cat`/`sed`, so leaving shell reads out read 0 of 2,566.
+Shell reads are detected by the SENSOR's own `bash_read_targets` -- the detector m5
+is graded with -- not by a second parser here: one shell-read detector for the whole
+sensor, whose fixes reach both. It does not respect quotes, so a read verb that starts
+a line inside a commit message or heredoc body counts; `followed_tools_only` is the
+strict figure without shell reads. `kg load` and `ctx board` are found by the program a
+segment actually runs (shlex-split, quotes respected; everything from a heredoc on is
+dropped, and a command shlex cannot split is dropped -- both under-count).
 
 The ledger is SHADOW: measured, never graded. It cannot become `worst` and it emits no
-actuator. Its hard claim is its own liveness, and it reports `partial` whenever part of
-what the model was shown could not be billed: a record Claude Code's `rendered` field
-says was shown that billed nothing, an attachment type the ledger does not know, an
-unreadable part of a billed record, a dead subagent block, or a run cut off by its time
-budget. A ledger that billed no byte at all is `blind`. Doctor §29 fails on both
-(BRO-1696: a sensor that goes dark must fail as a gap, never pass as a quiet reading).
+actuator. Its liveness checks need no threshold. It is `blind` when it read files and
+billed no byte, or parsed no record from them; `partial` when a record of a type it
+bills was shown to the model (Claude Code's `rendered` field) and billed nothing, a
+part of a billed record is unreadable, hook output names no event, a file parsed to no
+record, or its time budget ran out. Doctor §29 fails on both (BRO-1696: a sensor that
+goes dark must fail as a gap, never pass as a quiet reading). It does NOT detect a
+renamed or new attachment type: a type it does not know is reported under
+`unknown_visible` as data, and doctor says renames go undetected.
 
 leverage-sensor.py loads this file by PATH, not by import: the hooks start the sensor
 with `python3 -I`, which keeps this directory off sys.path (BRO-2652). Stdlib only.
@@ -70,8 +80,9 @@ KNOWN_HEADERS = (
 # bill. A listing record that carries `rendered` is billed from it instead, minus the
 # <system-reminder> tags: a delta also tells the model which MCP servers need auth or
 # disconnected, and that notice is in no listing field (10 such records in the
-# 2026-09-29 window). Hooks and memory are billed from their own fields, so no source
-# pays for Claude Code's per-record wrapper.
+# 2026-09-29 window). So a harness listing's bytes include the harness's own header
+# lines, and older records without `rendered` are billed from the field alone; hooks
+# and memory are always billed from their own fields.
 HARNESS_FIELDS = {
     "skill_listing": "content",
     "mcp_instructions_delta": "addedBlocks",
@@ -80,17 +91,22 @@ HARNESS_FIELDS = {
 }
 BILLED_TYPES = frozenset({"hook_success", "hook_additional_context", "instructions",
                           "nested_memory", *HARNESS_FIELDS})
-# Attachment types the model may be shown that the ledger reports, unbilled, under
-# `unattributed_visible`: turn plumbing and harness state, not injected context. A
-# shown type in NEITHER set is renamed or new, and makes the ledger `partial` until it
-# is classified here -- a renamed hook_success must not read as a quiet window.
+# A LABEL, not an alarm: the attachment types the model may be shown that the ledger
+# reports, unbilled, under `unattributed_visible` (turn plumbing and harness state). A
+# shown type in neither this set nor BILLED_TYPES goes to `unknown_visible`. Claude
+# Code's attachment format is undocumented and changes, so no rule over it can tell a
+# renamed hook_success from a new notice without a tuned threshold; the ledger reports
+# the type and does not guess.
 KNOWN_UNBILLED = frozenset({
     "queued_command", "total_tokens_reminder", "edited_text_file", "session_context",
     "environment", "remote_session_change", "file", "silent_turn_reminder", "auto_mode",
     "invoked_skills", "model", "date", "read_truncation_notice", "ultra_effort_enter",
     "dynamic_skill", "compact_file_reference", "command_permissions",
     "batching_reminder_sent", "thinking_drop", "hook_system_message", "hook_cancelled",
-    "prompt_snapshot", "deferred_tools_record",
+    "prompt_snapshot", "deferred_tools_record", "task_status", "task_reminder",
+    "hook_non_blocking_error", "date_change", "plan_mode", "plan_mode_exit",
+    "auto_mode_exit", "ultra_effort_exit", "bash_output_audience_note",
+    "structured_output", "max_turns_reached",
 })
 
 POINTER_KINDS = ("kg", "specs", "ctx", "memory")
@@ -129,20 +145,6 @@ _PYTHON_RE = re.compile(r"^python(?:\d+(?:\.\d+)?)?$")
 _PYTHON_VALUE_FLAGS = frozenset({"-X", "-W"})
 _SHELLS = frozenset({"sh", "bash", "zsh", "dash"})
 _KG_LOAD_VALUE_OPTS = frozenset({"--n", "-n", "--type", "--terms", "--limit"})
-# Read verbs whose first positional argument is a pattern or script, not a path, and
-# the flags that take a value (a flag that supplies the pattern moves it out of the
-# positionals).
-_PATTERN_FIRST = frozenset({"grep", "egrep", "fgrep", "rg", "ag", "sed"})
-_PATTERN_FLAGS = {"grep": {"-e", "--regexp", "-f", "--file"}, "egrep": {"-e", "-f"},
-                  "fgrep": {"-e", "-f"}, "rg": {"-e", "--regexp", "-f", "--file"},
-                  "ag": set(), "sed": {"-e", "--expression", "-f", "--file"}}
-_VALUE_FLAGS = {"grep": {"-A", "-B", "-C", "-m", "-d", "-D", "--max-count"},
-                "egrep": {"-A", "-B", "-C", "-m"}, "fgrep": {"-A", "-B", "-C", "-m"},
-                "rg": {"-A", "-B", "-C", "-m", "-g", "--glob", "-t", "--type", "-T", "-M"},
-                "ag": {"-A", "-B", "-C", "-m", "-G"}, "head": {"-n", "-c"},
-                "tail": {"-n", "-c"}, "sed": set()}
-_HEREDOC_RE = re.compile(r"<<(-?)\s*(['\"]?)([A-Za-z_][\w.-]*)\2")
-
 # The ledger's share of the Stop run: the hook's timeout is 25s, and m1-m6 are computed
 # before the ledger starts, so a slow ledger must stop itself rather than let the
 # timeout take the whole record with it.
@@ -310,74 +312,23 @@ def text_pointers(source, text):
     return found, bool(RESEARCH_POINTER_RE.search(text))
 
 
-def strip_shell_noise(cmd):
-    """The command with heredoc bodies and `#` comments removed, and newlines kept.
-
-    Quotes are tracked, so a `#` or `<<` inside a quoted string is left alone: a heredoc
-    inside `"$(cat <<'EOF' ...)"` stays inside its quoted argument, which no read verb
-    takes as a path. The newline that ends a comment is kept, so the next line is still
-    its own segment (shlex's own comment handling swallows it)."""
-    if "#" not in cmd and "<<" not in cmd:
-        return cmd
-    out, pending, quote = [], [], None
-    i, n = 0, len(cmd)
-    while i < n:
-        c = cmd[i]
-        if quote:
-            out.append(c)
-            if c == "\\" and quote == '"' and i + 1 < n:
-                out.append(cmd[i + 1])
-                i += 2
-                continue
-            if c == quote:
-                quote = None
-            i += 1
-            continue
-        if c == "\\" and i + 1 < n:
-            out.append(cmd[i:i + 2])
-            i += 2
-            continue
-        if c in "'\"":
-            quote = c
-        elif c == "#" and (i == 0 or cmd[i - 1] in " \t\n;&|()"):
-            j = cmd.find("\n", i)
-            i = n if j < 0 else j
-            continue
-        elif cmd.startswith("<<", i) and not cmd.startswith("<<<", i):
-            m = _HEREDOC_RE.match(cmd, i)
-            if m:
-                pending.append(m.group(3))
-                out.append(" ")
-                i = m.end()
-                continue
-        elif c == "\n" and pending:
-            out.append(c)
-            i += 1
-            for delim in pending:      # each body runs to its own terminator line
-                while i < n:
-                    j = cmd.find("\n", i)
-                    line = cmd[i:] if j < 0 else cmd[i:j]
-                    i = n if j < 0 else j + 1
-                    if line.strip() == delim:
-                        break
-            pending = []
-            continue
-        out.append(c)
-        i += 1
-    return "".join(out)
-
-
 def shell_segments(cmd):
-    """The token lists of a shell command's segments, quotes respected. An unparseable
-    command (an unbalanced quote) yields no segments -- an under-count, the safe
-    direction."""
-    lex = shlex.shlex(strip_shell_noise(cmd), posix=True, punctuation_chars=";&|()<>\n")
+    """The token lists of a shell command's segments, quotes respected.
+
+    Both ways this can be wrong are under-counts. Everything from a heredoc (`<<`) on is
+    dropped, body and later commands alike: a body is authored text. And a command
+    shlex cannot split -- an unbalanced quote, or an apostrophe in a `# comment`,
+    since shlex is told comments are ordinary words so that a comment cannot swallow
+    the newline and join the next line onto its segment -- yields nothing."""
+    lex = shlex.shlex(cmd, posix=True, punctuation_chars=";&|()<>\n")
     lex.whitespace = " \t\r"
     lex.whitespace_split = True
-    lex.commenters = ""            # comments are already gone, newlines intact
+    lex.commenters = ""
     segs, seg = [], []
     try:
         for tok in lex:
+            if tok.startswith("<<"):
+                break
             if tok and all(c in ";&|()\n" for c in tok):
                 if seg:
                     segs.append(seg)
@@ -437,39 +388,6 @@ def segment_programs(seg, depth=0):
     return [(name, args)]
 
 
-def read_targets(prog, args, vocab):
-    """Path arguments of one program, if it is a read: an allowlisted read verb, or git
-    in a read subcommand. Redirect targets are writes; a grep/sed pattern is not a path;
-    `git cat-file -e` checks existence without reading."""
-    if prog == "git":
-        subs = [a for a in args if not a.startswith("-")]
-        if not subs or subs[0] not in vocab["git_read_subs"]:
-            return []
-        if subs[0] == "cat-file" and ({"-e", "-t", "-s"} & set(args)):
-            return []
-        return [a for a in args[args.index(subs[0]) + 1:] if "/" in a and not a.startswith("-")]
-    if prog not in vocab["read_verbs"]:
-        return []
-    positional, pattern_given, skip, redirect = [], False, False, False
-    for a in args:
-        if redirect or skip:
-            redirect = skip = False
-            continue
-        if a and all(c in "<>&" for c in a):
-            redirect = True
-            continue
-        if a.startswith("-") and len(a) > 1:
-            if a in _PATTERN_FLAGS.get(prog, ()):
-                pattern_given = skip = True
-            elif a in _VALUE_FLAGS.get(prog, ()):
-                skip = True
-            continue
-        positional.append(a)
-    if prog in _PATTERN_FIRST and not pattern_given:
-        positional = positional[1:]
-    return [a for a in positional if "/" in a]
-
-
 def load_query_tokens(args):
     """The query words of `kg load <query...>`, normalized for slug matching."""
     toks, skip = set(), False
@@ -513,6 +431,7 @@ class _Session:
         self.unbilled_visible = {}
         self.pointers = {k: {} for k in POINTER_KINDS}   # kind → key → {first, ts, sources}
         self.uses = {k: {} for k in POINTER_KINDS}       # kind → key → [first, last, last_ts]
+        self.shell_uses = {k: {} for k in POINTER_KINDS}  # the same, from shell reads
         self.kg_loads = []          # (idx, ts, tokens)
         self.board_cmds = []        # (idx, ts)
         self.reflexes = set()
@@ -528,7 +447,8 @@ class _Session:
         except (TypeError, AttributeError, ValueError, KeyError):
             self.malformed += 1
             att = obj.get("attachment") if isinstance(obj.get("attachment"), dict) else {}
-            if att.get("type") in BILLED_TYPES:
+            at = att.get("type")
+            if isinstance(at, str) and at in BILLED_TYPES:
                 self.unreadable_parts += 1
 
     def _feed(self, obj, idx):
@@ -671,15 +591,17 @@ class _Session:
             self.pointed.add("research")
 
     # -- uses ------------------------------------------------------------------------
-    def _use(self, kind, key, idx, ts):
-        u = self.uses[kind].get(key)
+    def _use(self, kind, key, idx, ts, shell=False):
+        table = self.shell_uses if shell else self.uses
+        u = table[kind].get(key)
         if u is None:
-            self.uses[kind][key] = [idx, idx, ts]
+            table[kind][key] = [idx, idx, ts]
         else:
             u[1], u[2] = idx, ts
 
-    def _read_path(self, path, idx, ts, opened=True):
-        """One path a tool READ (or, for Glob, searched: opened=False)."""
+    def _read_path(self, path, idx, ts, opened=True, shell=False):
+        """One path a tool READ (or, for Glob, searched: opened=False). `shell` marks a
+        read found by the sensor's shell-read detector, kept apart for the strict figure."""
         p = path.lower()
         if not p:
             return
@@ -692,14 +614,14 @@ class _Session:
         if not opened:
             return
         for key in KG_PATH_RE.findall(p):
-            self._use("kg", key, idx, ts)
+            self._use("kg", key, idx, ts, shell)
         for key in SPECS_PATH_RE.findall(p):
-            self._use("specs", key, idx, ts)
+            self._use("specs", key, idx, ts, shell)
         for key in MEMORY_PATH_RE.findall(p):
             if key != MEMORY_INDEX:      # the index is injected, not pointed at
-                self._use("memory", key, idx, ts)
+                self._use("memory", key, idx, ts, shell)
         for key in HEX8_RE.findall(p):
-            self._use("ctx", key, idx, ts)
+            self._use("ctx", key, idx, ts, shell)
 
     def _kg_load(self, args, idx, ts):
         self.reflexes.add("kg")
@@ -718,10 +640,11 @@ class _Session:
             self._read_path(str(inp.get("pattern") or "") + " " + str(inp.get("path") or ""),
                             idx, ts, opened=False)
         elif name == "Bash":
-            for seg in shell_segments(str(inp.get("command") or "")):
+            cmd = str(inp.get("command") or "")
+            for target in self.vocab["shell_read_targets"](cmd.lower()):
+                self._read_path(target, idx, ts, shell=True)
+            for seg in shell_segments(cmd):
                 for prog, args in segment_programs(seg):
-                    for target in read_targets(prog, args, self.vocab):
-                        self._read_path(target, idx, ts)
                     if prog in ("kg", "kg.py") and args[:1] == ["load"]:
                         self._kg_load(args[1:], idx, ts)
                     elif prog in ("ctx", "ctx.py") and args[:1] == ["board"]:
@@ -749,14 +672,17 @@ class _Session:
                         self._use("ctx", key, idx, ts)
 
     # -- follow-through --------------------------------------------------------------
-    def used(self, kind, key, after_idx=None, after_ts=None):
+    def used(self, kind, key, after_idx=None, after_ts=None, tools_only=False):
         """Whether a tool call used a pointer after a point in this session (after_idx)
-        or, for a subagent reading its parent's pointer, after a moment (after_ts)."""
+        or, for a subagent reading its parent's pointer, after a moment (after_ts).
+        `tools_only` leaves shell reads out: the strict, quote-proof figure."""
         def later(i, t):
             return i > after_idx if after_idx is not None else bool(t) and t > after_ts
-        u = self.uses[kind].get(key)
-        if u and later(u[1], u[2]):
-            return True
+        tables = (self.uses,) if tools_only else (self.uses, self.shell_uses)
+        for table in tables:
+            u = table[kind].get(key)
+            if u and later(u[1], u[2]):
+                return True
         if kind == "kg":
             slug = key.rsplit("/", 1)[-1]
             for i, t, toks in self.kg_loads:
@@ -779,6 +705,12 @@ def read_session(path, iter_records, kg_read_re, vocab):
         else:
             s.malformed += 1
     s.finish()
+    # The reader drops lines it cannot parse, so a file of nothing but broken lines
+    # would otherwise look like a file with nothing in it.
+    try:
+        s.unparsed = not (s.own_records or s.fork_copies or s.malformed) and os.path.getsize(path) > 0
+    except OSError:
+        s.unparsed = False
     return s
 
 
@@ -842,25 +774,28 @@ def _aggregate(files, sessions, truncated=False):
     typed = sum(s.billed_type_records for s in live)
     shown = sum(s.billed_type_rendered for s in live)
 
+    unparsed = sum(s.unparsed for s in sessions)
     # A run the time budget cut short is `partial` whatever it did read: what it did
     # not read cannot be called absent.
     if not files:
         status, reason = "no_data", "no session file in the window"
+    elif sessions and unparsed == len(sessions) and not truncated:
+        status = "blind"
+        reason = f"read {unparsed} non-empty file(s) and parsed no record from any of them"
     elif not live and not truncated:
         status, reason = "no_data", "every record in the window was a fork copy"
     elif total == 0 and not truncated:
         status = "blind"
         reason = (f"read {len(live)} session(s), {sum(s.own_records for s in live)} records, "
                   "and billed 0 injected bytes — the attachment schema no longer matches")
-    elif unbilled or unknown_event or unknown or unreadable or truncated:
+    elif unbilled or unknown_event or unreadable or unparsed or truncated:
         # One source going dark while the others keep the total above zero is the same
         # failure one level down: the ledger would read `live` with role-x missing.
         status = "partial"
         parts = [f"{n} {at} record(s) the model was shown billed 0 bytes"
                  for at, n in sorted(unbilled.items())]
-        parts += [f"{v['records']} shown record(s) of attachment type {at!r}, which the "
-                  "ledger does not know (renamed or new: classify it in context_ledger.py)"
-                  for at, v in sorted(unknown.items())]
+        if unparsed:
+            parts.append(f"{unparsed} non-empty file(s) parsed to no record")
         if unknown_event:
             parts.append(f"{unknown_event} hook output(s) with no hookEvent")
         if unreadable:
@@ -899,7 +834,7 @@ def _aggregate(files, sessions, truncated=False):
 
 def _follow_through(sessions):
     """Unit: one (session, pointer) pair, however often the pointer was re-injected."""
-    by_kind = {k: {"injected": 0, "followed": 0} for k in POINTER_KINDS}
+    by_kind = {k: {"injected": 0, "followed": 0, "followed_tools_only": 0} for k in POINTER_KINDS}
     by_source, kg_by_type = {}, {}
     opened = {k: {"opened": 0, "opened_never_injected": 0, "opened_before_injection_only": 0}
               for k in ("kg", "specs", "memory")}
@@ -909,6 +844,8 @@ def _follow_through(sessions):
                 hit = s.used(kind, key, after_idx=p["first"])
                 by_kind[kind]["injected"] += 1
                 by_kind[kind]["followed"] += hit
+                by_kind[kind]["followed_tools_only"] += s.used(kind, key, after_idx=p["first"],
+                                                               tools_only=True)
                 if kind == "kg":
                     t = kg_by_type.setdefault(key.split("/", 1)[0] if "/" in key else "(flat)",
                                               {"injected": 0, "followed": 0})
@@ -919,7 +856,11 @@ def _follow_through(sessions):
                     b["injected"] += 1
                     b["followed"] += hit
         for kind, o in opened.items():
-            for key, (_, last_use, _) in s.uses[kind].items():
+            merged = dict(s.shell_uses[kind])
+            for key, u in s.uses[kind].items():
+                m = merged.get(key)
+                merged[key] = u if m is None else [min(m[0], u[0]), max(m[1], u[1]), None]
+            for key, (_, last_use, _) in merged.items():
                 o["opened"] += 1
                 p = s.pointers[kind].get(key)
                 if p is None:
@@ -929,6 +870,8 @@ def _follow_through(sessions):
     for rows in [by_kind, kg_by_type] + list(by_source.values()):
         for v in rows.values():
             v["rate"] = _rate(v["followed"], v["injected"])
+    for v in by_kind.values():
+        v["rate_tools_only"] = _rate(v["followed_tools_only"], v["injected"])
     for o in opened.values():
         # Self-directed retrieval: the share of what the agent opened that nothing
         # injected into this session had pointed at.
@@ -936,7 +879,9 @@ def _follow_through(sessions):
     injected = sum(v["injected"] for v in by_kind.values())
     followed = sum(v["followed"] for v in by_kind.values())
     return {
-        "unit": "(session, pointer) pair; followed = a later tool call in the same session opened it",
+        "unit": ("(session, pointer) pair; followed = a later tool call in the same session "
+                 "opened it, shell reads included (m5's detector); followed_tools_only = Read/Grep "
+                 "tools, kg load, ctx board and MCP ids only"),
         "overall": {"injected": injected, "followed": followed, "rate": _rate(followed, injected)},
         "by_kind": by_kind,
         # persona/* entries carry their claim inline, so an unopened one may still be used.
@@ -1009,10 +954,8 @@ def analyze_context(files, kg_read_re, vocab, iter_records, subagent_files=(),
     block = _aggregate(files, main, main_cut)
     sub = _aggregate(subagent_files, subs, sub_cut)
     _via_subagents(block, [s for s in main if s.own_records], [s for s in subs if s.own_records])
-    if block["status"] == "live" and sub["status"] in ("blind", "partial"):
-        # A dead subagent block is a dead half of the bill; doctor reads one status.
-        block["status"] = "partial"
-        block["status_reason"] = f"subagents {sub['status']}: {sub['status_reason']}"
+    # The subagent block keeps its own status, which doctor §29 checks separately: the
+    # headline is computed from main sessions only, so only a main `partial` nulls it.
     headline = dict.fromkeys(HEADLINE_KEYS)
     if block["status"] == "live":
         # A partial window stores no headline: a value computed with a source missing
@@ -1033,6 +976,8 @@ def analyze_context(files, kg_read_re, vocab, iter_records, subagent_files=(),
         "scope": "main-session transcripts; subagent transcripts are measured under `subagents`",
         "turn_unit": "one Claude Code promptId (pre-promptId transcripts: one human prompt)",
         "token_estimate": TOKEN_ESTIMATE_NOTE,
-        "billing_unit": "the injected text itself; Claude Code's per-record wrapper is not billed",
+        "billing_unit": ("hooks and memory: the injected text, without Claude Code's per-record "
+                         "wrapper; harness listings: `rendered` minus its tags when present "
+                         "(so the harness's own header lines are included), else the listing field"),
         "subagents": subagents,
     }
