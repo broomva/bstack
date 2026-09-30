@@ -540,7 +540,7 @@ def ledger_budget_s(default, start=None):
     return max(0.0, min(default, LEDGER_DEADLINE_S - elapsed))
 
 
-def context_ledger_block(files, kg_read_re, subagent_files=(), budget_s=None):
+def context_ledger_block(files, kg_read_re, subagent_files=(), budget_s=None, start=None):
     """The `context_ledger` block: injected-context bytes by source, pointer
     follow-through and retrieval reflexes. SHADOW -- it never grades.
 
@@ -552,11 +552,18 @@ def context_ledger_block(files, kg_read_re, subagent_files=(), budget_s=None):
     how the sensor reads a shell read reaches both (the ledger parses a command only
     to find `kg load` / `ctx board`). It stops itself at its time budget (the Stop hook
     allows 25s, and m1-m6 are already computed when the ledger starts), reporting
-    `partial` rather than being killed; `budget_s` overrides the ledger's default."""
+    `partial` rather than being killed. main() passes `start` (when this process began),
+    so the budget is what is left of the hook's deadline; a caller that passes neither
+    `start` nor `budget_s` gets the ledger's own cap, independent of process age."""
     vocab = {"kg_skills": KG_SKILLS, "shell_read_targets": bash_read_targets}
     try:
         mod = _load_context_ledger()
-        budget = ledger_budget_s(mod.DEFAULT_BUDGET_S) if budget_s is None else budget_s
+        if budget_s is not None:
+            budget = budget_s
+        elif start is not None:
+            budget = ledger_budget_s(mod.DEFAULT_BUDGET_S, start)
+        else:
+            budget = mod.DEFAULT_BUDGET_S
         return mod.analyze_context(files, kg_read_re, vocab, iter_lines, subagent_files, budget)
     except Exception as e:
         return {"status": "error", "headline": {},
@@ -1259,7 +1266,8 @@ def main():
     ledger = {}
     if not (args.no_store and (args.brief or args.closure)):
         ledger = context_ledger_block(files, kg_read_re, [
-            f for pat in subagent_globs(glob_pat) for f in window_files(pat, window)])
+            f for pat in subagent_globs(glob_pat) for f in window_files(pat, window)],
+            start=_START)
     # The ledger's headline values join `metrics` so evaluate() files them like any
     # other row -- as `shadow` under a stood-down setpoint, `no_setpoint` without one --
     # and so the blind-read nulling below covers them too.

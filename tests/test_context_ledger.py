@@ -12,8 +12,11 @@ one rule removed, and requires the named test to fail.
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import importlib.util
+import io
+import sys
 import json
 import os
 import re
@@ -684,6 +687,12 @@ class Reflexes(LedgerCase):
         cl = self.ledger(T().skill_listing("- deep-research\n- kg\n").prompt(pid="p1"))
         self.assertEqual(cl["reflexes"]["research"]["pointed"]["sessions"], 0)
 
+    def test_a_forks_open_of_an_inherited_pointer_is_not_self_directed(self):
+        cl = self.ledger(T().hook("UserPromptSubmit", ROLE_X, fork=True).prompt(pid="p1")
+                         .tool("Read", file_path=RAILWAY))
+        op = cl["follow_through"]["opened"]["kg"]
+        self.assertEqual((op["opened_inherited_only"], op["opened_never_injected"]), (1, 0))
+
     def test_a_fork_is_pointed_by_its_inherited_history(self):
         # The fork's model sees the copied injection, so the fork is "pointed" -- but
         # the pointer is the parent's, and is not re-counted in follow-through.
@@ -785,8 +794,23 @@ class Liveness(LedgerCase):
         # Not the quiet `no_data` "every record was a fork copy", and no claim that the
         # schema changed: no session of its own was read.
         self.assertEqual((cl["status"], cl["status_reason"]),
-                         ("blind", "no session of its own: 1 non-empty file(s) parsed to no record, "
-                                   "the rest held only fork copies"))
+                         ("blind", "no session of its own: 1 non-empty file(s) parsed to no record; "
+                                   "1 fork-copied record(s), which are the parent's"))
+
+    def test_no_fork_is_claimed_when_there_is_none(self):
+        bad = Path(self.dir) / "bad.jsonl"
+        bad.write_text("not json\n")
+        empty = Path(self.dir) / "empty.jsonl"
+        empty.write_text("")
+        cl = SENSOR.context_ledger_block([str(bad), str(empty)], KG_RE)
+        self.assertEqual((cl["status"], cl["status_reason"]),
+                         ("blind", "no session of its own: 1 non-empty file(s) parsed to no record"))
+
+    def test_files_of_non_object_lines_are_blind(self):
+        odd = Path(self.dir) / "odd.jsonl"
+        odd.write_text('[1]\n"x"\n')
+        cl = SENSOR.context_ledger_block([str(odd)], KG_RE)
+        self.assertEqual(cl["status"], "blind")
 
     def test_empty_files_are_no_data_with_a_true_reason(self):
         empty = Path(self.dir) / "empty.jsonl"
@@ -945,6 +969,36 @@ class Cli(unittest.TestCase):
         self.live_transcript()
         self.assertIn("pointer follow-through: kg 1/2 (1 without shell reads)", self.run_sensor(SCRIPTS))
 
+    def test_main_budgets_from_the_process_start(self):
+        # main() hands the ledger what is left of the hook's deadline: a process that has
+        # already used it up gets a `partial` ledger, not a killed run.
+        self.live_transcript()
+        saved_start, saved_argv = SENSOR._START, sys.argv
+        SENSOR._START = time.monotonic() - 25
+        sys.argv = ["leverage-sensor.py", "--workspace", str(self.ws), "--transcripts",
+                    str(self.tr / "*.jsonl"), "--window", "3650", "--no-store", "--json"]
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out):
+                SENSOR.main()
+        finally:
+            SENSOR._START, sys.argv = saved_start, saved_argv
+        cl = json.loads(out.getvalue())["context_ledger"]
+        self.assertEqual(cl["status"], "partial")
+        self.assertIn("time budget", cl["status_reason"])
+
+    def test_library_callers_get_the_plain_cap(self):
+        # A caller that passes no `start` is not charged for how long its process has
+        # been alive (the unit tests themselves run in-process for many seconds).
+        self.live_transcript()
+        saved = SENSOR._START
+        SENSOR._START = time.monotonic() - 100
+        try:
+            cl = SENSOR.context_ledger_block([str(self.tr / "s1.jsonl")], KG_RE)
+        finally:
+            SENSOR._START = saved
+        self.assertEqual(cl["status"], "live")
+
     def test_ledger_budget_counts_time_already_spent(self):
         now = time.monotonic()
         self.assertEqual(SENSOR.ledger_budget_s(12.0, start=now), 12.0)
@@ -1065,19 +1119,13 @@ class Doctor(unittest.TestCase):
     def test_no_data_and_old_state_are_info(self):
         self.assertIn("[info] context ledger: no session read",
                       self.section(self.ledger(status="no_data", status_reason="no session file")))
-        # Written long before this install's context_ledger.py: it predates an upgrade.
-        out = self.section({"measured_at": "2025-01-01T00:00:00+00:00", "metrics": {}}, age_days=400)
-        self.assertIn("[info] leverage-state.json has no context_ledger block", out)
-        self.assertIn("before this bstack gained the ledger", out)
-        self.assertNotIn("[gap]", out)
-
-    def test_a_fresh_state_without_the_block_is_a_gap(self):
-        # Written after this install's context_ledger.py, yet with no block: the Stop
-        # hook runs a different, older sensor.
-        from datetime import datetime, timezone
-        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        out = self.section({"measured_at": now, "metrics": {}})
-        self.assertIn("[gap] context ledger is NOT RUNNING", out)
+        # A missing block is a deployment fact doctor cannot attribute (which install the
+        # Stop hook runs is invisible here): info naming both causes, fresh or old.
+        for age in (0, 400):
+            out = self.section({"measured_at": "2026-09-29T00:00:00+00:00", "metrics": {}}, age_days=age)
+            self.assertIn("has no context_ledger block: a sensor older than the ledger", out)
+            self.assertIn("if the Stop hook runs an older bstack install", out)
+            self.assertNotIn("[gap]", out)
 
     def test_a_state_that_is_not_an_object_is_unreadable(self):
         self.assertIn("[gap] context ledger state unreadable", self.section("[1]"))

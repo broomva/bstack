@@ -161,7 +161,7 @@ MUTANTS = (
      "    elif False:\n",
      "Liveness.test_files_with_no_parseable_record_are_blind"),
     ("an unparseable file among good ones ignored", L,
-     "        s.unparsed = not (s.own_records or s.fork_copies or s.malformed) and os.path.getsize(path) > 0\n",
+     "        s.unparsed = not (s.own_records or s.fork_copies) and os.path.getsize(path) > 0\n",
      "        s.unparsed = False\n",
      "Liveness.test_one_unparseable_file_is_partial"),
     ("the record guard re-raises on an unhashable type", L,
@@ -224,6 +224,18 @@ MUTANTS = (
      "        if live:\n            reason = (f\"read {len(live)} session(s)",
      "        if True:\n            reason = (f\"read {len(live)} session(s)",
      "Liveness.test_fork_only_window_with_a_corrupt_file_is_not_no_data"),
+    ("a blind reason claims fork copies that are not there", L,
+     "            if forks:\n                reason +=",
+     "            if True:\n                reason +=",
+     "Liveness.test_no_fork_is_claimed_when_there_is_none"),
+    ("a file of non-object lines is not unparsed", L,
+     "        s.unparsed = not (s.own_records or s.fork_copies) and os.path.getsize(path) > 0\n",
+     "        s.unparsed = not (s.own_records or s.fork_copies or s.malformed) and os.path.getsize(path) > 0\n",
+     "Liveness.test_files_of_non_object_lines_are_blind"),
+    ("a fork's inherited opens counted as self-directed", L,
+     "                if p is None and key in s.inherited[kind]:\n",
+     "                if False:\n",
+     "Reflexes.test_a_forks_open_of_an_inherited_pointer_is_not_self_directed"),
     # -- the sensor ----------------------------------------------------------------------
     ("a broken ledger takes the sensor down", S,
      "        return mod.analyze_context(files, kg_read_re, vocab, iter_lines, subagent_files, budget)\n    except Exception as e:\n",
@@ -269,6 +281,14 @@ MUTANTS = (
      '(w.startswith("-") and not w.startswith("--") and "i" in w[1:])',
      '(w.startswith("-") and "i" in w[1:])',
      "FollowThrough.test_long_sed_flags_are_not_in_place_edits"),
+    ("main() does not pass the process start", S,
+     "            start=_START)\n",
+     "            start=None)\n",
+     "Cli.test_main_budgets_from_the_process_start"),
+    ("library callers charged for process age", S,
+     "        else:\n            budget = mod.DEFAULT_BUDGET_S\n",
+     "        else:\n            budget = ledger_budget_s(mod.DEFAULT_BUDGET_S)\n",
+     "Cli.test_library_callers_get_the_plain_cap"),
     # -- doctor §29 --------------------------------------------------------------------
     ("doctor passes a blind ledger", D,
      '            gap "context ledger is BLIND — $_cl_detail" \\\n',
@@ -286,13 +306,9 @@ MUTANTS = (
      '            emit("NOTE", "renamed or new attachment types are NOT detected (reported, not alarmed); "\n',
      '            emit("NOTE", "attachment types: "\n',
      "Doctor.test_live_note_says_renames_are_not_detected"),
-    ("doctor passes a ledger that is not running", D,
-     'emit("NOBLOCKFRESH" if newer else "NOBLOCK", ',
-     'emit("NOBLOCK" if newer else "NOBLOCK", ',
-     "Doctor.test_a_fresh_state_without_the_block_is_a_gap"),
-    ("doctor gaps a state that predates the upgrade", D,
-     'emit("NOBLOCKFRESH" if newer else "NOBLOCK", ',
-     'emit("NOBLOCKFRESH" if True else "NOBLOCK", ',
+    ("doctor gaps a missing block it cannot attribute", D,
+     '                [ "$QUIET" = "0" ] && echo "  [info] leverage-state.json (measured $_cl_detail) has no context_ledger block',
+     '                gap "leverage-state.json (measured $_cl_detail) has no context_ledger block"; [ "$QUIET" = "0" ] && echo "  [info] leverage-state.json (measured $_cl_detail) has no context_ledger block',
      "Doctor.test_no_data_and_old_state_are_info"),
     ("doctor passes an all-null ledger", D,
      "            if not head or all(v is None for v in head.values()):\n",
@@ -318,8 +334,6 @@ def copy_scripts(dest):
         shutil.copy(REPO / "scripts" / f, dest / f)
     shutil.copytree(REPO / "scripts" / "lib", dest / "repo" / "scripts" / "lib")
     shutil.copy(REPO / "scripts" / "doctor.sh", dest / "repo" / "scripts" / "doctor.sh")
-    # doctor §29 compares the state's age against the ledger file beside it
-    shutil.copy(REPO / "scripts" / "context_ledger.py", dest / "repo" / "scripts" / "context_ledger.py")
     return dest
 
 

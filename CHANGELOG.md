@@ -68,7 +68,8 @@ read either: an Agent prompt, a Write body, a Grep pattern, a Skill's free text.
   - it does not respect quotes: a read verb starting a line of a commit message or
     heredoc counts;
   - a grep pattern that is itself a path counts;
-  - `git diff`/`git log -- path`, `wc` and `md5sum` count.
+  - `git diff`/`git log -- path`, `wc` and `md5sum` count;
+  - it does not know comments: `make test  # later; cat <path>` counts the `cat`.
 - **m5's shell-read detector is fixed in two places.** Review found both through the
   ledger, which shares it:
   - `sed -i` (an in-place write) is no longer a read;
@@ -87,13 +88,18 @@ read either: an Agent prompt, a Write body, a Grep pattern, a Skill's free text.
 
   `kg load` and `ctx board` are found by the program a segment actually runs. The
   command is shlex-split with quotes respected, and shell keywords such as `do`/`then`
-  are skipped. Two things are dropped: everything from a heredoc on, and a `# comment`
-  up to its newline, so a comment naming an entity is not a query for it.
+  are skipped. Two things are dropped, both under-counts:
+  - everything from a heredoc on;
+  - everything from a `#`-prefixed token to its newline, so a comment naming an entity
+    is not a query for it. That includes a quoted `"#x"` argument, and a comment
+    ending in a backslash, which takes the next line with it.
 
   Opened means opened, not used: every role-x entry carries its core_claim inline, so an
   unopened pointer may still have been used. The block
   reports rates per source and per entity type, self-directed opens, and parent
-  pointers opened only by the session's own subagents.
+  pointers opened only by the session's own subagents. A fork's opens of pointers it
+  inherited from its parent's copied history are counted separately, not as
+  self-directed.
 - **Retrieval reflexes.** The share of sessions that read the KG, docs/specs or
   memory, or ran deep research, split by whether an injection pointed there. The
   split is observational, and the block says so.
@@ -109,16 +115,20 @@ read either: an Agent prompt, a Write body, a Grep pattern, a Skill's free text.
   into the context of the agent it measures. Operators see it in the human view, the
   JSON and doctor.
 - **Liveness, with no tuned threshold.**
-  - **`blind`:** files were read and no byte was billed, or no record parsed.
+  - **`blind`:** files were read and no byte was billed, or no record parsed. A file of
+    lines that parse to something other than an object counts as no record. The reason
+    names what was read, and claims a schema change only when sessions of its own were
+    read.
   - **`partial`, and no headline stored:**
     - a record of a billed type that Claude Code's `rendered` field says the model
       was shown billed nothing;
     - part of a billed record is unreadable;
     - hook output names no event;
     - a file parsed to no record;
-    - the time budget ran out. The budget is 12s, or what is left of 20s since the
-    sensor started, whichever is smaller, so a slow m1–m6 cannot push the run past
-    the hook's 25s.
+    - the time budget ran out. `main()` gives the ledger 12s, or what is left of 20s
+    since the sensor process started, whichever is smaller, so a slow m1–m6 cannot
+    push the run past the hook's 25s. A library caller that passes no start time gets
+    the plain 12s cap.
   - **Subagents:** the subagent block keeps its own status.
   - **Not detected: a renamed or new attachment type.** The format is undocumented and
     changes, and no fixed rule over it avoids both false alarms and silent misses. Such
@@ -135,14 +145,19 @@ read either: an Agent prompt, a Write body, a Grep pattern, a Skill's free text.
   - `error`: the ledger raised; m1–m6 still compute;
   - `live` with every headline value null;
   - a dead subagent block;
-  - a state written after this bstack gained the ledger that still has no ledger block,
-    meaning the Stop hook runs a different, older sensor. The check compares the
-    state's mtime with `context_ledger.py`'s, so it needs no threshold and the Stop
-    throttle does not fool it;
   - an unknown status, or an unreadable block.
 
-  It also prints the drift-check coverage and the renames disclaimer. A state written
-  before the upgrade with no block is info, and so is a state older than 7 days.
+  It also prints the drift-check coverage and the renames disclaimer.
+
+  A state with no ledger block is info, like §27's deployment advisories, and the
+  message names both possible causes:
+  - the state was written before this install was upgraded, and the next Stop run past
+    the 6h throttle adds the block;
+  - the Stop hook runs an older bstack install, which needs upgrading.
+
+  Doctor cannot tell which install the Stop hook runs. File times cannot settle it: a
+  tarball keeps commit-time mtimes, and an upgrade re-stamps files. So it does not
+  guess. A state older than 7 days is info too.
 - **`scripts/context_ledger.py` is inside the L3 perimeter**, beside the sensors it
   runs in (BRO-1707): an edit to it is an L3 governance mutation.
 
@@ -225,7 +240,7 @@ turn.
     for `sed -i` and existence checks.
 - **No BRO ticket.** The Broomva Linear MCP was unauthenticated in the authoring
   session.
-- **Tests:** `tests/context-ledger.test.sh` runs 112 unittest cases:
+- **Tests:** `tests/context-ledger.test.sh` runs 116 unittest cases:
   - every source, both dedups, and twin pairing (order, batched, cross-turn);
   - follow-through true positives and true negatives, shell reads and the strict
     figure;
@@ -238,7 +253,7 @@ turn.
   - the cached brief, and the CLI under `-I`;
   - doctor §29 in every state.
 
-  It also runs a 63-mutant proof over the ledger, the sensor and doctor §29. Each
+  It also runs a 67-mutant proof over the ledger, the sensor and doctor §29. Each
   mutant must fail its named test by assertion, after a positive control on an
   unmutated copy. The first mutant bills `stdout` on top of `content`, and the byte
   test goes red.

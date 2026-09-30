@@ -42,6 +42,7 @@ figure without shell reads):
   - a grep pattern that is itself a path counts;
   - `git diff -- path`, `git log -- path`, `wc` and `md5sum` count as reads, though
     they show a diff, a history or a count rather than the file.
+  - it does not know comments: `make test  # later; cat <path>` counts the `cat`.
 And its known under-counts: a path in a shell or loop variable; a read behind a shell
 keyword or a wrapper (`do cat …`, `timeout 5 cat …`, `(cat …)`).
 `kg load` and `ctx board` are found by the program a segment actually runs
@@ -327,13 +328,17 @@ def text_pointers(source, text):
 def shell_segments(cmd):
     """The token lists of a shell command's segments, quotes respected.
 
-    Every way this can be wrong is an under-count. Everything from a heredoc (`<<`) on
-    is dropped, body and later commands alike: a body is authored text. A `# comment`
-    is dropped up to its newline -- shlex is told comments are ordinary words, so that
-    one cannot swallow the newline and join the next line onto its segment, and the
-    words are then skipped here, so a comment naming an entity is not a query for it
-    (a quoted argument that starts with `#` is dropped too). And a command shlex cannot
-    split -- an unbalanced quote, or an apostrophe in a comment -- yields nothing."""
+    Every way this can be wrong is an under-count:
+      - everything from a heredoc (`<<`) on is dropped, body and later commands alike
+        (a body is authored text), including a `<<` inside a comment;
+      - a token that starts with `#` drops everything after it up to the next newline,
+        so a comment naming an entity is not a query for it. shlex is told comments are
+        ordinary words, so that one cannot swallow the newline and join the next line
+        onto its segment. Quotes are gone by then, so a quoted argument such as "#x"
+        drops the rest of its line too, and a comment ending in a backslash also takes
+        the next line;
+      - a command shlex cannot split (an unbalanced quote, or an apostrophe in a
+        comment) yields nothing."""
     lex = shlex.shlex(cmd, posix=True, punctuation_chars=";&|()<>\n")
     lex.whitespace = " \t\r"
     lex.whitespace_split = True
@@ -462,6 +467,7 @@ class _Session:
         self.board_cmds = []        # (idx, ts)
         self.reflexes = set()
         self.pointed = set()
+        self.inherited = {k: set() for k in POINTER_KINDS}  # pointers in a fork's copied history
 
     # -- feeding ---------------------------------------------------------------------
     def feed(self, obj, idx):
@@ -490,6 +496,8 @@ class _Session:
                 for source, _, text, _ in attachment_texts(att):
                     if text:
                         self._mark_pointed(source, text)
+                        for kind, keys in text_pointers(source, text)[0].items():
+                            self.inherited[kind].update(keys)
             return
         self.own_records += 1
         if t == "user":
@@ -733,10 +741,11 @@ def read_session(path, iter_records, kg_read_re, vocab):
         else:
             s.malformed += 1
     s.finish()
-    # The reader drops lines it cannot parse, so a file of nothing but broken lines
-    # would otherwise look like a file with nothing in it.
+    # The reader drops lines it cannot parse, and a line that parses to something other
+    # than an object is not a record either, so a file of nothing but such lines would
+    # otherwise look like a file with nothing in it.
     try:
-        s.unparsed = not (s.own_records or s.fork_copies or s.malformed) and os.path.getsize(path) > 0
+        s.unparsed = not (s.own_records or s.fork_copies) and os.path.getsize(path) > 0
     except OSError:
         s.unparsed = False
     return s
@@ -824,8 +833,9 @@ def _aggregate(files, sessions, truncated=False):
                 reason += f"; {unparsed} non-empty file(s) parsed to no record"
         else:
             # No session of its own was read, so nothing says the schema changed.
-            reason = (f"no session of its own: {unparsed} non-empty file(s) parsed to no record, "
-                      f"the rest held only fork copies")
+            reason = f"no session of its own: {unparsed} non-empty file(s) parsed to no record"
+            if forks:
+                reason += f"; {forks} fork-copied record(s), which are the parent's"
     elif unbilled or unknown_event or unreadable or unparsed or truncated:
         # A KNOWN billed source going dark while the others keep the total above zero is
         # the same failure one level down. (A renamed type is not caught here: it is
@@ -875,7 +885,8 @@ def _follow_through(sessions):
     """Unit: one (session, pointer) pair, however often the pointer was re-injected."""
     by_kind = {k: {"injected": 0, "followed": 0, "followed_tools_only": 0} for k in POINTER_KINDS}
     by_source, kg_by_type = {}, {}
-    opened = {k: {"opened": 0, "opened_never_injected": 0, "opened_before_injection_only": 0}
+    opened = {k: {"opened": 0, "opened_never_injected": 0, "opened_before_injection_only": 0,
+                  "opened_inherited_only": 0}
               for k in ("kg", "specs", "memory")}
     for s in sessions:
         for kind in POINTER_KINDS:
@@ -902,7 +913,10 @@ def _follow_through(sessions):
             for key, (_, last_use, _) in merged.items():
                 o["opened"] += 1
                 p = s.pointers[kind].get(key)
-                if p is None:
+                if p is None and key in s.inherited[kind]:
+                    # A fork's model saw its parent's copied injection: not self-directed.
+                    o["opened_inherited_only"] += 1
+                elif p is None:
                     o["opened_never_injected"] += 1
                 elif last_use < p["first"]:
                     o["opened_before_injection_only"] += 1
