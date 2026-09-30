@@ -216,6 +216,14 @@ MUTANTS = (
      "                  else \"the window's session files hold no record\")\n",
      "                  else \"every record in the window was a fork copy\")\n",
      "Liveness.test_empty_files_are_no_data_with_a_true_reason"),
+    ("comment words read as a kg load query", L,
+     '            elif tok.startswith("#"):\n                in_comment = True\n                continue\n',
+     "",
+     "NoProse.test_comment_words_are_not_query_words"),
+    ("a blind reason claims schema drift with no session read", L,
+     "        if live:\n            reason = (f\"read {len(live)} session(s)",
+     "        if True:\n            reason = (f\"read {len(live)} session(s)",
+     "Liveness.test_fork_only_window_with_a_corrupt_file_is_not_no_data"),
     # -- the sensor ----------------------------------------------------------------------
     ("a broken ledger takes the sensor down", S,
      "        return mod.analyze_context(files, kg_read_re, vocab, iter_lines, subagent_files, budget)\n    except Exception as e:\n",
@@ -249,6 +257,18 @@ MUTANTS = (
      "    return [f for f in glob.glob(glob_pat) if (_mtime(f) or 0) >= cutoff]\n",
      "    return [f for f in glob.glob(glob_pat) if os.path.getmtime(f) >= cutoff]\n",
      "Cli.test_a_vanished_file_is_skipped_not_the_list"),
+    ("the human view drops the strict figure's label", S,
+     "({v.get('followed_tools_only')} without shell reads)",
+     "({v.get('followed_tools_only')})",
+     "Cli.test_human_view_labels_the_strict_figure"),
+    ("the ledger budget ignores time already spent", S,
+     "    return max(0.0, min(default, LEDGER_DEADLINE_S - elapsed))\n",
+     "    return default\n",
+     "Cli.test_ledger_budget_counts_time_already_spent"),
+    ("a long sed flag read as -i (m5's detector)", S,
+     '(w.startswith("-") and not w.startswith("--") and "i" in w[1:])',
+     '(w.startswith("-") and "i" in w[1:])',
+     "FollowThrough.test_long_sed_flags_are_not_in_place_edits"),
     # -- doctor §29 --------------------------------------------------------------------
     ("doctor passes a blind ledger", D,
      '            gap "context ledger is BLIND — $_cl_detail" \\\n',
@@ -267,9 +287,13 @@ MUTANTS = (
      '            emit("NOTE", "attachment types: "\n',
      "Doctor.test_live_note_says_renames_are_not_detected"),
     ("doctor passes a ledger that is not running", D,
-     'emit("NOBLOCKFRESH" if age < 86400 else "NOBLOCK", ',
-     'emit("NOBLOCK" if age < 86400 else "NOBLOCK", ',
+     'emit("NOBLOCKFRESH" if newer else "NOBLOCK", ',
+     'emit("NOBLOCK" if newer else "NOBLOCK", ',
      "Doctor.test_a_fresh_state_without_the_block_is_a_gap"),
+    ("doctor gaps a state that predates the upgrade", D,
+     'emit("NOBLOCKFRESH" if newer else "NOBLOCK", ',
+     'emit("NOBLOCKFRESH" if True else "NOBLOCK", ',
+     "Doctor.test_no_data_and_old_state_are_info"),
     ("doctor passes an all-null ledger", D,
      "            if not head or all(v is None for v in head.values()):\n",
      "            if False:\n",
@@ -294,6 +318,8 @@ def copy_scripts(dest):
         shutil.copy(REPO / "scripts" / f, dest / f)
     shutil.copytree(REPO / "scripts" / "lib", dest / "repo" / "scripts" / "lib")
     shutil.copy(REPO / "scripts" / "doctor.sh", dest / "repo" / "scripts" / "doctor.sh")
+    # doctor §29 compares the state's age against the ledger file beside it
+    shutil.copy(REPO / "scripts" / "context_ledger.py", dest / "repo" / "scripts" / "context_ledger.py")
     return dest
 
 

@@ -77,11 +77,18 @@ read either: an Agent prompt, a Write body, a Grep pattern, a Skill's free text.
 
   Both make m5 more conservative. On the live window m5 is unchanged (0.54, 49
   sessions), and so is every other graded metric. `tests/kg-bash-read-detection.test.sh`
-  gains the cases: both edits must miss, and `grep -i` and `git cat-file -p` must still
-  count.
+  gains the cases:
+  - `sed -i`, `-ni`, `-i.bak` and `--in-place` must miss;
+  - `git cat-file -e/-t/-s` must miss;
+  - `grep -i`, `sed --silent` and `git cat-file -p` must still count.
 
-  `kg load` and `ctx board` are found by the program a segment actually runs:
-  shlex-split with quotes respected, dropping everything from a heredoc on.
+  The detector's known under-counts are listed too: a path in a shell or loop variable,
+  and a read behind a shell keyword or wrapper (`do cat …`, `timeout 5 cat …`).
+
+  `kg load` and `ctx board` are found by the program a segment actually runs. The
+  command is shlex-split with quotes respected, and shell keywords such as `do`/`then`
+  are skipped. Two things are dropped: everything from a heredoc on, and a `# comment`
+  up to its newline, so a comment naming an entity is not a query for it.
 
   Opened means opened, not used: every role-x entry carries its core_claim inline, so an
   unopened pointer may still have been used. The block
@@ -109,7 +116,9 @@ read either: an Agent prompt, a Write body, a Grep pattern, a Skill's free text.
     - part of a billed record is unreadable;
     - hook output names no event;
     - a file parsed to no record;
-    - the 12s time budget ran out.
+    - the time budget ran out. The budget is 12s, or what is left of 20s since the
+    sensor started, whichever is smaller, so a slow m1–m6 cannot push the run past
+    the hook's 25s.
   - **Subagents:** the subagent block keeps its own status.
   - **Not detected: a renamed or new attachment type.** The format is undocumented and
     changes, and no fixed rule over it avoids both false alarms and silent misses. Such
@@ -126,12 +135,14 @@ read either: an Agent prompt, a Write body, a Grep pattern, a Skill's free text.
   - `error`: the ledger raised; m1–m6 still compute;
   - `live` with every headline value null;
   - a dead subagent block;
-  - a fresh state (<24h) with no ledger block, meaning the Stop hook runs a sensor
-    older than the ledger;
+  - a state written after this bstack gained the ledger that still has no ledger block,
+    meaning the Stop hook runs a different, older sensor. The check compares the
+    state's mtime with `context_ledger.py`'s, so it needs no threshold and the Stop
+    throttle does not fool it;
   - an unknown status, or an unreadable block.
 
-  It also prints the drift-check coverage and the renames disclaimer. An older state
-  with no block is info, and so is a state older than 7 days.
+  It also prints the drift-check coverage and the renames disclaimer. A state written
+  before the upgrade with no block is info, and so is a state older than 7 days.
 - **`scripts/context_ledger.py` is inside the L3 perimeter**, beside the sensors it
   runs in (BRO-1707): an edit to it is an L3 governance mutation.
 
@@ -214,7 +225,7 @@ turn.
     for `sed -i` and existence checks.
 - **No BRO ticket.** The Broomva Linear MCP was unauthenticated in the authoring
   session.
-- **Tests:** `tests/context-ledger.test.sh` runs 106 unittest cases:
+- **Tests:** `tests/context-ledger.test.sh` runs 112 unittest cases:
   - every source, both dedups, and twin pairing (order, batched, cross-turn);
   - follow-through true positives and true negatives, shell reads and the strict
     figure;
@@ -227,7 +238,7 @@ turn.
   - the cached brief, and the CLI under `-I`;
   - doctor §29 in every state.
 
-  It also runs a 57-mutant proof over the ledger, the sensor and doctor §29. Each
+  It also runs a 63-mutant proof over the ledger, the sensor and doctor §29. Each
   mutant must fail its named test by assertion, after a positive control on an
   unmutated copy. The first mutant bills `stdout` on top of `content`, and the byte
   test goes red.

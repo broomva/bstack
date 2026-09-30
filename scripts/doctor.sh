@@ -1858,10 +1858,12 @@ fi
 # record Claude Code says the model was shown (`partial`: one source dark while the
 # others keep the total up); one that raised (`error`); one that says `live` with
 # every headline value null; a dead subagent block; and a status this check does not
-# know. No block at all means the sensor that wrote the state predates the ledger: a
-# gap when the state is fresh (<24h -- the Stop hook is running an old sensor, which no
-# later Stop run fixes on its own), info when it is older (it may just predate an
-# upgrade). A state older than 7 days is reported as stale, as §23 does.
+# know. No block at all means the sensor that wrote the state predates the ledger. It
+# is a gap when the state was written AFTER this install's context_ledger.py arrived:
+# the Stop hook then runs a different, older sensor, which no later Stop run fixes.
+# When the state is older than the ledger file it predates an upgrade, and the next
+# unthrottled Stop run adds the block: info. A state older than 7 days is reported as
+# stale, as §23 does.
 section "29. Context ledger (shadow)"
 _CL_STATE="$WORKSPACE/.control/leverage-state.json"
 if [ ! -f "$_CL_STATE" ]; then
@@ -1869,8 +1871,8 @@ if [ ! -f "$_CL_STATE" ]; then
 elif ! command -v python3 >/dev/null 2>&1; then
     [ "$QUIET" = "0" ] && echo "  [info] python3 unavailable — skipping the context-ledger check"
 else
-    _CL_REPORT="$(python3 -I - "$_CL_STATE" 2>/dev/null <<'PY'
-import json, sys
+    _CL_REPORT="$(python3 -I - "$_CL_STATE" "$BSTACK_REPO/scripts/context_ledger.py" 2>/dev/null <<'PY'
+import json, os, sys
 
 def emit(kind, detail=""):
     print(kind + "\t" + " ".join(str(detail).split())[:300])
@@ -1879,14 +1881,14 @@ try:
     with open(sys.argv[1]) as f:
         st = json.load(f)
     cl = st.get("context_ledger") if isinstance(st, dict) else None
-    if cl is None:
-        import time
-        from datetime import datetime
+    if not isinstance(st, dict):
+        emit("UNREADABLE", "leverage-state.json is a " + type(st).__name__ + ", not an object")
+    elif cl is None:
         try:
-            age = time.time() - datetime.fromisoformat(st["measured_at"]).timestamp()
-        except Exception:  # noqa: BLE001 - no usable timestamp: treat as old
-            age = float("inf")
-        emit("NOBLOCKFRESH" if age < 86400 else "NOBLOCK", st.get("measured_at") if isinstance(st, dict) else "")
+            newer = os.path.getmtime(sys.argv[1]) > os.path.getmtime(sys.argv[2])
+        except OSError:
+            newer = False
+        emit("NOBLOCKFRESH" if newer else "NOBLOCK", st.get("measured_at"))
     elif not isinstance(cl, dict):
         emit("UNREADABLE", "context_ledger is a " + type(cl).__name__)
     else:
@@ -1940,11 +1942,11 @@ PY
             NOTE)
                 [ "$QUIET" = "0" ] && echo "  [info] context ledger: $_cl_detail" ;;
             NOBLOCKFRESH)
-                gap "context ledger is NOT RUNNING — leverage-state.json (measured $_cl_detail) has no context_ledger block, so the Stop hook runs a sensor older than the ledger (bstack < 0.42.0)" \
-                    "upgrade the bstack install the Stop hook runs (a vendored copy is re-vendored by hand); the next Stop run then adds the block" ;;
+                gap "context ledger is NOT RUNNING — leverage-state.json (measured $_cl_detail) was written after this bstack gained the ledger, yet has no context_ledger block: the Stop hook runs a different, older sensor (bstack < 0.42.0)" \
+                    "upgrade the bstack install the Stop hook runs (a vendored copy is re-vendored by hand); check now with: python3 -I $BSTACK_REPO/scripts/leverage-sensor.py --workspace $WORKSPACE" ;;
             NOBLOCK)
-                [ "$QUIET" = "0" ] && echo "  [info] leverage-state.json has no context_ledger block: the sensor that wrote it (measured $_cl_detail) predates the ledger (bstack < 0.42.0)"
-                [ "$QUIET" = "0" ] && echo "         → if the Stop hook still runs an older bstack, upgrade it; or now: python3 -I $BSTACK_REPO/scripts/leverage-sensor.py --workspace $WORKSPACE"
+                [ "$QUIET" = "0" ] && echo "  [info] leverage-state.json has no context_ledger block: it was written (measured $_cl_detail) before this bstack gained the ledger; the next unthrottled Stop run adds it"
+                [ "$QUIET" = "0" ] && echo "         → or now: python3 -I $BSTACK_REPO/scripts/leverage-sensor.py --workspace $WORKSPACE"
                 ;;
             NO_DATA)
                 [ "$QUIET" = "0" ] && echo "  [info] context ledger: no session read this window ($_cl_detail) — nothing to measure, not a defect"

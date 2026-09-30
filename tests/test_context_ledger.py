@@ -458,6 +458,12 @@ class FollowThrough(LedgerCase):
         cl = self.ledger(self.rx().tool("Bash", command="sudo -u me kg.py load persona/auth-better-auth"))
         self.assertEqual(self.kg(cl)["followed"], 1)
 
+    def test_long_sed_flags_are_not_in_place_edits(self):
+        # `--silent` holds an `i`; only a short flag bundle or --in-place means -i.
+        cl = self.ledger(self.rx().tool(
+            "Bash", command="sed --silent -n '1,5p' research/entities/persona/railway-deploy-default.md"))
+        self.assertEqual(self.kg(cl)["followed"], 1)
+
     def test_existence_checks_and_in_place_edits_are_not_reads(self):
         # m5's shared detector: `git cat-file -e` checks existence, `sed -i` writes.
         for cmd in ("git cat-file -e main:research/entities/persona/railway-deploy-default.md",
@@ -628,6 +634,10 @@ class NoProse(LedgerCase):
                                            prompt="check session 3403ef08 and agent f5307ce7"))
         self.assertEqual(self.ctx(cl)["followed"], 0)
 
+    def test_comment_words_are_not_query_words(self):
+        cl = self.ledger(self.board().tool("Bash", command="kg.py load a  # see auth-better-auth"))
+        self.assertEqual((self.kg(cl)["followed"], self.kg(cl)["followed_tools_only"]), (0, 0))
+
     def test_heredoc_body_is_not_a_use(self):
         cl = self.ledger(self.board().tool(
             "Bash", command="git commit -q -F - <<'MSG'\nwhy\nkg.py load auth-better-auth\nctx board\nMSG"))
@@ -772,9 +782,11 @@ class Liveness(LedgerCase):
         bad = Path(self.dir) / "bad.jsonl"
         bad.write_text("not json\n")
         cl = SENSOR.context_ledger_block([fork, str(bad)], KG_RE)
-        # Not the quiet `no_data` "every record was a fork copy": a loud state, naming it.
-        self.assertIn(cl["status"], ("blind", "partial"))
-        self.assertIn("parsed to no record", cl["status_reason"])
+        # Not the quiet `no_data` "every record was a fork copy", and no claim that the
+        # schema changed: no session of its own was read.
+        self.assertEqual((cl["status"], cl["status_reason"]),
+                         ("blind", "no session of its own: 1 non-empty file(s) parsed to no record, "
+                                   "the rest held only fork copies"))
 
     def test_empty_files_are_no_data_with_a_true_reason(self):
         empty = Path(self.dir) / "empty.jsonl"
@@ -929,6 +941,16 @@ class Cli(unittest.TestCase):
                              env=dict(os.environ, BROOMVA_WORKSPACE=str(self.ws)))
         self.assertIn("editing scripts/context_ledger.py", out.stdout)
 
+    def test_human_view_labels_the_strict_figure(self):
+        self.live_transcript()
+        self.assertIn("pointer follow-through: kg 1/2 (1 without shell reads)", self.run_sensor(SCRIPTS))
+
+    def test_ledger_budget_counts_time_already_spent(self):
+        now = time.monotonic()
+        self.assertEqual(SENSOR.ledger_budget_s(12.0, start=now), 12.0)
+        self.assertLess(SENSOR.ledger_budget_s(12.0, start=now - 19), 1.01)
+        self.assertEqual(SENSOR.ledger_budget_s(12.0, start=now - 30), 0.0)
+
     def test_a_malformed_block_renders_one_honest_line(self):
         self.assertEqual(SENSOR.render_ledger({"status": "live", "totals": {}}),
                          ["  [shadow] context ledger: present but unreadable"])
@@ -1043,16 +1065,27 @@ class Doctor(unittest.TestCase):
     def test_no_data_and_old_state_are_info(self):
         self.assertIn("[info] context ledger: no session read",
                       self.section(self.ledger(status="no_data", status_reason="no session file")))
-        out = self.section({"measured_at": "2026-09-29T00:00:00+00:00", "metrics": {}})
+        # Written long before this install's context_ledger.py: it predates an upgrade.
+        out = self.section({"measured_at": "2025-01-01T00:00:00+00:00", "metrics": {}}, age_days=400)
         self.assertIn("[info] leverage-state.json has no context_ledger block", out)
-        self.assertIn("predates the ledger", out)
+        self.assertIn("before this bstack gained the ledger", out)
         self.assertNotIn("[gap]", out)
 
     def test_a_fresh_state_without_the_block_is_a_gap(self):
+        # Written after this install's context_ledger.py, yet with no block: the Stop
+        # hook runs a different, older sensor.
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
         out = self.section({"measured_at": now, "metrics": {}})
         self.assertIn("[gap] context ledger is NOT RUNNING", out)
+
+    def test_a_state_that_is_not_an_object_is_unreadable(self):
+        self.assertIn("[gap] context ledger state unreadable", self.section("[1]"))
+
+    def test_partial_subagent_block_is_a_gap(self):
+        out = self.section(self.ledger(subagents={"status": "partial", "status_reason": "x",
+                                                  "totals": {"bytes": 5}}))
+        self.assertIn("[gap] context ledger's subagent block is PARTIAL", out)
 
     def test_dead_subagent_block_is_a_gap(self):
         out = self.section(self.ledger(subagents={"status": "blind", "status_reason": "billed 0",

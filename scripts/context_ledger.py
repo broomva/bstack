@@ -42,6 +42,8 @@ figure without shell reads):
   - a grep pattern that is itself a path counts;
   - `git diff -- path`, `git log -- path`, `wc` and `md5sum` count as reads, though
     they show a diff, a history or a count rather than the file.
+And its known under-counts: a path in a shell or loop variable; a read behind a shell
+keyword or a wrapper (`do cat …`, `timeout 5 cat …`, `(cat …)`).
 `kg load` and `ctx board` are found by the program a segment actually runs
 (shlex-split, quotes respected, shell keywords such as `do`/`then` skipped); everything
 from a heredoc on is dropped, and a command shlex cannot split is dropped -- both
@@ -325,20 +327,29 @@ def text_pointers(source, text):
 def shell_segments(cmd):
     """The token lists of a shell command's segments, quotes respected.
 
-    Both ways this can be wrong are under-counts. Everything from a heredoc (`<<`) on is
-    dropped, body and later commands alike: a body is authored text. And a command
-    shlex cannot split -- an unbalanced quote, or an apostrophe in a `# comment`,
-    since shlex is told comments are ordinary words so that a comment cannot swallow
-    the newline and join the next line onto its segment -- yields nothing."""
+    Every way this can be wrong is an under-count. Everything from a heredoc (`<<`) on
+    is dropped, body and later commands alike: a body is authored text. A `# comment`
+    is dropped up to its newline -- shlex is told comments are ordinary words, so that
+    one cannot swallow the newline and join the next line onto its segment, and the
+    words are then skipped here, so a comment naming an entity is not a query for it
+    (a quoted argument that starts with `#` is dropped too). And a command shlex cannot
+    split -- an unbalanced quote, or an apostrophe in a comment -- yields nothing."""
     lex = shlex.shlex(cmd, posix=True, punctuation_chars=";&|()<>\n")
     lex.whitespace = " \t\r"
     lex.whitespace_split = True
     lex.commenters = ""
-    segs, seg = [], []
+    segs, seg, in_comment = [], [], False
     try:
         for tok in lex:
             if tok.startswith("<<"):
                 break
+            if in_comment:
+                if "\n" not in tok or not all(c in ";&|()\n" for c in tok):
+                    continue
+                in_comment = False
+            elif tok.startswith("#"):
+                in_comment = True
+                continue
             if tok and all(c in ";&|()\n" for c in tok):
                 if seg:
                     segs.append(seg)
@@ -400,7 +411,8 @@ def segment_programs(seg, depth=0):
 
 def load_query_tokens(args):
     """The query words of `kg load <query...>`, normalized for slug matching. A redirect
-    and its target (`> /tmp/out`, `2>&1`) are not query words."""
+    operator and its target (`> /tmp/out`, `>& 1`) are skipped; a bare file-descriptor
+    number such as the `2` of `2>&1` is kept, and names no entity."""
     toks, skip = set(), False
     for a in args:
         if skip:
@@ -805,10 +817,15 @@ def _aggregate(files, sessions, truncated=False):
                   else "the window's session files hold no record")
     elif total == 0 and not truncated:
         status = "blind"
-        reason = (f"read {len(live)} session(s), {sum(s.own_records for s in live)} records, "
-                  "and billed 0 injected bytes — the attachment schema no longer matches")
-        if unparsed:
-            reason += f"; {unparsed} non-empty file(s) parsed to no record"
+        if live:
+            reason = (f"read {len(live)} session(s), {sum(s.own_records for s in live)} records, "
+                      "and billed 0 injected bytes — the attachment schema no longer matches")
+            if unparsed:
+                reason += f"; {unparsed} non-empty file(s) parsed to no record"
+        else:
+            # No session of its own was read, so nothing says the schema changed.
+            reason = (f"no session of its own: {unparsed} non-empty file(s) parsed to no record, "
+                      f"the rest held only fork copies")
     elif unbilled or unknown_event or unreadable or unparsed or truncated:
         # A KNOWN billed source going dark while the others keep the total above zero is
         # the same failure one level down. (A renamed type is not caught here: it is
@@ -969,7 +986,7 @@ def analyze_context(files, kg_read_re, vocab, iter_records, subagent_files=(),
                     budget_s=DEFAULT_BUDGET_S):
     """The context_ledger block for one window of transcript files and their subagents.
     `vocab` carries m5's kg skill names and its shell-read detector, so the ledger and
-    m5 read a shell command the same way. Main sessions are read first; the
+    m5 recognise a shell READ the same way (m5 does not look for `kg load`). Main sessions are read first; the
     time budget, when it runs out, cuts the subagents before them."""
     deadline = None if budget_s is None else time.monotonic() + budget_s
     main, main_cut = _read_all(files, iter_records, kg_read_re, vocab, deadline)

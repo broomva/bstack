@@ -84,6 +84,7 @@ check_counts "grep over store"    "grep -rn 'foo' docs/research/entities/"
 check_counts "read in 2nd segment" "cd /tmp && cat docs/research/entities/pattern/q.md"
 check_counts "grep -i is still a read" "grep -i claim docs/research/entities/pattern/q.md"
 check_counts "git cat-file -p prints the blob" "git cat-file -p main:docs/research/entities/pattern/q.md"
+check_counts "sed --silent is not -i"   "sed --silent -n '1,5p' docs/research/entities/pattern/q.md"
 
 # ---------------------------------------------------------------------------
 # Writes and incidental mentions — must NOT count. Every one of these was scored
@@ -108,6 +109,10 @@ check_misses "unrelated command"      "bun run lint && git status --porcelain"
 check_misses "sed -i edits an entity"   "sed -i '' 's/a/b/' docs/research/entities/pattern/q.md"
 check_misses "sed -ni edits in place"   "sed -ni 's/a/b/p' docs/research/entities/pattern/q.md"
 check_misses "git cat-file -e existence check" "git cat-file -e origin/main:docs/research/entities/pattern/q.md"
+check_misses "git cat-file -t type check" "git cat-file -t main:docs/research/entities/pattern/q.md"
+check_misses "git cat-file -s size check" "git cat-file -s main:docs/research/entities/pattern/q.md"
+check_misses "sed --in-place edit"      "sed --in-place 's/a/b/' docs/research/entities/pattern/q.md"
+check_misses "sed -i.bak edit"          "sed -i.bak 's/a/b/' docs/research/entities/pattern/q.md"
 
 echo
 echo "  $PASS passed, $FAIL failed"

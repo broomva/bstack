@@ -37,6 +37,10 @@ import time
 from datetime import datetime, timezone
 
 HOME = os.path.expanduser("~")
+_START = time.monotonic()
+# The Stop hook kills this process at 25s. The context ledger must finish, and the
+# record be stored, inside that, so its budget is what is left of this deadline.
+LEDGER_DEADLINE_S = 20.0
 
 
 def resolve_workspace(arg=None):
@@ -528,6 +532,14 @@ def _load_context_ledger():
     return mod
 
 
+def ledger_budget_s(default, start=None):
+    """Seconds the ledger may run: its own cap, or what is left before LEDGER_DEADLINE_S
+    counted from process start, whichever is smaller. m1-m6 run first, so a slow
+    analyze() leaves the ledger less time rather than pushing the run past the hook."""
+    elapsed = time.monotonic() - (_START if start is None else start)
+    return max(0.0, min(default, LEDGER_DEADLINE_S - elapsed))
+
+
 def context_ledger_block(files, kg_read_re, subagent_files=(), budget_s=None):
     """The `context_ledger` block: injected-context bytes by source, pointer
     follow-through and retrieval reflexes. SHADOW -- it never grades.
@@ -544,7 +556,7 @@ def context_ledger_block(files, kg_read_re, subagent_files=(), budget_s=None):
     vocab = {"kg_skills": KG_SKILLS, "shell_read_targets": bash_read_targets}
     try:
         mod = _load_context_ledger()
-        budget = mod.DEFAULT_BUDGET_S if budget_s is None else budget_s
+        budget = ledger_budget_s(mod.DEFAULT_BUDGET_S) if budget_s is None else budget_s
         return mod.analyze_context(files, kg_read_re, vocab, iter_lines, subagent_files, budget)
     except Exception as e:
         return {"status": "error", "headline": {},
@@ -1069,8 +1081,8 @@ def render_ledger(cl):
             lines.append("           top sources: " + ", ".join(
                 f"{k} {v['bytes'] // 1024}KB/{v['events']}x" for k, v in top))
         ft = cl["follow_through"]["by_kind"]
-        lines.append("           pointer follow-through (without shell reads): " + ", ".join(
-            f"{k} {v['followed']}/{v['injected']} ({v.get('followed_tools_only')})"
+        lines.append("           pointer follow-through: " + ", ".join(
+            f"{k} {v['followed']}/{v['injected']} ({v.get('followed_tools_only')} without shell reads)"
             for k, v in ft.items() if v["injected"]))
         rf = cl["reflexes"]
         lines.append("           retrieval reflexes (pointed | not; observational): " + ", ".join(
