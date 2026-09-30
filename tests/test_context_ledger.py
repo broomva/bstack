@@ -270,6 +270,16 @@ class Sources(LedgerCase):
         self.assertEqual(cl["totals"]["bytes"], 0)
         self.assertEqual(cl["not_injected"]["hook:Stop:leverage-sensor.py"]["bytes"], nb(text))
 
+    def test_plain_pre_tool_use_stdout_is_not_injected(self):
+        cl = self.ledger(T().prompt(pid="p1").hook("PreToolUse", "a note", command="/x/scripts/pre.sh"))
+        self.assertEqual(cl["sources"], {})
+        self.assertEqual(cl["not_injected"]["hook:PreToolUse:pre.sh"]["bytes"], nb("a note"))
+
+    def test_drift_coverage_counts_only_records_that_carry_text(self):
+        cl = self.ledger(T().prompt(pid="p1").hook("PreToolUse", "", stdout="{}\n")
+                         .hook("UserPromptSubmit", ROLE_X, rendered=ROLE_X))
+        self.assertEqual(cl["drift_check_coverage"], {"billed_type_records": 1, "with_rendered": 1, "share": 1.0})
+
     def test_system_message_and_empty_json_are_not_injected(self):
         cl = self.ledger(T().prompt(pid="p1")
                          .hook("SessionStart", "", stdout='{"systemMessage": "[bstack P7] overdue"}\n')
@@ -447,6 +457,39 @@ class FollowThrough(LedgerCase):
     def test_wrapper_flag_values_are_skipped(self):
         cl = self.ledger(self.rx().tool("Bash", command="sudo -u me kg.py load persona/auth-better-auth"))
         self.assertEqual(self.kg(cl)["followed"], 1)
+
+    def test_existence_checks_and_in_place_edits_are_not_reads(self):
+        # m5's shared detector: `git cat-file -e` checks existence, `sed -i` writes.
+        for cmd in ("git cat-file -e main:research/entities/persona/railway-deploy-default.md",
+                    "sed -i '' 's/a/b/' research/entities/persona/railway-deploy-default.md"):
+            cl = self.ledger(self.rx().tool("Bash", command=cmd))
+            self.assertEqual(self.kg(cl)["followed"], 0, cmd)
+
+    def test_kg_load_inside_a_compound_command_counts(self):
+        for cmd in ("for x in 1; do kg.py load persona/auth-better-auth; done",
+                    "if true; then kg.py load persona/auth-better-auth; fi"):
+            cl = self.ledger(self.rx().tool("Bash", command=cmd))
+            self.assertEqual(self.kg(cl)["followed"], 1, cmd)
+
+    def test_glob_is_a_search_not_an_open(self):
+        cl = self.ledger(self.rx().tool("Glob", pattern="research/entities/persona/railway-deploy-default.md"))
+        self.assertEqual(self.kg(cl)["followed"], 0)
+        self.assertEqual(cl["reflexes"]["kg"]["pointed"]["with_reflex"], 1)
+
+    def test_each_source_is_credited_from_its_own_injection(self):
+        # CLAUDE.md names the pointer, a Read follows, THEN role-x names it: the read
+        # is CLAUDE.md's follow-through, not role-x's.
+        text = "Read research/entities/persona/railway-deploy-default.md first.\n"
+        cl = self.ledger(T().instructions(("/w/CLAUDE.md", "Project", text)).prompt(pid="p1")
+                         .tool("Read", file_path=RAILWAY).hook("UserPromptSubmit", ROLE_X))
+        by = cl["follow_through"]["by_source"]
+        self.assertEqual(by["memory:Project"]["kg"]["followed"], 1)
+        self.assertEqual(by["hook:UserPromptSubmit:role-x-intake"]["kg"]["followed"], 0)
+
+    def test_redirects_are_not_query_words(self):
+        mod = SENSOR._load_context_ledger()
+        self.assertEqual(mod.load_query_tokens(["auth-better-auth", ">", "/tmp/o", "2", ">&", "1"]),
+                         {"auth-better-auth", "2"})
 
     def test_comment_keeps_the_next_line(self):
         cl = self.ledger(self.rx().tool("Bash", command="cd ~/x  # go\nkg.py load persona/auth-better-auth"))
@@ -724,6 +767,22 @@ class Liveness(LedgerCase):
         self.assertEqual(cl["status"], "partial")
         self.assertIn("parsed to no record", cl["status_reason"])
 
+    def test_fork_only_window_with_a_corrupt_file_is_not_no_data(self):
+        fork = T("f").hook("UserPromptSubmit", ROLE_X, fork=True).write(self.dir)
+        bad = Path(self.dir) / "bad.jsonl"
+        bad.write_text("not json\n")
+        cl = SENSOR.context_ledger_block([fork, str(bad)], KG_RE)
+        # Not the quiet `no_data` "every record was a fork copy": a loud state, naming it.
+        self.assertIn(cl["status"], ("blind", "partial"))
+        self.assertIn("parsed to no record", cl["status_reason"])
+
+    def test_empty_files_are_no_data_with_a_true_reason(self):
+        empty = Path(self.dir) / "empty.jsonl"
+        empty.write_text("")
+        cl = SENSOR.context_ledger_block([str(empty)], KG_RE)
+        self.assertEqual((cl["status"], cl["status_reason"]),
+                         ("no_data", "the window's session files hold no record"))
+
     def test_unhashable_attachment_type_is_counted_not_fatal(self):
         cl = self.ledger(T().prompt(pid="p1").hook("UserPromptSubmit", ROLE_X)
                          .raw({"type": "attachment", "attachment": {"type": ["x"]}}))
@@ -852,6 +911,28 @@ class Cli(unittest.TestCase):
         self.assertEqual(rec["context_ledger"]["subagents"]["files"], 2)
         self.assertEqual(rec["context_ledger"]["subagents"]["totals"]["bytes"], 2 * nb(CLAUDE_MD))
 
+    def test_a_vanished_file_is_skipped_not_the_list(self):
+        self.live_transcript()
+        sub = self.tr / "s1" / "subagents"
+        T("agent-a").instructions(("/w/CLAUDE.md", "Project", CLAUDE_MD)).prompt(pid="q1").write(sub)
+        (sub / "agent-gone.jsonl").symlink_to(self.root / "nowhere.jsonl")   # stat raises
+        rec = json.loads(self.run_sensor(SCRIPTS, "--json"))
+        self.assertEqual(rec["context_ledger"]["subagents"]["files"], 1)
+
+    def test_the_ledger_is_inside_the_l3_perimeter(self):
+        # It runs in the sensor's process and feeds its metrics (BRO-1707).
+        (self.ws / ".control").mkdir(exist_ok=True)
+        out = subprocess.run(["bash", str(REPO / "scripts" / "l3-stability-pretool-hook.sh")],
+                             input=json.dumps({"tool_name": "Edit", "tool_input": {
+                                 "file_path": str(self.ws / "scripts" / "context_ledger.py")}}),
+                             capture_output=True, text=True, timeout=30,
+                             env=dict(os.environ, BROOMVA_WORKSPACE=str(self.ws)))
+        self.assertIn("editing scripts/context_ledger.py", out.stdout)
+
+    def test_a_malformed_block_renders_one_honest_line(self):
+        self.assertEqual(SENSOR.render_ledger({"status": "live", "totals": {}}),
+                         ["  [shadow] context ledger: present but unreadable"])
+
     def test_brief_and_closure_runs_skip_the_ledger(self):
         # These print no ledger and store nothing, and SessionStart runs --brief under a
         # 10s timeout: a probe module records whether the ledger ran at all.
@@ -861,7 +942,7 @@ class Cli(unittest.TestCase):
         shutil.copy(SCRIPTS / "leverage-sensor.py", probe / "leverage-sensor.py")
         marker = self.root / "ledger-ran"
         (probe / "context_ledger.py").write_text(
-            "import os\ndef analyze_context(*a):\n"
+            "import os\nDEFAULT_BUDGET_S = 12.0\ndef analyze_context(*a):\n"
             "    open(os.environ['LEDGER_MARKER'], 'a').close()\n    return {'status': 'no_data'}\n")
         env = {"LEDGER_MARKER": str(marker)}
         self.run_sensor(probe, "--brief", env=env)
@@ -930,9 +1011,10 @@ class Doctor(unittest.TestCase):
         return {"measured_at": "2026-09-29T00:00:00+00:00", "context_ledger": cl}
 
     def test_live_is_ok_and_names_the_numbers(self):
-        out = self.section(self.ledger())
+        out = self.section(self.ledger(follow_through={"by_kind": {"kg": {
+            "followed": 1, "injected": 99, "followed_tools_only": 0}}}))
         self.assertIn("[ok] context ledger (shadow, not graded)", out)
-        self.assertIn("1/99", out)
+        self.assertIn("1/99 (0 without shell reads)", out)
         self.assertIn("+1234 B in subagents", out)
 
     def test_blind_is_a_gap(self):
@@ -965,6 +1047,12 @@ class Doctor(unittest.TestCase):
         self.assertIn("[info] leverage-state.json has no context_ledger block", out)
         self.assertIn("predates the ledger", out)
         self.assertNotIn("[gap]", out)
+
+    def test_a_fresh_state_without_the_block_is_a_gap(self):
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        out = self.section({"measured_at": now, "metrics": {}})
+        self.assertIn("[gap] context ledger is NOT RUNNING", out)
 
     def test_dead_subagent_block_is_a_gap(self):
         out = self.section(self.ledger(subagents={"status": "blind", "status_reason": "billed 0",

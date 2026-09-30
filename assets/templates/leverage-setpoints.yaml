@@ -101,7 +101,7 @@ metrics:
     level: L2
     status: shadow
     direction: higher_is_better
-    why: "Share of (session, KG entity) pointers an injection named that a later tool call in the same session opened. Opened, not used: persona/* entries carry their claim inline."
+    why: "Share of (session, KG entity) pointers an injection named that a later tool call in the same session opened. Opened, not used: every role-x entry carries its core_claim inline, so an unopened pointer may still have been used."
 
   - id: cl3
     name: retrieval_reflex_session_rate

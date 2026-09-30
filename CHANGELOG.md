@@ -57,20 +57,34 @@ read either: an Agent prompt, a Write body, a Grep pattern, a Skill's free text.
   - an MCP id field naming it;
   - `ctx board`.
 
-  **Shell reads count** because this harness reads with Bash: on 2026-09-30 all 19
-  followed KG pointers were `cat`/`sed`/`grep`. They are found by the sensor's own
-  `bash_read_targets`, the detector m5 is graded with. That gives one shell-read
-  detector for the whole sensor, with no second parser.
+  **Shell reads count** because this harness reads with Bash: on 2026-09-30 none of the
+  18 followed KG pointers was opened with the Read tool. All were `cat`/`sed`/`head`/
+  `grep` reads of explicit paths. They are found by the sensor's own
+  `bash_read_targets`, the detector m5 is graded with, so a fix to how a shell read is
+  recognized reaches both.
 
-  That detector does not respect quotes: a read verb starting a line of a commit
-  message or heredoc counts, and so does a grep pattern that is itself a path. So
-  the block also reports `followed_tools_only`, which leaves shell reads out. Of the
-  19, one matched through a heredoc line, a python script that opens the file.
+  That detector's known over-counts are listed in the module, and all of them land in
+  `followed` but not in `followed_tools_only`, the strict figure without shell reads:
+  - it does not respect quotes: a read verb starting a line of a commit message or
+    heredoc counts;
+  - a grep pattern that is itself a path counts;
+  - `git diff`/`git log -- path`, `wc` and `md5sum` count.
+- **m5's shell-read detector is fixed in two places.** Review found both through the
+  ledger, which shares it:
+  - `sed -i` (an in-place write) is no longer a read;
+  - `git cat-file -e/-t/-s` (an existence, type or size check) is no longer a read. It
+    had scored one session's "did my PR land?" check as a KG follow-through.
+
+  Both make m5 more conservative. On the live window m5 is unchanged (0.54, 49
+  sessions), and so is every other graded metric. `tests/kg-bash-read-detection.test.sh`
+  gains the cases: both edits must miss, and `grep -i` and `git cat-file -p` must still
+  count.
 
   `kg load` and `ctx board` are found by the program a segment actually runs:
   shlex-split with quotes respected, dropping everything from a heredoc on.
 
-  Opened means opened, not used: a persona/* entry carries its claim inline. The block
+  Opened means opened, not used: every role-x entry carries its core_claim inline, so an
+  unopened pointer may still have been used. The block
   reports rates per source and per entity type, self-directed opens, and parent
   pointers opened only by the session's own subagents.
 - **Retrieval reflexes.** The share of sessions that read the KG, docs/specs or
@@ -112,10 +126,14 @@ read either: an Agent prompt, a Write body, a Grep pattern, a Skill's free text.
   - `error`: the ledger raised; m1–m6 still compute;
   - `live` with every headline value null;
   - a dead subagent block;
+  - a fresh state (<24h) with no ledger block, meaning the Stop hook runs a sensor
+    older than the ledger;
   - an unknown status, or an unreadable block.
 
-  It also prints the drift-check coverage and the renames disclaimer. A state from a
-  sensor older than the ledger is info, and so is a state older than 7 days.
+  It also prints the drift-check coverage and the renames disclaimer. An older state
+  with no block is info, and so is a state older than 7 days.
+- **`scripts/context_ledger.py` is inside the L3 perimeter**, beside the sensors it
+  runs in (BRO-1707): an edit to it is an L3 governance mutation.
 
 Measured on the owner's workspace over the last 7 days (2026-09-30T05:16Z): 91 main
 transcripts, 563 turns, and 157 subagent transcripts. 19,899 fork-copied records were
@@ -139,12 +157,12 @@ skipped.
 injections carry no hook output.
 
 **KG follow-through**
-- **Overall:** 19 of 2,566 pointers were followed (0.74%).
+- **Overall:** 18 of 2,566 pointers were followed (0.70%).
 - **Without shell reads:** 0 of 2,566.
-- **role-x:** 17 of 2,397. **CLAUDE.md:** 3 of 166.
+- **role-x:** 16 of 2,397. **CLAUDE.md:** 3 of 166.
 - **Opened only by the session's own subagents:** 2 more.
-- **By entity type:** persona 3/602, pattern 7/1,019, concept 6/695, tool 3/208.
-- **Self-directed:** 84% of the 144 KG entities opened were never injected.
+- **By entity type:** persona 3/602, pattern 6/1,019, concept 6/695, tool 3/208.
+- **Self-directed:** 84% of the 139 KG entities opened were never injected.
 
 **Other pointers**
 - **MEMORY.md links:** 33 of 13,560 followed; 2 without shell reads.
@@ -158,7 +176,7 @@ injections carry no hook output.
 
 **Reconciled with the 2026-09-29 baseline** (1,508 role-x firings, 87 sessions, 2,850
 slugs, 49 opened = 1.7%). The baseline's method, run on the current window, gives
-1,511 firings, 87 sessions, 2,853 pairs and 48 opened (1.68%). The ledger's 0.71% for
+1,511 firings, 87 sessions, 2,853 pairs and 48 opened (1.68%). The ledger's 0.67% for
 role-x comes from two corrections:
 
 - **Fork copies.** 630 of those firings are copies re-counted from 7 forked session
@@ -166,11 +184,12 @@ role-x comes from two corrections:
   opened by the loose rule (1.59%).
 - **Stricter open detection.** The loose rule counts a path appearing anywhere in any
   tool input, at any time. That includes `git add` or commit of the entity, Edit
-  targets, Linear descriptions, Agent prompts, and reads before the injection. The
-  ledger counts reads after the injection only, which leaves 17 of 2,397.
+  targets, Linear descriptions, Agent prompts, existence checks, and reads before the
+  injection. The ledger counts reads after the injection only, which leaves 16 of
+  2,397.
 
-  A few real reads go through a loop variable and are missed, so the true figure is
-  about 18–19 of 2,397. The conclusion is unchanged.
+  3 real reads go through a loop variable and are missed, so the true figure is about
+  19 of 2,397. The conclusion is unchanged.
 
 The baseline's ~3,735 chars/turn is a per-firing figure (the mean is 3,872). There
 are more firings than turns because task notifications fire UserPromptSubmit inside a
@@ -191,22 +210,24 @@ turn.
   artifact:
   - rename detection was dropped for a disclaimer;
   - the liveness checks are threshold-free;
-  - the ledger's own shell reader was cut in favour of m5's detector.
+  - the ledger's own shell reader was cut in favour of m5's detector, which is fixed
+    for `sed -i` and existence checks.
 - **No BRO ticket.** The Broomva Linear MCP was unauthenticated in the authoring
   session.
-- **Tests:** `tests/context-ledger.test.sh` runs 93 unittest cases:
+- **Tests:** `tests/context-ledger.test.sh` runs 106 unittest cases:
   - every source, both dedups, and twin pairing (order, batched, cross-turn);
   - follow-through true positives and true negatives, shell reads and the strict
     figure;
   - the detector's known over-counts, pinned;
   - `kg load` and `ctx board` inside prose;
   - a no-prose invariance check with a positive control;
-  - every liveness state, malformed and unparseable files;
+  - every liveness state, malformed and unparseable files, a vanished file;
+  - the L3 perimeter;
   - subagents and workflow agents;
   - the cached brief, and the CLI under `-I`;
   - doctor §29 in every state.
 
-  It also runs a 45-mutant proof over the ledger, the sensor and doctor §29. Each
+  It also runs a 57-mutant proof over the ledger, the sensor and doctor §29. Each
   mutant must fail its named test by assertion, after a positive control on an
   unmutated copy. The first mutant bills `stdout` on top of `content`, and the byte
   test goes red.

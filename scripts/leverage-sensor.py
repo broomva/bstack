@@ -149,7 +149,17 @@ def _segment_read_targets(seg):
         subs = [w for w in words[1:] if not w.startswith("-")]
         if not subs or subs[0] not in _GIT_READ_SUBS:
             return []
+        # `git cat-file -e/-t/-s` asks whether an object exists, or its type or size;
+        # it prints no content. Counting it scored "did my PR land?" as a KG read.
+        if subs[0] == "cat-file" and {"-e", "-t", "-s"} & set(words):
+            return []
     elif verb not in _READ_VERBS:
+        return []
+    # `sed -i` rewrites the file in place: a write, not a read (`-i`, `-i.bak`,
+    # `-ni`, `--in-place`). The bundled-flag test is sed-only; `grep -i` is a read.
+    if verb == "sed" and any(w == "--in-place" or w.startswith("--in-place=") or
+                             (w.startswith("-") and not w.startswith("--") and "i" in w[1:])
+                             for w in words[1:]):
         return []
     # Quotes are stripped from ARGUMENTS here rather than deleted from the command:
     # for a read verb, `cat "docs/research/entities/x.md"` is an ordinary read, and
@@ -380,12 +390,21 @@ def is_nudge(text):
     return bool(CONTINUE_RE.match(t) or NUDGE_RE.search(t))
 
 
+def _mtime(path):
+    """A file's mtime, or None when it vanished between the glob and the stat (a
+    worktree janitor) or is a dangling link: that one file is skipped, not the list."""
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return None
+
+
 def window_files(glob_pat, window_days):
     """Transcript files touched within the window. Computed ONCE per run and handed to
     both analyze() and the context ledger: the live session's file is being appended
     while the sensor runs, so two globs could disagree about which sessions exist."""
     cutoff = time.time() - window_days * 86400
-    return [f for f in glob.glob(glob_pat) if os.path.getmtime(f) >= cutoff]
+    return [f for f in glob.glob(glob_pat) if (_mtime(f) or 0) >= cutoff]
 
 
 def subagent_globs(glob_pat):
@@ -509,7 +528,7 @@ def _load_context_ledger():
     return mod
 
 
-def context_ledger_block(files, kg_read_re, subagent_files=(), budget_s=12.0):
+def context_ledger_block(files, kg_read_re, subagent_files=(), budget_s=None):
     """The `context_ledger` block: injected-context bytes by source, pointer
     follow-through and retrieval reflexes. SHADOW -- it never grades.
 
@@ -517,14 +536,16 @@ def context_ledger_block(files, kg_read_re, subagent_files=(), budget_s=12.0):
     reading either: it returns status "error" with the reason, which doctor §29 fails
     on. A block that is missing or all-null is how BRO-1696's dead sensor passed.
 
-    The ledger shares m5's kg skill names and m5's shell-read detector, so the sensor
-    has one way to read a shell command, and it stops itself at `budget_s` (the Stop
-    hook allows 25s, and m1-m6 are already computed when the ledger starts), reporting
-    `partial` rather than being killed."""
+    The ledger shares m5's kg skill names and m5's shell-READ detector, so a fix to
+    how the sensor reads a shell read reaches both (the ledger parses a command only
+    to find `kg load` / `ctx board`). It stops itself at its time budget (the Stop hook
+    allows 25s, and m1-m6 are already computed when the ledger starts), reporting
+    `partial` rather than being killed; `budget_s` overrides the ledger's default."""
     vocab = {"kg_skills": KG_SKILLS, "shell_read_targets": bash_read_targets}
     try:
-        return _load_context_ledger().analyze_context(
-            files, kg_read_re, vocab, iter_lines, subagent_files, budget_s)
+        mod = _load_context_ledger()
+        budget = mod.DEFAULT_BUDGET_S if budget_s is None else budget_s
+        return mod.analyze_context(files, kg_read_re, vocab, iter_lines, subagent_files, budget)
     except Exception as e:
         return {"status": "error", "headline": {},
                 "status_reason": _clip(f"{type(e).__name__}: {e}", MAX_WARNING_CHARS)}
@@ -1048,8 +1069,9 @@ def render_ledger(cl):
             lines.append("           top sources: " + ", ".join(
                 f"{k} {v['bytes'] // 1024}KB/{v['events']}x" for k, v in top))
         ft = cl["follow_through"]["by_kind"]
-        lines.append("           pointer follow-through: " + ", ".join(
-            f"{k} {v['followed']}/{v['injected']}" for k, v in ft.items() if v["injected"]))
+        lines.append("           pointer follow-through (without shell reads): " + ", ".join(
+            f"{k} {v['followed']}/{v['injected']} ({v.get('followed_tools_only')})"
+            for k, v in ft.items() if v["injected"]))
         rf = cl["reflexes"]
         lines.append("           retrieval reflexes (pointed | not; observational): " + ", ".join(
             f"{k} {rf[k]['pointed']['rate']}|{rf[k]['unpointed']['rate']}"
@@ -1224,13 +1246,8 @@ def main():
     # use for the ledger, and the SessionStart path runs this way under a 10s timeout.
     ledger = {}
     if not (args.no_store and (args.brief or args.closure)):
-        try:
-            sub_files = [f for pat in subagent_globs(glob_pat) for f in window_files(pat, window)]
-        except OSError:
-            # A transcript vanished between the glob and its mtime (a worktree janitor).
-            # The subagent block reads `no_data` for this run; m1-m6 are unaffected.
-            sub_files = []
-        ledger = context_ledger_block(files, kg_read_re, sub_files)
+        ledger = context_ledger_block(files, kg_read_re, [
+            f for pat in subagent_globs(glob_pat) for f in window_files(pat, window)])
     # The ledger's headline values join `metrics` so evaluate() files them like any
     # other row -- as `shadow` under a stood-down setpoint, `no_setpoint` without one --
     # and so the blind-read nulling below covers them too.

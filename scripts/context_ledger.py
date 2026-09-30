@@ -23,21 +23,29 @@ block, and a parent's pointer that only its subagent opened is counted separatel
 Same rule as the sensor it extends (h ⟂ U): every number comes from transcript
 STRUCTURE -- the attachment records the harness writes and the structured fields of
 tool_use inputs. No assistant text or thinking block is read, and neither is prose
-that a structured field carries: an Agent prompt, a Write body, a Grep pattern, a
-Skill's free text. The one exception is stated below: shell reads are found by the
-sensor's own detector, which does not respect quotes.
+that a structured field carries: an Agent prompt, a Write body, a Grep pattern. A
+`kg load` query is read for the entity it names, whether it comes from Bash or from a
+Skill(kg) call's args, because naming the entity is how `kg load` opens one. The one
+other exception is stated below: shell reads are found by the sensor's own detector,
+which does not respect quotes.
 
 A pointer is followed by a Read or Grep of its path, a `kg load` naming it, an MCP id
 field naming it, or `ctx board` (the owner's definition), and also by a shell read of
-its path. This harness steers agents to Bash, and on 2026-09-30 every KG pointer that a
-session opened was opened with `cat`/`sed`, so leaving shell reads out read 0 of 2,566.
+its path. This harness steers agents to Bash: on 2026-09-30 none of the followed KG
+pointers was opened with the Read tool, so leaving shell reads out read 0 of 2,566.
 Shell reads are detected by the SENSOR's own `bash_read_targets` -- the detector m5
-is graded with -- not by a second parser here: one shell-read detector for the whole
-sensor, whose fixes reach both. It does not respect quotes, so a read verb that starts
-a line inside a commit message or heredoc body counts; `followed_tools_only` is the
-strict figure without shell reads. `kg load` and `ctx board` are found by the program a
-segment actually runs (shlex-split, quotes respected; everything from a heredoc on is
-dropped, and a command shlex cannot split is dropped -- both under-count).
+is graded with -- so a fix to how a shell read is recognized reaches both. Its known
+over-counts, all counted in `followed` and none in `followed_tools_only` (the strict
+figure without shell reads):
+  - it does not respect quotes: a read verb that starts a line inside a commit
+    message or heredoc body counts;
+  - a grep pattern that is itself a path counts;
+  - `git diff -- path`, `git log -- path`, `wc` and `md5sum` count as reads, though
+    they show a diff, a history or a count rather than the file.
+`kg load` and `ctx board` are found by the program a segment actually runs
+(shlex-split, quotes respected, shell keywords such as `do`/`then` skipped); everything
+from a heredoc on is dropped, and a command shlex cannot split is dropped -- both
+under-count.
 
 The ledger is SHADOW: measured, never graded. It cannot become `worst` and it emits no
 actuator. Its liveness checks need no threshold. It is `blind` when it read files and
@@ -144,6 +152,8 @@ _ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _PYTHON_RE = re.compile(r"^python(?:\d+(?:\.\d+)?)?$")
 _PYTHON_VALUE_FLAGS = frozenset({"-X", "-W"})
 _SHELLS = frozenset({"sh", "bash", "zsh", "dash"})
+# Keywords that open a compound command: `for x in a; do kg.py load y; done` runs kg.py.
+_SHELL_KEYWORDS = frozenset({"if", "then", "else", "elif", "while", "until", "do", "{", "!"})
 _KG_LOAD_VALUE_OPTS = frozenset({"--n", "-n", "--type", "--terms", "--limit"})
 # The ledger's share of the Stop run: the hook's timeout is 25s, and m1-m6 are computed
 # before the ledger starts, so a slow ledger must stop itself rather than let the
@@ -350,7 +360,7 @@ def segment_programs(seg, depth=0):
     i = 0
     while i < len(seg):
         tok = seg[i]
-        if _ASSIGN_RE.match(tok):
+        if _ASSIGN_RE.match(tok) or tok in _SHELL_KEYWORDS:
             i += 1
             continue
         base = os.path.basename(tok)
@@ -389,11 +399,15 @@ def segment_programs(seg, depth=0):
 
 
 def load_query_tokens(args):
-    """The query words of `kg load <query...>`, normalized for slug matching."""
+    """The query words of `kg load <query...>`, normalized for slug matching. A redirect
+    and its target (`> /tmp/out`, `2>&1`) are not query words."""
     toks, skip = set(), False
     for a in args:
         if skip:
             skip = False
+            continue
+        if a and all(c in "<>&" for c in a):
+            skip = True
             continue
         if a.startswith("-"):
             skip = a in _KG_LOAD_VALUE_OPTS
@@ -580,8 +594,10 @@ class _Session:
         found, _ = text_pointers(source, text)
         for kind, keys in found.items():
             for key in keys:
-                p = self.pointers[kind].setdefault(key, {"first": idx, "ts": ts, "sources": set()})
-                p["sources"].add(source)
+                p = self.pointers[kind].setdefault(key, {"first": idx, "ts": ts, "sources": {}})
+                # Each source is credited from ITS first injection: a read that came
+                # before role-x named the pointer is not role-x's follow-through.
+                p["sources"].setdefault(source, idx)
         self._mark_pointed(source, text)
 
     def _mark_pointed(self, source, text):
@@ -777,20 +793,26 @@ def _aggregate(files, sessions, truncated=False):
     unparsed = sum(s.unparsed for s in sessions)
     # A run the time budget cut short is `partial` whatever it did read: what it did
     # not read cannot be called absent.
+    forks = sum(s.fork_copies for s in sessions)
     if not files:
         status, reason = "no_data", "no session file in the window"
     elif sessions and unparsed == len(sessions) and not truncated:
         status = "blind"
         reason = f"read {unparsed} non-empty file(s) and parsed no record from any of them"
-    elif not live and not truncated:
-        status, reason = "no_data", "every record in the window was a fork copy"
+    elif not live and not truncated and not unparsed:
+        status = "no_data"
+        reason = ("every record in the window was a fork copy" if forks
+                  else "the window's session files hold no record")
     elif total == 0 and not truncated:
         status = "blind"
         reason = (f"read {len(live)} session(s), {sum(s.own_records for s in live)} records, "
                   "and billed 0 injected bytes — the attachment schema no longer matches")
+        if unparsed:
+            reason += f"; {unparsed} non-empty file(s) parsed to no record"
     elif unbilled or unknown_event or unreadable or unparsed or truncated:
-        # One source going dark while the others keep the total above zero is the same
-        # failure one level down: the ledger would read `live` with role-x missing.
+        # A KNOWN billed source going dark while the others keep the total above zero is
+        # the same failure one level down. (A renamed type is not caught here: it is
+        # reported under `unknown_visible`, and doctor says renames go undetected.)
         status = "partial"
         parts = [f"{n} {at} record(s) the model was shown billed 0 bytes"
                  for at, n in sorted(unbilled.items())]
@@ -851,10 +873,10 @@ def _follow_through(sessions):
                                               {"injected": 0, "followed": 0})
                     t["injected"] += 1
                     t["followed"] += hit
-                for source in p["sources"]:
+                for source, first in p["sources"].items():
                     b = by_source.setdefault(source, {}).setdefault(kind, {"injected": 0, "followed": 0})
                     b["injected"] += 1
-                    b["followed"] += hit
+                    b["followed"] += s.used(kind, key, after_idx=first)
         for kind, o in opened.items():
             merged = dict(s.shell_uses[kind])
             for key, u in s.uses[kind].items():
@@ -884,7 +906,8 @@ def _follow_through(sessions):
                  "tools, kg load, ctx board and MCP ids only"),
         "overall": {"injected": injected, "followed": followed, "rate": _rate(followed, injected)},
         "by_kind": by_kind,
-        # persona/* entries carry their claim inline, so an unopened one may still be used.
+        # Every role-x KG entry carries its core_claim inline before the path, so an
+        # unopened pointer may still have been used: this counts opens, not use.
         "kg_by_type": dict(sorted(kg_by_type.items())),
         "by_source": dict(sorted(by_source.items())),
         "opened": opened,
@@ -945,8 +968,8 @@ def _read_all(paths, iter_records, kg_read_re, vocab, deadline):
 def analyze_context(files, kg_read_re, vocab, iter_records, subagent_files=(),
                     budget_s=DEFAULT_BUDGET_S):
     """The context_ledger block for one window of transcript files and their subagents.
-    `vocab` carries the sensor's read verbs, git read subcommands and kg skill names,
-    so the ledger and m5 read the same vocabulary. Main sessions are read first; the
+    `vocab` carries m5's kg skill names and its shell-read detector, so the ledger and
+    m5 read a shell command the same way. Main sessions are read first; the
     time budget, when it runs out, cuts the subagents before them."""
     deadline = None if budget_s is None else time.monotonic() + budget_s
     main, main_cut = _read_all(files, iter_records, kg_read_re, vocab, deadline)
