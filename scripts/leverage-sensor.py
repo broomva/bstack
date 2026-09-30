@@ -37,6 +37,10 @@ import time
 from datetime import datetime, timezone
 
 HOME = os.path.expanduser("~")
+_START = time.monotonic()
+# The Stop hook kills this process at 25s. The context ledger must finish, and the
+# record be stored, inside that, so its budget is what is left of this deadline.
+LEDGER_DEADLINE_S = 20.0
 
 
 def resolve_workspace(arg=None):
@@ -149,7 +153,17 @@ def _segment_read_targets(seg):
         subs = [w for w in words[1:] if not w.startswith("-")]
         if not subs or subs[0] not in _GIT_READ_SUBS:
             return []
+        # `git cat-file -e/-t/-s` asks whether an object exists, or its type or size;
+        # it prints no content. Counting it scored "did my PR land?" as a KG read.
+        if subs[0] == "cat-file" and {"-e", "-t", "-s"} & set(words):
+            return []
     elif verb not in _READ_VERBS:
+        return []
+    # `sed -i` rewrites the file in place: a write, not a read (`-i`, `-i.bak`,
+    # `-ni`, `--in-place`). The bundled-flag test is sed-only; `grep -i` is a read.
+    if verb == "sed" and any(w == "--in-place" or w.startswith("--in-place=") or
+                             (w.startswith("-") and not w.startswith("--") and "i" in w[1:])
+                             for w in words[1:]):
         return []
     # Quotes are stripped from ARGUMENTS here rather than deleted from the command:
     # for a read verb, `cat "docs/research/entities/x.md"` is an ordinary read, and
@@ -181,6 +195,9 @@ INJECTED_MARKERS = ("<command-", "<local-command", "system-reminder",
 # L0 external plant (tool), L1 agent internal (reflex), L2 meta-control, L3 governance.
 DEFAULT_LEVELS = {
     "m1": "L1", "m2": "L0", "m3": "L0", "m4": "L0", "m5": "L2", "m6": "L3",
+    # context ledger (shadow): what injected context costs and whether it is used --
+    # knowledge routing, so the same level as m5.
+    "cl1": "L2", "cl2": "L2", "cl3": "L2",
 }
 
 
@@ -377,9 +394,37 @@ def is_nudge(text):
     return bool(CONTINUE_RE.match(t) or NUDGE_RE.search(t))
 
 
-def analyze(glob_pat, window_days, kg_read_re):
+def _mtime(path):
+    """A file's mtime, or None when it vanished between the glob and the stat (a
+    worktree janitor) or is a dangling link: that one file is skipped, not the list."""
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return None
+
+
+def window_files(glob_pat, window_days):
+    """Transcript files touched within the window. Computed ONCE per run and handed to
+    both analyze() and the context ledger: the live session's file is being appended
+    while the sensor runs, so two globs could disagree about which sessions exist."""
     cutoff = time.time() - window_days * 86400
-    files = [f for f in glob.glob(glob_pat) if os.path.getmtime(f) >= cutoff]
+    return [f for f in glob.glob(glob_pat) if (_mtime(f) or 0) >= cutoff]
+
+
+def subagent_globs(glob_pat):
+    """Claude Code writes a subagent's transcript to <project>/<session-id>/subagents/,
+    and a workflow's agents one level further down, so the session glob reaches
+    neither."""
+    root = os.path.dirname(glob_pat)
+    # `agent-*` only: a workflow directory also holds its journal.jsonl, which records
+    # the workflow's steps and is not an agent transcript.
+    return (os.path.join(root, "*", "subagents", "*.jsonl"),
+            os.path.join(root, "*", "subagents", "workflows", "*", "agent-*.jsonl"))
+
+
+def analyze(glob_pat, window_days, kg_read_re, files=None):
+    if files is None:
+        files = window_files(glob_pat, window_days)
 
     sessions = continue_nudges = tool_results = tool_errors = 0
     read_before_edit = sandbox_bypass = edits = kg_sessions = 0
@@ -473,6 +518,56 @@ def analyze(glob_pat, window_days, kg_read_re):
         "meta_sessions": meta_sessions, "product_sessions": product_sessions,
     }
     return metrics, raw
+
+
+def _load_context_ledger():
+    """scripts/context_ledger.py, loaded by FILE PATH. The hooks start this file with
+    `python3 -I`, which keeps its directory off sys.path, so a plain import would fail;
+    loading by path adds nothing to sys.path (the test_lock.py pattern, BRO-2652)."""
+    import importlib.util
+    path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "context_ledger.py")
+    spec = importlib.util.spec_from_file_location("context_ledger", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def ledger_budget_s(default, start=None):
+    """Seconds the ledger may run: its own cap, or what is left before LEDGER_DEADLINE_S
+    counted from process start, whichever is smaller. m1-m6 run first, so a slow
+    analyze() leaves the ledger less time rather than pushing the run past the hook."""
+    elapsed = time.monotonic() - (_START if start is None else start)
+    return max(0.0, min(default, LEDGER_DEADLINE_S - elapsed))
+
+
+def context_ledger_block(files, kg_read_re, subagent_files=(), budget_s=None, start=None):
+    """The `context_ledger` block: injected-context bytes by source, pointer
+    follow-through and retrieval reflexes. SHADOW -- it never grades.
+
+    A failure here must not take m1-m6 down with it, and must not look like a quiet
+    reading either: it returns status "error" with the reason, which doctor §29 fails
+    on. A block that is missing or all-null is how BRO-1696's dead sensor passed.
+
+    The ledger shares m5's kg skill names and m5's shell-READ detector, so a fix to
+    how the sensor reads a shell read reaches both (the ledger parses a command only
+    to find `kg load` / `ctx board`). It stops itself at its time budget (the Stop hook
+    allows 25s, and m1-m6 are already computed when the ledger starts), reporting
+    `partial` rather than being killed. main() passes `start` (when this process began),
+    so the budget is what is left of the hook's deadline; a caller that passes neither
+    `start` nor `budget_s` gets the ledger's own cap, independent of process age."""
+    vocab = {"kg_skills": KG_SKILLS, "shell_read_targets": bash_read_targets}
+    try:
+        mod = _load_context_ledger()
+        if budget_s is not None:
+            budget = budget_s
+        elif start is not None:
+            budget = ledger_budget_s(mod.DEFAULT_BUDGET_S, start)
+        else:
+            budget = mod.DEFAULT_BUDGET_S
+        return mod.analyze_context(files, kg_read_re, vocab, iter_lines, subagent_files, budget)
+    except Exception as e:
+        return {"status": "error", "headline": {},
+                "status_reason": _clip(f"{type(e).__name__}: {e}", MAX_WARNING_CHARS)}
 
 
 def merge_ship_shadow(metrics, raw, workspace, max_age_sec=172800):
@@ -865,18 +960,32 @@ def no_worst_line(record):
     return "No setpoint graded — no metric matched a live setpoint this window."
 
 
-def shadow_notes(record):
+def is_calibrating(row):
+    """A shadow row with no target and no alert: a measurement still being calibrated,
+    not a stood-down shield. It never had a threshold, so nothing can go missing when
+    it is ungraded (the context ledger's cl1-cl3 are the first)."""
+    return (row.get("status") == "shadow" and row.get("target") is None
+            and row.get("alert") is None)
+
+
+def shadow_notes(record, brief=False):
     """Lines naming every stood-down setpoint and every unrecognized status.
 
     A shadow setpoint is deliberately ungraded, so it vanishes from the graded
     output entirely. Vanishing silently is the opposite failure to the one
     BRO-2168 fixed -- a shield can then be gone for windows without anyone
-    noticing -- so its absence is stated rather than implied."""
+    noticing -- so its absence is stated rather than implied.
+
+    `brief=True` (the SessionStart wire) leaves out calibrating rows. They were
+    never shields, and printing a shadow metric into the context of the agent it
+    measures lets it read its own score -- the context ledger's follow-through rate
+    would then shape the follow-through it is calibrating on."""
     rows = record.get("results")
     if not isinstance(rows, list):
         return []
     out = []
-    shadowed = [r for r in rows if isinstance(r, dict) and r.get("status") == "shadow"]
+    shadowed = [r for r in rows if isinstance(r, dict) and r.get("status") == "shadow"
+                and not (brief and is_calibrating(r))]
     if shadowed:
         out.append("shadow (measured, NOT graded): " + ", ".join(
             f"{r.get('name', r['key'])} = {r.get('value')} [{r.get('setpoint_status')}]"
@@ -930,7 +1039,7 @@ def render_brief(record):
         # BRO-2168: with no worst gap, "within target" is only true if
         # something was actually graded. no_worst_line() decides on the graded rows.
         lines.append(no_worst_line(record))
-        lines.extend(shadow_notes(record))
+        lines.extend(shadow_notes(record, brief=True))
         return "\n".join(x for x in lines if x)
     sign = "↑" if worst.get("direction") == "lower_is_better" else "↓"
     gap = worst.get("gap")
@@ -950,8 +1059,45 @@ def render_brief(record):
               and r.get("key") != worst.get("key")]
     if others:
         lines.append("Other alerts: " + ", ".join(f"{o['name']}={o['value']}" for o in others))
-    lines.extend(shadow_notes(record))
+    lines.extend(shadow_notes(record, brief=True))
     return "\n".join(lines)
+
+
+def render_ledger(cl):
+    """The context ledger in the human view: a few lines, never raising. Not rendered
+    into the SessionStart brief -- a ledger of injected bytes should not add to them."""
+    if not isinstance(cl, dict):
+        return []
+    status = cl.get("status")
+    if status not in ("live", "partial"):
+        return [f"  [shadow] context ledger: {str(status).upper()} — {cl.get('status_reason')}"]
+    try:
+        tot = cl["totals"]
+        ps, pt = tot["per_session"], tot["per_turn"]
+        sub = (cl.get("subagents") or {}).get("totals") or {}
+        lines = []
+        if status == "partial":
+            lines.append(f"  [shadow] context ledger: PARTIAL — {cl.get('status_reason')}")
+        lines.append(f"  [shadow] context ledger — {cl['sessions']} sessions, {cl['turns']} turns; "
+                     f"injected {ps['median']} B/session median (p90 {ps['p90']}), "
+                     f"{pt['median']} B/turn median (p90 {pt['p90']}); "
+                     f"+{sub.get('bytes', 0)} B in {cl['subagents'].get('files', 0)} subagent "
+                     f"transcripts; ≈ tokens = bytes/4 (estimate)")
+        top = list(cl.get("sources", {}).items())[:4]
+        if top:
+            lines.append("           top sources: " + ", ".join(
+                f"{k} {v['bytes'] // 1024}KB/{v['events']}x" for k, v in top))
+        ft = cl["follow_through"]["by_kind"]
+        lines.append("           pointer follow-through: " + ", ".join(
+            f"{k} {v['followed']}/{v['injected']} ({v.get('followed_tools_only')} without shell reads)"
+            for k, v in ft.items() if v["injected"]))
+        rf = cl["reflexes"]
+        lines.append("           retrieval reflexes (pointed | not; observational): " + ", ".join(
+            f"{k} {rf[k]['pointed']['rate']}|{rf[k]['unpointed']['rate']}"
+            for k in ("kg", "specs", "memory", "research") if k in rf))
+        return lines
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return ["  [shadow] context ledger: present but unreadable"]
 
 
 def render_human(record):
@@ -1001,6 +1147,7 @@ def render_human(record):
     if m6s is not None:
         out.append(f"  [shadow] m6s_meta_work_ship_ratio = {m6s}  "
                    f"(exogenous ship-signal — NON-actuating, calibrating for BRO-1709)")
+    out.extend(render_ledger(record.get("context_ledger")))
     worst = record.get("worst")
     worst = worst if isinstance(worst, dict) else None
     out.append(f"  Focus: {worst.get('name', worst.get('key', '?'))} → "
@@ -1112,7 +1259,19 @@ def main():
               f"setpoints.knowledge_paths {kg_pat!r} is not a valid regex ({e}) "
               "— using the default")
         kg_read_re = re.compile(DEFAULT_KG_READ, re.IGNORECASE)
-    metrics, raw = analyze(glob_pat, window, kg_read_re)
+    files = window_files(glob_pat, window)
+    metrics, raw = analyze(glob_pat, window, kg_read_re, files=files)
+    # A run that stores nothing and prints only the brief or the closure verdict has no
+    # use for the ledger, and the SessionStart path runs this way under a 10s timeout.
+    ledger = {}
+    if not (args.no_store and (args.brief or args.closure)):
+        ledger = context_ledger_block(files, kg_read_re, [
+            f for pat in subagent_globs(glob_pat) for f in window_files(pat, window)],
+            start=_START)
+    # The ledger's headline values join `metrics` so evaluate() files them like any
+    # other row -- as `shadow` under a stood-down setpoint, `no_setpoint` without one --
+    # and so the blind-read nulling below covers them too.
+    metrics.update(ledger.get("headline") or {})
     # A blind read must not emit a row that reads as a measurement.
     # With no structural events every metric computes to 0.0 from an empty
     # numerator -- at or better than every target -- and only closure.sensor_live
@@ -1140,6 +1299,8 @@ def main():
         "sessions_analyzed": raw["sessions_analyzed"],
         "metrics": metrics, "raw": raw, "policy_warnings": policy_warnings, "results": results, "worst": worst,
     }
+    if ledger:
+        record["context_ledger"] = ledger
     record["closure"] = closure_verdict(record, setpoints)
 
     if not args.no_store:

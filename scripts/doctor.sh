@@ -1846,6 +1846,127 @@ PY
     done <<< "$_FLEET_REPORT"
 fi
 
+# ── Section 29: Context ledger (shadow) ────────────────────────────────────
+# leverage-sensor.py writes a `context_ledger` block into leverage-state.json: the
+# bytes each injected source (hooks, CLAUDE.md / MEMORY.md, harness listings) put
+# into context, whether the pointers they carried were followed, and the retrieval
+# reflexes each session showed. It is SHADOW, so nothing here grades a value.
+#
+# What this section DOES fail on is a dead ledger. BRO-1696 was a sensor whose every
+# value was null or zero passing as a quiet reading, so these are all gaps: a ledger
+# that read sessions and billed no byte (`blind`); one that billed nothing from a
+# record Claude Code says the model was shown (`partial`: one source dark while the
+# others keep the total up); one that raised (`error`); one that says `live` with
+# every headline value null; a dead subagent block; and a status this check does not
+# know. No block at all means the sensor that wrote the state predates the ledger.
+# That is info, like §27's deployment advisories: doctor cannot tell which install the
+# Stop hook runs, so it cannot tell "written before this upgrade, the next unthrottled
+# Stop run adds it" from "the Stop hook runs an older install". File times cannot
+# settle it either (a tarball keeps commit-time mtimes; an upgrade re-stamps files), so
+# the message names both causes and the check. A state older than 7 days is reported
+# as stale, as §23 does.
+section "29. Context ledger (shadow)"
+_CL_STATE="$WORKSPACE/.control/leverage-state.json"
+if [ ! -f "$_CL_STATE" ]; then
+    [ "$QUIET" = "0" ] && echo "  [info] no leverage-state yet — the context ledger appears after the Stop sensor runs (see §23)"
+elif ! command -v python3 >/dev/null 2>&1; then
+    [ "$QUIET" = "0" ] && echo "  [info] python3 unavailable — skipping the context-ledger check"
+else
+    _CL_REPORT="$(python3 -I - "$_CL_STATE" 2>/dev/null <<'PY'
+import json, sys
+
+def emit(kind, detail=""):
+    print(kind + "\t" + " ".join(str(detail).split())[:300])
+
+try:
+    with open(sys.argv[1]) as f:
+        st = json.load(f)
+    cl = st.get("context_ledger") if isinstance(st, dict) else None
+    if not isinstance(st, dict):
+        emit("UNREADABLE", "leverage-state.json is a " + type(st).__name__ + ", not an object")
+    elif cl is None:
+        emit("NOBLOCK", st.get("measured_at"))
+    elif not isinstance(cl, dict):
+        emit("UNREADABLE", "context_ledger is a " + type(cl).__name__)
+    else:
+        status = cl.get("status")
+        reason = cl.get("status_reason") or ""
+        head = cl.get("headline") if isinstance(cl.get("headline"), dict) else {}
+        if status == "live":
+            if not head or all(v is None for v in head.values()):
+                emit("ALLNULL", "status live but every headline value is null: " + json.dumps(head))
+            else:
+                tot = cl.get("totals") or {}
+                ps = (tot.get("per_session") or {}).get("median")
+                pt = (tot.get("per_turn") or {}).get("median")
+                kg = ((cl.get("follow_through") or {}).get("by_kind") or {}).get("kg") or {}
+                sub = (cl.get("subagents") or {}).get("totals") or {}
+                emit("LIVE", "%s sessions / %s turns; injected median %s B/session, %s B/turn "
+                     "(~bytes/4 tokens), +%s B in subagents; KG pointer follow-through %s/%s "
+                     "(%s without shell reads); measured %s" % (
+                         cl.get("sessions"), cl.get("turns"), ps, pt, sub.get("bytes", 0),
+                         kg.get("followed"), kg.get("injected"), kg.get("followed_tools_only"),
+                         st.get("measured_at")))
+        elif status in ("blind", "partial", "error", "no_data"):
+            emit(status.upper(), reason)
+        else:
+            emit("UNKNOWN", "status " + repr(status) + " is not one this check reads")
+        sub = cl.get("subagents") if isinstance(cl.get("subagents"), dict) else {}
+        if sub.get("status") in ("blind", "partial"):
+            emit("SUB" + sub["status"].upper(), sub.get("status_reason") or "")
+        if status in ("live", "partial"):
+            cov = (cl.get("drift_check_coverage") or {}).get("share")
+            unknown = sorted((cl.get("unknown_visible") or {}).keys())
+            emit("NOTE", "renamed or new attachment types are NOT detected (reported, not alarmed); "
+                 "rendered-field drift-check coverage %s; unknown shown types: %s" % (
+                     cov, ", ".join(unknown) or "none"))
+except Exception as exc:  # noqa: BLE001 - report, never die
+    emit("UNREADABLE", type(exc).__name__ + ": " + str(exc))
+PY
+)"
+    _CL_RC=$?
+    if [ "$_CL_RC" != "0" ] || [ -z "$_CL_REPORT" ]; then
+        _CL_REPORT="$(printf 'UNREADABLE\tthe context-ledger probe did not run (python3 exited %s)' "$_CL_RC")"
+    fi
+    if [ -z "$(find "$_CL_STATE" -mtime -7 2>/dev/null)" ]; then
+        [ "$QUIET" = "0" ] && echo "  [info] leverage-state.json is older than 7 days — the ledger below is stale (see §23)"
+    fi
+    while IFS=$'\t' read -r _cl_kind _cl_detail; do
+        [ -z "$_cl_kind" ] && continue
+        case "$_cl_kind" in
+            LIVE)
+                ok "context ledger (shadow, not graded): $_cl_detail" ;;
+            NOTE)
+                [ "$QUIET" = "0" ] && echo "  [info] context ledger: $_cl_detail" ;;
+            NOBLOCK)
+                [ "$QUIET" = "0" ] && echo "  [info] leverage-state.json (measured $_cl_detail) has no context_ledger block: a sensor older than the ledger (bstack < 0.42.0) wrote it"
+                [ "$QUIET" = "0" ] && echo "         → if that was before this install was upgraded, the next Stop run past its 6h throttle adds it; if the Stop hook runs an older bstack install (a vendored copy), upgrade that one"
+                ;;
+            NO_DATA)
+                [ "$QUIET" = "0" ] && echo "  [info] context ledger: no session read this window ($_cl_detail) — nothing to measure, not a defect"
+                ;;
+            PARTIAL)
+                gap "context ledger is PARTIALLY BLIND — $_cl_detail" \
+                    "a source the model was shown bills 0 bytes, or part of a record is unreadable; compare the named records against scripts/context_ledger.py" ;;
+            BLIND)
+                gap "context ledger is BLIND — $_cl_detail" \
+                    "compare a recent transcript's attachment records against scripts/context_ledger.py (hook_success / instructions); a ledger that reads 0 injected bytes is the BRO-1696 dead sensor" ;;
+            SUBBLIND|SUBPARTIAL)
+                gap "context ledger's subagent block is ${_cl_kind#SUB} — $_cl_detail" \
+                    "the subagent transcripts under <session>/subagents/ bill wrong; compare one against scripts/context_ledger.py" ;;
+            ERROR)
+                gap "context ledger FAILED — $_cl_detail" \
+                    "run python3 -I $BSTACK_REPO/scripts/leverage-sensor.py --workspace $WORKSPACE --json and fix scripts/context_ledger.py" ;;
+            ALLNULL)
+                gap "context ledger is DEAD — $_cl_detail" \
+                    "an all-null reading is a failure, not a quiet window (BRO-1696); re-run the sensor and inspect the block" ;;
+            *)
+                gap "context ledger state unreadable — $_cl_detail" \
+                    "re-run the sensor: python3 -I $BSTACK_REPO/scripts/leverage-sensor.py --workspace $WORKSPACE" ;;
+        esac
+    done <<< "$_CL_REPORT"
+fi
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 TOTAL=$((PASSES + GAPS))

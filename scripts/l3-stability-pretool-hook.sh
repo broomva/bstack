@@ -50,6 +50,9 @@ L3_PATHS=(
     ".control/leverage-setpoints.yaml"
     "scripts/leverage-sensor.py"
     "scripts/leverage-ship-sensor.py"
+    # The context ledger runs inside the sensor's process and its headline joins the
+    # sensor's `metrics`, so it is part of the metric that watches the agent.
+    "scripts/context_ledger.py"
 )
 
 # Check if file_path matches any L3 path (suffix match on basename or full
