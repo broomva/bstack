@@ -181,6 +181,9 @@ INJECTED_MARKERS = ("<command-", "<local-command", "system-reminder",
 # L0 external plant (tool), L1 agent internal (reflex), L2 meta-control, L3 governance.
 DEFAULT_LEVELS = {
     "m1": "L1", "m2": "L0", "m3": "L0", "m4": "L0", "m5": "L2", "m6": "L3",
+    # context ledger (shadow): what injected context costs and whether it is used --
+    # knowledge routing, so the same level as m5.
+    "cl1": "L2", "cl2": "L2", "cl3": "L2",
 }
 
 
@@ -377,9 +380,17 @@ def is_nudge(text):
     return bool(CONTINUE_RE.match(t) or NUDGE_RE.search(t))
 
 
-def analyze(glob_pat, window_days, kg_read_re):
+def window_files(glob_pat, window_days):
+    """Transcript files touched within the window. Computed ONCE per run and handed to
+    both analyze() and the context ledger: the live session's file is being appended
+    while the sensor runs, so two globs could disagree about which sessions exist."""
     cutoff = time.time() - window_days * 86400
-    files = [f for f in glob.glob(glob_pat) if os.path.getmtime(f) >= cutoff]
+    return [f for f in glob.glob(glob_pat) if os.path.getmtime(f) >= cutoff]
+
+
+def analyze(glob_pat, window_days, kg_read_re, files=None):
+    if files is None:
+        files = window_files(glob_pat, window_days)
 
     sessions = continue_nudges = tool_results = tool_errors = 0
     read_before_edit = sandbox_bypass = edits = kg_sessions = 0
@@ -473,6 +484,33 @@ def analyze(glob_pat, window_days, kg_read_re):
         "meta_sessions": meta_sessions, "product_sessions": product_sessions,
     }
     return metrics, raw
+
+
+def _load_context_ledger():
+    """scripts/context_ledger.py, loaded by FILE PATH. The hooks start this file with
+    `python3 -I`, which keeps its directory off sys.path, so a plain import would fail;
+    loading by path adds nothing to sys.path (the test_lock.py pattern, BRO-2652)."""
+    import importlib.util
+    path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "context_ledger.py")
+    spec = importlib.util.spec_from_file_location("context_ledger", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def context_ledger_block(files, kg_read_re):
+    """The `context_ledger` block: injected-context bytes by source, pointer
+    follow-through and retrieval reflexes. SHADOW -- it never grades.
+
+    A failure here must not take m1-m6 down with it, and must not look like a quiet
+    reading either: it returns status "error" with the reason, which doctor §29 fails
+    on. A block that is missing or all-null is how BRO-1696's dead sensor passed."""
+    try:
+        return _load_context_ledger().analyze_context(
+            files, kg_read_re, bash_read_targets, iter_lines)
+    except Exception as e:
+        return {"status": "error", "headline": {},
+                "status_reason": _clip(f"{type(e).__name__}: {e}", MAX_WARNING_CHARS)}
 
 
 def merge_ship_shadow(metrics, raw, workspace, max_age_sec=172800):
@@ -954,6 +992,37 @@ def render_brief(record):
     return "\n".join(lines)
 
 
+def render_ledger(cl):
+    """The context ledger in the human view: a few lines, never raising. Not rendered
+    into the SessionStart brief -- a ledger of injected bytes should not add to them."""
+    if not isinstance(cl, dict):
+        return []
+    status = cl.get("status")
+    if status != "live":
+        return [f"  [shadow] context ledger: {str(status).upper()} — {cl.get('status_reason')}"]
+    try:
+        tot = cl["totals"]
+        ps, pt = tot["per_session"], tot["per_turn"]
+        lines = [f"  [shadow] context ledger — {cl['sessions']} sessions, {cl['turns']} turns; "
+                 f"injected {ps['median']:.0f} B/session median (p90 {ps['p90']}), "
+                 f"{pt['median'] if pt['median'] is not None else '-'} B/turn median "
+                 f"(p90 {pt['p90']}); ≈ tokens = bytes/4 (estimate)"]
+        top = list(cl.get("sources", {}).items())[:4]
+        if top:
+            lines.append("           top sources: " + ", ".join(
+                f"{k} {v['bytes'] // 1024}KB/{v['events']}x" for k, v in top))
+        ft = cl["follow_through"]["by_kind"]
+        lines.append("           pointer follow-through: " + ", ".join(
+            f"{k} {v['followed']}/{v['injected']}" for k, v in ft.items() if v["injected"]))
+        rf = cl["reflexes"]
+        lines.append("           retrieval reflexes (pointed | not): " + ", ".join(
+            f"{k} {rf[k]['pointed']['rate']}|{rf[k]['unpointed']['rate']}"
+            for k in ("kg", "specs", "memory", "research") if k in rf))
+        return lines
+    except (KeyError, TypeError, ValueError):
+        return ["  [shadow] context ledger: present but unreadable"]
+
+
 def render_human(record):
     # Same tolerance contract as render_brief: degrade to a truthful line, never raise.
     out = [f"Self-improvement loop — {record.get('sessions_analyzed', '?')} sessions over "
@@ -1001,6 +1070,7 @@ def render_human(record):
     if m6s is not None:
         out.append(f"  [shadow] m6s_meta_work_ship_ratio = {m6s}  "
                    f"(exogenous ship-signal — NON-actuating, calibrating for BRO-1709)")
+    out.extend(render_ledger(record.get("context_ledger")))
     worst = record.get("worst")
     worst = worst if isinstance(worst, dict) else None
     out.append(f"  Focus: {worst.get('name', worst.get('key', '?'))} → "
@@ -1112,7 +1182,13 @@ def main():
               f"setpoints.knowledge_paths {kg_pat!r} is not a valid regex ({e}) "
               "— using the default")
         kg_read_re = re.compile(DEFAULT_KG_READ, re.IGNORECASE)
-    metrics, raw = analyze(glob_pat, window, kg_read_re)
+    files = window_files(glob_pat, window)
+    metrics, raw = analyze(glob_pat, window, kg_read_re, files=files)
+    ledger = context_ledger_block(files, kg_read_re)
+    # The ledger's headline values join `metrics` so evaluate() files them like any
+    # other row -- as `shadow` under a stood-down setpoint, `no_setpoint` without one --
+    # and so the blind-read nulling below covers them too.
+    metrics.update(ledger.get("headline") or {})
     # A blind read must not emit a row that reads as a measurement.
     # With no structural events every metric computes to 0.0 from an empty
     # numerator -- at or better than every target -- and only closure.sensor_live
@@ -1139,6 +1215,7 @@ def main():
         "transcript_glob": glob_pat,
         "sessions_analyzed": raw["sessions_analyzed"],
         "metrics": metrics, "raw": raw, "policy_warnings": policy_warnings, "results": results, "worst": worst,
+        "context_ledger": ledger,
     }
     record["closure"] = closure_verdict(record, setpoints)
 

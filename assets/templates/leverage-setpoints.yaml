@@ -77,6 +77,36 @@ metrics:
     actuator: "anti-windup: freeze NEW governance/primitive edits (stops the numerator growing). The ONLY input that LOWERS m6 is MERGING an agent-authored PRODUCT PR (apps/core/work/…) — it is a trailing-window ratio, so expect a ~7d lag, not a one-PR clear. Waiting or a fresh session do nothing; only where you edit does."
     why: "Fraction of editing sessions that touched only meta paths vs any product path (sub-repos counted via absolute paths). THE anti-capture governor at L3 — the loop watching itself."
 
+  # ── Context ledger — SHADOW (measured, NOT graded) ──────────────────────────
+  # scripts/context_ledger.py measures what the context we inject costs and whether
+  # it is used, and writes the full breakdown to leverage-state.json `context_ledger`
+  # (bytes by source, pointer follow-through, retrieval reflexes). These three rows
+  # are its headline values. `status: shadow` keeps them out of grading, ranking and
+  # the actuator; they carry no target because no reference has been calibrated yet.
+  # Author one only after the ledger has run for a few windows, and the Layer-2
+  # ablation says which way the numbers should move. doctor §29 fails on a DEAD ledger
+  # (blind, errored, or all-null), never on a value.
+  - id: cl1
+    name: injected_bytes_per_turn_p50
+    level: L2
+    status: shadow
+    direction: lower_is_better
+    why: "Median bytes of injected context per turn (hooks + CLAUDE.md/MEMORY.md + harness listings). Token cost ≈ bytes/4, an estimate."
+
+  - id: cl2
+    name: kg_pointer_follow_through_rate
+    level: L2
+    status: shadow
+    direction: higher_is_better
+    why: "Share of (session, KG entity) pointers an injection named that a later tool call in the same session opened."
+
+  - id: cl3
+    name: retrieval_reflex_session_rate
+    level: L2
+    status: shadow
+    direction: higher_is_better
+    why: "Share of sessions that read the KG, docs/specs or memory, or ran deep research, from tool-call structure."
+
 # Optional: override the knowledge-read path regex the sensor uses for m5.
 # knowledge_paths: "research/entities|docs/knowledge-index|your/knowledge/dir"
 
