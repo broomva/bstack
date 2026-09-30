@@ -1853,11 +1853,13 @@ fi
 # reflexes each session showed. It is SHADOW, so nothing here grades a value.
 #
 # What this section DOES fail on is a dead ledger. BRO-1696 was a sensor whose every
-# value was null or zero passing as a quiet reading, so a ledger that read sessions
-# and found no injected byte (`blind`), one that raised (`error`), one that says
-# `live` with every headline value null, or a status this check does not know are
-# all gaps. No block at all is a state written by a sensor older than the ledger:
-# info, because the next Stop run replaces it.
+# value was null or zero passing as a quiet reading, so these are all gaps: a ledger
+# that read sessions and billed no byte (`blind`); one that billed nothing from a
+# record Claude Code says the model was shown (`partial`: one source dark while the
+# others keep the total up); one that raised (`error`); one that says `live` with
+# every headline value null; and a status this check does not know. No block at all
+# is a state written by a sensor older than the ledger: info, because the next Stop
+# run replaces it. A state older than 7 days is reported as stale, as §23 does.
 section "29. Context ledger (shadow)"
 _CL_STATE="$WORKSPACE/.control/leverage-state.json"
 if [ ! -f "$_CL_STATE" ]; then
@@ -1891,11 +1893,13 @@ try:
                 ps = (tot.get("per_session") or {}).get("median")
                 pt = (tot.get("per_turn") or {}).get("median")
                 kg = ((cl.get("follow_through") or {}).get("by_kind") or {}).get("kg") or {}
+                sub = (cl.get("subagents") or {}).get("totals") or {}
                 emit("LIVE", "%s sessions / %s turns; injected median %s B/session, %s B/turn "
-                     "(~bytes/4 tokens); KG pointer follow-through %s/%s" % (
-                         cl.get("sessions"), cl.get("turns"), ps, pt,
-                         kg.get("followed"), kg.get("injected")))
-        elif status in ("blind", "error", "no_data"):
+                     "(~bytes/4 tokens), +%s B in subagents; KG pointer follow-through %s/%s; "
+                     "measured %s" % (
+                         cl.get("sessions"), cl.get("turns"), ps, pt, sub.get("bytes", 0),
+                         kg.get("followed"), kg.get("injected"), st.get("measured_at")))
+        elif status in ("blind", "partial", "error", "no_data"):
             emit(status.upper(), reason)
         else:
             emit("UNKNOWN", "status " + repr(status) + " is not one this check reads")
@@ -1908,6 +1912,9 @@ PY
         _CL_REPORT="$(printf 'UNREADABLE\tthe context-ledger probe did not run (python3 exited %s)' "$_CL_RC")"
     fi
     IFS=$'\t' read -r _cl_kind _cl_detail <<< "$_CL_REPORT"
+    if [ -z "$(find "$_CL_STATE" -mtime -7 2>/dev/null)" ]; then
+        [ "$QUIET" = "0" ] && echo "  [info] leverage-state.json is older than 7 days — the ledger below is stale (see §23)"
+    fi
     case "$_cl_kind" in
         LIVE)
             ok "context ledger (shadow, not graded): $_cl_detail" ;;
@@ -1918,6 +1925,9 @@ PY
         NO_DATA)
             [ "$QUIET" = "0" ] && echo "  [info] context ledger: no session read this window ($_cl_detail) — nothing to measure, not a defect"
             ;;
+        PARTIAL)
+            gap "context ledger is PARTIALLY BLIND — $_cl_detail" \
+                "a source the model was shown bills 0 bytes; compare that attachment type's records against scripts/context_ledger.py" ;;
         BLIND)
             gap "context ledger is BLIND — $_cl_detail" \
                 "compare a recent transcript's attachment records against scripts/context_ledger.py (hook_success / instructions); a ledger that reads 0 injected bytes is the BRO-1696 dead sensor" ;;

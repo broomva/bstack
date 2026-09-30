@@ -388,6 +388,12 @@ def window_files(glob_pat, window_days):
     return [f for f in glob.glob(glob_pat) if os.path.getmtime(f) >= cutoff]
 
 
+def subagent_glob(glob_pat):
+    """Claude Code writes a subagent's transcript to <project>/<session-id>/subagents/,
+    one level below the session files, so the session glob never reaches it."""
+    return os.path.join(os.path.dirname(glob_pat), "*", "subagents", "*.jsonl")
+
+
 def analyze(glob_pat, window_days, kg_read_re, files=None):
     if files is None:
         files = window_files(glob_pat, window_days)
@@ -498,7 +504,7 @@ def _load_context_ledger():
     return mod
 
 
-def context_ledger_block(files, kg_read_re):
+def context_ledger_block(files, kg_read_re, subagent_files=()):
     """The `context_ledger` block: injected-context bytes by source, pointer
     follow-through and retrieval reflexes. SHADOW -- it never grades.
 
@@ -507,7 +513,7 @@ def context_ledger_block(files, kg_read_re):
     on. A block that is missing or all-null is how BRO-1696's dead sensor passed."""
     try:
         return _load_context_ledger().analyze_context(
-            files, kg_read_re, bash_read_targets, iter_lines)
+            files, kg_read_re, bash_read_targets, iter_lines, subagent_files)
     except Exception as e:
         return {"status": "error", "headline": {},
                 "status_reason": _clip(f"{type(e).__name__}: {e}", MAX_WARNING_CHARS)}
@@ -903,18 +909,32 @@ def no_worst_line(record):
     return "No setpoint graded — no metric matched a live setpoint this window."
 
 
-def shadow_notes(record):
+def is_calibrating(row):
+    """A shadow row with no target and no alert: a measurement still being calibrated,
+    not a stood-down shield. It never had a threshold, so nothing can go missing when
+    it is ungraded (the context ledger's cl1-cl3 are the first)."""
+    return (row.get("status") == "shadow" and row.get("target") is None
+            and row.get("alert") is None)
+
+
+def shadow_notes(record, brief=False):
     """Lines naming every stood-down setpoint and every unrecognized status.
 
     A shadow setpoint is deliberately ungraded, so it vanishes from the graded
     output entirely. Vanishing silently is the opposite failure to the one
     BRO-2168 fixed -- a shield can then be gone for windows without anyone
-    noticing -- so its absence is stated rather than implied."""
+    noticing -- so its absence is stated rather than implied.
+
+    `brief=True` (the SessionStart wire) leaves out calibrating rows. They were
+    never shields, and printing a shadow metric into the context of the agent it
+    measures lets it read its own score -- the context ledger's follow-through rate
+    would then shape the follow-through it is calibrating on."""
     rows = record.get("results")
     if not isinstance(rows, list):
         return []
     out = []
-    shadowed = [r for r in rows if isinstance(r, dict) and r.get("status") == "shadow"]
+    shadowed = [r for r in rows if isinstance(r, dict) and r.get("status") == "shadow"
+                and not (brief and is_calibrating(r))]
     if shadowed:
         out.append("shadow (measured, NOT graded): " + ", ".join(
             f"{r.get('name', r['key'])} = {r.get('value')} [{r.get('setpoint_status')}]"
@@ -968,7 +988,7 @@ def render_brief(record):
         # BRO-2168: with no worst gap, "within target" is only true if
         # something was actually graded. no_worst_line() decides on the graded rows.
         lines.append(no_worst_line(record))
-        lines.extend(shadow_notes(record))
+        lines.extend(shadow_notes(record, brief=True))
         return "\n".join(x for x in lines if x)
     sign = "↑" if worst.get("direction") == "lower_is_better" else "↓"
     gap = worst.get("gap")
@@ -988,7 +1008,7 @@ def render_brief(record):
               and r.get("key") != worst.get("key")]
     if others:
         lines.append("Other alerts: " + ", ".join(f"{o['name']}={o['value']}" for o in others))
-    lines.extend(shadow_notes(record))
+    lines.extend(shadow_notes(record, brief=True))
     return "\n".join(lines)
 
 
@@ -998,15 +1018,20 @@ def render_ledger(cl):
     if not isinstance(cl, dict):
         return []
     status = cl.get("status")
-    if status != "live":
+    if status not in ("live", "partial"):
         return [f"  [shadow] context ledger: {str(status).upper()} — {cl.get('status_reason')}"]
     try:
         tot = cl["totals"]
         ps, pt = tot["per_session"], tot["per_turn"]
-        lines = [f"  [shadow] context ledger — {cl['sessions']} sessions, {cl['turns']} turns; "
-                 f"injected {ps['median']:.0f} B/session median (p90 {ps['p90']}), "
-                 f"{pt['median'] if pt['median'] is not None else '-'} B/turn median "
-                 f"(p90 {pt['p90']}); ≈ tokens = bytes/4 (estimate)"]
+        sub = (cl.get("subagents") or {}).get("totals") or {}
+        lines = []
+        if status == "partial":
+            lines.append(f"  [shadow] context ledger: PARTIAL — {cl.get('status_reason')}")
+        lines.append(f"  [shadow] context ledger — {cl['sessions']} sessions, {cl['turns']} turns; "
+                     f"injected {ps['median']} B/session median (p90 {ps['p90']}), "
+                     f"{pt['median']} B/turn median (p90 {pt['p90']}); "
+                     f"+{sub.get('bytes', 0)} B in {cl['subagents'].get('files', 0)} subagent "
+                     f"transcripts; ≈ tokens = bytes/4 (estimate)")
         top = list(cl.get("sources", {}).items())[:4]
         if top:
             lines.append("           top sources: " + ", ".join(
@@ -1015,11 +1040,11 @@ def render_ledger(cl):
         lines.append("           pointer follow-through: " + ", ".join(
             f"{k} {v['followed']}/{v['injected']}" for k, v in ft.items() if v["injected"]))
         rf = cl["reflexes"]
-        lines.append("           retrieval reflexes (pointed | not): " + ", ".join(
+        lines.append("           retrieval reflexes (pointed | not; observational): " + ", ".join(
             f"{k} {rf[k]['pointed']['rate']}|{rf[k]['unpointed']['rate']}"
             for k in ("kg", "specs", "memory", "research") if k in rf))
         return lines
-    except (KeyError, TypeError, ValueError):
+    except (KeyError, TypeError, ValueError, AttributeError):
         return ["  [shadow] context ledger: present but unreadable"]
 
 
@@ -1184,7 +1209,12 @@ def main():
         kg_read_re = re.compile(DEFAULT_KG_READ, re.IGNORECASE)
     files = window_files(glob_pat, window)
     metrics, raw = analyze(glob_pat, window, kg_read_re, files=files)
-    ledger = context_ledger_block(files, kg_read_re)
+    # A run that stores nothing and prints only the brief or the closure verdict has no
+    # use for the ledger, and the SessionStart path runs this way under a 10s timeout.
+    ledger = {}
+    if not (args.no_store and (args.brief or args.closure)):
+        ledger = context_ledger_block(files, kg_read_re,
+                                      window_files(subagent_glob(glob_pat), window))
     # The ledger's headline values join `metrics` so evaluate() files them like any
     # other row -- as `shadow` under a stood-down setpoint, `no_setpoint` without one --
     # and so the blind-read nulling below covers them too.
@@ -1215,8 +1245,9 @@ def main():
         "transcript_glob": glob_pat,
         "sessions_analyzed": raw["sessions_analyzed"],
         "metrics": metrics, "raw": raw, "policy_warnings": policy_warnings, "results": results, "worst": worst,
-        "context_ledger": ledger,
     }
+    if ledger:
+        record["context_ledger"] = ledger
     record["closure"] = closure_verdict(record, setpoints)
 
     if not args.no_store:

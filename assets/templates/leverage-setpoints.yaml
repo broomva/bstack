@@ -80,25 +80,27 @@ metrics:
   # ── Context ledger — SHADOW (measured, NOT graded) ──────────────────────────
   # scripts/context_ledger.py measures what the context we inject costs and whether
   # it is used, and writes the full breakdown to leverage-state.json `context_ledger`
-  # (bytes by source, pointer follow-through, retrieval reflexes). These three rows
-  # are its headline values. `status: shadow` keeps them out of grading, ranking and
-  # the actuator; they carry no target because no reference has been calibrated yet.
-  # Author one only after the ledger has run for a few windows, and the Layer-2
-  # ablation says which way the numbers should move. doctor §29 fails on a DEAD ledger
-  # (blind, errored, or all-null), never on a value.
+  # (bytes by source for main sessions and, separately, their subagents; pointer
+  # follow-through; retrieval reflexes). These three rows are its headline values.
+  # `status: shadow` keeps them out of grading, ranking and the actuator. They carry
+  # no target, because no reference has been calibrated yet, and a shadow row with no
+  # target is kept out of the SessionStart brief too: the agent being measured must
+  # not read its own score. Author a target only after the ledger has run for a few
+  # windows and the Layer-2 ablation says which way the numbers should move. doctor
+  # §29 fails on a DEAD ledger (blind, partial, errored or all-null), never on a value.
   - id: cl1
-    name: injected_bytes_per_turn_p50
+    name: injected_bytes_per_session_p50
     level: L2
     status: shadow
     direction: lower_is_better
-    why: "Median bytes of injected context per turn (hooks + CLAUDE.md/MEMORY.md + harness listings). Token cost ≈ bytes/4, an estimate."
+    why: "Median bytes of injected context per main session: hook output, CLAUDE.md/MEMORY.md and harness listings. Token cost ≈ bytes/4, an estimate. Per-turn figures are in the block; their median is mostly role-x."
 
   - id: cl2
     name: kg_pointer_follow_through_rate
     level: L2
     status: shadow
     direction: higher_is_better
-    why: "Share of (session, KG entity) pointers an injection named that a later tool call in the same session opened."
+    why: "Share of (session, KG entity) pointers an injection named that a later tool call in the same session opened. Opened, not used: persona/* entries carry their claim inline."
 
   - id: cl3
     name: retrieval_reflex_session_rate

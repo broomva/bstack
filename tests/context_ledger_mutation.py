@@ -9,7 +9,10 @@ control runs every killing test against an unmutated copy first, so a red here i
 mutant's doing and not the copy's.
 
 The first mutant is the one the rule was written for: count a hook_success record's
-`stdout` on top of its `content`, which bills every role-x turn twice.
+`stdout` on top of its `content`, which bills every role-x turn twice. The rest remove
+one rule each: twin pairing and its turn scope, fork skipping, the Stop exclusion, the
+four ways prose could be read as a use, slug matching, ordering, both liveness states,
+harness catalogs as pointers, error containment, the brief exclusion and subagent scope.
 
     python3 tests/context_ledger_mutation.py
 """
@@ -27,51 +30,88 @@ REPO = Path(__file__).resolve().parent.parent
 FILES = ("leverage-sensor.py", "context_ledger.py")
 
 # (label, file, anchor, replacement, killing test)
+L, S = "context_ledger.py", "leverage-sensor.py"
 MUTANTS = (
-    ("dedup: stdout billed on top of content", "context_ledger.py",
+    ("dedup: stdout billed on top of content", L,
      '        return content, "content"\n',
      '        return content + (att.get("stdout") or ""), "content"\n',
      "Sources.test_role_x_intake_content_and_stdout_counted_once"),
-    ("dedup: JSON additionalContext and its twin both billed", "context_ledger.py",
-     "        if self._pending[other].get(key, 0) > 0:\n",
-     "        if False:\n",
+    ("dedup: JSON additionalContext and its twin both billed", L,
+     "                twin_of[j], twin_of[k] = k, j\n",
+     "                pass\n",
      "Sources.test_ctx_board_json_and_its_twin_counted_once"),
-    ("fork copies billed again", "context_ledger.py",
+    ("twin pairing crosses turns", L,
+     '                key = (c["turn"], c["event"], c["text"].strip())\n',
+     '                key = (c["event"], c["text"].strip())\n',
+     "Sources.test_pairing_does_not_cross_turns"),
+    ("fork copies billed again", L,
      '        if obj.get("forkedFrom"):\n',
      "        if False:\n",
      "Sources.test_fork_copies_are_skipped"),
-    ("Stop stdout billed as injected", "context_ledger.py",
+    ("Stop stdout billed as injected", L,
      'PLAIN_STDOUT_EVENTS = frozenset({"SessionStart", "UserPromptSubmit"})\n',
      'PLAIN_STDOUT_EVENTS = frozenset({"SessionStart", "UserPromptSubmit", "Stop"})\n',
      "Sources.test_stop_stdout_is_recorded_not_injected"),
-    ("assistant text read as an action", "context_ledger.py",
+    ("assistant text read as an action", L,
      '                if isinstance(it, dict) and it.get("type") == "tool_use":\n',
      '                if isinstance(it, dict) and it.get("type") == "text":\n'
-     '                    s.on_tool_use("Bash", {"command": it.get("text") or ""}, idx)\n'
+     '                    self._on_tool_use("Bash", {"command": it.get("text") or ""}, idx, ts)\n'
      '                if isinstance(it, dict) and it.get("type") == "tool_use":\n',
      "NoProse.test_ledger_is_invariant_under_prose_replacement"),
-    ("Agent prompt read as an action", "context_ledger.py",
+    ("Agent prompt read as an action", L,
      '        if name == "Read":\n',
      '        if name == "Agent":\n'
-     '            self.on_tool_use("Bash", {"command": str(inp.get("prompt") or "")}, idx)\n'
+     '            self._on_tool_use("Bash", {"command": str(inp.get("prompt") or "")}, idx, ts)\n'
      '        if name == "Read":\n',
      "NoProse.test_prose_naming_a_pointer_is_not_follow_through"),
-    ("an open BEFORE the injection counts as follow-through", "context_ledger.py",
-     "        if u and u[1] > first:\n",
+    ("kg load matched anywhere in a command", L,
+     "            for seg in shell_segments(cmd):\n",
+     '            for m in re.finditer(r"kg(?:\\.py)?\\s+load\\s+(\\S+)", cmd):\n'
+     "                self._kg_load([m.group(1)], idx, ts)\n"
+     "            for seg in shell_segments(cmd):\n",
+     "NoProse.test_commit_message_is_not_a_use"),
+    ("Grep pattern read for ids", L,
+     '            self._read_path(str(inp.get("path") or ""), idx, ts)\n        elif name == "Glob":\n',
+     '            self._read_path(str(inp.get("path") or "") + " " + str(inp.get("pattern") or ""), idx, ts)\n'
+     '        elif name == "Glob":\n',
+     "NoProse.test_grep_pattern_is_not_a_use"),
+    ("every MCP field read, prose included", L,
+     '                if isinstance(v, str) and k.lower().endswith("id"):\n',
+     "                if isinstance(v, str):\n",
+     "NoProse.test_mcp_prose_field_is_not_a_use"),
+    ("a bare query word names a one-word slug", L,
+     '                    ("-" in slug and slug in toks)\n',
+     "                    (slug in toks)\n",
+     "FollowThrough.test_single_word_slug_needs_its_type"),
+    ("an open BEFORE the injection counts as follow-through", L,
+     "        if u and later(u[1], u[2]):\n",
      "        if u:\n",
      "FollowThrough.test_open_before_injection_is_not_follow_through"),
-    ("a ledger with no injected byte reports live", "context_ledger.py",
-     "    elif total_bytes == 0:\n",
+    ("a ledger with no billed byte reports live", L,
+     "    elif total == 0:\n",
      "    elif False:\n",
      "Liveness.test_sessions_with_no_injected_byte_are_blind"),
-    ("a harness catalog counts as a pointer", "context_ledger.py",
-     '        if not source.startswith("harness:"):\n',
-     "        if True:\n",
+    ("a source gone dark reports live", L,
+     "    elif unbilled or unknown_event:\n",
+     "    elif False:\n",
+     "Liveness.test_partial_when_a_shown_record_bills_nothing"),
+    ("a harness catalog counts as a pointer", L,
+     '    if source.startswith("harness:"):\n        return found, False\n',
+     "",
      "Reflexes.test_harness_listing_is_not_a_pointer"),
-    ("a broken ledger takes the sensor down", "leverage-sensor.py",
-     "            files, kg_read_re, bash_read_targets, iter_lines)\n    except Exception as e:\n",
-     "            files, kg_read_re, bash_read_targets, iter_lines)\n    except ZeroDivisionError as e:\n",
+    ("a broken ledger takes the sensor down", S,
+     "            files, kg_read_re, bash_read_targets, iter_lines, subagent_files)\n    except Exception as e:\n",
+     "            files, kg_read_re, bash_read_targets, iter_lines, subagent_files)\n    except ZeroDivisionError as e:\n",
      "Cli.test_a_broken_ledger_is_an_error_and_spares_m1_to_m6"),
+    ("the brief prints calibrating rows", S,
+     "                and not (brief and is_calibrating(r))]\n",
+     "                ]\n",
+     "Cli.test_brief_leaves_calibrating_rows_out"),
+    ("subagent transcripts left out", S,
+     "        ledger = context_ledger_block(files, kg_read_re,\n"
+     "                                      window_files(subagent_glob(glob_pat), window))\n",
+     "        ledger = context_ledger_block(files, kg_read_re)\n",
+     "Cli.test_subagent_transcripts_are_found"),
 )
 
 

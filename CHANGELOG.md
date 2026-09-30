@@ -4,115 +4,161 @@
 
 ### feat(sensor): a context ledger — what injected context costs, and whether anything uses it (shadow)
 
-The owner asked whether the context bstack and its neighbours inject improves behaviour
-enough to pay for its tokens. That context is the role-x intake, the ctx-core board
-brief, the memory index, and the SessionStart hooks. This is Layer 1 of the answer: a
-measurement read from transcript structure. Layer 2, a causal ablation harness, is
-being built separately in broomva/skills.
+The owner asked whether the context bstack and its neighbours inject changes
+behaviour enough to pay for its tokens: the role-x intake, the ctx-core board brief,
+the memory index, and the SessionStart hooks. This release answers the first half,
+Layer 1: a measurement read from transcript structure. Layer 2, a causal ablation
+harness, is being built separately in broomva/skills.
 
-`leverage-sensor.py` now writes a `context_ledger` block into `leverage-state.json` and
-`leverage-metrics.jsonl`. It is shadow: measured, never graded, never ranked as
-`worst`, and it emits no actuator. Like m1–m6, every number comes from transcript
-structure and never from the model's prose (h ⟂ U). The inputs are the attachment
-records Claude Code writes, plus the structured fields of `tool_use` inputs.
+`leverage-sensor.py` now writes a `context_ledger` block into `leverage-state.json`
+and `leverage-metrics.jsonl`. It is shadow: it is measured but never graded, never
+ranked `worst`, and it emits no actuator.
 
-- **Injection bytes by source, per session and per turn** (median and p90). Tokens are
-  estimated as bytes/4, and the block says so.
-  - Hook output is keyed by event and source: `role-x-intake`, `ctx-core-board`,
+As with m1–m6, every number comes from transcript structure (h ⟂ U). The sources are
+the attachment records Claude Code writes and the structured fields of `tool_use`
+inputs. Prose inside those fields is not read either: a Grep pattern, a Skill's free
+text, an MCP prompt, or a commit message or PR body inside a Bash command. A shell
+command is parsed into the program each segment runs (quotes respected, heredoc
+bodies dropped), and only a program's own arguments are read.
+
+- **Bytes by source, per session and per turn**, reported as median and p90. Tokens
+  are estimated as bytes/4 and labelled as an estimate.
+  - Hook output is keyed by event and source tag: `role-x-intake`, `ctx-core-board`,
     `self-improvement-loop` and `auth-preflight`, falling back to the hook's script
-    name.
-  - CLAUDE.md, MEMORY.md and nested CLAUDE.md are billed from the `instructions` and
-    `nested_memory` attachments, which carry their full text, so their sizes are
-    observable. When neither attachment appears, `memory_observable` is false; it is
-    never reported as zero.
-  - The harness listings (skills, MCP instructions, agents) are billed too, in their own
-    group.
+    name. This covers SessionStart and UserPromptSubmit stdout, JSON
+    `additionalContext`, and a hook's block `reason`.
+  - CLAUDE.md, MEMORY.md and nested CLAUDE.md files are read from the `instructions`
+    and `nested_memory` attachments, which carry their full text. When neither is
+    present, `memory_observable` is false; it is never reported as zero.
+  - Harness listings (skills, MCP instructions, agents, deferred tools) are billed
+    from `rendered` when present, so the "MCP servers need auth" notices count too.
+  - Every other attachment the model was shown (queued commands, token reminders,
+    edited-file notices, git status) is listed under `unattributed_visible`, not
+    dropped.
+  - Subagent transcripts (`<session>/subagents/*.jsonl`) are measured in their own
+    `subagents` block.
 - **Each injection is billed once.**
-  - A `hook_success` record carries plain output in both `content` and `stdout`; only
-    `content` is counted.
-  - JSON `additionalContext` is written twice, once in the hook's stdout and again as
-    a `hook_additional_context` record, and the two share no id. They are paired by
-    event and text, so a hook that repeats itself on two turns still counts twice.
-  - Stop and PreToolUse stdout is recorded in the transcript but never reaches the
-    model. It is reported under `not_injected` and not billed.
-  - Fork copies (records marked `forkedFrom`) are skipped. The parent already billed
-    them.
-- **Pointer follow-through.** The pointers are KG entity paths, `docs/specs/` paths,
-  ctx board session and agent ids, and MEMORY.md links. A pointer counts as followed
-  when a later tool call in the same session used it: a Read or Grep of the path, a
-  shell read of it, `kg.py load` naming it, an MCP id field naming it, or a
-  `ctx board` command. The rate is reported per source.
-  - Opens of pointers that nothing injected are counted as self-directed retrieval.
-  - Only structural fields are read. An Agent prompt, a Write body or a SendMessage
-    that names a path is not follow-through.
-- **Retrieval reflexes.** The share of sessions that read the KG, docs/specs or memory,
-  or ran deep research, split by whether an injection pointed there.
-- **Three headline values join `metrics` as shadow rows:**
-  `cl1_injected_bytes_per_turn_p50`, `cl2_kg_pointer_follow_through_rate` and
-  `cl3_retrieval_reflex_session_rate`, all at L2. The template adds them with
-  `status: shadow` and no target, because no reference has been calibrated yet.
+  - `hook_success` carries plain output in both `content` and `stdout`; only `content`
+    is counted.
+  - JSON output is written twice, once in the hook's stdout and again as a
+    `hook_additional_context` record, and the two share no id. The halves are paired
+    within one turn, by event and text, one pair per hook. The pair is billed under
+    the half that names the hook's command.
+  - Stop and PreToolUse stdout never reaches the model. It goes to `not_injected`.
+  - Fork copies (records marked `forkedFrom`) are skipped: the parent already billed
+    them. They still mark the fork as "pointed" for the reflex split.
+- **Pointer follow-through.** Pointers are KG entity paths, `docs/specs/` paths, ctx
+  board session and agent ids, and MEMORY.md links. One (session, pointer) pair counts
+  as followed when a later tool call in the same session used it:
+  - a Read or Grep of the path, or a shell read of it;
+  - `kg load` naming it; a one-word slug must be named with its type;
+  - an MCP id field naming it;
+  - `ctx board`.
+
+  The block reports rates per source and per entity type, opens that nothing
+  injected (self-directed retrieval), and parent pointers opened only by the
+  session's own subagents.
+- **Retrieval reflexes.** The share of sessions that read the KG, docs/specs or
+  memory, or ran deep research, split by whether an injection pointed there. The
+  split is observational, and the block says so.
+- **Headline shadow rows**, all at L2:
+  - `cl1_injected_bytes_per_session_p50`
+  - `cl2_kg_pointer_follow_through_rate`
+  - `cl3_retrieval_reflex_session_rate`
+
+  The template adds them with `status: shadow` and no target. A shadow row with no
+  target is a calibration measurement, not a stood-down shield, so the SessionStart
+  brief leaves it out (`shadow_notes(brief=True)`): the agent being measured must not
+  read its own follow-through score. The human view and the JSON show all three.
 - **Doctor §29** fails on a dead ledger and never on a value (BRO-1696). These states
   are gaps:
-  - `blind`: sessions were read but no injected byte was found;
-  - `error`: the ledger raised; the sensor records the error and m1–m6 still compute;
+  - `blind`: sessions read, no byte billed;
+  - `partial`: a record Claude Code says the model was shown billed 0 bytes, or hook
+    output has no `hookEvent`. One source is dark while the others keep the total up;
+  - `error`: the ledger raised; m1–m6 still compute;
   - `live` with every headline value null;
-  - a status doctor does not know;
-  - an unreadable block.
+  - an unknown status, or an unreadable block.
 
-  A state written before the ledger existed is info.
+  A state written before the ledger existed is info, and a state older than 7 days
+  is reported as stale. The `partial` check found a real miss while this was being
+  built: 10 harness deltas that carried only an auth notice had been billed 0 bytes.
 
-Measured on the owner's workspace, last 7 days (91 transcript files, 560 turns):
+Measured on the owner's workspace over the last 7 days (2026-09-30T04:02Z): 91 main
+transcripts, 563 turns and 154 subagent transcripts. 19,899 fork-copied records were
+skipped.
 
-| Source | Events | Median/event | Share of bytes |
+| Source | Events | Median/event | Share |
 |---|---:|---:|---:|
-| role-x intake (UserPromptSubmit) | 878 | 3.2 KB | 26% |
-| skill listing (harness) | 122 | 30.2 KB | 24% |
-| MEMORY.md | 127 | 20.7 KB | 20% |
-| CLAUDE.md (+ nested) | 135 | 22.7 KB | 23% |
-| MCP instructions + agent listing (harness) | 215 | 2.8–5.4 KB | 6.5% |
-| every SessionStart hook together | 359 | 0.1–0.8 KB | 0.7% |
+| role-x intake (UserPromptSubmit) | 881 | 3.2 KB | 23.8% |
+| skill listing | 122 | 30.3 KB | 21.7% |
+| MEMORY.md | 127 | 20.7 KB | 18.6% |
+| CLAUDE.md (+ nested) | 135 | 22.7 KB | 20.5% |
+| deferred-tools + MCP + agent listings | 344 | 3.0–10.9 KB | 14.7% |
+| every SessionStart hook together | 359 | 0.1–0.8 KB | 0.6% |
 
-Totals:
+**Main sessions**
+- **Injected:** 14.7 MB (~3.68M tokens, estimated). Memory 39%, harness 36%, hooks 24%.
+- **Per session:** median 106.8 KB, p90 250.8 KB.
+- **Per turn:** median 5.0 KB (mostly role-x), p90 100.7 KB (the session-start turn).
 
-- **Injected context:** 13.4 MB (~3.35M tokens, estimated).
-- **Per session:** median 93.6 KB, p90 235 KB.
-- **Per turn:** median 5.0 KB, p90 87 KB. The p90 is the first turn, which carries the
-  whole session-start load.
-- **KG follow-through:** 19 of 2,556 (session, entity) pointers were followed (0.74%).
-  84% of the 141 KG entities the sessions opened were never injected.
-- **Memory-index follow-through:** 29 of 13,560 links (0.21%).
+**Subagents** inject another 14.7 MB, made of harness listings and memory. Their
+injections carry no hook output.
 
-**Reconciled with the 2026-09-29 baseline.** The baseline counted 1,508 role-x
-firings, 87 sessions and 2,850 named slugs, of which 49 were opened (1.7%). Its
-counting method reproduces exactly: 1,508, 87, 2,850 and 48. The ledger's figures are
-lower for two reasons:
+**KG follow-through**
+- **Overall:** 19 of 2,566 pointers were followed (0.74%).
+- **role-x:** 17 of 2,397. **CLAUDE.md:** 3 of 166.
+- **Opened only by the session's own subagents:** 2 more.
+- **By entity type:** persona 3/602, pattern 7/1,019, concept 6/695, tool 3/208.
+- **Self-directed:** 84% of the 144 KG entities opened were never injected.
 
-- **Fork copies.** 630 of the 1,508 firings are fork copies, re-counted from 7 forked
-  session files. Without them there are 878 firings and 2,387 role-x pairs.
-- **Stricter open detection.** "Opened" there meant the path appeared anywhere in any
-  tool input, at any time. The ledger requires a read that comes after the injection.
-  The baseline's opens included `git add`/commit of the entity, Edit targets, Linear
-  descriptions, Agent prompts and heredoc bodies.
+**Other pointers**
+- **MEMORY.md links:** 33 of 13,560 followed. **specs:** 0/14. **ctx:** 0/9.
 
-The baseline's ~3,735 characters per turn is a per-firing figure. The mean is 3,873
-chars per firing, 3,785 as a mean of per-session means. There are more firings than
-turns because task notifications fire UserPromptSubmit inside a turn.
+**Reflexes**
+- **Any reflex:** 58% of sessions.
+- **KG:** 46/88 pointed vs 0/3 unpointed. The 3 unpointed sessions are near-idle, so
+  this is not an effect size.
+
+**Reconciled with the 2026-09-29 baseline** (1,508 role-x firings, 87 sessions, 2,850
+slugs, 49 opened = 1.7%). The baseline's method, run on the current window, gives
+1,511 firings, 87 sessions, 2,853 pairs and 48 opened (1.68%). The ledger's 0.7%
+comes from two corrections:
+
+- **Fork copies.** 630 of those firings are copies re-counted from 7 forked session
+  files. Without them there are 881 firings and 2,397 role-x pairs, of which 38 are
+  opened by the loose rule (1.59%).
+- **Stricter open detection.** The loose rule counts a path appearing anywhere in any
+  tool input, at any time. That includes `git add` or commit of the entity, Edit
+  targets, Linear descriptions, Agent prompts, heredoc bodies, and reads before the
+  injection. Those are excluded, which leaves 17 of 2,397.
+
+The baseline's ~3,735 chars/turn is a per-firing figure (the mean is 3,872). There
+are more firings than turns because task notifications fire UserPromptSubmit inside a
+turn.
 
 ### Notes
 
 - **m5 is blind to `kg.py load` run through Bash.** m5 is unchanged here. The ledger's
-  KG reflex does count Bash `kg.py load`, so `cl3` and m5 can differ.
-- **Cost:** the Stop sensor run goes from 1.5s to 3.0s over 378 MB of transcripts.
-- **The ledger is a separate file.** `scripts/context_ledger.py` is loaded by file path,
+  KG reflex does count it, so `cl3` and m5 can differ (m5 0.54 vs ledger KG 0.51).
+- **Cost:** the Stop run goes from 1.5s to 5.6s over 378 MB of main and 143 MB of
+  subagent transcripts, inside its 25s timeout. `--brief` and `--closure` runs with
+  `--no-store` skip the ledger, which covers the SessionStart path.
+- **The ledger is a separate file,** `scripts/context_ledger.py`. It is loaded by path,
   because the hooks run the sensor under `python3 -I` (BRO-2652). It is stdlib only.
 - **No BRO ticket.** The Broomva Linear MCP was unauthenticated in the authoring
   session.
-- **Tests:** `tests/context-ledger.test.sh` runs 45 unittest cases covering every
-  source, both dedups, follow-through true positives and true negatives, a no-prose
-  invariance check with a positive control, liveness, the CLI under `-I`, and doctor
-  §29 in every state. It also runs a 10-mutant proof: each mutant must fail its named
-  test by assertion, after a positive control on an unmutated copy. The first mutant
-  bills `stdout` on top of `content`, and the byte test goes red.
+- **Tests:** `tests/context-ledger.test.sh` runs 73 unittest cases:
+  - every source, both dedups, and twin pairing (order, batched, cross-turn);
+  - follow-through true positives and true negatives;
+  - six cases of prose inside a structured field;
+  - a no-prose invariance check with a positive control;
+  - `partial` and `blind` states, malformed records, subagents;
+  - the cached brief, and the CLI under `-I`;
+  - doctor §29 in every state.
+
+  It also runs an 18-mutant proof. Each mutant must fail its named test by assertion,
+  after a positive control on an unmutated copy. The first mutant bills `stdout` on
+  top of `content`, and the byte test goes red.
 
 ## 0.41.2 — 2026-09-28
 
