@@ -15,20 +15,40 @@ launched is still in flight. The block reason says to do the wait in the foregro
 now and then continue.
 
 - **In flight** comes from the Stop input's own `background_tasks` list (Claude Code
-  2.1.280 sends it with `last_assistant_message`). When a Claude Code doesn't send it,
-  the hook replays the transcript instead (`TaskLedger`). A task starts with a Bash
-  `backgroundTaskId` (including a call moved to the background at its timeout), a
-  Monitor `taskId`, an async Agent or Workflow, or a SendMessage that resumes a
-  finished agent under its old id. It ends with a `<task-notification>` carrying a
-  `<status>`, a TaskStop, or a terminal TaskOutput.
-- **The promise** must sit in the closing paragraph. Third-person reports ("it's
-  waiting on CI"), negated waits, waits on a person, block-quoted, double-quoted or
-  inline-code text (a cited stall is not a promise), a handback ask block, and a declared terminal `ARC-STATUS` don't count.
+  2.1.280 sends it with `last_assistant_message`). Only task types a session launches
+  count (`local_bash`, `local_agent`, `local_workflow`, the `monitor*` types,
+  `mcp_task`, `remote_agent`). Harness-internal tasks such as `dream`,
+  `auto_mode_scan` and `in_process_teammate` don't, and neither does an unknown type.
+  When a Claude Code doesn't send the list, the hook replays the transcript instead
+  (`TaskLedger`).
+  - A task starts with a Bash `backgroundTaskId` (including a call moved to the
+    background at its timeout), a Monitor `taskId`, an async Agent or Workflow, or a
+    SendMessage that resumes a finished agent under its old id.
+  - It ends with a `<task-notification>` carrying a `<status>`, a TaskStop (`task_id`
+    or `taskId`), a terminal TaskOutput, or, for a background subagent, a user
+    interrupt.
+  - A launch more than 2 h older than the transcript's last timestamp is not treated
+    as in flight, because a session that died wrote no completion for it.
+- **The promise** must sit in the closing paragraph and be a promise, not a keyword.
+  A future verb needs a first-person subject ("I'll wait", "let me wait") or must
+  open its sentence ("Will merge once green"), so "the hook will wait forever if…"
+  doesn't count. "Notified" and "the background job is running" are status, not
+  promises. None of these count either: third-person reports ("it's waiting on CI"),
+  negated waits, waits on a person, block-quoted, fenced, double-quoted or inline-code
+  text (a cited stall is not a promise), a handback ask block, and a terminal
+  `ARC-STATUS:` (the last declaration wins, and it needs a `:` or `=`, so prose about
+  ARC-STATUS doesn't switch the matcher off).
 - **One block per turn:** never while `stop_hook_active`. On top of that, the
   arc-continuation cap runs through `autonomous-arc.sh try-block` with its own
-  consecutive counter, `bgwait_count`, at 1. It shares the lifetime `total_blocks`
-  ceiling with the other Stop checks. `autonomous-arc.sh reset` now accepts
-  `bgwait_count`.
+  consecutive counter, `bgwait_count`, at 1, and its own lifetime counter,
+  `bgwait_total`, at 5. The guard also stops once the shared `total_blocks` reaches 5,
+  but it never adds to it. A low-precision heuristic must not use up the lifetime
+  budget of the no-op and handback checks. `try-block` gains an optional fifth
+  argument, the lifetime counter, and refuses a resettable one. `reset` accepts
+  `bgwait_count`. If arc-continuation blocks the same Stop for a handback, the guard's
+  reason defers to it: "if this turn hands a decision to a human, write the ask block
+  instead". The reason points at TaskOutput `block=true` on the running task, never a
+  relaunch.
 - **Fails open** on any parse error. Each BLOCK or CAP decision appends a line to
   `$BROOMVA_AUTONOMOUS_HOME/bg-wait-guard.jsonl`.
 - `bg_wait_guard.py inflight TRANSCRIPT` prints the tasks still in flight. A coordinator
@@ -49,6 +69,9 @@ endings, 2026-09-25 to 10-05) found:
 | In-flight endings where a task finished and its notification went undelivered | **0 of 1,679** |
 | Matcher precision, 60 hand-labelled blocks | 56/60 (93%) |
 
+These numbers come from the first-round matcher. The matcher that shipped after review
+is stricter, so it blocks fewer endings (see the false-positive rate below).
+
 Two of the four reported sessions had already been woken by notifications earlier in
 the same session. The 9cabd372 "stall" had its reviewer's completion queued 1 s
 before the Stop, and the session resumed itself 3 s later. The reported stalls were
@@ -56,28 +79,38 @@ nudged 10–60 s after going idle, before their task finished. Enabling the guar
 the fleet rule "an idle session is a finished session". It does not rescue sessions
 from a stranding nobody has observed.
 
-**False-positive rate** on the 80 most recently written transcripts under
-`~/.claude/projects/-Users-broomva-broomva/` (58 sessions, 2026-09-28 to 10-05; 2,344
-turn endings, 559 distinct ending texts): the guard would block 33 distinct endings.
-Hand-labelled from the matched sentence only, none of them is a clean false block. One is
-borderline: a status list that says a PR "merges once its checks settle". Before the
-double-quote rule there was one clear false block, a coordinator reporting that
-another session "ended its turn 'waiting for the reviewer'". The rule removed that block
-and changed no other verdict. 45 distinct endings declare a terminal `ARC-STATUS`, and 0
-of them are blocked. So the measured false-block rate is 0/559 (at most 1/559, 0.18%,
-counting the borderline one).
+**False-positive rate.** The sample is the 80 most recently written transcripts under
+`~/.claude/projects/-Users-broomva-broomva/` that were last written before 2026-10-05
+13:00 (59 sessions, 1,451 turn endings, 486 distinct ending texts). The guard would
+block 36 distinct endings. I hand-labelled each one from its matched sentence alone,
+and every one is a closing promise to wait on a task the session isn't doing itself,
+with that task still in flight. So the measured false-block rate is **0/486**. The 54
+distinct endings that declare a terminal `ARC-STATUS` are all allowed. Getting there
+took two rounds of review:
 
-Tests: `tests/bg-wait-guard.test.sh` covers 53 cases through the registered
+- In an earlier pass, over 559 endings, one cited stall was a clear false block: a
+  coordinator reporting that another session "ended its turn 'waiting for the
+  reviewer'". The double-quote rule removed it.
+- Two status lines were borderline: "#799 merges once its checks settle", and a
+  "that only works after #667 lands". The first-person rule removed both.
+- The other changes are deliberate. "Once #668 goes green I'll merge it" is still
+  caught, through "goes green".
+
+Tests: `tests/bg-wait-guard.test.sh` covers 101 cases through the registered
 `hooks.json` command:
 
 - Replays of the four real stalls must block; real normal endings must not. Each runs
   in both Stop-input modes.
-- The cap, the gate, fail-open behaviour and the trace.
-- 19 mutants (the matcher, the running-task check, the ledger's starts, ends and
-  pre-filter, the cap, the gate, each matcher exclusion, the registration), and every
-  one turns the suite red.
+- A matcher table with 21 promises and 17 non-promises, including the
+  keyword-shaped false positives and the missed stalls that cross-review found.
+- The ledger's TaskStop, interrupt and staleness ends, the task-type allowlist, the
+  cap, the gate, fail-open behaviour and the trace.
+- 40 mutants, and every one turns the suite red: each of the 10 matcher patterns,
+  each exclusion, the running-task check, the ledger's starts, ends and pre-filter,
+  the allowlist, the counters and ceilings, the reason, and the registration.
 
-Fixtures are redacted slices of the real transcripts. `tests/fixtures/bg-wait/build_fixtures.py`
+Fixtures are redacted slices of the real transcripts. Even the final message keeps
+only what the matcher reads (`trim_final`). `tests/fixtures/bg-wait/build_fixtures.py`
 records each one's source. `tests/hook-python-isolation.test.sh` drives the new hook,
 so its `-I` is mutation-proved like the rest.
 

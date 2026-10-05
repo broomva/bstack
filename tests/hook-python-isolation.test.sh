@@ -231,7 +231,7 @@ drive() {
     # Stop — the bg-wait guard (opt-in; forced on here) blocks a background-wait promise.
     rm -rf "$T/arc"
     run bgwait_block "$C_BGWAIT" "$(stop_payload S-bgw "$T/arc-tr/bgwait.jsonl")" BSTACK_BG_WAIT_GUARD=force
-    note bgwait_block "state: bg=$(arc get S-bgw bgwait_count) tb=$(arc get S-bgw total_blocks)"
+    note bgwait_block "state: bg=$(arc get S-bgw bgwait_count) bt=$(arc get S-bgw bgwait_total) tb=$(arc get S-bgw total_blocks)"
 
     # PreToolUse — test-lock blocks an edit (and a Bash write) to the locked test,
     # allows an edit elsewhere; the L3 hook warns on a governance file.
@@ -299,7 +299,7 @@ expect "arc-continuation: the block spent the stall budget"   has arc_block stdo
 expect "arc-continuation: a handback with no ask is blocked"  has arc_handback stdout "Blocked on you"
 expect "arc-continuation: a tool call resets the counter"     has arc_productive stdout "state: rc=0 tb=1"
 expect "bg-wait guard: a background-wait promise is blocked"  has bgwait_block stdout '"decision": "block"'
-expect "bg-wait guard: the block spent its own counter"       has bgwait_block stdout "state: bg=1 tb=1"
+expect "bg-wait guard: the block spent its own counters"      has bgwait_block stdout "state: bg=1 bt=1 tb="
 expect "test-lock: an Edit to the locked test exits 2"        rcis lock_edit 2
 expect "test-lock: the block names the lock"                  has lock_edit stderr "BLOCKED (test-lock)"
 expect "test-lock: a Bash write to the locked test exits 2"   rcis lock_bash 2

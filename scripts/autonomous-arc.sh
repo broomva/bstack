@@ -21,12 +21,17 @@
 #   bump   <sid> reconcile_count          increment + print the new value
 #   reset  <sid> reconcile_count          set to 0 (called on a productive turn so the
 #                                         consecutive cap bounds CONSECUTIVE stalls)
-#   try-block <sid> <consec_max> <life_max> [counter]  atomic runaway guard: prints BLOCK and
-#                                         increments reconcile_count + total_blocks iff
-#                                         reconcile_count<consec_max AND total_blocks<life_max;
-#                                         else prints CAP. total_blocks NEVER resets — a
+#   try-block <sid> <consec_max> <life_max> [counter] [life_counter]  atomic runaway guard:
+#                                         prints BLOCK and increments counter (default
+#                                         reconcile_count) + life_counter (default
+#                                         total_blocks) iff counter<consec_max AND
+#                                         life_counter<life_max AND total_blocks<life_max;
+#                                         else prints CAP. Lifetime counters NEVER reset — a
 #                                         lifetime ceiling so an interleaved-tool loop
 #                                         (which resets reconcile_count) still terminates.
+#                                         A separate life_counter (bg_wait_guard.py's
+#                                         bgwait_total) is bounded by total_blocks but
+#                                         never spends it (BRO-2815).
 #
 # Concurrency: writes are serialized with an flock on <arc>.lock and land via an
 # atomic mkstemp+os.replace, so a Stop-hook bump and a UserPromptSubmit set can
@@ -63,6 +68,10 @@ STALE_SECONDS="${BROOMVA_ARC_STALE_SECONDS:-28800}" python3 -I - "$VERB" "$ARC" 
 import sys, json, os, time, datetime, tempfile, fcntl
 
 verb, arc_path, rest = sys.argv[1], sys.argv[2], sys.argv[3:]
+# Consecutive counters `reset` may clear. WHITELIST: `reset <sid> total_blocks` would
+# defeat the lifetime runaway ceiling, which exists precisely so that no reason and no
+# caller can clear it. bgwait_count: bg_wait_guard.py's consecutive counter (BRO-2815).
+RESETTABLE = ("reconcile_count", "handback_count", "bgwait_count")
 STALE = int(os.environ.get("STALE_SECONDS", "28800") or 28800)
 
 def now_iso():
@@ -164,10 +173,7 @@ elif verb == "reset":
     # Honour the field argument. It was accepted and ignored — reset always zeroed
     # reconcile_count — so `reset <sid> handback_count` would have silently reset the
     # wrong counter, exactly when a second counter was introduced (BRO-2179).
-    # WHITELIST. `reset <sid> total_blocks` would defeat the lifetime runaway ceiling,
-    # which exists precisely so that no reason and no caller can clear it.
-    # bgwait_count: bg_wait_guard.py's own consecutive counter (BRO-2815).
-    RESETTABLE = ("reconcile_count", "handback_count", "bgwait_count")
+    # Only the RESETTABLE whitelist (top of this block).
     field = rest[0] if rest and rest[0] else "reconcile_count"
     if field not in RESETTABLE:
         print(f"autonomous-arc: refusing to reset {field!r}; "
@@ -187,12 +193,21 @@ elif verb == "try-block":
     # (BRO-2179, found by cross-model review). total_blocks stays shared on purpose: it
     # is the lifetime runaway backstop across ALL reasons.
     counter = rest[2] if len(rest) > 2 and rest[2] else "reconcile_count"
+    # Optional 4th arg: the LIFETIME counter to spend (BRO-2815). A heuristic check
+    # with its own budget still stops at the shared total_blocks ceiling, but does not
+    # spend it, so it cannot switch off the no-op and handback checks for the arc.
+    life_counter = rest[3] if len(rest) > 3 and rest[3] else "total_blocks"
+    if life_counter in RESETTABLE or life_counter == counter:
+        print(f"autonomous-arc: {life_counter!r} cannot be a lifetime counter",
+              file=sys.stderr)
+        sys.exit(2)
     def _tb(d):
         rc = int(d.get(counter, 0))
         tb = int(d.get("total_blocks", 0))
-        if rc < consec_max and tb < life_max:
+        lc = int(d.get(life_counter, 0))
+        if rc < consec_max and lc < life_max and tb < life_max:
             d[counter] = rc + 1
-            d["total_blocks"] = tb + 1
+            d[life_counter] = lc + 1
             d["last_reconcile"] = now_iso()
             return "BLOCK"
         return "CAP"

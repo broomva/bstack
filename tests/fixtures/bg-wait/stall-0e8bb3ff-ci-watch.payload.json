@@ -4,7 +4,7 @@
    "description": "[redacted]",
    "id": "bhwo3rp5f",
    "status": "running",
-   "type": "shell"
+   "type": "local_bash"
   }
  ],
  "hook_event_name": "Stop",

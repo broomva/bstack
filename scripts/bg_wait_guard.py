@@ -34,7 +34,8 @@ the status quo. So:
   - at most one block per turn: never while stop_hook_active (this Stop is
     already a hook-driven continuation), and the arc-continuation cap pattern on
     top (autonomous-arc.sh try-block with its own consecutive counter bgwait_count
-    at 1, sharing the lifetime total_blocks ceiling with the other Stop checks).
+    at 1 and its own lifetime counter bgwait_total at 5; it also refuses once the
+    other Stop checks' total_blocks is at 5, but never adds to it).
 
 Subcommands:
   hook                 read the Stop payload on stdin; print a block decision or nothing
@@ -45,6 +46,7 @@ Subcommands:
                        this hook would have returned there (the measurement, and the
                        source of the test fixtures)
 """
+import datetime
 import json
 import os
 import re
@@ -54,48 +56,75 @@ import sys
 TERMINAL_STATUSES = {"completed", "failed", "killed", "stopped", "cancelled",
                      "canceled", "error", "timeout", "timed_out", "expired", "done"}
 CONSEC_MAX = 1          # one rewrite nudge per turn, never a loop
-LIFE_MAX = 5            # same lifetime ceiling as arc-continuation (total_blocks is shared)
+LIFE_MAX = 5            # lifetime ceiling, the same number arc-continuation uses
 COUNTER = "bgwait_count"
+# The guard's OWN lifetime counter. It also refuses once arc-continuation's
+# total_blocks has hit LIFE_MAX, but it never adds to total_blocks: a low-precision
+# heuristic must not spend the lifetime budget of the no-op and handback checks.
+LIFE_COUNTER = "bgwait_total"
+# Task types a session launches itself (the `type` Claude Code 2.1.280 puts in
+# background_tasks). Harness-internal tasks (dream, auto_mode_scan, an agent-team
+# in_process_teammate) are not the session's wait. An unknown type does not count:
+# a missed block costs a nudge, a false one fights a legitimate stop.
+SESSION_TASK_TYPES = {"local_bash", "local_agent", "local_workflow", "monitor", "monitor_ws",
+                      "monitor_mcp", "mcp_task", "remote_agent"}
+# Transcript fallback only: a launch this old at the transcript's last timestamp is not
+# treated as in flight. A session that died or was interrupted writes no completion,
+# so without a bound such a task would read as running forever.
+STALE_SECONDS = 2 * 3600
 
 REASON = (
     "You're about to go idle waiting on a background task. In this fleet a wait runs in "
     "the foreground, so an idle session means a finished one. Do the wait in the "
-    "foreground now (`gh pr checks --watch` with a timeout, or Agent "
-    "`run_in_background: false`), then continue. If nothing depends on that task, "
-    "TaskStop it or say so plainly, then end the turn.")
+    "foreground now, then continue: `gh pr checks --watch` with a timeout, or TaskOutput "
+    "with block=true on the task that is already running (don't launch it again). If "
+    "nothing depends on that task, TaskStop it or say so plainly, then end the turn. If "
+    "this turn hands a decision to a human, write the ask block instead.")
 
 # ── the matcher ──────────────────────────────────────────────────────────────
 # Phrased as PROMISES, not keywords: "watch" alone is in every `gh pr checks
-# --watch` receipt, "background" in every summary of what ran there. Each pattern
-# needs the forward-looking shape of a session that is about to wait.
+# --watch` receipt, "background" in every summary of what ran there, "notified" in
+# every changelog. Each pattern needs the forward-looking shape of a session that is
+# about to wait, and a future verb needs a FIRST-PERSON subject: "the hook will wait
+# forever if ..." describes code, "I'll wait" is a promise. A bare "Will" counts only
+# where it starts a sentence or follows "and" (the subject-elided "Will merge once
+# green", "... and will merge once it passes").
+_I = r"(?:i(?:'|’)?ll|i will|i(?:'|’)?m going to|i am going to|we(?:'|’)?ll|we will|let me)"
+_FUTURE = (r"(?:\b%s|(?:^|(?<=[.!?:;]\s)|(?<=\n)|(?<=[-*]\s)|(?<=\band\s))"
+           r"(?:will|going to))" % _I)
+_DONE = (r"(?:reports?|finish(?:es)?|completes?|concludes?|returns?|comes? back|lands?|"
+         r"resolves?|arrives?|settles?|passe?s|(?:goes|go|turns?) green|"
+         r"(?:is|are|it(?:'|’)s|they(?:'|’)re)\s+"
+         r"(?:done|in|back|green|finished|ready))")
+_WHEN = r"(?:when|once|as soon as|after|until|whichever)"
 _PROMISE_PATTERNS = [
-    # "I'll wait for it", "will wait until", "going to wait", "let me wait"
-    r"\b(?:i(?:'|’)?ll|i will|i(?:'|’)?m going to|i am going to|we(?:'|’)?ll|"
-    r"will|let me|going to)\s+(?:\w+\s+){0,2}?(?:wait|await|hold|sit tight|stand by)\b",
+    # "I'll wait for it", "let me wait", "Will check back after lunch"
+    _FUTURE + r"\s+(?:\w+\s+){0,2}?(?:wait|await|hold|sit tight|stand by|check back|"
+    r"check in|idle)\b",
     # "Waiting for the reviewer's verdict", "waiting on CI", "awaiting the watcher"
     r"\b(?:waiting|awaiting|await)\s+(?:for|on|until|the)\b",
-    # "notify me", "be notified", "the notification", "report back", "wake me", "ping me when"
-    r"\b(?:notif(?:y|ies|ied|ication|ications)|report(?:s|ing)? back|wakes? me|"
-    r"ping me when|hear back|lets? me know when)\b",
-    # "Monitor armed", "watcher is running", "a background loop will re-run …"
-    r"\b(?:monitor|watch(?:er)?|poller|background (?:task|loop|watch|job|agent|shell|command|"
-    r"process|check|run|review(?:er)?))\b[^.\n]{0,60}?\b(?:armed|running|in flight|"
+    # "Standing by for the CI result", "sleeping until CI is green", "I'm idle until"
+    r"\bstanding by\b|\b(?:sleeping|idling|idle)\s+until\b|\b(?:i(?:'|’)m|i am)\s+(?:\w+\s+)?idle\b",
+    # "notify me", "will come in as a notification", "let me know when", "hear back"
+    r"\b(?:notify|wake|ping)\s+me\b|\blets?\s+me\s+know\s+when\b|\bhear\s+back\b|"
+    r"\b(?:as|via)\s+(?:a\s+|the\s+|its\s+|their\s+)?(?:task[- ])?notifications?\b",
+    # "Monitor armed", "the watcher is running", "I'm watching it in the background"
+    r"\b(?:monitor|watch(?:er)?|poller)\b[^.\n]{0,60}?\b(?:armed|running|in flight|"
     r"in progress|started|launched|will|is watching|keeps? watching|polls?)\b",
-    # "I'll merge when both are green", "will continue once plan-drift concludes"
-    r"\b(?:i(?:'|’)?ll|i will|will|then)\s+(?:\w+\s+){0,2}?(?:merge|continue|proceed|"
-    r"resume|re-?run|pick (?:it|this|them)? ?up|act|ship|push|land|follow up|decide|post|"
-    r"report|record|close|ask|batch|apply|fold|attempt)\b[^.\n]{0,80}?\b"
+    r"\bi(?:'|’)?m\s+watching\b|\bwatching\s+(?:it|them|the\s+\w+)\s+in\s+the\s+background\b",
+    # "a background loop will re-run ..." (a background JOB that is merely running is
+    # a status line, not a wait)
+    r"\bbackground\s+(?:task|loop|watch|job|agent|shell|command|process|check|run|"
+    r"review(?:er)?)s?\b[^.\n]{0,60}?\b(?:armed|will|is watching|keeps? watching|polls?)\b",
+    # "I'll merge when both are green", "I'll decide once Codex's verdict is in"
+    _FUTURE + r"\s+(?:\w+\s+){0,2}?(?:merge|continue|proceed|resume|re-?run|run|"
+    r"pick (?:it|this|them)? ?up|act|ship|push|land|follow up|decide|post|report|record|"
+    r"close|ask|batch|apply|fold|attempt|carry on|confirm|fix|open)\b[^.\n]{0,80}?\b"
     r"(?:when|once|after|as soon as|the moment)\b",
-    # "... when they report", "once it finishes": the turn hands its next step to a
-    # completion it is not waiting for itself
-    r"\b(?:when|once|as soon as|after|until|whichever)\s+(?:[\w#'\u2019-]+\s+){1,4}?"
-    r"(?:reports?|finish(?:es)?|completes?|concludes?|returns?|comes? back|lands?|resolves?|"
-    r"arrives?|settles?|(?:is|are) done)\b",
-    # "I'm idle until those numbers arrive"
-    r"\b(?:i(?:'|\u2019)m|i am)\s+(?:\w+\s+)?idle\b",
-    # "When it's green I'll merge", "once they're both green"
-    r"\b(?:when|once|as soon as)\s+(?:it(?:'|\u2019)s|it is|they(?:'|\u2019)re|they are|"
-    r"both are|ci is|checks are)\s+(?:all\s+|both\s+)?green\b",
+    # "I'll report back once both verdicts and CI are in"
+    _FUTURE + r"[^.\n]{0,100}?\b" + _WHEN + r"\s+(?:[\w#'’-]+\s+){0,4}?" + _DONE + r"\b",
+    # "Once both review verdicts arrive, I'll fix ...", "When it's green I'll merge"
+    r"\b" + _WHEN + r"\s+(?:[\w#'’-]+\s+){0,4}?" + _DONE + r"\b[^.\n]{0,60}?\b" + _I + r"\b",
 ]
 PROMISE_RE = re.compile("|".join("(?:%s)" % p for p in _PROMISE_PATTERNS), re.I)
 # A trigger is only a trigger if nothing negates it just before ("no background
@@ -119,7 +148,7 @@ QUOTE_RE = re.compile(r"^\s{0,3}>.*$", re.M)
 # Legitimate terminal endings even if a wait phrase appears in them: an explicit
 # ARC-STATUS declaration (CLOSED, DONE, MERGED, BLOCKED, HANDBACK, ...) is the
 # session saying it is stopping on purpose. Only a still-moving status is judged.
-ARC_STATUS_RE = re.compile(r"ARC-STATUS\W{0,6}([A-Za-z][\w-]*)")
+ARC_STATUS_RE = re.compile(r"ARC-STATUS\s*[*_`]*\s*[:=]\s*[*_`]*\s*([A-Za-z][\w-]*)")
 MOVING_STATUSES = {"open", "active", "in-progress", "in_progress", "running", "waiting"}
 ASK_HEAD_RE = re.compile(
     r"^\s{0,3}#{1,4}[^\n]*?(⛔|blocked on you|what i need from you)", re.I | re.M)
@@ -151,8 +180,8 @@ def promise_span(text):
     """The phrase that makes the message a background-wait promise, or None."""
     if not text or not text.strip():
         return None
-    status = ARC_STATUS_RE.search(text)
-    if status and status.group(1).lower() not in MOVING_STATUSES:
+    declared = ARC_STATUS_RE.findall(text)       # the last declaration wins; "ARC-STATUS is"
+    if declared and declared[-1].lower() not in MOVING_STATUSES:   # (no separator) is prose
         return None                         # a declared terminal: closed, merged, handed back
     if ASK_HEAD_RE.search(text):
         return None                         # a handback that asks a human
@@ -190,7 +219,9 @@ def running_from_input(payload):
         status = str(t.get("status") or "").lower()
         if status in TERMINAL_STATUSES:
             continue
-        out.append({"id": str(t.get("id") or "?"), "type": str(t.get("type") or "task"),
+        if str(t.get("type") or "") not in SESSION_TASK_TYPES:
+            continue
+        out.append({"id": str(t.get("id") or "?"), "type": str(t.get("type")),
                     "description": str(t.get("description") or t.get("command") or "")[:120]})
     return out
 
@@ -206,17 +237,38 @@ class TaskLedger:
     Launch: a tool result carrying backgroundTaskId (Bash, including a call moved to
     the background at its timeout), a Monitor's taskId, an async Agent's agentId, an
     async Workflow's taskId. End: a <task-notification> with a <status> (delivered,
-    queued, or merely enqueued), a TaskStop/KillShell result, or a TaskOutput that
-    reports a terminal status. Monitor events carry no <status> and end nothing.
+    queued, or merely enqueued), a TaskStop/KillShell result, a TaskOutput that
+    reports a terminal status, or, for a background subagent, a user interrupt (the
+    interrupt stops it and no notification is written). Monitor events carry no
+    <status> and end nothing. A launch older than STALE_SECONDS at the last timestamp
+    seen is not reported: a session that died wrote no completion for it.
+    Types are Claude Code's own names (local_bash, local_agent, monitor, ...).
     """
 
     def __init__(self):
         self.launched = {}
         self.ended = set()
         self._tool = {}
+        self._born = {}
+        self.now = None
 
     def running(self):
-        return [dict(id=k, **v) for k, v in self.launched.items() if k not in self.ended]
+        out = []
+        for k, v in self.launched.items():
+            if k in self.ended:
+                continue
+            born = self._born.get(k)
+            if born is not None and self.now is not None and self.now - born > STALE_SECONDS:
+                continue
+            out.append(dict(id=k, **v))
+        return out
+
+    def clock(self, o):
+        """Advance `now` from an entry's ISO timestamp, if it has one."""
+        ts = _epoch(o.get("timestamp")) if isinstance(o, dict) else None
+        if ts is not None and (self.now is None or ts > self.now):
+            self.now = ts
+        return ts
 
     def _notes(self, s):
         if "<task-notification>" not in s:
@@ -227,6 +279,7 @@ class TaskLedger:
                 self.ended.add(tid.group(1).strip())
 
     def feed(self, o):
+        ts = self.clock(o)
         t = o.get("type")
         if t == "queue-operation":
             if isinstance(o.get("content"), str):
@@ -247,12 +300,15 @@ class TaskLedger:
             return
         if t != "user":
             return
-        if isinstance(content, str):
-            self._notes(content)
-        elif isinstance(content, list):
-            for b in content:
-                if isinstance(b, dict) and b.get("type") == "text":
-                    self._notes(b.get("text") or "")
+        texts = [content] if isinstance(content, str) else [
+            b.get("text") or "" for b in content
+            if isinstance(b, dict) and b.get("type") == "text"] if isinstance(content, list) else []
+        for x in texts:
+            self._notes(x)
+            if x.startswith(_INTERRUPT):
+                for k, v in self.launched.items():
+                    if v.get("type") == "local_agent":
+                        self.ended.add(k)
         r = o.get("toolUseResult")
         if not isinstance(r, dict):
             return
@@ -264,35 +320,49 @@ class TaskLedger:
         tid = info = None
         if r.get("backgroundTaskId"):
             tid, info = r["backgroundTaskId"], {
-                "type": "shell", "description": str(inp.get("command") or "")[:120]}
+                "type": "local_bash", "description": str(inp.get("command") or "")[:120]}
         elif r.get("isAsync") and r.get("agentId"):
             tid, info = r["agentId"], {
-                "type": "subagent", "description": str(r.get("description") or "")[:120]}
+                "type": "local_agent", "description": str(r.get("description") or "")[:120]}
         elif r.get("resumedAgentId") and r.get("success") is not False:
             # SendMessage to a finished background agent resumes it under the SAME id;
             # its next notification is what ends it again.
             tid, info = r["resumedAgentId"], {
-                "type": "subagent", "description": str(inp.get("summary") or "")[:120]}
+                "type": "local_agent", "description": str(inp.get("summary") or "")[:120]}
         elif r.get("taskId") and (name == "Monitor" or "timeoutMs" in r):
             tid, info = r["taskId"], {
                 "type": "monitor", "description": str(inp.get("description") or "")[:120]}
         elif r.get("taskId") and r.get("status") == "async_launched":
             tid, info = r["taskId"], {
-                "type": str(r.get("taskType") or "workflow"),
+                "type": str(r.get("taskType") or "local_workflow"),
                 "description": str(r.get("workflowName") or "")[:120]}
         if tid:
             self.launched[str(tid)] = info
             self.ended.discard(str(tid))
-        if r.get("task_id") and name in ("TaskStop", "KillShell", "KillBash"):
-            self.ended.add(str(r["task_id"]))
+            self._born[str(tid)] = ts
+        stopped = r.get("task_id") or r.get("taskId")
+        if stopped and name in ("TaskStop", "KillShell", "KillBash"):
+            self.ended.add(str(stopped))
         task = r.get("task")
         if isinstance(task, dict) and task.get("task_id") \
                 and str(task.get("status") or "").lower() in TERMINAL_STATUSES:
             self.ended.add(str(task["task_id"]))
 
 
+_INTERRUPT = "[Request interrupted by user"
 _RELEVANT = ("backgroundTaskId", "agentId", "resumedAgentId", "taskId", "task_id",
-             "task-notification", '"tool_use"')
+             "task-notification", '"tool_use"', _INTERRUPT)
+_TS_RE = re.compile(r'"timestamp"\s*:\s*"([^"]+)"')
+
+
+def _epoch(value):
+    """An ISO-8601 timestamp as epoch seconds, or None."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
 
 
 def running_from_transcript(path):
@@ -300,7 +370,10 @@ def running_from_transcript(path):
     with open(path, encoding="utf-8", errors="replace") as f:
         for ln in f:
             if not any(k in ln for k in _RELEVANT):
-                continue                    # most lines; skip the json parse
+                m = _TS_RE.search(ln)       # most lines: keep the clock, skip the parse
+                if m:
+                    ledger.clock({"timestamp": m.group(1)})
+                continue
             try:
                 ledger.feed(json.loads(ln))
             except ValueError:
@@ -371,9 +444,9 @@ def _arc(*args):
     return p.stdout.strip()
 
 
-def _trace(record):
+def _trace(record, env):
     """One line per BLOCK/CAP, so a block that fired is measurable later. Best effort."""
-    home = os.environ.get("BROOMVA_AUTONOMOUS_HOME") or os.path.expanduser(
+    home = env.get("BROOMVA_AUTONOMOUS_HOME") or os.path.expanduser(
         "~/.config/broomva/autonomous")
     try:
         os.makedirs(home, exist_ok=True)
@@ -409,9 +482,9 @@ def hook(stdin_text, env):
         running = running_from_transcript(transcript) if transcript and os.path.isfile(transcript) else []
     if decide(text, running) != "BLOCK" or not sid:
         return None
-    verdict = _arc("try-block", sid, str(CONSEC_MAX), str(LIFE_MAX), COUNTER)
+    verdict = _arc("try-block", sid, str(CONSEC_MAX), str(LIFE_MAX), COUNTER, LIFE_COUNTER)
     _trace({"session_id": sid, "verdict": verdict or "NO_HELPER",
-            "tasks": [t.get("id") for t in running][:10], "text": text[-200:]})
+            "tasks": [t.get("id") for t in running][:10], "text": text[-200:]}, env)
     if verdict != "BLOCK":
         return None
     listed = "; ".join("%s %s%s" % (t.get("type"), t.get("id"),

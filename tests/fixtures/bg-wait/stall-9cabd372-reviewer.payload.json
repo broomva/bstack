@@ -4,7 +4,7 @@
    "description": "[redacted]",
    "id": "a82a45b8d07bdb388",
    "status": "running",
-   "type": "subagent"
+   "type": "local_agent"
   }
  ],
  "hook_event_name": "Stop",

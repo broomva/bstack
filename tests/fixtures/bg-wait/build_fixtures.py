@@ -10,7 +10,10 @@ including) the Stop it ended on, reduced to the fields the task ledger reads, pl
 the final assistant entry with its text verbatim. Redaction: commands, tool
 output, earlier assistant prose and every human/coordinator message become
 "[redacted]"; task notifications keep only their task-id and status; paths are
-dropped. Task ids and the final text are kept, because they are what is tested.
+dropped. Task ids are kept. The final text keeps only what the matcher reads
+(trim_final): its closing paragraph, ARC-STATUS trailers, ask-block headings, and
+any earlier paragraph carrying a wait phrase (the last-paragraph rule is tested on
+it). Every other paragraph becomes "[redacted]".
 
 <name>.payload.json is the Stop input Claude Code would have sent: the final text
 as last_assistant_message, and background_tasks as the ledger saw them at that
@@ -84,6 +87,30 @@ TUR_KEYS = ("backgroundTaskId", "agentId", "isAsync", "taskId", "timeoutMs", "st
             "task_id", "task", "resumedAgentId", "success", "taskType", "workflowName")
 
 
+# Operational detail in a KEPT paragraph that a public fixture does not need; the
+# replacement keeps the sentence's shape (and its verdict).
+SCRUB = [(re.compile(r"Railway and broomva\.tech are still logged out\."),
+          "Two deploy CLIs are still logged out."),
+         (re.compile(r"`~/\.cache/[^`]+`"), "`[path]`")]
+
+
+def trim_final(text):
+    """The final message reduced to the parts the matcher reads; see the docstring."""
+    for rx, rep in SCRUB:
+        text = rx.sub(rep, text or "")
+    paras = re.split(r"\n\s*\n", text or "")
+    body = [i for i, p in enumerate(paras) if p.strip()]
+    while len(body) > 1 and g.ARC_STATUS_RE.search(paras[body[-1]]) and len(paras[body[-1]]) < 300:
+        body.pop()
+    last = body[-1] if body else -1
+    out = []
+    for i, p in enumerate(paras):
+        keep = (i >= last or g.ARC_STATUS_RE.search(p) or g.ASK_HEAD_RE.search(p)
+                or g.PROMISE_RE.search(g._prose(p)))
+        out.append(p if keep or not p.strip() else "[redacted]")
+    return "\n\n".join(out)
+
+
 def redact(o, final):
     t = o.get("type")
     base = {"type": t, "uuid": o.get("uuid"), "entrypoint": o.get("entrypoint"),
@@ -109,7 +136,7 @@ def redact(o, final):
                 blocks.append({"type": "tool_use", "id": b.get("id"), "name": b.get("name"),
                                "input": keep})
             elif b.get("type") == "text" and final:
-                blocks.append({"type": "text", "text": b.get("text", "")})
+                blocks.append({"type": "text", "text": trim_final(b.get("text", ""))})
         if not blocks:
             return None
         return dict(base, message={"role": "assistant", "content": blocks})
@@ -190,7 +217,7 @@ def build(projects):
             if r is not None:
                 out.append(r)
             if i == final_i:
-                text = g.entry_text(o)
+                text = trim_final(g.entry_text(o))
         with open(os.path.join(HERE, name + ".jsonl"), "w") as f:
             for r in out:
                 f.write(json.dumps(r, sort_keys=True) + "\n")
