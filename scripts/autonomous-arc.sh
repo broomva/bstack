@@ -166,7 +166,8 @@ elif verb == "reset":
     # wrong counter, exactly when a second counter was introduced (BRO-2179).
     # WHITELIST. `reset <sid> total_blocks` would defeat the lifetime runaway ceiling,
     # which exists precisely so that no reason and no caller can clear it.
-    RESETTABLE = ("reconcile_count", "handback_count")
+    # bgwait_count: bg_wait_guard.py's own consecutive counter (BRO-2815).
+    RESETTABLE = ("reconcile_count", "handback_count", "bgwait_count")
     field = rest[0] if rest and rest[0] else "reconcile_count"
     if field not in RESETTABLE:
         print(f"autonomous-arc: refusing to reset {field!r}; "

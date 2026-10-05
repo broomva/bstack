@@ -1,0 +1,14 @@
+{
+ "background_tasks": [
+  {
+   "description": "[redacted]",
+   "id": "bhwo3rp5f",
+   "status": "running",
+   "type": "shell"
+  }
+ ],
+ "hook_event_name": "Stop",
+ "last_assistant_message": "I'll wait for the background CI watch task to notify me when the checks complete.",
+ "session_id": "fixture-stall-0e8bb3ff-ci-watch",
+ "stop_hook_active": false
+}

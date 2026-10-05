@@ -159,6 +159,14 @@ JSONL
 printf '%s\n' '{"type":"assistant","uuid":"a1","message":{"role":"assistant","content":[{"type":"text","text":"No response requested."}]}}' > "$T/arc-tr/noop.jsonl"
 printf '%s\n' '{"type":"assistant","uuid":"a2","message":{"role":"assistant","content":[{"type":"text","text":"Stopping here. This one is your call."}]}}' > "$T/arc-tr/handback.jsonl"
 printf '%s\n' '{"type":"assistant","uuid":"a3","message":{"role":"assistant","content":[{"type":"tool_use","id":"t9","name":"Bash","input":{"command":"ls"}}]}}' > "$T/arc-tr/productive.jsonl"
+# bg-wait guard (BRO-2815): a background launch still in flight, then a turn that
+# promises to wait on it. No background_tasks in the payload, so the transcript
+# ledger runs too.
+cat > "$T/arc-tr/bgwait.jsonl" <<'JSONL'
+{"type":"assistant","uuid":"b1","message":{"role":"assistant","content":[{"type":"tool_use","id":"tb","name":"Bash","input":{"command":"gh pr checks 1 --watch","run_in_background":true}}]}}
+{"type":"user","uuid":"b2","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tb","content":"started"}]},"toolUseResult":{"backgroundTaskId":"bwatch01"}}
+{"type":"assistant","uuid":"b3","message":{"role":"assistant","content":[{"type":"text","text":"Watcher armed. I'll wait for it to report back."}]}}
+JSONL
 
 # A second workspace that ships its own bridge script: the bridge hook then runs
 # `python3 -I "$BRIDGE"`, whose sys.path[0] would otherwise be THIS scripts/ dir.
@@ -172,6 +180,7 @@ PYSTUB
 HJ="$PLUG/hooks/hooks.json"
 C_POSTURE="$(hpy "$H/hookcmd.py" "$HJ" UserPromptSubmit autonomous-posture-hook.sh)" || exit 1
 C_ARC="$(hpy "$H/hookcmd.py" "$HJ" Stop arc-continuation-hook.sh)" || exit 1
+C_BGWAIT="$(hpy "$H/hookcmd.py" "$HJ" Stop bg_wait_guard.py)" || exit 1
 C_SENSOR="$(hpy "$H/hookcmd.py" "$HJ" Stop leverage-sensor.py)" || exit 1
 C_WAKEUP="$(hpy "$H/hookcmd.py" "$HJ" SessionStart knowledge-wakeup-hook.sh)" || exit 1
 C_UPDATE="$(hpy "$H/hookcmd.py" "$HJ" SessionStart bstack-autoupdate-hook.sh)" || exit 1
@@ -219,6 +228,10 @@ drive() {
     rm -rf "$T/arc"; arc set S-ok demo slice-1 >/dev/null; arc try-block S-ok 2 5 >/dev/null
     run arc_productive "$C_ARC" "$(stop_payload S-ok "$T/arc-tr/productive.jsonl")"
     arc_state arc_productive S-ok
+    # Stop — the bg-wait guard (opt-in; forced on here) blocks a background-wait promise.
+    rm -rf "$T/arc"
+    run bgwait_block "$C_BGWAIT" "$(stop_payload S-bgw "$T/arc-tr/bgwait.jsonl")" BSTACK_BG_WAIT_GUARD=force
+    note bgwait_block "state: bg=$(arc get S-bgw bgwait_count) tb=$(arc get S-bgw total_blocks)"
 
     # PreToolUse — test-lock blocks an edit (and a Bash write) to the locked test,
     # allows an edit elsewhere; the L3 hook warns on a governance file.
@@ -269,7 +282,7 @@ drive() {
     note bridge_ws "probe: $(cat "$T/bridge-probe.json" 2>/dev/null || echo none)"
 }
 
-SCENARIOS="posture_bootstrap posture_quiet arc_block arc_handback arc_productive lock_edit lock_bash lock_allow l3_warn sensor_stop wakeup autoupdate gate_block gate_allow bridge bridge_ws"
+SCENARIOS="posture_bootstrap posture_quiet arc_block arc_handback arc_productive bgwait_block lock_edit lock_bash lock_allow l3_warn sensor_stop wakeup autoupdate gate_block gate_allow bridge bridge_ws"
 
 # ── pass A: no plants ────────────────────────────────────────────────────────
 PASSNAME=A; drive
@@ -285,6 +298,8 @@ expect "arc-continuation: a no-op mid-arc turn is blocked"    has arc_block stdo
 expect "arc-continuation: the block spent the stall budget"   has arc_block stdout "state: rc=1 tb=1"
 expect "arc-continuation: a handback with no ask is blocked"  has arc_handback stdout "Blocked on you"
 expect "arc-continuation: a tool call resets the counter"     has arc_productive stdout "state: rc=0 tb=1"
+expect "bg-wait guard: a background-wait promise is blocked"  has bgwait_block stdout '"decision": "block"'
+expect "bg-wait guard: the block spent its own counter"       has bgwait_block stdout "state: bg=1 tb=1"
 expect "test-lock: an Edit to the locked test exits 2"        rcis lock_edit 2
 expect "test-lock: the block names the lock"                  has lock_edit stderr "BLOCKED (test-lock)"
 expect "test-lock: a Bash write to the locked test exits 2"   rcis lock_bash 2
@@ -379,7 +394,7 @@ if bad:
         bad "static: the enumerator missed a spelling (fixtures)"
     fi
     n="$(hpy "$REPO/tests/hook_python_sites.py" "$SRC" sites | awk -F'\t' '$3==1' | wc -l | tr -d ' ')"
-    [ "$n" -ge 22 ] && ok "static: $n isolated sites enumerated (>= the 22 known: 13 hook + 9 generated)" \
+    [ "$n" -ge 23 ] && ok "static: $n isolated sites enumerated (>= the 23 known: 14 hook + 9 generated)" \
         || bad "static: only $n isolated sites enumerated — the enumeration shrank"
 fi
 

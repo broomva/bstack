@@ -1,0 +1,8 @@
+{
+ "dropped_completions_of": null,
+ "expect": "block",
+ "final_line": 562,
+ "note": "BRO-2814 session, 2026-10-04 13:28: a gh pr checks --watch auto-moved to the background; 'I'll wait for the background CI watch task to notify me'",
+ "source": "-Users-broomva--paseo-worktrees-1knm9c8c-bro-2814-clippy/bf70ef3d-956e-4010-bfe0-0da91961eb19.jsonl",
+ "stop_line": 567
+}

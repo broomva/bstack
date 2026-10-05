@@ -1,0 +1,8 @@
+{
+ "dropped_completions_of": null,
+ "expect": "allow",
+ "final_line": 244,
+ "note": "a real ARC-STATUS: CLOSED ending with a background task still in flight",
+ "source": "-Users-broomva-broomva/27c0bc75-6715-4af4-ae02-112b4f118a1e.jsonl",
+ "stop_line": 247
+}

@@ -1,0 +1,14 @@
+{
+ "background_tasks": [
+  {
+   "description": "[redacted]",
+   "id": "a82a45b8d07bdb388",
+   "status": "running",
+   "type": "subagent"
+  }
+ ],
+ "hook_event_name": "Stop",
+ "last_assistant_message": "Committed as 30d1e1a3, not yet pushed. Waiting for the reviewer's verdict.",
+ "session_id": "fixture-stall-9cabd372-reviewer",
+ "stop_hook_active": false
+}

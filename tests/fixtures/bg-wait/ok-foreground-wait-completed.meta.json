@@ -1,0 +1,8 @@
+{
+ "dropped_completions_of": null,
+ "expect": "allow",
+ "final_line": 1122,
+ "note": "a real turn that ran gh pr checks --watch in the FOREGROUND to completion, then closed; nothing in flight",
+ "source": "-Users-broomva-broomva/0e1ae31f-bf67-428a-9134-bc0c1c82ddbb.jsonl",
+ "stop_line": 1126
+}

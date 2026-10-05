@@ -1,5 +1,75 @@
 # Changelog
 
+## 0.43.0 — 2026-10-05
+
+### feat(hooks): an opt-in Stop guard for turns that promise a background wait — and the measurement that made it opt-in (BRO-2815)
+
+The report: Paseo sessions ended their turn on "I'll wait for the background CI watch
+to notify me" and went idle, four times on 2026-10-03/04, under briefs that said "wait
+in the FOREGROUND". The premise was that a background task never wakes an idle Paseo
+session.
+
+`scripts/bg_wait_guard.py` is a Stop hook. When enabled, it blocks the Stop once if
+the turn's closing paragraph promises a background wait AND a task this session
+launched is still in flight. The block reason says to do the wait in the foreground
+now and then continue.
+
+- **In flight** comes from the Stop input's own `background_tasks` list (Claude Code
+  2.1.280 sends it with `last_assistant_message`). When a Claude Code doesn't send it,
+  the hook replays the transcript instead (`TaskLedger`). A task starts with a Bash
+  `backgroundTaskId` (including a call moved to the background at its timeout), a
+  Monitor `taskId`, an async Agent or Workflow, or a SendMessage that resumes a
+  finished agent under its old id. It ends with a `<task-notification>` carrying a
+  `<status>`, a TaskStop, or a terminal TaskOutput.
+- **The promise** must sit in the closing paragraph. Third-person reports ("it's
+  waiting on CI"), negated waits, waits on a person, quoted or inline-code text, a
+  handback ask block, and a declared terminal `ARC-STATUS` don't count.
+- **One block per turn:** never while `stop_hook_active`. On top of that, the
+  arc-continuation cap runs through `autonomous-arc.sh try-block` with its own
+  consecutive counter, `bgwait_count`, at 1. It shares the lifetime `total_blocks`
+  ceiling with the other Stop checks. `autonomous-arc.sh reset` now accepts
+  `bgwait_count`.
+- **Fails open** on any parse error. Each BLOCK or CAP decision appends a line to
+  `$BROOMVA_AUTONOMOUS_HOME/bg-wait-guard.jsonl`.
+- `bg_wait_guard.py inflight TRANSCRIPT` prints the tasks still in flight. A coordinator
+  tick can use it: an idle session with a task in flight is waiting, not stalled.
+  `bg_wait_guard.py replay TRANSCRIPT...` prints the verdict at every turn ending.
+
+**Off by default.** `BSTACK_BG_WAIT_GUARD=1` enables it under Paseo (`PASEO_AGENT_ID`
+set), and `BSTACK_BG_WAIT_GUARD=force` enables it everywhere. The reason is that the
+measurement does not support the premise. A replay of 570 Paseo sessions (4,508 turn
+endings, 2026-09-25 to 10-05) found:
+
+| Measure | Value |
+|---|---|
+| Turn endings with a background task in flight | 1,679 (37%) |
+| Endings the guard would block | 1,019 (22.6% of all endings) |
+| … then woken by the task's own notification | 941 (92%; median 132 s later) |
+| … where a human or coordinator spoke before the task finished | 76 (median 50 s after going idle) |
+| In-flight endings where a task finished and its notification went undelivered | **0 of 1,679** |
+| Matcher precision, 60 hand-labelled blocks | 56/60 (93%) |
+
+Two of the four reported sessions had already been woken by notifications earlier in
+the same session. The 9cabd372 "stall" had its reviewer's completion queued 1 s
+before the Stop, and the session resumed itself 3 s later. The reported stalls were
+nudged 10–60 s after going idle, before their task finished. Enabling the guard buys
+the fleet rule "an idle session is a finished session". It does not rescue sessions
+from a stranding nobody has observed.
+
+Tests: `tests/bg-wait-guard.test.sh` covers 51 cases through the registered
+`hooks.json` command:
+
+- Replays of the four real stalls must block; real normal endings must not. Each runs
+  in both Stop-input modes.
+- The cap, the gate, fail-open behaviour and the trace.
+- 18 mutants (the matcher, the running-task check, the ledger's starts, ends and
+  pre-filter, the cap, the gate, each matcher exclusion, the registration), and every
+  one turns the suite red.
+
+Fixtures are redacted slices of the real transcripts. `tests/fixtures/bg-wait/build_fixtures.py`
+records each one's source. `tests/hook-python-isolation.test.sh` drives the new hook,
+so its `-I` is mutation-proved like the rest.
+
 ## 0.42.0 — 2026-09-29
 
 ### feat(sensor): a context ledger — what injected context costs, and whether anything uses it (shadow)

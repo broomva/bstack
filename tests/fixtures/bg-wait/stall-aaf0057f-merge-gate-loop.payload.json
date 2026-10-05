@@ -1,0 +1,14 @@
+{
+ "background_tasks": [
+  {
+   "description": "[redacted]",
+   "id": "b3ixtwcid",
+   "status": "running",
+   "type": "shell"
+  }
+ ],
+ "hook_event_name": "Stop",
+ "last_assistant_message": "The re-run is queued, and a background loop will re-run the Merge Gate once plan-drift concludes. I'll merge when both are green.",
+ "session_id": "fixture-stall-aaf0057f-merge-gate-loop",
+ "stop_hook_active": false
+}

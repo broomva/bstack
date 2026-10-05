@@ -1,0 +1,8 @@
+{
+ "dropped_completions_of": "a82a45b8d07bdb388",
+ "expect": "block",
+ "final_line": 1617,
+ "note": "workspace#885, 2026-10-03 14:57: 'Waiting for the reviewer's verdict.' The reviewer (resumed via SendMessage) is in flight: its completion, enqueued 1 s before this Stop, is DROPPED, i.e. the moment the promise was written",
+ "source": "-Users-broomva--paseo-worktrees-0t10n7id-excited-sheep/7fd0ecd3-111b-44a3-a690-87413447b885.jsonl",
+ "stop_line": 1621
+}

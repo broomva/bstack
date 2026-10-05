@@ -1,0 +1,8 @@
+{
+ "dropped_completions_of": null,
+ "expect": "block",
+ "final_line": 1465,
+ "note": "workspace#883, 2026-10-03 14:47: 'a background loop will re-run the Merge Gate once plan-drift concludes. I'll merge when both are green.'",
+ "source": "-Users-broomva--paseo-worktrees-0t10n7id-new-octopus/22365d24-5bd5-4c92-ada0-a9a10770f2f7.jsonl",
+ "stop_line": 1468
+}

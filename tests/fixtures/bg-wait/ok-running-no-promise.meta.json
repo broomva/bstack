@@ -1,0 +1,8 @@
+{
+ "dropped_completions_of": null,
+ "expect": "allow",
+ "final_line": 393,
+ "note": "a real maintenance-tick ending with a task still in flight and no wait promise in its closing paragraph",
+ "source": "-Users-broomva-broomva/99878642-e84a-4e08-a982-925dffcd9ab2.jsonl",
+ "stop_line": 396
+}

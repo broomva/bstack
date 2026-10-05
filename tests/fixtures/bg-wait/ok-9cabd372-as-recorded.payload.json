@@ -1,0 +1,7 @@
+{
+ "background_tasks": [],
+ "hook_event_name": "Stop",
+ "last_assistant_message": "Committed as 30d1e1a3, not yet pushed. Waiting for the reviewer's verdict.",
+ "session_id": "fixture-ok-9cabd372-as-recorded",
+ "stop_hook_active": false
+}

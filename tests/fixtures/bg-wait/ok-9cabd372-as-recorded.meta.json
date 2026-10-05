@@ -1,0 +1,8 @@
+{
+ "dropped_completions_of": null,
+ "expect": "allow",
+ "final_line": 1617,
+ "note": "the same Stop exactly as recorded: the reviewer's completion was already queued, nothing is in flight, and the session resumed itself 3 s later. A wait that completed is not a stall",
+ "source": "-Users-broomva--paseo-worktrees-0t10n7id-excited-sheep/7fd0ecd3-111b-44a3-a690-87413447b885.jsonl",
+ "stop_line": 1621
+}

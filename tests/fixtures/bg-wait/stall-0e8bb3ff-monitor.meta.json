@@ -1,0 +1,8 @@
+{
+ "dropped_completions_of": null,
+ "expect": "block",
+ "final_line": 842,
+ "note": "same session, 13:53, after the first nudge: 'Monitor armed. I'll wait for it to report back'",
+ "source": "-Users-broomva--paseo-worktrees-1knm9c8c-bro-2814-clippy/bf70ef3d-956e-4010-bfe0-0da91961eb19.jsonl",
+ "stop_line": 846
+}

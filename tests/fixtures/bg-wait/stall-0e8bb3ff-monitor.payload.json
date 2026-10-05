@@ -1,0 +1,14 @@
+{
+ "background_tasks": [
+  {
+   "description": "[redacted]",
+   "id": "bg4l8hnsa",
+   "status": "running",
+   "type": "monitor"
+  }
+ ],
+ "hook_event_name": "Stop",
+ "last_assistant_message": "Monitor armed. I'll wait for it to report back rather than polling manually.",
+ "session_id": "fixture-stall-0e8bb3ff-monitor",
+ "stop_hook_active": false
+}
