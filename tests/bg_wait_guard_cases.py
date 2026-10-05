@@ -153,6 +153,11 @@ def cases(root):
               verdict("Waiting on your answer to the naming question.") is None)
         check("matcher: a wait phrase inside inline code does not block",
               verdict("The stall looked like `I'll wait for the watcher` and is now fixed.") is None)
+        check("matcher: a wait phrase in double quotes (a cited stall) does not block",
+              verdict('The worker opened its PR. It ended its turn "waiting for the reviewer", '
+                      'the same stall the spec lists as a trap.') is None)
+        check("matcher: a promise with a double-quoted name still blocks",
+              blocked(verdict('I\'ll wait for the "plan-drift" check to report back.')))
         check("matcher: a declared terminal (ARC-STATUS: DONE) does not block",
               verdict("I'll merge when CI is green.\n\nARC-STATUS: DONE") is None)
         check("matcher: a moving ARC-STATUS (OPEN) still blocks",
@@ -266,7 +271,9 @@ MUTANTS = [
      "(?:you|your|the user|the operator|a human)\\b\", after, re.I):",
      "(?:you|your|the user|the operator|a human)\\b\", after, re.I) and False:"),
     ("inline-code strip deleted", "scripts/bg_wait_guard.py",
-     "    return INLINE_CODE_RE.sub(\" \", body)", "    return body"),
+     "    body = INLINE_CODE_RE.sub(\" \", body)", "    pass"),
+    ("double-quote strip deleted", "scripts/bg_wait_guard.py",
+     "    return DQUOTE_RE.sub(\" \", body)", "    return body"),
     ("registration removed from hooks.json", "hooks/hooks.json",
      "bg_wait_guard.py", "bg_wait_guard_unregistered.py"),
 ]

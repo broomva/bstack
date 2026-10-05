@@ -22,8 +22,8 @@ now and then continue.
   finished agent under its old id. It ends with a `<task-notification>` carrying a
   `<status>`, a TaskStop, or a terminal TaskOutput.
 - **The promise** must sit in the closing paragraph. Third-person reports ("it's
-  waiting on CI"), negated waits, waits on a person, quoted or inline-code text, a
-  handback ask block, and a declared terminal `ARC-STATUS` don't count.
+  waiting on CI"), negated waits, waits on a person, block-quoted, double-quoted or
+  inline-code text (a cited stall is not a promise), a handback ask block, and a declared terminal `ARC-STATUS` don't count.
 - **One block per turn:** never while `stop_hook_active`. On top of that, the
   arc-continuation cap runs through `autonomous-arc.sh try-block` with its own
   consecutive counter, `bgwait_count`, at 1. It shares the lifetime `total_blocks`
@@ -56,13 +56,24 @@ nudged 10–60 s after going idle, before their task finished. Enabling the guar
 the fleet rule "an idle session is a finished session". It does not rescue sessions
 from a stranding nobody has observed.
 
-Tests: `tests/bg-wait-guard.test.sh` covers 51 cases through the registered
+**False-positive rate** on the 80 most recently written transcripts under
+`~/.claude/projects/-Users-broomva-broomva/` (58 sessions, 2026-09-28 to 10-05; 2,344
+turn endings, 559 distinct ending texts): the guard would block 33 distinct endings.
+Hand-labelled from the matched sentence only, none of them is a clean false block. One is
+borderline: a status list that says a PR "merges once its checks settle". Before the
+double-quote rule there was one clear false block, a coordinator reporting that
+another session "ended its turn 'waiting for the reviewer'". The rule removed that block
+and changed no other verdict. 45 distinct endings declare a terminal `ARC-STATUS`, and 0
+of them are blocked. So the measured false-block rate is 0/559 (at most 1/559, 0.18%,
+counting the borderline one).
+
+Tests: `tests/bg-wait-guard.test.sh` covers 53 cases through the registered
 `hooks.json` command:
 
 - Replays of the four real stalls must block; real normal endings must not. Each runs
   in both Stop-input modes.
 - The cap, the gate, fail-open behaviour and the trace.
-- 18 mutants (the matcher, the running-task check, the ledger's starts, ends and
+- 19 mutants (the matcher, the running-task check, the ledger's starts, ends and
   pre-filter, the cap, the gate, each matcher exclusion, the registration), and every
   one turns the suite red.
 

@@ -8,10 +8,10 @@ given was that a background task (Bash run_in_background, a Bash call moved to t
 background at its timeout, the Monitor tool, a background Agent or Workflow) never
 wakes an idle Paseo session.
 
-MEASURED, AND THE PREMISE DOES NOT HOLD (replay over 570 Paseo sessions, 4,507 turn
-endings, 2026-09-25..10-05; numbers in the PR): 1,678 endings had a task in flight;
-in 0 of them did a task finish and its notification go undelivered. Of the 942
-endings this hook would block, 876 (93%) were woken by the task's own notification
+MEASURED, AND THE PREMISE DOES NOT HOLD (replay over 570 Paseo sessions, 4,508 turn
+endings, 2026-09-25..10-05; CHANGELOG 0.43.0): 1,679 endings had a task in flight;
+in 0 of them did a task finish and its notification go undelivered. Of the 1,019
+endings this hook would block, 941 (92%) were woken by the task's own notification
 (median ~2 min later). The four reported stalls were nudged 10-60 s after going
 idle, before their task finished; two of the four sessions had already been woken
 by notifications earlier in the same session. So this hook is OPT-IN: what it buys
@@ -111,6 +111,10 @@ THIRD_PERSON_RE = re.compile(
     r"prs?)|#\d+|\b(?:is|are|was|were))\s+(?:(?:still|now|also|then|only)\s+)?$", re.I)
 FENCE_RE = re.compile(r"^\s{0,3}(`{3,}|~{3,}).*?^\s{0,3}\1", re.M | re.S)
 INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
+# A phrase in double quotes is cited, not said: 'It ended its turn "waiting for the
+# reviewer"' reports another session's stall (the one false block in the 559-ending
+# measurement in the PR).
+DQUOTE_RE = re.compile(r"[\"\u201c][^\"\u201c\u201d\n]{1,160}[\"\u201d]")
 QUOTE_RE = re.compile(r"^\s{0,3}>.*$", re.M)
 # Legitimate terminal endings even if a wait phrase appears in them: an explicit
 # ARC-STATUS declaration (CLOSED, DONE, MERGED, BLOCKED, HANDBACK, ...) is the
@@ -123,11 +127,12 @@ ASK_HEAD_RE = re.compile(
 
 def _prose(text):
     """The text a reader takes as the message's own voice: no fenced code, no inline
-    code spans, no quoted lines. A message that QUOTES a stall (a review finding, the
+    code spans, no quoted lines, no double-quoted phrases. A message that QUOTES a stall (a review finding, the
     brief itself) is not making the promise."""
     body = FENCE_RE.sub(" ", text or "")
     body = QUOTE_RE.sub(" ", body)
-    return INLINE_CODE_RE.sub(" ", body)
+    body = INLINE_CODE_RE.sub(" ", body)
+    return DQUOTE_RE.sub(" ", body)
 
 
 def _last_paragraph(body):
