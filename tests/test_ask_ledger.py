@@ -1118,3 +1118,29 @@ def test_an_option_sharing_the_asks_id_is_never_stamped(tmp_path):
     with pytest.raises(LedgerError, match="nothing was written"):
         stamp_origin(f, "A1", "new", "/w", "claude", "w")
     assert f.read_text() == text
+
+
+# ── the vendored block must not drift unnoticed (BRO-2918) ──────────────────
+#
+# scripts/ask_ledger.py carries a cross-repo vendored copy of
+# broomva/workspace's _routable/_strip_origin_blocks/stamp_origin/
+# _StrictLoader/_no_dupes/_check_stamp (pinned to a source SHA in the comment
+# above `_routable`). A network fetch of the other repo at test time is the
+# wrong trade for CI (per rustic-rat-f6's review of bstack#130) — this is the
+# offline half instead: hash the block, and an edit to it without updating
+# this constant goes red here, with no network and no auth. An upstream
+# change is still only caught at a deliberate resync, not automatically.
+_VENDORED_BLOCK_SHA256 = "bdd1b211669c53a80ded77e6088001a90d8a9bafc54285764673793efe949602"
+
+
+def test_the_vendored_stamp_block_has_not_drifted_from_its_pinned_hash():
+    import hashlib
+    text = (Path(__file__).resolve().parent.parent / "scripts" / "ask_ledger.py").read_text(encoding="utf-8")
+    start = text.index("# VENDORED from broomva/workspace@")
+    end = text.index("# END VENDORED") + len("# END VENDORED")
+    digest = hashlib.sha256(text[start:end].encode("utf-8")).hexdigest()
+    assert digest == _VENDORED_BLOCK_SHA256, (
+        "the vendored stamp block changed without updating _VENDORED_BLOCK_SHA256 "
+        "(and the VENDORED-from comment's source SHA, if this was a deliberate resync "
+        f"from a newer broomva/workspace commit) — got {digest}"
+    )

@@ -778,6 +778,7 @@ def _check_stamp(before: dict, text: str, stamped: set[str], origin: dict) -> No
         raise LedgerError(f"stamp could not rewrite {what} cleanly (an origin in a shape the line edit "
                           "does not handle: flow style, a comment on its line, or keys after options); "
                           "nothing was written. Replace that origin by hand.")
+# END VENDORED
 
 
 def _sweep_cmd(args) -> int:
