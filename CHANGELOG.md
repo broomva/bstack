@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.43.1 — 2026-10-08
+
+### fix(ask_ledger): resync the vendored stamp block to broomva/workspace@580c2059f (BRO-2925)
+
+0.43.0 vendored the stamp logic from workspace's ac84dd58e plus two local fixes.
+Its source, broomva/workspace#932, then went through three more review rounds
+before merging as 580c2059f. This copies the drifted functions back, so each
+vendored function is byte-identical to that commit:
+
+- **Partial-miss refusal.** `missing = targets - set(stamped)` refuses the whole
+  ledger when any targeted ask's line cannot be found. Before, it stamped the rest
+  and exited 0.
+- **One `_locked_rw` helper** for the lock, in place of the inline flock.
+- **Corrected refusal text** ("a string or null origin").
+
+Tests: the racing two-thread lock test is replaced by deterministic ones. The lock
+holder appends an ask before releasing, and a shared-lock holder blocks the writer,
+so a read before the lock, `LOCK_SH`, or no lock each fail. A partial-miss refusal
+test is added, and the sha256 pin is updated to the new block. 132 pass. The hook's
+own test passes 8/8: stamp's refusal still never blocks an edit.
+
 ## 0.43.0 — 2026-10-07
 
 ### feat(hooks): ask-origin-stamp — every ask names its asker at write time (BRO-2918)

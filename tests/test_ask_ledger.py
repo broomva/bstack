@@ -1163,31 +1163,67 @@ def test_a_quoted_id_with_a_trailing_comment_is_still_matched(tmp_path):
     assert load(path)["asks"][0]["origin"]["agent_id"] == "agent-1"
 
 
-def test_concurrent_stamps_on_the_same_ledger_do_not_lose_a_write(tmp_path):
-    """Regression: stamp_origin did read-modify-write with no lock. Two sessions
-    stamping DIFFERENT asks in the SAME ledger near-simultaneously raced a
-    classic lost update — both callers reported success, but only the second
-    writer's change survived on disk. `fcntl.flock` around the whole
-    read-modify-verify-write cycle serializes the two calls instead."""
+def _blocks_while_locked(path, call):
+    """Hold the ledger's lock, start `call` in a thread, and return whether it
+    was still waiting 0.2 s later; then, still holding the lock, append an ask
+    (as another writer would), release, and let `call` finish. A writer that
+    read before taking the lock overwrites that ask (from broomva/workspace#932)."""
+    import fcntl
     import threading
-    from ask_ledger import stamp_origin, load
-    path = tmp_path / "arc.yaml"
-    path.write_text("arc: demo\nopened: 2026-10-07\ntz: UTC\nlanes: [x]\n"
-                     "asks:\n  - id: A1\n    ask: x\n  - id: A2\n    ask: y\n")
-    results: dict[str, list[str]] = {}
+    import time
+    done = threading.Event()
+    with path.open("r+") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        t = threading.Thread(target=lambda: (call(), done.set()))
+        t.start()
+        time.sleep(0.2)
+        waited = not done.is_set()
+        held.seek(0, 2)
+        held.write("  - id: A9\n    ask: written by the lock holder\n")
+        held.flush()
+    t.join(5)
+    return waited, done.is_set()
 
-    def run(ask_id, agent_id):
-        results[ask_id] = stamp_origin(path, ask_id, agent_id, "/w", "claude", "w")
 
-    t1 = threading.Thread(target=run, args=("A1", "agent-1"))
-    t2 = threading.Thread(target=run, args=("A2", "agent-2"))
-    t1.start(); t2.start()
-    t1.join(); t2.join()
+def test_stamp_waits_for_the_ledger_lock(tmp_path):
+    """Deterministic: a two-thread race caught a missing lock only about half the time."""
+    from ask_ledger import stamp_origin
+    f = tmp_path / "l.yaml"
+    f.write_text(_HEAD + "  - id: A1\n    ask: x\n")
+    waited, finished = _blocks_while_locked(f, lambda: stamp_origin(f, "A1", "agent-1", "/w", "claude", "w"))
+    asks = yaml.safe_load(f.read_text())["asks"]
+    assert (waited, finished, asks[0]["origin"]["agent_id"], [a["id"] for a in asks]) == (True, True, "agent-1", ["A1", "A9"])
 
-    assert (results["A1"], results["A2"]) == (["A1"], ["A2"])
-    by_id = {a["id"]: a for a in load(path)["asks"]}
-    assert by_id["A1"]["origin"]["agent_id"] == "agent-1"
-    assert by_id["A2"]["origin"]["agent_id"] == "agent-2"
+
+def test_a_writer_waits_for_a_reader_holding_a_shared_lock(tmp_path):
+    """A writer's lock is exclusive: it waits even for a shared (reader) lock."""
+    import fcntl
+    import threading
+    import time
+    from ask_ledger import stamp_origin
+    f = tmp_path / "l.yaml"
+    f.write_text(_HEAD + "  - id: A1\n    ask: x\n")
+    done = threading.Event()
+    with f.open("r") as reader:
+        fcntl.flock(reader, fcntl.LOCK_SH)
+        t = threading.Thread(target=lambda: (stamp_origin(f, "A1", "agent-1", "/w", "claude", "w"), done.set()))
+        t.start()
+        time.sleep(0.2)
+        waited = not done.is_set()
+    t.join(5)
+    assert (waited, done.is_set()) == (True, True)
+
+
+def test_a_partial_miss_is_refused_with_nothing_written(tmp_path):
+    """`id: 01` parses to 1 but its line reads 01: the line edit cannot find it.
+    Stamping A1 alone and leaving 1 unstamped would exit 0; it must refuse."""
+    from ask_ledger import stamp_origin, LedgerError
+    text = _HEAD + "  - id: A1\n    ask: x\n  - id: 01\n    ask: y\n"
+    f = tmp_path / "l.yaml"
+    f.write_text(text)
+    with pytest.raises(LedgerError, match=r"needed an origin \(1\)"):
+        stamp_origin(f, None, "agent-1", "/w", "claude", "w")
+    assert f.read_text() == text
 
 
 # ── the vendored block must not drift unnoticed (BRO-2918) ──────────────────
@@ -1200,7 +1236,7 @@ def test_concurrent_stamps_on_the_same_ledger_do_not_lose_a_write(tmp_path):
 # offline half instead: hash the block, and an edit to it without updating
 # this constant goes red here, with no network and no auth. An upstream
 # change is still only caught at a deliberate resync, not automatically.
-_VENDORED_BLOCK_SHA256 = "9b1c5f5a0fd3661b68fe0f7f47f3678f20daf8a967faa093d72f0e3f2f3ece15"
+_VENDORED_BLOCK_SHA256 = "a6a2e3b83367c02c083b553c38283e4334ba1af708a743d0dade2760847103fe"
 
 
 def test_the_vendored_stamp_block_has_not_drifted_from_its_pinned_hash():
