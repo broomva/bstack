@@ -1147,6 +1147,22 @@ def test_an_id_with_a_trailing_comment_is_still_matched(tmp_path):
     assert load(path)["asks"][0]["origin"]["agent_id"] == "agent-1"
 
 
+def test_a_quoted_id_with_a_trailing_comment_is_still_matched(tmp_path):
+    """Regression: P20 Stratum B round 2 reproduced this after round 1 fixed the
+    quote and the comment shapes separately. Doing the quote-check BEFORE
+    stripping the comment compares the opening quote against the comment's last
+    character, which never match, so the quotes silently survived into the
+    comparison against the parsed, unquoted id — the same 'stamped: []
+    misreported as already-stamped' failure, just one shape deeper."""
+    from ask_ledger import stamp_origin, load
+    path = tmp_path / "arc.yaml"
+    path.write_text("arc: demo\nopened: 2026-10-07\ntz: UTC\nlanes: [x]\n"
+                     'asks:\n  - id: "A1"  # the only ask\n    ask: x\n')
+    stamped = stamp_origin(path, None, "agent-1", "/w", "claude", "w")
+    assert stamped == ["A1"]
+    assert load(path)["asks"][0]["origin"]["agent_id"] == "agent-1"
+
+
 def test_concurrent_stamps_on_the_same_ledger_do_not_lose_a_write(tmp_path):
     """Regression: stamp_origin did read-modify-write with no lock. Two sessions
     stamping DIFFERENT asks in the SAME ledger near-simultaneously raced a

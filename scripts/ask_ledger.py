@@ -642,21 +642,28 @@ def _unquote_id(raw: str) -> str:
     actually parsed, so the two can be compared.
 
     `_ID_LINE` is a line regex, not a YAML parser, so it captures everything up
-    to end-of-line verbatim. Two shapes round-trip differently through PyYAML
+    to end-of-line verbatim. Three shapes round-trip differently through PyYAML
     than through this regex: an id written quoted (`id: "A1"`) PARSES to the
-    unquoted `A1` that `load()` and `targets` hold, and a plain scalar followed
-    by a trailing comment (`id: A1  # note`) PARSES to just `A1`, the comment
-    never part of the value. Without this, either shape made `stamp_origin`
-    silently find zero lines to insert — `stamped: []`, the CLI printing "(none
-    — already stamped)" for an ask that was never actually touched (BRO-2918,
-    P20 Stratum B round 1 reproduced the quoted case; the comment case is the
-    same root cause, found while fixing it). Ask ids are never YAML-escaped
-    internally (no embedded quotes or `#`), so both strips round-trip exactly.
+    unquoted `A1` that `load()` and `targets` hold; a plain scalar followed by a
+    trailing comment (`id: A1  # note`) PARSES to just `A1`, the comment never
+    part of the value; and the two COMBINED (`id: "A1"  # note`) need the
+    comment stripped FIRST — doing the quote-check first on the combined shape
+    compares `raw[-1]` (the comment's last character) against `raw[0]` (the
+    opening quote), which never match, so the quote strip silently no-ops and
+    the quotes survive into the "already stamped" comparison. Strip order is
+    therefore comment, then quotes, never the reverse — round 2 of P20 Stratum
+    B (bstack#130) reproduced this exact combined case after round 1 had only
+    covered the quote and the comment shapes separately. Ask ids are never
+    YAML-escaped internally (no embedded quotes or `#`), so both strips
+    round-trip exactly, in either order ON THEIR OWN — only the combination
+    is order-sensitive.
     """
+    m = _TRAILING_COMMENT.match(raw)
+    if m:
+        raw = m.group(1)
     if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in ("\"", "'"):
         return raw[1:-1]
-    m = _TRAILING_COMMENT.match(raw)
-    return m.group(1) if m else raw
+    return raw
 
 
 # VENDORED from broomva/workspace@ac84dd58e4f0863d2fc29c360a261098afa4cecb
