@@ -624,6 +624,15 @@ def open_asks(ledger: dict) -> list[dict]:
 _ID_LINE = re.compile(r"^(\s*)(-\s+)?id:\s*(.+?)\s*$")
 
 
+# VENDORED from broomva/workspace@ac84dd58e4f0863d2fc29c360a261098afa4cecb
+# scripts/ask_ledger.py: _routable, _strip_origin_blocks, stamp_origin,
+# _StrictLoader, _no_dupes, _check_stamp (through the line defining
+# _check_stamp below). Keep byte-identical to workspace's copy of the same
+# functions; when workspace's PR #932 (BRO-2918) merges to main, re-sync from
+# the merge SHA, not from a branch commit. No automated cross-repo check
+# exists yet (unlike the single-repo apikey_prefix identity test in
+# broomva/workspace#933) because that would need network access to another
+# repo at test time; this comment is the manifest half of that discipline.
 def _routable(origin: object) -> bool:
     """An origin the routers can address: a mapping with an `agent_id`. Maestro's
     router (maestro-paseo control-asks.ts) reads only that key, and both readers
