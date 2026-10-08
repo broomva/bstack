@@ -20,6 +20,7 @@ Spec: docs/specs/2026-08-18-agent-handback-contract.html
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as _dt
 import os
 import re
@@ -666,24 +667,16 @@ def _unquote_id(raw: str) -> str:
     return raw
 
 
-# VENDORED from broomva/workspace@ac84dd58e4f0863d2fc29c360a261098afa4cecb
-# scripts/ask_ledger.py: _routable, _strip_origin_blocks, stamp_origin,
-# _StrictLoader, _no_dupes, _check_stamp (through the line defining
-# _check_stamp below). No automated cross-repo check exists (unlike the
-# single-repo apikey_prefix identity test in broomva/workspace#933) because
-# that would need network access to another repo at test time; this comment
-# plus the sha256 pin in tests/test_ask_ledger.py are the manifest half of
-# that discipline instead.
-#
-# NOT byte-identical to ac84dd58e as of this comment: P20 Stratum B (bstack#130
-# round 1) reproduced two bugs in the pinned text itself — a quoted/commented
-# `id: "A1"` line silently failed to stamp while reporting success (fixed by
-# `_unquote_id`, applied at both `_ID_LINE`-match call sites below), and
-# concurrent stamps on the same ledger raced a lost update with no lock (fixed
-# by the `fcntl.flock` added around `stamp_origin`'s read-modify-write). Both
-# fixes were reported upstream for workspace's own copy; re-sync from whichever
-# SHA lands those fixes there too, and this note can then say byte-identical
-# again.
+# VENDORED from broomva/workspace@580c2059f340fba5c6e09d25b9dd729b7fe8a61a
+# scripts/ask_ledger.py: _routable, _strip_origin_blocks, _locked_rw,
+# stamp_origin, _StrictLoader, _no_dupes, _check_stamp (through the line
+# defining _check_stamp below), plus _unquote_id/_TRAILING_COMMENT/_ID_LINE
+# above. Each function is byte-identical to that commit (BRO-2925): the
+# lock, the quoted/commented-id fix and the partial-miss refusal all landed
+# upstream in broomva/workspace#932. No automated cross-repo check exists
+# (it would need another repo at test time); this comment plus the sha256
+# pin in tests/test_ask_ledger.py are the manifest. Resync by copying these
+# functions from a newer workspace commit and re-pinning both.
 def _routable(origin: object) -> bool:
     """An origin the routers can address: a mapping with an `agent_id`. Maestro's
     router (maestro-paseo control-asks.ts) reads only that key, and both readers
@@ -692,12 +685,10 @@ def _routable(origin: object) -> bool:
 
 
 def _strip_origin_blocks(lines: list[str], ids: set[str]) -> list[str]:
-    """Remove any `origin:` block already belonging to one of `ids`, so a re-stamp
-    replaces it instead of appending a second one. PyYAML silently keeps whichever
-    duplicate key comes LAST, so an unremoved old block would make the file read
-    as re-stamped while `load()` still returned the ORIGINAL session. (The write
-    is still checked before it lands — see `_check_stamp` — because this pass is
-    line-based and not every origin shape is one it can find.)
+    """Remove any `origin:` block already belonging to one of `ids`, so a forced
+    re-stamp replaces it instead of appending a second one. PyYAML silently keeps
+    whichever duplicate key comes LAST, so an unremoved old block would make the
+    file read as re-stamped while `load()` still returned the ORIGINAL session.
 
     Tracks ask boundaries by indent, not by id value alone: an ask's `options:`
     entries carry their own `- id: <option-id>` lines, which `_ID_LINE` also
@@ -740,6 +731,26 @@ def _strip_origin_blocks(lines: list[str], ids: set[str]) -> list[str]:
     return out
 
 
+@contextlib.contextmanager
+def _locked_rw(path: Path):
+    """The ledger opened for read and write under an exclusive lock, held until
+    the block exits: every writer of a ledger (stamp, archive) goes through it,
+    so they serialize. `fcntl` is POSIX-only; without it this degrades to an
+    unlocked open rather than raising (a Windows import must not crash a hook)."""
+    try:
+        import fcntl
+    except ImportError:
+        fcntl = None
+    try:
+        fh = path.open("r+", encoding="utf-8")
+    except FileNotFoundError:
+        raise LedgerError(f"no ledger at {path}")
+    with fh:
+        if fcntl is not None:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+        yield fh
+
+
 def stamp_origin(path: Path, ask_id: str | None, agent_id: str, cwd: str,
                  provider: str, session: str, force: bool = False,
                  claude_session: str = "") -> list[str]:
@@ -749,30 +760,28 @@ def stamp_origin(path: Path, ask_id: str | None, agent_id: str, cwd: str,
     line-based to keep the diff small, so it is checked before it is written: the
     new text must parse to the old ledger with exactly the stamped asks' origins
     changed. An origin shape the line edit cannot rewrite (flow style, a comment
-    on its line, keys after options) is refused with nothing written, never
+    on its line, a string or null origin) is refused with nothing written, never
     reported as stamped while the old value stays (BRO-2918, P20 round 2).
 
     Holds an exclusive advisory lock on `path` across the whole read-modify-
-    verify-write cycle (P20 Stratum B, round 1): two sessions both raising an ask
-    in the SAME ledger near-simultaneously used to read-modify-write on separate,
-    unlocked opens, a classic lost update — the second write silently clobbered
-    the first one's `origin:` block, and both calls reported success. `fcntl` is
-    POSIX-only; its absence (fail-open, not fail-closed, since every other write
-    path in this file already assumes POSIX) degrades to the prior unlocked
-    behaviour rather than raising, so a Windows import does not crash the hook.
-    """
-    try:
-        import fcntl
-    except ImportError:
-        fcntl = None
+    verify-write cycle (P20 Stratum B round 1, bstack#130): two sessions both
+    raising an ask in the SAME ledger near-simultaneously used to read-modify-
+    write on separate, unlocked opens, a classic lost update — the second write
+    silently clobbered the first one's `origin:` block, and both calls reported
+    success. `fcntl` is POSIX-only; its absence (fail-open, not fail-closed,
+    since every other write path here already assumes POSIX) degrades to the
+    prior unlocked behaviour rather than raising, so a Windows import does not
+    crash the hook.
 
-    try:
-        fh = path.open("r+", encoding="utf-8")
-    except FileNotFoundError:
-        raise LedgerError(f"no ledger at {path}")
-    with fh:
-        if fcntl is not None:
-            fcntl.flock(fh, fcntl.LOCK_EX)
+    A targeted id with no stamped line (any of them, not only all of them) means
+    the id was found in the parsed ledger but the LINE-based `_ID_LINE` regex never
+    matched a line for it — some id shape neither `_unquote_id` nor this edit
+    anticipates. Reporting that as "stamped 0 ask(s): (none — already stamped)"
+    (the pre-fix behaviour) is indistinguishable from the correct zero, which is
+    exactly how the quoted/commented-id bug above went unnoticed; raising makes
+    the gap loud instead of silent (P20 Stratum B round 1 follow-up).
+    """
+    with _locked_rw(path) as fh:
         text = fh.read()
         ledger = _parse_ledger_text(path, text)
         targets = {str(a.get("id")) for a in (ledger.get("asks") or [])
@@ -800,6 +809,17 @@ def stamp_origin(path: Path, ask_id: str | None, agent_id: str, cwd: str,
                 if value:
                     out.append(f"{indent}  {key}: {value}\n")
             stamped.append(this_id)
+
+        # Every targeted ask, not only all of them at once: a partial miss used to
+        # stamp the rest, exit 0, and leave one ask silently without (P20 round 3).
+        missing = targets - set(stamped)
+        if missing:
+            raise LedgerError(
+                f"{path}: {len(missing)} ask(s) needed an origin "
+                f"({', '.join(sorted(missing))}) but no line matched — an id shape "
+                f"(quoting, a comment, something else) that the line edit cannot find. "
+                f"Nothing was written; stamp will keep refusing until the shape is fixed by hand."
+            )
 
         if stamped:
             new_text = "".join(out)
@@ -853,7 +873,7 @@ def _check_stamp(before: dict, text: str, stamped: set[str], origin: dict) -> No
     if wrong or not isinstance(after, dict) or without_origins(after) != without_origins(before):
         what = f"ask(s) {', '.join(wrong)}" if wrong else "another part of the ledger"
         raise LedgerError(f"stamp could not rewrite {what} cleanly (an origin in a shape the line edit "
-                          "does not handle: flow style, a comment on its line, or keys after options); "
+                          "does not handle: flow style, a comment on its line, or a string or null origin); "
                           "nothing was written. Replace that origin by hand.")
 # END VENDORED
 
