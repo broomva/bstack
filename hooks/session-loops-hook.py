@@ -57,6 +57,10 @@ STREAM = "loops/session"
 CRON_LIFE_S = 7 * 24 * 3600  # CronCreate: "Recurring tasks auto-expire after 7 days"
 PRUNE_AFTER_S = CRON_LIFE_S + 24 * 3600
 PROMPT_HEAD = 120
+# The hook's own deadline, under hooks.json's 5 s timeout. The writer's flock has
+# no timeout and every session shares one stream lock, so a writer stuck holding
+# it would otherwise hold every turn on the machine for the full 5 s.
+DEADLINE_S = 3
 # Session and cron ids become a file name and part of an envelope subject.
 ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 AGENT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._@+=-]{0,127}")
@@ -72,9 +76,16 @@ GIT_ENV = (
 
 
 def home_dir():
-    """BROOMVA_HOME if set, else ~/.broomva: the writer's own rule."""
+    """BROOMVA_HOME if set, else ~/.broomva: the writer's own rule.
+
+    None for a relative BROOMVA_HOME, which the writer refuses: resolved here it
+    would land the cache inside the session's repository (the hook's cwd).
+    """
     raw = os.environ.get("BROOMVA_HOME", "")
-    return os.path.expanduser(raw) if raw else os.path.join(os.path.expanduser("~"), ".broomva")
+    if not raw:
+        return os.path.join(os.path.expanduser("~"), ".broomva")
+    path = os.path.expanduser(raw)
+    return path if os.path.isabs(path) else None
 
 
 def cache_path(sid):
@@ -158,21 +169,27 @@ def load_writer():
 
 
 def in_sri(cwd, ws):
+    """(whether cwd is a Stimulus/SRI checkout, whether that answer may be cached).
+
+    Fails closed: when git cannot answer (missing, timed out), the cwd counts as
+    SRI for this call only, so a prompt head is withheld rather than leaked.
+    """
     if not cwd:
-        return False
+        return False, True
     home = os.path.expanduser("~")
     roots = [os.path.join(home, r) for r in SRI_HOME_ROOTS]
     if ws:
         roots.append(os.path.join(ws, "work", "stimulus"))
+    roots += [os.path.realpath(r) for r in roots]
 
     def under(path):
         return any(path == r or path.startswith(r + os.sep) for r in roots)
 
-    if under(cwd):
-        return True
+    if under(cwd) or under(os.path.realpath(cwd)):
+        return True, True
     # A worktree can live anywhere; its common dir points back at the main checkout.
     if not os.path.isdir(cwd):
-        return False
+        return False, True
     import subprocess
 
     try:
@@ -182,13 +199,13 @@ def in_sri(cwd, ws):
             env={k: v for k, v in os.environ.items() if k not in GIT_ENV},
         )
     except Exception:
-        return False
+        return True, False
     g = p.stdout.strip() if p.returncode == 0 else ""
     if not g:
-        return False
+        return False, True  # not a git checkout, so not a worktree of one
     if not os.path.isabs(g):
         g = os.path.join(cwd, g)
-    return under(os.path.dirname(os.path.realpath(g)))
+    return under(os.path.dirname(os.path.realpath(g))), True
 
 
 def cron_view(cron):
@@ -250,8 +267,8 @@ class Session:
             if self.cwd in known:
                 self._sri = bool(known[self.cwd])
             else:
-                self._sri = in_sri(self.cwd, workspace())
-                if self.cache is not None and self.cwd:
+                self._sri, cacheable = in_sri(self.cwd, workspace())
+                if cacheable and self.cache is not None and self.cwd:
                     self.cache["sri"] = {self.cwd: self._sri}
         return self._sri
 
@@ -298,13 +315,23 @@ def on_stop(s):
         return
     if s.writer() is None:
         return
-    first = s.cache is None
+    # No snapshot of this session was ever recorded (no cache, or only a
+    # PostToolUse's): a cron found now may predate the hook.
+    first = s.cache is None or s.cache.get("digest") is None
     cache = s.start_cache()
     known = cache["crons"]
     live = {v["id"]: v for v in views}
     now = time.time()
     for cid, view in sorted(live.items()):
         if cid in known:
+            continue
+        if not view["recurring"]:
+            # A one-shot (ScheduleWakeup's, every turn of a self-paced /loop):
+            # the snapshot lists it and its fire is still correlated, but its
+            # own created/deleted pair would be three fsync'd writes per turn
+            # for a loop ORPHANED and EXPIRING never judge.
+            known[cid] = {k: view[k] for k in ("schedule", "recurring", "prompt_sha256")}
+            known[cid].update(created_event=None, seen_at=now)
             continue
         data = s.cron_data(view, view["_prompt"])
         data["via"] = "snapshot"
@@ -317,6 +344,9 @@ def on_stop(s):
         known[cid].update(created_event=event, seen_at=now)
     for cid in sorted(set(known) - set(live)):
         gone = known[cid]
+        if not gone.get("recurring") and not gone.get("created_event"):
+            del known[cid]  # a one-shot that fired: recorded by the snapshot alone
+            continue
         s.emit("loop.session.cron_deleted", s.subject(cid),
                {"via": "snapshot", "recurring": bool(gone.get("recurring")),
                 "prompt_sha256": gone.get("prompt_sha256", "")},
@@ -386,15 +416,14 @@ def on_prompt(s):
 
 
 def on_end(s):
-    cache = s.cache
-    if not cache:
-        return
+    # main() only calls this when the cache file exists; an unreadable one still
+    # means the session had a cron, so the end is recorded with crons unknown.
     if s.writer() is None:
         return
     reason = s.payload.get("reason")
     s.emit("loop.session.ended", "session:" + s.sid, {
         "reason": reason if isinstance(reason, str) else None,
-        "crons": sorted(cache["crons"]),
+        "crons": sorted(s.cache["crons"]) if s.cache else None,
     })
     s.cache = None
     try:
@@ -418,6 +447,8 @@ def main():
     sid = payload.get("session_id")
     if handler is None or not isinstance(sid, str) or not ID_RE.fullmatch(sid):
         return
+    if home_dir() is None:
+        return
     # The cheapest exit first: a prompt or a tool call in a session with no cache.
     if handler is on_prompt or handler is on_end:
         if not os.path.exists(cache_path(sid)):
@@ -434,8 +465,17 @@ def main():
             save_cache(sid, s.cache)
 
 
+def _deadline(signum, frame):
+    sys.stderr.write("session-loops-hook: gave up after %d s (stream lock held?)\n" % DEADLINE_S)
+    os._exit(0)
+
+
 if __name__ == "__main__":
     try:
+        import signal
+
+        signal.signal(signal.SIGALRM, _deadline)
+        signal.alarm(DEADLINE_S)
         main()
     except BaseException as exc:  # never break a session, whatever happened
         if not isinstance(exc, SystemExit) or exc.code not in (0, None):

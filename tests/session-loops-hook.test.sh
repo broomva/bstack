@@ -158,6 +158,72 @@ mkdir -p "$T/nowriter/hooks" && cp "$HOOK" "$T/nowriter/hooks/"
 check "a plugin root without the writer exits 0 and writes nothing" \
     [ "$( (cd "$T/neutral" && BROOMVA_HOME="$T/h6w" HOME="$T/home" python3 -I "$T/nowriter/hooks/session-loops-hook.py" < "$FX/04-stop-one-cron.json"; echo $?) )$(lines "$T/h6w")" = 00 ]
 
+# ── 7. P20 round 1 (BRO-2932): the cases a reviewer found the suite could miss ─
+# A one-shot (ScheduleWakeup's, every turn of a self-paced /loop) changes the
+# snapshot but writes no created/deleted pair of its own; its fire still counts.
+H7="$T/h7"
+ONESHOT='session_crons=[{"id":"w1","schedule":"5 14 8 10 *","recurring":false,"prompt":"wake up"}]'
+hook "$H7" "$(with "$FX/04-stop-one-cron.json" "$ONESHOT")" >/dev/null
+hook "$H7" "$(with "$FX/05-prompt-cron-fire.json" 'prompt="wake up"')" >/dev/null
+hook "$H7" "$FX/08-stop-no-crons.json" >/dev/null
+check "a one-shot writes snapshot, its fire, snapshot: no created/deleted pair" \
+    [ "$(types "$H7")" = "session.snapshot run.started session.snapshot" ]
+# Two crons sharing a prompt: the fire names both as candidates.
+H7b="$T/h7b"
+hook "$H7b" "$(with "$FX/04-stop-one-cron.json" 'session_crons=[{"id":"a1","schedule":"* * * * *","recurring":true,"prompt":"same"},{"id":"b2","schedule":"*/2 * * * *","recurring":true,"prompt":"same"}]')" >/dev/null
+hook "$H7b" "$(with "$FX/05-prompt-cron-fire.json" 'prompt="same"')" >/dev/null
+check "two crons with one prompt: the run lists both as candidates" [ "$(field "$H7b" 4 data.candidates)" = '["a1", "b2"]' ]
+# A PostToolUse in the first turn the hook sees creates the cache before any
+# snapshot: a cron that predates the hook is still only a lower bound.
+H7c="$T/h7c"
+hook "$H7c" "$(with "$FX/07-posttool-crondelete.json" 'tool_input={"id":"old00001"}' 'tool_response={"id":"old00001"}')" >/dev/null
+hook "$H7c" "$FX/04-stop-one-cron.json" >/dev/null
+check "no snapshot recorded yet: a cron found is a lower bound even with a cache" \
+    [ "$(field "$H7c" 2 type)$(field "$H7c" 2 data.created_at_lower_bound)" = '"loop.session.cron_created"true' ]
+# A corrupt cache: the cron is re-recorded as a lower bound (the adapter takes
+# the earliest cron_created per subject), and SessionEnd still records the end.
+H7d="$T/h7d"
+hook "$H7d" "$FX/03-posttool-croncreate.json" >/dev/null
+hook "$H7d" "$FX/04-stop-one-cron.json" >/dev/null
+printf 'not json' > "$H7d/cache/session-loops/53305082-37ff-47ed-b9aa-1b33ec806891.json"
+hook "$H7d" "$FX/04-stop-one-cron.json" >/dev/null
+check "a corrupt cache re-records the cron, marked a lower bound" \
+    [ "$(field "$H7d" 3 data.via)$(field "$H7d" 3 data.created_at_lower_bound)" = '"snapshot"true' ]
+printf 'not json' > "$H7d/cache/session-loops/53305082-37ff-47ed-b9aa-1b33ec806891.json"
+hook "$H7d" "$FX/09-session-end.json" >/dev/null
+check "SessionEnd over a corrupt cache records the end, crons unknown" \
+    [ "$(field "$H7d" 5 type)$(field "$H7d" 5 data.crons)" = '"loop.session.ended"null' ]
+check "verify ok" verify "$H7d"
+# A relative BROOMVA_HOME (the writer refuses it) must not land a cache in the repo.
+rc="$( (cd "$T/neutral" && env HOME="$T/home" BROOMVA_HOME=relhome python3 -I "$HOOK" < "$FX/04-stop-one-cron.json" 2>/dev/null; echo $?) )"
+check "a relative BROOMVA_HOME writes nothing into the session's cwd" [ "$rc$(ls -A "$T/neutral")" = 0 ]
+# git missing: SRI cannot be ruled out, so no prompt head, and the answer is not cached.
+H7e="$T/h7e"
+mkdir -p "$T/nogit" "$T/plain-cwd" && ln -sf "$(command -v python3)" "$T/nogit/python3"
+( cd "$T/neutral" && env PATH="$T/nogit" HOME="$T/home" BROOMVA_HOME="$H7e" \
+    "$T/nogit/python3" -I "$HOOK" < <(with "$FX/04-stop-one-cron.json" "cwd=\"$T/plain-cwd\"") )
+check "git unavailable: the cron is recorded as sri, without a head" \
+    [ "$(field "$H7e" 1 data.scope)$(field "$H7e" 1 data.prompt_head)" = '"sri"null' ]
+check "git unavailable: that answer is not cached" sh -c "! grep -q '\"sri\"' '$H7e/cache/session-loops/'*.json"
+# A writer stuck holding the stream lock: the hook gives up on its own deadline,
+# well inside hooks.json's 5 s timeout, and still exits 0.
+H7f="$T/h7f"
+mkdir -p "$H7f/locks"
+python3 -I -c '
+import fcntl, os, sys, time
+fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o600)
+fcntl.flock(fd, fcntl.LOCK_EX)
+open(sys.argv[2], "w").close()
+time.sleep(20)' "$H7f/locks/loops__session.lock" "$T/locked" &
+HOLDER=$!
+for _ in $(seq 1 50); do [ -f "$T/locked" ] && break; sleep 0.1; done
+t0=$(python3 -I -c 'import time; print(time.time())')
+rc="$(hook "$H7f" "$FX/04-stop-one-cron.json")"
+took=$(python3 -I -c "import time; print(int(time.time() - $t0))")
+kill "$HOLDER" 2>/dev/null; wait "$HOLDER" 2>/dev/null
+check "a held stream lock: exit 0 within the 3 s deadline (took ${took}s)" [ "$rc$((took < 5))" = 01 ]
+check "and says it gave up" grep -q 'gave up after 3 s' "$H7f.stderr"
+
 # ── 7. the wiring and the vendored writer ────────────────────────────────────
 check "hooks.json runs it on Stop, UserPromptSubmit, SessionEnd and PostToolUse Cron*" python3 -I -c '
 import json, sys

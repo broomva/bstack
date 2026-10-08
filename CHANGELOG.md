@@ -17,9 +17,11 @@ noticed. Nothing on disk had ever said the cron existed.
   - Stop → diffs `session_crons` against a per-session cache
     (`<BROOMVA_HOME>/cache/session-loops/<sid>.json`). It writes only when the set
     changed: `cron_created` / `cron_deleted` with `via: snapshot` for what no
-    PostToolUse saw (an expiry, a fired one-shot), then `loop.session.snapshot`.
-    When a cron is found on the hook's first sight of the session, it is marked
-    `created_at_lower_bound: true`.
+    PostToolUse saw (an expiry, a deletion the hook missed), then
+    `loop.session.snapshot`. A cron found before any snapshot of the session was
+    recorded is marked `created_at_lower_bound: true`. A one-shot (ScheduleWakeup's,
+    new on every turn of a self-paced `/loop`) appears in the snapshot only, with
+    no created/deleted pair of its own; its fire is still correlated.
   - UserPromptSubmit → `loop.run.started` when the prompt equals a cached cron's
     prompt. A cron fire carries no origin field, so equality is the correlation.
   - SessionEnd → `loop.session.ended`, then the cache is removed and caches older
@@ -37,21 +39,41 @@ noticed. Nothing on disk had ever said the cron existed.
   line and creates no cache file. A Stop whose cron set is unchanged compares one
   digest and exits.
 - **Never blocks.** Every path exits 0; an error is one stderr line. The hooks.json
-  command ends `|| true`.
-- **Budget, measured over 100 Stop events each** (hooks.json command, `sh -c`, M-series
-  Mac shared with other agents): bare `python3 -I -c pass` p95 24.7 ms; a session with
-  no cron p95 29.3 ms; one cron, unchanged p95 31.3 ms. Worst case, a cron set that
-  changes every turn (three fsync'd appends per Stop): p95 67.5 ms.
+  command ends `|| true`. The hook sets its own 3 s deadline (SIGALRM), under
+  hooks.json's 5 s timeout, because the writer's flock has no timeout and one stream
+  lock is shared by every session on the machine.
+- **Fails closed on SRI.** When git cannot answer (it is missing or timed out), the cwd
+  counts as SRI for that call, and the answer is not cached. A relative
+  `BROOMVA_HOME`, which the writer refuses, writes nothing, not even a cache inside
+  the session's repo.
+- **Budget, measured over 100 Stop events each** (the hooks.json command under `sh -c`,
+  on an M-series Mac shared with other agents; the bare-interpreter row is the floor
+  on that load):
+
+  | Stop event | p95 |
+  |---|---|
+  | bare `python3 -I -c pass` | 29.7 ms |
+  | session that never had a cron | 38.3 ms |
+  | one cron, unchanged | 34.8 ms |
+  | self-paced `/loop` (new one-shot every turn; one append) | 44.4 ms |
+  | recurring set changes every turn (three fsync'd appends) | 50.2 ms |
 - `scripts/broomva_home.py` is vendored byte-identical from
   broomva/workspace@71d3e647e (BRO-2917). `tests/session-loops-hook.test.sh` pins it
   by sha256, as BRO-2918 pinned `ask_ledger.py`. Importing the workspace checkout's
   copy would make every write depend on whichever branch that checkout is on.
 
-Tests: `tests/session-loops-hook.test.sh` (47 checks) replays payloads captured from a
+Tests: `tests/session-loops-hook.test.sh` (58 checks) replays payloads captured from a
 real interactive 2.1.280 session (`tests/fixtures/session-loops/`: CronCreate, one
-cron fire, CronDelete, /exit). It also covers the Stop-only diff, secret redaction
-(including a secret cut at character 120), SRI scope, malformed input, an unwritable
-home, and the pin. `broomva_home.py verify` passes over every stream the tests write.
+cron fire, CronDelete, /exit). It also covers:
+
+- the Stop-only diff, one-shots, and shared-prompt candidates;
+- secret redaction, including a secret cut at character 120;
+- SRI scope, including git being unavailable;
+- a corrupt cache, a relative home, an unwritable home, and a held stream lock;
+- the sha256 pin on the vendored writer.
+
+Reverting any of the P20 round-1 fixes turns its test red (7 of 7 mutants killed).
+`broomva_home.py verify` passes over every stream the tests write.
 `tests/hook-python-isolation.test.sh` drives all four registrations, and the mutation
 suite kills a missing `-I` on each one.
 
