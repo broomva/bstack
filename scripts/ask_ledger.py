@@ -21,11 +21,26 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import os
 import re
 import sys
 from pathlib import Path
 
-import yaml
+# hooks/ask-origin-stamp-hook.sh invokes this file with `python3 -I` (BRO-2652):
+# no cwd, script dir, PYTHONPATH or user site on sys.path, so a yaml.py planted
+# in the session's repo cannot replace the real module. -I also hides a PyYAML
+# installed with `pip install --user`, so on ImportError the user site is
+# APPENDED (never inserted first): the standard library and the interpreter's
+# own site-packages still win. See scripts/leverage-sensor.py for the same
+# pattern (BRO-2652 established it there first).
+try:
+    import yaml
+except ImportError:
+    import site
+    _user_site = site.getusersitepackages()
+    if isinstance(_user_site, str) and os.path.isdir(_user_site) and _user_site not in sys.path:
+        sys.path.append(_user_site)
+    import yaml
 
 CLASSES = {"credential", "authority", "decision", "artifact", "scope", "external"}
 # A blocking ask has NO default, which means silence stalls a lane. That is only
@@ -65,16 +80,26 @@ class LedgerError(Exception):
     pass
 
 
-def load(path: Path) -> dict:
+def _parse_ledger_text(path: Path, text: str) -> dict:
+    """The parse half of `load()`, taking text directly rather than re-reading the
+    file — so a caller that already holds an open, locked file descriptor (see
+    `stamp_origin`) parses the bytes it is holding instead of racing a second,
+    unlocked open against itself."""
     try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        raise LedgerError(f"no ledger at {path}")
+        data = yaml.safe_load(text)
     except yaml.YAMLError as e:
         raise LedgerError(f"{path}: unparseable YAML: {e}")
     if not isinstance(data, dict):
         raise LedgerError(f"{path}: top level must be a mapping")
     return data
+
+
+def load(path: Path) -> dict:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        raise LedgerError(f"no ledger at {path}")
+    return _parse_ledger_text(path, text)
 
 
 def sweep(path: Path) -> list[Path]:
@@ -592,6 +617,247 @@ def open_asks(ledger: dict) -> list[dict]:
     )
 
 
+# --- origin: the routing key, stamped at creation (BRO-2179 follow-up,
+# automated at write time by BRO-2918) ---------------------------------------
+# An ask ledger is git-tracked, so an identical copy of every ledger exists in
+# every worktree. Nothing about the FILE says which session raised the ask,
+# which means an answer has no address to go back to. Paseo exports
+# PASEO_AGENT_ID and PASEO_AGENT_CWD into every agent session; recording them
+# at ask-creation time is what turns "answer the ask" into a delivery rather
+# than a guess. hooks/ask-origin-stamp-hook.sh calls `stamp` automatically on
+# every Write/Edit of a workspace's .control/asks/*.yaml.
+#
+# The write is a line insert rather than a yaml.dump round-trip on purpose:
+# pyyaml does not preserve comments, and re-emitting reflows every folded
+# scalar in the file. These ledgers are reviewed as diffs, so a 3-line change
+# must read as one.
+_ID_LINE = re.compile(r"^(\s*)(-\s+)?id:\s*(.+?)\s*$")
+
+
+_TRAILING_COMMENT = re.compile(r"^(\S+)\s+#.*$")
+
+
+def _unquote_id(raw: str) -> str:
+    """Normalize the RAW text `_ID_LINE` captured after `id:` to what `load()`
+    actually parsed, so the two can be compared.
+
+    `_ID_LINE` is a line regex, not a YAML parser, so it captures everything up
+    to end-of-line verbatim. Three shapes round-trip differently through PyYAML
+    than through this regex: an id written quoted (`id: "A1"`) PARSES to the
+    unquoted `A1` that `load()` and `targets` hold; a plain scalar followed by a
+    trailing comment (`id: A1  # note`) PARSES to just `A1`, the comment never
+    part of the value; and the two COMBINED (`id: "A1"  # note`) need the
+    comment stripped FIRST — doing the quote-check first on the combined shape
+    compares `raw[-1]` (the comment's last character) against `raw[0]` (the
+    opening quote), which never match, so the quote strip silently no-ops and
+    the quotes survive into the "already stamped" comparison. Strip order is
+    therefore comment, then quotes, never the reverse — round 2 of P20 Stratum
+    B (bstack#130) reproduced this exact combined case after round 1 had only
+    covered the quote and the comment shapes separately. Ask ids are never
+    YAML-escaped internally (no embedded quotes or `#`), so both strips
+    round-trip exactly, in either order ON THEIR OWN — only the combination
+    is order-sensitive.
+    """
+    m = _TRAILING_COMMENT.match(raw)
+    if m:
+        raw = m.group(1)
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in ("\"", "'"):
+        return raw[1:-1]
+    return raw
+
+
+# VENDORED from broomva/workspace@ac84dd58e4f0863d2fc29c360a261098afa4cecb
+# scripts/ask_ledger.py: _routable, _strip_origin_blocks, stamp_origin,
+# _StrictLoader, _no_dupes, _check_stamp (through the line defining
+# _check_stamp below). No automated cross-repo check exists (unlike the
+# single-repo apikey_prefix identity test in broomva/workspace#933) because
+# that would need network access to another repo at test time; this comment
+# plus the sha256 pin in tests/test_ask_ledger.py are the manifest half of
+# that discipline instead.
+#
+# NOT byte-identical to ac84dd58e as of this comment: P20 Stratum B (bstack#130
+# round 1) reproduced two bugs in the pinned text itself — a quoted/commented
+# `id: "A1"` line silently failed to stamp while reporting success (fixed by
+# `_unquote_id`, applied at both `_ID_LINE`-match call sites below), and
+# concurrent stamps on the same ledger raced a lost update with no lock (fixed
+# by the `fcntl.flock` added around `stamp_origin`'s read-modify-write). Both
+# fixes were reported upstream for workspace's own copy; re-sync from whichever
+# SHA lands those fixes there too, and this note can then say byte-identical
+# again.
+def _routable(origin: object) -> bool:
+    """An origin the routers can address: a mapping with an `agent_id`. Maestro's
+    router (maestro-paseo control-asks.ts) reads only that key, and both readers
+    take a string or an id-less mapping as no origin at all."""
+    return isinstance(origin, dict) and bool(origin.get("agent_id"))
+
+
+def _strip_origin_blocks(lines: list[str], ids: set[str]) -> list[str]:
+    """Remove any `origin:` block already belonging to one of `ids`, so a re-stamp
+    replaces it instead of appending a second one. PyYAML silently keeps whichever
+    duplicate key comes LAST, so an unremoved old block would make the file read
+    as re-stamped while `load()` still returned the ORIGINAL session. (The write
+    is still checked before it lands — see `_check_stamp` — because this pass is
+    line-based and not every origin shape is one it can find.)
+
+    Tracks ask boundaries by indent, not by id value alone: an ask's `options:`
+    entries carry their own `- id: <option-id>` lines, which `_ID_LINE` also
+    matches. Only an id line at the same indent as the FIRST id line seen (the
+    ask list's own indent) is treated as entering a new ask; a deeper one is an
+    option and must not reset which ask's `origin:` we are looking for.
+    """
+    out: list[str] = []
+    i, n = 0, len(lines)
+    ask_indent_len: int | None = None
+    sibling_indent: str | None = None
+    while i < n:
+        line = lines[i]
+        stripped = line.rstrip("\n")
+        m = _ID_LINE.match(stripped)
+        if m:
+            # The key column, as stamp_origin measures it: `- id:` and a bare `id:` under it align.
+            this_indent_len = len(m.group(1)) + len(m.group(2) or "")
+            if ask_indent_len is None:
+                ask_indent_len = this_indent_len
+            if this_indent_len == ask_indent_len:
+                sibling_indent = (
+                    " " * (len(m.group(1)) + len(m.group(2) or ""))
+                    if _unquote_id(m.group(3)) in ids else None
+                )
+            out.append(line)
+            i += 1
+            continue
+        if sibling_indent is not None and stripped == f"{sibling_indent}origin:":
+            i += 1
+            while i < n:
+                inner = lines[i].rstrip("\n")
+                inner_indent = len(inner) - len(inner.lstrip(" "))
+                if inner.strip() and inner_indent <= len(sibling_indent):
+                    break
+                i += 1
+            continue
+        out.append(line)
+        i += 1
+    return out
+
+
+def stamp_origin(path: Path, ask_id: str | None, agent_id: str, cwd: str,
+                 provider: str, session: str, force: bool = False,
+                 claude_session: str = "") -> list[str]:
+    """Insert an `origin:` block under each targeted ask. Returns the ids stamped.
+
+    Targets every ask with no routable origin (any ask, with `force`). The edit is
+    line-based to keep the diff small, so it is checked before it is written: the
+    new text must parse to the old ledger with exactly the stamped asks' origins
+    changed. An origin shape the line edit cannot rewrite (flow style, a comment
+    on its line, keys after options) is refused with nothing written, never
+    reported as stamped while the old value stays (BRO-2918, P20 round 2).
+
+    Holds an exclusive advisory lock on `path` across the whole read-modify-
+    verify-write cycle (P20 Stratum B, round 1): two sessions both raising an ask
+    in the SAME ledger near-simultaneously used to read-modify-write on separate,
+    unlocked opens, a classic lost update — the second write silently clobbered
+    the first one's `origin:` block, and both calls reported success. `fcntl` is
+    POSIX-only; its absence (fail-open, not fail-closed, since every other write
+    path in this file already assumes POSIX) degrades to the prior unlocked
+    behaviour rather than raising, so a Windows import does not crash the hook.
+    """
+    try:
+        import fcntl
+    except ImportError:
+        fcntl = None
+
+    try:
+        fh = path.open("r+", encoding="utf-8")
+    except FileNotFoundError:
+        raise LedgerError(f"no ledger at {path}")
+    with fh:
+        if fcntl is not None:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+        text = fh.read()
+        ledger = _parse_ledger_text(path, text)
+        targets = {str(a.get("id")) for a in (ledger.get("asks") or [])
+                   if isinstance(a, dict) and (force or not _routable(a.get("origin")))}
+        if ask_id is not None:
+            if ask_id not in {str(a.get("id")) for a in (ledger.get("asks") or []) if isinstance(a, dict)}:
+                raise LedgerError(f"no ask '{ask_id}' in {path}")
+            targets &= {ask_id}
+
+        lines = _strip_origin_blocks(text.splitlines(keepends=True), targets)
+        out: list[str] = []
+        stamped: list[str] = []
+        for line in lines:
+            out.append(line)
+            m = _ID_LINE.match(line.rstrip("\n"))
+            this_id = _unquote_id(m.group(3)) if m else None
+            if not m or this_id not in targets:
+                continue
+            # The key column, not the leading whitespace: `  - id:` puts `id` at 4.
+            indent = " " * (len(m.group(1)) + len(m.group(2) or ""))
+            out.append(f"{indent}origin:\n")
+            for key, value in (("agent_id", agent_id), ("provider", provider),
+                               ("cwd", cwd), ("session", session),
+                               ("claude_session", claude_session)):
+                if value:
+                    out.append(f"{indent}  {key}: {value}\n")
+            stamped.append(this_id)
+
+        if stamped:
+            new_text = "".join(out)
+            _check_stamp(ledger, new_text, set(stamped), {
+                k: v for k, v in (("agent_id", agent_id), ("provider", provider), ("cwd", cwd),
+                                  ("session", session), ("claude_session", claude_session)) if v})
+            fh.seek(0)
+            fh.write(new_text)
+            fh.truncate()
+        # `with fh:` closes the descriptor on the way out, which releases the
+        # flock — unlocking must never happen before the write above lands.
+    return stamped
+
+
+class _StrictLoader(yaml.SafeLoader):
+    """PyYAML accepts duplicate mapping keys; every other consumer of these files
+    does not. Validating with a looser parser than the reader is how a file passes
+    here and fails there."""
+
+
+def _no_dupes(loader, node, deep=False):
+    mapping = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in mapping:
+            raise LedgerError(f"duplicate key {key!r} at line {key_node.start_mark.line + 1}")
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+_StrictLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_dupes)
+
+
+def _check_stamp(before: dict, text: str, stamped: set[str], origin: dict) -> None:
+    """Refuse a stamp whose text does not read back as `before` with only the
+    stamped asks' origins set to `origin`. Raises LedgerError; writes nothing."""
+    try:
+        after = yaml.load(text, Loader=_StrictLoader)
+    except (yaml.YAMLError, LedgerError) as e:  # _StrictLoader raises LedgerError on a duplicate key
+        raise LedgerError(f"stamp could not rewrite the origin cleanly ({e}); nothing was written. "
+                          "Replace that origin by hand.")
+
+    def without_origins(ledger: dict) -> dict:
+        asks = [{k: v for k, v in a.items() if not (k == "origin" and str(a.get("id")) in stamped)}
+                if isinstance(a, dict) else a for a in (ledger.get("asks") or [])]
+        return {**ledger, "asks": asks}
+
+    wrong = sorted(str(a.get("id")) for a in (after.get("asks") or []) if isinstance(a, dict)
+                   and str(a.get("id")) in stamped and a.get("origin") != origin) \
+        if isinstance(after, dict) else sorted(stamped)
+    if wrong or not isinstance(after, dict) or without_origins(after) != without_origins(before):
+        what = f"ask(s) {', '.join(wrong)}" if wrong else "another part of the ledger"
+        raise LedgerError(f"stamp could not rewrite {what} cleanly (an origin in a shape the line edit "
+                          "does not handle: flow style, a comment on its line, or keys after options); "
+                          "nothing was written. Replace that origin by hand.")
+# END VENDORED
+
+
 def _sweep_cmd(args) -> int:
     """`validate --all` / `open --all` over a directory of ledgers.
 
@@ -669,6 +935,17 @@ def main(argv: list[str] | None = None) -> int:
     d.add_argument("--flat", action="store_true",
                    help="least-confident first overall, ignoring verdict grouping")
 
+    st = sub.add_parser("stamp", help="record which Paseo session raised an ask, so an answer can be routed back")
+    st.add_argument("ledger", type=Path)
+    st.add_argument("--ask", default=None, help="stamp one ask; default is every unstamped ask")
+    st.add_argument("--agent-id", default=os.environ.get("PASEO_AGENT_ID", ""))
+    st.add_argument("--cwd", default=os.environ.get("PASEO_AGENT_CWD", os.getcwd()))
+    st.add_argument("--provider", default=os.environ.get("PASEO_AGENT_PROVIDER", "claude"))
+    st.add_argument("--session", default="", help="human-readable session name; defaults to the cwd basename")
+    st.add_argument("--claude-session", default=os.environ.get("CLAUDE_CODE_SESSION_ID", ""),
+                    help="the Claude transcript id, so an ended session can be found and resumed")
+    st.add_argument("--force", action="store_true", help="overwrite an existing origin")
+
     args = ap.parse_args(argv)
 
     if getattr(args, "all", False):
@@ -679,6 +956,24 @@ def main(argv: list[str] | None = None) -> int:
     except LedgerError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
+
+    if args.cmd == "stamp":
+        if not args.agent_id:
+            # Outside a Paseo session there is no id to record. Writing a blank one
+            # would be worse than writing none: it reads as "stamped" to the UI.
+            print("error: no --agent-id and PASEO_AGENT_ID is unset "
+                  "(run inside a Paseo session, or pass --agent-id)", file=sys.stderr)
+            return 2
+        session = args.session or Path(args.cwd).name
+        try:
+            stamped = stamp_origin(args.ledger, args.ask, args.agent_id, args.cwd,
+                                   args.provider, session, force=args.force,
+                                   claude_session=args.claude_session)
+        except LedgerError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        print(f"stamped {len(stamped)} ask(s): {', '.join(stamped) or '(none — already stamped)'}")
+        return 0
 
     if args.cmd == "validate":
         preauth = {}

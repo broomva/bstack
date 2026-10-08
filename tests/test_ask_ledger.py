@@ -932,3 +932,285 @@ def test_open_all_sends_a_broken_ledger_to_stderr_not_stdout(tmp_path, capsys):
     cap = capsys.readouterr()
     assert "A1" in cap.out
     assert "unparseable" in cap.err and "unparseable" not in cap.out
+
+
+# ── origin: the routing key, stamped at write time (BRO-2918) ───────────────
+#
+# This backports workspace's scripts/ask_ledger.py stamp_origin()/stamp (BRO-2179
+# follow-up) into bstack's bundled copy, so hooks/ask-origin-stamp-hook.sh has a
+# working `stamp` regardless of which repo it runs in — it always shells out to
+# THIS copy via ${CLAUDE_PLUGIN_ROOT}, never a workspace-local one.
+
+def test_stamp_origin_writes_agent_id_cwd_provider_and_session(tmp_path):
+    """The field names here are the contract with the reader
+    (apps/maestro-paseo/server/control-asks.ts reads origin.agent_id and
+    origin.cwd verbatim); a rename here breaks routing silently."""
+    from ask_ledger import stamp_origin, load
+    path = tmp_path / "arc.yaml"
+    path.write_text(yaml.safe_dump(ledger(asks=[ask(id="A1"), ask(id="A2")])))
+    stamped = stamp_origin(path, None, "agent-123", "/cwd/x", "claude", "my-session")
+    assert sorted(stamped) == ["A1", "A2"]
+    reloaded = load(path)
+    for a in reloaded["asks"]:
+        assert a["origin"] == {
+            "agent_id": "agent-123", "provider": "claude",
+            "cwd": "/cwd/x", "session": "my-session",
+        }
+
+
+def test_stamp_origin_skips_an_ask_that_already_has_one(tmp_path):
+    """Without the `not a.get('origin')` guard, every later `stamp` call (the
+    PostToolUse hook fires on every Edit, not just the first) would overwrite the
+    FIRST session's identity with whichever ran stamp most recently."""
+    from ask_ledger import stamp_origin, load
+    path = tmp_path / "arc.yaml"
+    path.write_text(yaml.safe_dump(ledger(asks=[ask(id="A1")])))
+    assert stamp_origin(path, None, "first-agent", "/cwd", "claude", "s1") == ["A1"]
+    assert stamp_origin(path, None, "second-agent", "/cwd", "claude", "s2") == []
+    assert load(path)["asks"][0]["origin"]["agent_id"] == "first-agent"
+
+
+def test_stamp_origin_force_overwrites_without_duplicating_the_key(tmp_path):
+    """`_strip_origin_blocks` removes the old block before inserting the new one.
+    Without it, `force` would insert a SECOND `origin:` key; PyYAML keeps the
+    LAST duplicate, which here would be the OLD block (written closer to id:),
+    so force would silently no-op from the reader's side."""
+    from ask_ledger import stamp_origin, load
+    path = tmp_path / "arc.yaml"
+    path.write_text(yaml.safe_dump(ledger(asks=[ask(id="A1")])))
+    stamp_origin(path, None, "first-agent", "/cwd", "claude", "s1")
+    stamp_origin(path, None, "second-agent", "/cwd", "claude", "s2", force=True)
+    assert load(path)["asks"][0]["origin"]["agent_id"] == "second-agent"
+    assert path.read_text().count("origin:") == 1
+
+
+def test_stamp_origin_force_does_not_confuse_an_option_id_with_the_ask_id(tmp_path):
+    """An ask's `options:` list carries its own `- id: <option-id>` lines, which
+    the same id-matching regex also matches. Without indent-scoping,
+    `_strip_origin_blocks` would stop tracking the target ask at the first
+    option id (never a member of `targets`) and never find the real block."""
+    from ask_ledger import stamp_origin, load
+    a = ask(id="A1", options=[
+        {"id": "develop", "label": "Develop", "consequence": "x", "reversible": True},
+        {"id": "park", "label": "Park", "consequence": "y", "reversible": True},
+    ])
+    path = tmp_path / "arc.yaml"
+    path.write_text(yaml.safe_dump(ledger(asks=[a])))
+    stamp_origin(path, None, "first-agent", "/cwd", "claude", "s1")
+    stamp_origin(path, None, "second-agent", "/cwd", "claude", "s2", force=True)
+    assert load(path)["asks"][0]["origin"]["agent_id"] == "second-agent"
+    assert path.read_text().count("origin:") == 1
+
+
+def test_stamp_origin_targets_one_ask_by_id(tmp_path):
+    from ask_ledger import stamp_origin, load
+    path = tmp_path / "arc.yaml"
+    path.write_text(yaml.safe_dump(ledger(asks=[ask(id="A1"), ask(id="A2")])))
+    assert stamp_origin(path, "A1", "agent-1", "/cwd", "claude", "s1") == ["A1"]
+    by_id = {a["id"]: a for a in load(path)["asks"]}
+    assert "origin" in by_id["A1"]
+    assert "origin" not in by_id["A2"]
+
+
+def test_stamp_origin_unknown_ask_id_raises(tmp_path):
+    from ask_ledger import stamp_origin, LedgerError
+    path = tmp_path / "arc.yaml"
+    path.write_text(yaml.safe_dump(ledger(asks=[ask(id="A1")])))
+    with pytest.raises(LedgerError):
+        stamp_origin(path, "NOPE", "agent-1", "/cwd", "claude", "s1")
+
+
+def test_stamp_cli_fails_closed_with_no_agent_id(tmp_path, monkeypatch):
+    """A blank agent_id written to the file would read as 'stamped' to the Asks
+    UI while carrying no address — worse than leaving the ask unstamped."""
+    monkeypatch.delenv("PASEO_AGENT_ID", raising=False)
+    path = tmp_path / "arc.yaml"
+    path.write_text(yaml.safe_dump(ledger(asks=[ask(id="A1")])))
+    assert main(["stamp", str(path)]) == 2
+
+
+def test_stamp_cli_defaults_session_to_cwd_basename(tmp_path, monkeypatch):
+    """The PostToolUse hook never passes --session; the whole mechanism depends
+    on this default resolving to something a human recognizes in the Asks UI."""
+    from ask_ledger import load
+    monkeypatch.setenv("PASEO_AGENT_ID", "env-agent")
+    monkeypatch.setenv("PASEO_AGENT_CWD", "/Users/broomva/.paseo/worktrees/x/my-worktree")
+    path = tmp_path / "arc.yaml"
+    path.write_text(yaml.safe_dump(ledger(asks=[ask(id="A1")])))
+    assert main(["stamp", str(path)]) == 0
+    origin = load(path)["asks"][0]["origin"]
+    assert origin["agent_id"] == "env-agent"
+    assert origin["session"] == "my-worktree"
+
+
+def test_stamp_cli_takes_the_claude_session_from_the_environment(tmp_path, monkeypatch):
+    from ask_ledger import load
+    monkeypatch.setenv("PASEO_AGENT_ID", "agent-1")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-9")
+    path = tmp_path / "arc.yaml"
+    path.write_text(yaml.safe_dump(ledger(asks=[ask(id="A1")])))
+    assert main(["stamp", str(path)]) == 0
+    assert load(path)["asks"][0]["origin"]["claude_session"] == "sess-9"
+
+
+# ── stamp reads its own write back (P20 round 2, ported from broomva/workspace
+# PR #932 — session rustic-rat-f6 found these mutating a real ledger) ───────
+
+_ORIGIN = {"agent_id": "new", "provider": "claude", "cwd": "/w", "session": "w"}
+_HEAD = "arc: demo\nopened: 2026-10-08T01:00Z\ntz: UTC\nlanes: [x]\nasks:\n"
+
+
+def _stamp(tmp_path, text, **kw):
+    from ask_ledger import stamp_origin
+    f = tmp_path / "l.yaml"
+    f.write_text(text)
+    return f, stamp_origin(f, kw.pop("ask_id", None), "new", "/w", "claude", "w", **kw)
+
+
+@pytest.mark.parametrize("origin_lines", [
+    "    origin: {agent_id: old}\n",                            # flow style
+    "    origin:  # stamped by hand\n      agent_id: old\n",    # a comment on its line
+])
+def test_a_shape_the_line_edit_cannot_rewrite_is_refused_with_nothing_written(tmp_path, origin_lines):
+    from ask_ledger import stamp_origin, LedgerError
+    text = _HEAD + "  - id: A1\n    ask: x\n" + origin_lines
+    f = tmp_path / "l.yaml"
+    f.write_text(text)
+    with pytest.raises(LedgerError, match="nothing was written"):
+        stamp_origin(f, "A1", "new", "/w", "claude", "w", force=True)
+    assert f.read_text() == text
+
+
+def test_an_origin_after_options_is_replaced(tmp_path):
+    """A PyYAML-sorted ask: options (with their own `- id:` lines) before origin.
+    An option's id line is deeper than the ask's, so it does not end the ask."""
+    text = (_HEAD + "  - ask: x\n    id: A1\n    options:\n    - id: ship\n    - id: hold\n"
+            "    origin:\n      agent_id: old\n  - ask: y\n    id: A2\n    origin:\n      agent_id: keep\n")
+    f, _ = _stamp(tmp_path, text, ask_id="A1", force=True)
+    asks = yaml.safe_load(f.read_text())["asks"]
+    assert (asks[0]["origin"], asks[1]["origin"], [o["id"] for o in asks[0]["options"]]) == (
+        _ORIGIN, {"agent_id": "keep"}, ["ship", "hold"])
+
+
+def test_forcing_one_ask_never_touches_another_asks_origin(tmp_path):
+    """Mixed shapes: A1 opens with `- id:`, A2 with another key."""
+    text = (_HEAD + "  - id: A1\n    origin:\n      agent_id: old\n"
+            "  - ask: y\n    id: A2\n    origin:\n      agent_id: keep\n")
+    f, stamped = _stamp(tmp_path, text, ask_id="A1", force=True)
+    asks = yaml.safe_load(f.read_text())["asks"]
+    assert (stamped, asks[0]["origin"], asks[1]["origin"]) == (["A1"], _ORIGIN, {"agent_id": "keep"})
+
+
+def test_an_origin_the_router_cannot_address_is_replaced_without_force(tmp_path):
+    text = _HEAD + "  - id: A1\n    ask: x\n    origin:\n      cwd: /x\n"
+    f, stamped = _stamp(tmp_path, text)
+    assert (stamped, yaml.safe_load(f.read_text())["asks"][0]["origin"]) == (["A1"], _ORIGIN)
+
+
+def test_an_option_sharing_the_asks_id_is_never_stamped(tmp_path):
+    """The line edit stamps under any `id: A1` line; the read-back refuses when
+    that lands inside another ask's options, leaving the file as it was."""
+    from ask_ledger import stamp_origin, LedgerError
+    text = (_HEAD + "  - id: A1\n    ask: x\n  - id: A2\n    ask: y\n    options:\n"
+            "      - id: A1\n        label: same name\n")
+    f = tmp_path / "l.yaml"
+    f.write_text(text)
+    with pytest.raises(LedgerError, match="nothing was written"):
+        stamp_origin(f, "A1", "new", "/w", "claude", "w")
+    assert f.read_text() == text
+
+
+# ── P20 Stratum B round 1 findings (bstack#130), reported upstream too ──────
+
+def test_a_quoted_id_line_is_still_matched_and_stamped(tmp_path):
+    """Regression: `_ID_LINE` captures the RAW text after `id:`, so `id: "A1"`
+    captured the literal `"A1"` (with quotes) while `targets` holds the PARSED,
+    unquoted `A1` from `load()`. The line never matched, `stamped` came back
+    empty, and the CLI printed '(none — already stamped)' for an ask that was
+    never actually touched — a silent false negative, not an error."""
+    from ask_ledger import stamp_origin, load
+    path = tmp_path / "arc.yaml"
+    path.write_text('arc: demo\nopened: "2026-10-07T00:00Z"\ntz: UTC\nlanes: [x]\n'
+                     'asks:\n  - id: "A1"\n    ask: x\n')
+    stamped = stamp_origin(path, None, "agent-1", "/w", "claude", "w")
+    assert stamped == ["A1"]
+    assert load(path)["asks"][0]["origin"]["agent_id"] == "agent-1"
+
+
+def test_an_id_with_a_trailing_comment_is_still_matched(tmp_path):
+    from ask_ledger import stamp_origin, load
+    path = tmp_path / "arc.yaml"
+    path.write_text("arc: demo\nopened: 2026-10-07\ntz: UTC\nlanes: [x]\n"
+                     "asks:\n  - id: A1  # the only ask\n    ask: x\n")
+    stamped = stamp_origin(path, None, "agent-1", "/w", "claude", "w")
+    assert stamped == ["A1"]
+    assert load(path)["asks"][0]["origin"]["agent_id"] == "agent-1"
+
+
+def test_a_quoted_id_with_a_trailing_comment_is_still_matched(tmp_path):
+    """Regression: P20 Stratum B round 2 reproduced this after round 1 fixed the
+    quote and the comment shapes separately. Doing the quote-check BEFORE
+    stripping the comment compares the opening quote against the comment's last
+    character, which never match, so the quotes silently survived into the
+    comparison against the parsed, unquoted id — the same 'stamped: []
+    misreported as already-stamped' failure, just one shape deeper."""
+    from ask_ledger import stamp_origin, load
+    path = tmp_path / "arc.yaml"
+    path.write_text("arc: demo\nopened: 2026-10-07\ntz: UTC\nlanes: [x]\n"
+                     'asks:\n  - id: "A1"  # the only ask\n    ask: x\n')
+    stamped = stamp_origin(path, None, "agent-1", "/w", "claude", "w")
+    assert stamped == ["A1"]
+    assert load(path)["asks"][0]["origin"]["agent_id"] == "agent-1"
+
+
+def test_concurrent_stamps_on_the_same_ledger_do_not_lose_a_write(tmp_path):
+    """Regression: stamp_origin did read-modify-write with no lock. Two sessions
+    stamping DIFFERENT asks in the SAME ledger near-simultaneously raced a
+    classic lost update — both callers reported success, but only the second
+    writer's change survived on disk. `fcntl.flock` around the whole
+    read-modify-verify-write cycle serializes the two calls instead."""
+    import threading
+    from ask_ledger import stamp_origin, load
+    path = tmp_path / "arc.yaml"
+    path.write_text("arc: demo\nopened: 2026-10-07\ntz: UTC\nlanes: [x]\n"
+                     "asks:\n  - id: A1\n    ask: x\n  - id: A2\n    ask: y\n")
+    results: dict[str, list[str]] = {}
+
+    def run(ask_id, agent_id):
+        results[ask_id] = stamp_origin(path, ask_id, agent_id, "/w", "claude", "w")
+
+    t1 = threading.Thread(target=run, args=("A1", "agent-1"))
+    t2 = threading.Thread(target=run, args=("A2", "agent-2"))
+    t1.start(); t2.start()
+    t1.join(); t2.join()
+
+    assert (results["A1"], results["A2"]) == (["A1"], ["A2"])
+    by_id = {a["id"]: a for a in load(path)["asks"]}
+    assert by_id["A1"]["origin"]["agent_id"] == "agent-1"
+    assert by_id["A2"]["origin"]["agent_id"] == "agent-2"
+
+
+# ── the vendored block must not drift unnoticed (BRO-2918) ──────────────────
+#
+# scripts/ask_ledger.py carries a cross-repo vendored copy of
+# broomva/workspace's _routable/_strip_origin_blocks/stamp_origin/
+# _StrictLoader/_no_dupes/_check_stamp (pinned to a source SHA in the comment
+# above `_routable`). A network fetch of the other repo at test time is the
+# wrong trade for CI (per rustic-rat-f6's review of bstack#130) — this is the
+# offline half instead: hash the block, and an edit to it without updating
+# this constant goes red here, with no network and no auth. An upstream
+# change is still only caught at a deliberate resync, not automatically.
+_VENDORED_BLOCK_SHA256 = "9b1c5f5a0fd3661b68fe0f7f47f3678f20daf8a967faa093d72f0e3f2f3ece15"
+
+
+def test_the_vendored_stamp_block_has_not_drifted_from_its_pinned_hash():
+    import hashlib
+    text = (Path(__file__).resolve().parent.parent / "scripts" / "ask_ledger.py").read_text(encoding="utf-8")
+    start = text.index("# VENDORED from broomva/workspace@")
+    end = text.index("# END VENDORED") + len("# END VENDORED")
+    digest = hashlib.sha256(text[start:end].encode("utf-8")).hexdigest()
+    assert digest == _VENDORED_BLOCK_SHA256, (
+        "the vendored stamp block changed without updating _VENDORED_BLOCK_SHA256 "
+        "(and the VENDORED-from comment's source SHA, if this was a deliberate resync "
+        f"from a newer broomva/workspace commit) — got {digest}"
+    )

@@ -51,6 +51,12 @@ cp -R "$SRC/scripts" "$SRC/hooks" "$SRC/bin" "$PLUG/"
 
 # The ambient session must not steer workspace resolution.
 unset BSTACK_WORKSPACE BROOMVA_WORKSPACE CLAUDE_PROJECT_DIR PYTHONPATH PYTHONHOME PYTHONSTARTUP
+# This suite is itself run from inside a live Paseo session (bootstrap, local dev).
+# askstamp_miss asserts behavior with NO agent id present; without this unset, the
+# ambient session's own PASEO_AGENT_ID would leak in via `run`'s `env` (which adds
+# to the inherited environment, it does not clear it) and the negative case would
+# silently test nothing.
+unset PASEO_AGENT_ID PASEO_AGENT_CWD PASEO_AGENT_PROVIDER CLAUDE_CODE_SESSION_ID
 
 # `gh` must exist for knowledge-wakeup to spawn the ship sensor; this stub never
 # answers, and the setpoints below name no repos, so nothing is fetched.
@@ -179,6 +185,7 @@ C_L3="$(hpy "$H/hookcmd.py" "$HJ" PreToolUse l3-stability-pretool-hook.sh)" || e
 C_LOCK="$(hpy "$H/hookcmd.py" "$HJ" PreToolUse test-lock-hook.sh)" || exit 1
 C_GATE="bash \"\${CLAUDE_PLUGIN_ROOT}/scripts/control-gate-hook.sh\""          # bootstrap-deployed
 C_BRIDGE="bash \"\${CLAUDE_PLUGIN_ROOT}/scripts/conversation-bridge-hook.sh\""  # bootstrap-deployed
+C_ASKSTAMP="$(hpy "$H/hookcmd.py" "$HJ" PostToolUse ask-origin-stamp-hook.sh)" || exit 1
 
 PASSNAME=A
 EXTRA_PYTHONPATH=""
@@ -267,9 +274,68 @@ drive() {
     local _i
     for _i in $(seq 1 100); do [ -f "$T/bridge-probe.json" ] && break; sleep 0.1; done
     note bridge_ws "probe: $(cat "$T/bridge-probe.json" 2>/dev/null || echo none)"
+
+    # PostToolUse — ask-origin-stamp runs `ask_ledger.py stamp` (its own `-I` site)
+    # on a Write of .control/asks/*.yaml when PASEO_AGENT_ID is set; a Write
+    # elsewhere, or no agent id, must leave the file untouched.
+    mkdir -p "$WS/.control/asks"
+    cat > "$WS/.control/asks/demo.yaml" <<'EOF'
+arc: demo
+opened: "2026-10-07T00:00Z"
+tz: UTC
+lanes: [x]
+asks:
+  - id: A1
+    ask: x
+    class: authority
+    gates: [x]
+    exhausted: ["read: x", "preauth: y"]
+    blocking: false
+    default: leave it
+    preanswerable: true
+    answered_at: null
+EOF
+    run askstamp_hit "$C_ASKSTAMP" \
+        "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$WS/.control/asks/demo.yaml\"}}" \
+        CLAUDE_PROJECT_DIR="$WS" PASEO_AGENT_ID=askstamp-agent PASEO_AGENT_CWD="$WS"
+    # grep, not a second python+yaml parse: a yaml-import path independent of
+    # ask_ledger.py's own user-site fallback would fail on a machine where PyYAML
+    # is only reachable through that fallback, which says nothing about the hook.
+    if grep -q "agent_id: askstamp-agent" "$WS/.control/asks/demo.yaml" 2>/dev/null; then
+        note askstamp_hit "origin: stamped"
+    else
+        note askstamp_hit "origin: not stamped"
+    fi
+
+    cat > "$WS/.control/asks/no_agent.yaml" <<'EOF'
+arc: demo
+opened: "2026-10-07T00:00Z"
+tz: UTC
+lanes: [x]
+asks:
+  - id: A1
+    ask: x
+    class: authority
+    gates: [x]
+    exhausted: ["read: x", "preauth: y"]
+    blocking: false
+    default: leave it
+    preanswerable: true
+    answered_at: null
+EOF
+    # No PASEO_AGENT_ID in `run`'s env (the top-of-file unset keeps the ambient
+    # session's own id, if this suite happens to run inside one, from leaking in).
+    run askstamp_miss "$C_ASKSTAMP" \
+        "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$WS/.control/asks/no_agent.yaml\"}}" \
+        CLAUDE_PROJECT_DIR="$WS"
+    if grep -q "^    origin:" "$WS/.control/asks/no_agent.yaml" 2>/dev/null; then
+        note askstamp_miss "origin: stamped"
+    else
+        note askstamp_miss "origin: not stamped"
+    fi
 }
 
-SCENARIOS="posture_bootstrap posture_quiet arc_block arc_handback arc_productive lock_edit lock_bash lock_allow l3_warn sensor_stop wakeup autoupdate gate_block gate_allow bridge bridge_ws"
+SCENARIOS="posture_bootstrap posture_quiet arc_block arc_handback arc_productive lock_edit lock_bash lock_allow l3_warn sensor_stop wakeup autoupdate gate_block gate_allow bridge bridge_ws askstamp_hit askstamp_miss"
 
 # ── pass A: no plants ────────────────────────────────────────────────────────
 PASSNAME=A; drive
@@ -298,6 +364,10 @@ expect "control-gate: force-push is blocked (exit 2)"         rcis gate_block 2
 expect "control-gate: ls is allowed (exit 0)"                 rcis gate_allow 0
 expect "conversation-bridge: the session stamp was written"   has bridge stdout "session S-bridge"
 expect "conversation-bridge: the workspace bridge script ran"  has bridge_ws stdout '"ran": true'
+expect "ask-origin-stamp: a Write with an agent id stamps origin.agent_id" \
+    has askstamp_hit stdout "origin: stamped"
+expect "ask-origin-stamp: no agent id leaves the ask untouched" \
+    has askstamp_miss stdout "origin: not stamped"
 if [ "$YAML_OK" = 1 ]; then
     expect "sensors: PyYAML loads under -I (policy not degraded)" \
         test -z "$(cat "$T/out/A/sensor_stop.stdout" "$T/out/A/wakeup.stdout" | grep -F 'could not load setpoints')"
