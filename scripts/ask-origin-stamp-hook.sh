@@ -77,7 +77,7 @@ fp = ti.get("file_path") or ti.get("filePath") or ""
 if not fp:
     sys.exit(0)
 
-# Repo-relative, exactly one path segment under asks/ — `.control/asks/<arc>.yaml`,
+# Repo-relative, exactly one path segment under asks/ — .control/asks/<arc>.yaml,
 # never a nested subdirectory (mirrors the shape of every shipped ledger).
 try:
     rel = os.path.relpath(fp, repo_root)

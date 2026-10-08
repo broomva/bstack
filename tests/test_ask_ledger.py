@@ -1120,6 +1120,60 @@ def test_an_option_sharing_the_asks_id_is_never_stamped(tmp_path):
     assert f.read_text() == text
 
 
+# ── P20 Stratum B round 1 findings (bstack#130), reported upstream too ──────
+
+def test_a_quoted_id_line_is_still_matched_and_stamped(tmp_path):
+    """Regression: `_ID_LINE` captures the RAW text after `id:`, so `id: "A1"`
+    captured the literal `"A1"` (with quotes) while `targets` holds the PARSED,
+    unquoted `A1` from `load()`. The line never matched, `stamped` came back
+    empty, and the CLI printed '(none — already stamped)' for an ask that was
+    never actually touched — a silent false negative, not an error."""
+    from ask_ledger import stamp_origin, load
+    path = tmp_path / "arc.yaml"
+    path.write_text('arc: demo\nopened: "2026-10-07T00:00Z"\ntz: UTC\nlanes: [x]\n'
+                     'asks:\n  - id: "A1"\n    ask: x\n')
+    stamped = stamp_origin(path, None, "agent-1", "/w", "claude", "w")
+    assert stamped == ["A1"]
+    assert load(path)["asks"][0]["origin"]["agent_id"] == "agent-1"
+
+
+def test_an_id_with_a_trailing_comment_is_still_matched(tmp_path):
+    from ask_ledger import stamp_origin, load
+    path = tmp_path / "arc.yaml"
+    path.write_text("arc: demo\nopened: 2026-10-07\ntz: UTC\nlanes: [x]\n"
+                     "asks:\n  - id: A1  # the only ask\n    ask: x\n")
+    stamped = stamp_origin(path, None, "agent-1", "/w", "claude", "w")
+    assert stamped == ["A1"]
+    assert load(path)["asks"][0]["origin"]["agent_id"] == "agent-1"
+
+
+def test_concurrent_stamps_on_the_same_ledger_do_not_lose_a_write(tmp_path):
+    """Regression: stamp_origin did read-modify-write with no lock. Two sessions
+    stamping DIFFERENT asks in the SAME ledger near-simultaneously raced a
+    classic lost update — both callers reported success, but only the second
+    writer's change survived on disk. `fcntl.flock` around the whole
+    read-modify-verify-write cycle serializes the two calls instead."""
+    import threading
+    from ask_ledger import stamp_origin, load
+    path = tmp_path / "arc.yaml"
+    path.write_text("arc: demo\nopened: 2026-10-07\ntz: UTC\nlanes: [x]\n"
+                     "asks:\n  - id: A1\n    ask: x\n  - id: A2\n    ask: y\n")
+    results: dict[str, list[str]] = {}
+
+    def run(ask_id, agent_id):
+        results[ask_id] = stamp_origin(path, ask_id, agent_id, "/w", "claude", "w")
+
+    t1 = threading.Thread(target=run, args=("A1", "agent-1"))
+    t2 = threading.Thread(target=run, args=("A2", "agent-2"))
+    t1.start(); t2.start()
+    t1.join(); t2.join()
+
+    assert (results["A1"], results["A2"]) == (["A1"], ["A2"])
+    by_id = {a["id"]: a for a in load(path)["asks"]}
+    assert by_id["A1"]["origin"]["agent_id"] == "agent-1"
+    assert by_id["A2"]["origin"]["agent_id"] == "agent-2"
+
+
 # ── the vendored block must not drift unnoticed (BRO-2918) ──────────────────
 #
 # scripts/ask_ledger.py carries a cross-repo vendored copy of
@@ -1130,7 +1184,7 @@ def test_an_option_sharing_the_asks_id_is_never_stamped(tmp_path):
 # offline half instead: hash the block, and an edit to it without updating
 # this constant goes red here, with no network and no auth. An upstream
 # change is still only caught at a deliberate resync, not automatically.
-_VENDORED_BLOCK_SHA256 = "bdd1b211669c53a80ded77e6088001a90d8a9bafc54285764673793efe949602"
+_VENDORED_BLOCK_SHA256 = "9b1c5f5a0fd3661b68fe0f7f47f3678f20daf8a967faa093d72f0e3f2f3ece15"
 
 
 def test_the_vendored_stamp_block_has_not_drifted_from_its_pinned_hash():
