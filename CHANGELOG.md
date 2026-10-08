@@ -15,8 +15,10 @@ reason "No session is named as the one that asked".
   file. Two bash-only filters (a `PASEO_AGENT_ID` check, then a substring check for
   `.control/asks/*.yaml` in the raw tool-call JSON) run before any subprocess is
   spawned, because this plugin loads at personal scope and the hook otherwise
-  fires on every Write/Edit/MultiEdit in every session, every repo. Never blocks:
-  a stamp failure is swallowed, the triggering edit is never touched.
+  fires on every Write/Edit/MultiEdit in every session, every repo. Never
+  blocks: PostToolUse exit codes gate nothing regardless, but `stamp`'s own
+  stderr (including a refusal — see below) is let through to the operator
+  rather than discarded; the triggering edit is never touched either way.
 - Backported `stamp_origin()`/`_strip_origin_blocks()`/the `stamp` CLI subcommand
   into bstack's own bundled `scripts/ask_ledger.py` (previously missing — bstack's
   copy had drifted well behind broomva/workspace's), so the hook has a working
@@ -28,7 +30,18 @@ reason "No session is named as the one that asked".
   one, so `load()` kept returning the ORIGINAL agent_id — force silently no-opped
   from every reader's side. `_strip_origin_blocks()` removes the old block first,
   scoped by indent so an ask's own `options: [{id: ...}]` entries can't be
-  mistaken for the ask's own id line.
+  mistaken for the ask's own id line. Round 2 (ported from broomva/workspace
+  PR #932) found `_strip_origin_blocks` was still wrong in six shapes — flow
+  style, a trailing comment on the `origin:` line, options sorted after
+  `origin:`, mixed key orders across asks — any of which could stamp one ask
+  while silently deleting another's origin. `stamp` now parses its own
+  write-back with a strict (no-duplicate-key) loader and writes only if the
+  result equals the old ledger with exactly the targeted asks' origins
+  changed; otherwise it raises `LedgerError` and writes nothing. Plain `stamp`
+  (no `--force`) now also replaces an origin lacking `agent_id` — only that key
+  is routable (Maestro's router reads it, not `agentId`) — so a prior
+  partial/malformed stamp self-heals on the next write instead of looking
+  "already stamped" forever.
 - `import yaml` now falls back to appending the user site-packages directory on
   `ImportError`, matching `leverage-sensor.py`'s existing pattern, so the hook can
   invoke `ask_ledger.py` under `python3 -I` (BRO-2652 isolation) without needing a

@@ -624,11 +624,20 @@ def open_asks(ledger: dict) -> list[dict]:
 _ID_LINE = re.compile(r"^(\s*)(-\s+)?id:\s*(.+?)\s*$")
 
 
+def _routable(origin: object) -> bool:
+    """An origin the routers can address: a mapping with an `agent_id`. Maestro's
+    router (maestro-paseo control-asks.ts) reads only that key, and both readers
+    take a string or an id-less mapping as no origin at all."""
+    return isinstance(origin, dict) and bool(origin.get("agent_id"))
+
+
 def _strip_origin_blocks(lines: list[str], ids: set[str]) -> list[str]:
-    """Remove any `origin:` block already belonging to one of `ids`, so a forced
-    re-stamp replaces it instead of appending a second one. PyYAML silently keeps
-    whichever duplicate key comes LAST, so an unremoved old block would make the
-    file read as re-stamped while `load()` still returned the ORIGINAL session.
+    """Remove any `origin:` block already belonging to one of `ids`, so a re-stamp
+    replaces it instead of appending a second one. PyYAML silently keeps whichever
+    duplicate key comes LAST, so an unremoved old block would make the file read
+    as re-stamped while `load()` still returned the ORIGINAL session. (The write
+    is still checked before it lands — see `_check_stamp` — because this pass is
+    line-based and not every origin shape is one it can find.)
 
     Tracks ask boundaries by indent, not by id value alone: an ask's `options:`
     entries carry their own `- id: <option-id>` lines, which `_ID_LINE` also
@@ -645,7 +654,8 @@ def _strip_origin_blocks(lines: list[str], ids: set[str]) -> list[str]:
         stripped = line.rstrip("\n")
         m = _ID_LINE.match(stripped)
         if m:
-            this_indent_len = len(m.group(1))
+            # The key column, as stamp_origin measures it: `- id:` and a bare `id:` under it align.
+            this_indent_len = len(m.group(1)) + len(m.group(2) or "")
             if ask_indent_len is None:
                 ask_indent_len = this_indent_len
             if this_indent_len == ask_indent_len:
@@ -673,18 +683,25 @@ def _strip_origin_blocks(lines: list[str], ids: set[str]) -> list[str]:
 def stamp_origin(path: Path, ask_id: str | None, agent_id: str, cwd: str,
                  provider: str, session: str, force: bool = False,
                  claude_session: str = "") -> list[str]:
-    """Insert an `origin:` block under each targeted ask. Returns the ids stamped."""
+    """Insert an `origin:` block under each targeted ask. Returns the ids stamped.
+
+    Targets every ask with no routable origin (any ask, with `force`). The edit is
+    line-based to keep the diff small, so it is checked before it is written: the
+    new text must parse to the old ledger with exactly the stamped asks' origins
+    changed. An origin shape the line edit cannot rewrite (flow style, a comment
+    on its line, keys after options) is refused with nothing written, never
+    reported as stamped while the old value stays (BRO-2918, P20 round 2).
+    """
     ledger = load(path)
     targets = {str(a.get("id")) for a in (ledger.get("asks") or [])
-               if isinstance(a, dict) and (force or not a.get("origin"))}
+               if isinstance(a, dict) and (force or not _routable(a.get("origin")))}
     if ask_id is not None:
         if ask_id not in {str(a.get("id")) for a in (ledger.get("asks") or []) if isinstance(a, dict)}:
             raise LedgerError(f"no ask '{ask_id}' in {path}")
         targets &= {ask_id}
 
     lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
-    if force:
-        lines = _strip_origin_blocks(lines, targets)
+    lines = _strip_origin_blocks(lines, targets)
     out: list[str] = []
     stamped: list[str] = []
     for line in lines:
@@ -703,8 +720,55 @@ def stamp_origin(path: Path, ask_id: str | None, agent_id: str, cwd: str,
         stamped.append(m.group(3))
 
     if stamped:
-        path.write_text("".join(out), encoding="utf-8")
+        text = "".join(out)
+        _check_stamp(ledger, text, set(stamped), {
+            k: v for k, v in (("agent_id", agent_id), ("provider", provider), ("cwd", cwd),
+                              ("session", session), ("claude_session", claude_session)) if v})
+        path.write_text(text, encoding="utf-8")
     return stamped
+
+
+class _StrictLoader(yaml.SafeLoader):
+    """PyYAML accepts duplicate mapping keys; every other consumer of these files
+    does not. Validating with a looser parser than the reader is how a file passes
+    here and fails there."""
+
+
+def _no_dupes(loader, node, deep=False):
+    mapping = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in mapping:
+            raise LedgerError(f"duplicate key {key!r} at line {key_node.start_mark.line + 1}")
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+_StrictLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_dupes)
+
+
+def _check_stamp(before: dict, text: str, stamped: set[str], origin: dict) -> None:
+    """Refuse a stamp whose text does not read back as `before` with only the
+    stamped asks' origins set to `origin`. Raises LedgerError; writes nothing."""
+    try:
+        after = yaml.load(text, Loader=_StrictLoader)
+    except (yaml.YAMLError, LedgerError) as e:  # _StrictLoader raises LedgerError on a duplicate key
+        raise LedgerError(f"stamp could not rewrite the origin cleanly ({e}); nothing was written. "
+                          "Replace that origin by hand.")
+
+    def without_origins(ledger: dict) -> dict:
+        asks = [{k: v for k, v in a.items() if not (k == "origin" and str(a.get("id")) in stamped)}
+                if isinstance(a, dict) else a for a in (ledger.get("asks") or [])]
+        return {**ledger, "asks": asks}
+
+    wrong = sorted(str(a.get("id")) for a in (after.get("asks") or []) if isinstance(a, dict)
+                   and str(a.get("id")) in stamped and a.get("origin") != origin) \
+        if isinstance(after, dict) else sorted(stamped)
+    if wrong or not isinstance(after, dict) or without_origins(after) != without_origins(before):
+        what = f"ask(s) {', '.join(wrong)}" if wrong else "another part of the ledger"
+        raise LedgerError(f"stamp could not rewrite {what} cleanly (an origin in a shape the line edit "
+                          "does not handle: flow style, a comment on its line, or keys after options); "
+                          "nothing was written. Replace that origin by hand.")
 
 
 def _sweep_cmd(args) -> int:

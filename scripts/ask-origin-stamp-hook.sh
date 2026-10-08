@@ -18,10 +18,14 @@
 # Only a call that survives both spawns python3, which parses the JSON
 # properly and re-checks the exact path before writing anything.
 #
-# Never blocks: PostToolUse here is advisory. A stamp failure (malformed
-# ledger, no yaml module, anything) is swallowed and the edit the user just
-# made is never undone or flagged — this hook only ever adds an `origin:`
-# block, it never rejects the edit that triggered it.
+# Never blocks: PostToolUse exit codes do not gate anything (the tool call
+# already happened), and this hook always exits 0 regardless. But `stamp` can
+# now legitimately refuse a write it cannot do safely — a hand-written origin
+# in a shape its line-based edit cannot verify (flow style, a comment on its
+# line, keys after options) makes it raise and write nothing rather than guess
+# (BRO-2918 P20 round 2) — so stderr is let through to the hook's own stderr
+# (visible to the operator per Claude Code's hook-output capture) instead of
+# being discarded; the edit that triggered this hook is never touched either way.
 set -uo pipefail
 
 INPUT="$(cat 2>/dev/null || echo '{}')"
@@ -91,5 +95,5 @@ PYEOF
 [ -n "$FILE_PATH" ] || exit 0
 [ -f "$FILE_PATH" ] || exit 0
 
-python3 -I "$LEDGER_PY" stamp "$FILE_PATH" >/dev/null 2>&1
+python3 -I "$LEDGER_PY" stamp "$FILE_PATH" >/dev/null
 exit 0

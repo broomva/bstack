@@ -1051,3 +1051,70 @@ def test_stamp_cli_takes_the_claude_session_from_the_environment(tmp_path, monke
     path.write_text(yaml.safe_dump(ledger(asks=[ask(id="A1")])))
     assert main(["stamp", str(path)]) == 0
     assert load(path)["asks"][0]["origin"]["claude_session"] == "sess-9"
+
+
+# ── stamp reads its own write back (P20 round 2, ported from broomva/workspace
+# PR #932 — session rustic-rat-f6 found these mutating a real ledger) ───────
+
+_ORIGIN = {"agent_id": "new", "provider": "claude", "cwd": "/w", "session": "w"}
+_HEAD = "arc: demo\nopened: 2026-10-08T01:00Z\ntz: UTC\nlanes: [x]\nasks:\n"
+
+
+def _stamp(tmp_path, text, **kw):
+    from ask_ledger import stamp_origin
+    f = tmp_path / "l.yaml"
+    f.write_text(text)
+    return f, stamp_origin(f, kw.pop("ask_id", None), "new", "/w", "claude", "w", **kw)
+
+
+@pytest.mark.parametrize("origin_lines", [
+    "    origin: {agent_id: old}\n",                            # flow style
+    "    origin:  # stamped by hand\n      agent_id: old\n",    # a comment on its line
+])
+def test_a_shape_the_line_edit_cannot_rewrite_is_refused_with_nothing_written(tmp_path, origin_lines):
+    from ask_ledger import stamp_origin, LedgerError
+    text = _HEAD + "  - id: A1\n    ask: x\n" + origin_lines
+    f = tmp_path / "l.yaml"
+    f.write_text(text)
+    with pytest.raises(LedgerError, match="nothing was written"):
+        stamp_origin(f, "A1", "new", "/w", "claude", "w", force=True)
+    assert f.read_text() == text
+
+
+def test_an_origin_after_options_is_replaced(tmp_path):
+    """A PyYAML-sorted ask: options (with their own `- id:` lines) before origin.
+    An option's id line is deeper than the ask's, so it does not end the ask."""
+    text = (_HEAD + "  - ask: x\n    id: A1\n    options:\n    - id: ship\n    - id: hold\n"
+            "    origin:\n      agent_id: old\n  - ask: y\n    id: A2\n    origin:\n      agent_id: keep\n")
+    f, _ = _stamp(tmp_path, text, ask_id="A1", force=True)
+    asks = yaml.safe_load(f.read_text())["asks"]
+    assert (asks[0]["origin"], asks[1]["origin"], [o["id"] for o in asks[0]["options"]]) == (
+        _ORIGIN, {"agent_id": "keep"}, ["ship", "hold"])
+
+
+def test_forcing_one_ask_never_touches_another_asks_origin(tmp_path):
+    """Mixed shapes: A1 opens with `- id:`, A2 with another key."""
+    text = (_HEAD + "  - id: A1\n    origin:\n      agent_id: old\n"
+            "  - ask: y\n    id: A2\n    origin:\n      agent_id: keep\n")
+    f, stamped = _stamp(tmp_path, text, ask_id="A1", force=True)
+    asks = yaml.safe_load(f.read_text())["asks"]
+    assert (stamped, asks[0]["origin"], asks[1]["origin"]) == (["A1"], _ORIGIN, {"agent_id": "keep"})
+
+
+def test_an_origin_the_router_cannot_address_is_replaced_without_force(tmp_path):
+    text = _HEAD + "  - id: A1\n    ask: x\n    origin:\n      cwd: /x\n"
+    f, stamped = _stamp(tmp_path, text)
+    assert (stamped, yaml.safe_load(f.read_text())["asks"][0]["origin"]) == (["A1"], _ORIGIN)
+
+
+def test_an_option_sharing_the_asks_id_is_never_stamped(tmp_path):
+    """The line edit stamps under any `id: A1` line; the read-back refuses when
+    that lands inside another ask's options, leaving the file as it was."""
+    from ask_ledger import stamp_origin, LedgerError
+    text = (_HEAD + "  - id: A1\n    ask: x\n  - id: A2\n    ask: y\n    options:\n"
+            "      - id: A1\n        label: same name\n")
+    f = tmp_path / "l.yaml"
+    f.write_text(text)
+    with pytest.raises(LedgerError, match="nothing was written"):
+        stamp_origin(f, "A1", "new", "/w", "claude", "w")
+    assert f.read_text() == text

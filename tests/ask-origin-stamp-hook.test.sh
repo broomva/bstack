@@ -132,6 +132,37 @@ else
     fail "origin: block count should be 1" "got $count"
 fi
 
+# ── 7. `stamp` can refuse and exit 2 (a shape its line edit can't verify) — the
+# hook must still exit 0 and the untouched original edit must still stand ──
+cat > "$TW/.control/asks/flow.yaml" <<'EOF'
+arc: demo
+opened: "2026-10-07T00:00Z"
+tz: America/Bogota
+lanes: [gate]
+asks:
+  - id: A1
+    ask: "flow-style origin, which the line edit cannot rewrite"
+    class: authority
+    gates: [gate]
+    exhausted: ["read: x", "preauth: y"]
+    blocking: false
+    default: "leave it"
+    preanswerable: true
+    answered_at: null
+    origin: {cwd: /old}
+EOF
+# No agent_id -> not routable -> `stamp` targets it even without --force (the
+# hook never passes --force); the flow-style shape is what makes it unverifiable.
+before=$(md5 -q "$TW/.control/asks/flow.yaml" 2>/dev/null || md5sum "$TW/.control/asks/flow.yaml" | cut -d' ' -f1)
+code=$(printf '%s' "$(tool_json Edit "$TW/.control/asks/flow.yaml")" \
+    | PASEO_AGENT_ID=new-agent CLAUDE_PROJECT_DIR="$TW" CLAUDE_PLUGIN_ROOT="$REPO" bash "$HOOK"; echo $?)
+after=$(md5 -q "$TW/.control/asks/flow.yaml" 2>/dev/null || md5sum "$TW/.control/asks/flow.yaml" | cut -d' ' -f1)
+if [ "$code" = "0" ] && [ "$before" = "$after" ]; then
+    pass "stamp's internal refusal (exit 2, nothing written) never surfaces as a hook block"
+else
+    fail "a stamp refusal must still leave the hook exit 0 and the file untouched" "exit=$code"
+fi
+
 echo ""
 echo "── ask-origin-stamp-hook: $PASS passed, $FAIL failed ──"
 if [ "$FAIL" -gt 0 ]; then
