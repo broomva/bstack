@@ -1,0 +1,22 @@
+{
+ "cwd": "/private/tmp/bro2932-scratch",
+ "duration_ms": 0,
+ "hook_event_name": "PostToolUse",
+ "permission_mode": "bypassPermissions",
+ "prompt_id": "939cad2e-6169-413b-9129-1aca12cc7b27",
+ "session_id": "53305082-37ff-47ed-b9aa-1b33ec806891",
+ "tool_input": {
+  "cron": "* * * * *",
+  "prompt": "bro2932 smoke tick: reply only with the word OK",
+  "recurring": true
+ },
+ "tool_name": "CronCreate",
+ "tool_response": {
+  "durable": false,
+  "humanSchedule": "Every minute",
+  "id": "25b1e2a5",
+  "recurring": true
+ },
+ "tool_use_id": "toolu_01L57eEVe1617iLT9nDQB5m7",
+ "transcript_path": "/Users/operator/.claude/projects/-private-tmp-bro2932-scratch/53305082-37ff-47ed-b9aa-1b33ec806891.jsonl"
+}

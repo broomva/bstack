@@ -1,0 +1,17 @@
+{
+ "cwd": "/private/tmp/bro2932-scratch",
+ "duration_ms": 0,
+ "hook_event_name": "PostToolUse",
+ "permission_mode": "bypassPermissions",
+ "prompt_id": "6d34da00-bf4f-4596-a146-cbdb9a53b068",
+ "session_id": "53305082-37ff-47ed-b9aa-1b33ec806891",
+ "tool_input": {
+  "id": "25b1e2a5"
+ },
+ "tool_name": "CronDelete",
+ "tool_response": {
+  "id": "25b1e2a5"
+ },
+ "tool_use_id": "toolu_014PpW7MYaeYGreCcRLJgGng",
+ "transcript_path": "/Users/operator/.claude/projects/-private-tmp-bro2932-scratch/53305082-37ff-47ed-b9aa-1b33ec806891.jsonl"
+}

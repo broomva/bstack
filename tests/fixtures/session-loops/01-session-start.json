@@ -1,0 +1,8 @@
+{
+ "cwd": "/private/tmp/bro2932-scratch",
+ "hook_event_name": "SessionStart",
+ "model": "claude-haiku-4-5-20251001",
+ "session_id": "53305082-37ff-47ed-b9aa-1b33ec806891",
+ "source": "startup",
+ "transcript_path": "/Users/operator/.claude/projects/-private-tmp-bro2932-scratch/53305082-37ff-47ed-b9aa-1b33ec806891.jsonl"
+}
