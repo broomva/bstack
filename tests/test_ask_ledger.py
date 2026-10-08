@@ -932,3 +932,122 @@ def test_open_all_sends_a_broken_ledger_to_stderr_not_stdout(tmp_path, capsys):
     cap = capsys.readouterr()
     assert "A1" in cap.out
     assert "unparseable" in cap.err and "unparseable" not in cap.out
+
+
+# ── origin: the routing key, stamped at write time (BRO-2918) ───────────────
+#
+# This backports workspace's scripts/ask_ledger.py stamp_origin()/stamp (BRO-2179
+# follow-up) into bstack's bundled copy, so hooks/ask-origin-stamp-hook.sh has a
+# working `stamp` regardless of which repo it runs in — it always shells out to
+# THIS copy via ${CLAUDE_PLUGIN_ROOT}, never a workspace-local one.
+
+def test_stamp_origin_writes_agent_id_cwd_provider_and_session(tmp_path):
+    """The field names here are the contract with the reader
+    (apps/maestro-paseo/server/control-asks.ts reads origin.agent_id and
+    origin.cwd verbatim); a rename here breaks routing silently."""
+    from ask_ledger import stamp_origin, load
+    path = tmp_path / "arc.yaml"
+    path.write_text(yaml.safe_dump(ledger(asks=[ask(id="A1"), ask(id="A2")])))
+    stamped = stamp_origin(path, None, "agent-123", "/cwd/x", "claude", "my-session")
+    assert sorted(stamped) == ["A1", "A2"]
+    reloaded = load(path)
+    for a in reloaded["asks"]:
+        assert a["origin"] == {
+            "agent_id": "agent-123", "provider": "claude",
+            "cwd": "/cwd/x", "session": "my-session",
+        }
+
+
+def test_stamp_origin_skips_an_ask_that_already_has_one(tmp_path):
+    """Without the `not a.get('origin')` guard, every later `stamp` call (the
+    PostToolUse hook fires on every Edit, not just the first) would overwrite the
+    FIRST session's identity with whichever ran stamp most recently."""
+    from ask_ledger import stamp_origin, load
+    path = tmp_path / "arc.yaml"
+    path.write_text(yaml.safe_dump(ledger(asks=[ask(id="A1")])))
+    assert stamp_origin(path, None, "first-agent", "/cwd", "claude", "s1") == ["A1"]
+    assert stamp_origin(path, None, "second-agent", "/cwd", "claude", "s2") == []
+    assert load(path)["asks"][0]["origin"]["agent_id"] == "first-agent"
+
+
+def test_stamp_origin_force_overwrites_without_duplicating_the_key(tmp_path):
+    """`_strip_origin_blocks` removes the old block before inserting the new one.
+    Without it, `force` would insert a SECOND `origin:` key; PyYAML keeps the
+    LAST duplicate, which here would be the OLD block (written closer to id:),
+    so force would silently no-op from the reader's side."""
+    from ask_ledger import stamp_origin, load
+    path = tmp_path / "arc.yaml"
+    path.write_text(yaml.safe_dump(ledger(asks=[ask(id="A1")])))
+    stamp_origin(path, None, "first-agent", "/cwd", "claude", "s1")
+    stamp_origin(path, None, "second-agent", "/cwd", "claude", "s2", force=True)
+    assert load(path)["asks"][0]["origin"]["agent_id"] == "second-agent"
+    assert path.read_text().count("origin:") == 1
+
+
+def test_stamp_origin_force_does_not_confuse_an_option_id_with_the_ask_id(tmp_path):
+    """An ask's `options:` list carries its own `- id: <option-id>` lines, which
+    the same id-matching regex also matches. Without indent-scoping,
+    `_strip_origin_blocks` would stop tracking the target ask at the first
+    option id (never a member of `targets`) and never find the real block."""
+    from ask_ledger import stamp_origin, load
+    a = ask(id="A1", options=[
+        {"id": "develop", "label": "Develop", "consequence": "x", "reversible": True},
+        {"id": "park", "label": "Park", "consequence": "y", "reversible": True},
+    ])
+    path = tmp_path / "arc.yaml"
+    path.write_text(yaml.safe_dump(ledger(asks=[a])))
+    stamp_origin(path, None, "first-agent", "/cwd", "claude", "s1")
+    stamp_origin(path, None, "second-agent", "/cwd", "claude", "s2", force=True)
+    assert load(path)["asks"][0]["origin"]["agent_id"] == "second-agent"
+    assert path.read_text().count("origin:") == 1
+
+
+def test_stamp_origin_targets_one_ask_by_id(tmp_path):
+    from ask_ledger import stamp_origin, load
+    path = tmp_path / "arc.yaml"
+    path.write_text(yaml.safe_dump(ledger(asks=[ask(id="A1"), ask(id="A2")])))
+    assert stamp_origin(path, "A1", "agent-1", "/cwd", "claude", "s1") == ["A1"]
+    by_id = {a["id"]: a for a in load(path)["asks"]}
+    assert "origin" in by_id["A1"]
+    assert "origin" not in by_id["A2"]
+
+
+def test_stamp_origin_unknown_ask_id_raises(tmp_path):
+    from ask_ledger import stamp_origin, LedgerError
+    path = tmp_path / "arc.yaml"
+    path.write_text(yaml.safe_dump(ledger(asks=[ask(id="A1")])))
+    with pytest.raises(LedgerError):
+        stamp_origin(path, "NOPE", "agent-1", "/cwd", "claude", "s1")
+
+
+def test_stamp_cli_fails_closed_with_no_agent_id(tmp_path, monkeypatch):
+    """A blank agent_id written to the file would read as 'stamped' to the Asks
+    UI while carrying no address — worse than leaving the ask unstamped."""
+    monkeypatch.delenv("PASEO_AGENT_ID", raising=False)
+    path = tmp_path / "arc.yaml"
+    path.write_text(yaml.safe_dump(ledger(asks=[ask(id="A1")])))
+    assert main(["stamp", str(path)]) == 2
+
+
+def test_stamp_cli_defaults_session_to_cwd_basename(tmp_path, monkeypatch):
+    """The PostToolUse hook never passes --session; the whole mechanism depends
+    on this default resolving to something a human recognizes in the Asks UI."""
+    from ask_ledger import load
+    monkeypatch.setenv("PASEO_AGENT_ID", "env-agent")
+    monkeypatch.setenv("PASEO_AGENT_CWD", "/Users/broomva/.paseo/worktrees/x/my-worktree")
+    path = tmp_path / "arc.yaml"
+    path.write_text(yaml.safe_dump(ledger(asks=[ask(id="A1")])))
+    assert main(["stamp", str(path)]) == 0
+    origin = load(path)["asks"][0]["origin"]
+    assert origin["agent_id"] == "env-agent"
+    assert origin["session"] == "my-worktree"
+
+
+def test_stamp_cli_takes_the_claude_session_from_the_environment(tmp_path, monkeypatch):
+    from ask_ledger import load
+    monkeypatch.setenv("PASEO_AGENT_ID", "agent-1")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-9")
+    path = tmp_path / "arc.yaml"
+    path.write_text(yaml.safe_dump(ledger(asks=[ask(id="A1")])))
+    assert main(["stamp", str(path)]) == 0
+    assert load(path)["asks"][0]["origin"]["claude_session"] == "sess-9"

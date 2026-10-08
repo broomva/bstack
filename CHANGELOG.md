@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.43.0 — 2026-10-07
+
+### feat(hooks): ask-origin-stamp — every ask names its asker at write time (BRO-2918)
+
+`ask_ledger.py` has had `stamp_origin()`/`stamp` since BRO-2179's follow-up, but
+nothing called it when an ask was actually written: of 51 ledgers on
+broomva/workspace main, only 1 carried an `origin:` block, and Maestro's answer
+router filed 6 of 14 answers as brand-new "Act on your answer" sessions for the
+reason "No session is named as the one that asked".
+
+- New PostToolUse hook `scripts/ask-origin-stamp-hook.sh`, wired by default: runs
+  `ask_ledger.py stamp` on every Write/Edit/MultiEdit of a `.control/asks/*.yaml`
+  file. Two bash-only filters (a `PASEO_AGENT_ID` check, then a substring check for
+  `.control/asks/*.yaml` in the raw tool-call JSON) run before any subprocess is
+  spawned, because this plugin loads at personal scope and the hook otherwise
+  fires on every Write/Edit/MultiEdit in every session, every repo. Never blocks:
+  a stamp failure is swallowed, the triggering edit is never touched.
+- Backported `stamp_origin()`/`_strip_origin_blocks()`/the `stamp` CLI subcommand
+  into bstack's own bundled `scripts/ask_ledger.py` (previously missing — bstack's
+  copy had drifted well behind broomva/workspace's), so the hook has a working
+  `stamp` regardless of which repo it runs in: it always shells out to THIS copy
+  via `${CLAUDE_PLUGIN_ROOT}`, never a workspace-local one.
+- Fixed a latent bug in `stamp --force`, found while testing: it inserted a
+  SECOND `origin:` block instead of replacing the first. PyYAML keeps the LAST
+  duplicate mapping key, and the new block landed closer to `id:` than the old
+  one, so `load()` kept returning the ORIGINAL agent_id — force silently no-opped
+  from every reader's side. `_strip_origin_blocks()` removes the old block first,
+  scoped by indent so an ask's own `options: [{id: ...}]` entries can't be
+  mistaken for the ask's own id line.
+- `import yaml` now falls back to appending the user site-packages directory on
+  `ImportError`, matching `leverage-sensor.py`'s existing pattern, so the hook can
+  invoke `ask_ledger.py` under `python3 -I` (BRO-2652 isolation) without needing a
+  dedicated venv.
+
 ## 0.42.0 — 2026-09-29
 
 ### feat(sensor): a context ledger — what injected context costs, and whether anything uses it (shadow)

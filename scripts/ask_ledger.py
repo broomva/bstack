@@ -21,11 +21,26 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import os
 import re
 import sys
 from pathlib import Path
 
-import yaml
+# hooks/ask-origin-stamp-hook.sh invokes this file with `python3 -I` (BRO-2652):
+# no cwd, script dir, PYTHONPATH or user site on sys.path, so a yaml.py planted
+# in the session's repo cannot replace the real module. -I also hides a PyYAML
+# installed with `pip install --user`, so on ImportError the user site is
+# APPENDED (never inserted first): the standard library and the interpreter's
+# own site-packages still win. See scripts/leverage-sensor.py for the same
+# pattern (BRO-2652 established it there first).
+try:
+    import yaml
+except ImportError:
+    import site
+    _user_site = site.getusersitepackages()
+    if isinstance(_user_site, str) and os.path.isdir(_user_site) and _user_site not in sys.path:
+        sys.path.append(_user_site)
+    import yaml
 
 CLASSES = {"credential", "authority", "decision", "artifact", "scope", "external"}
 # A blocking ask has NO default, which means silence stalls a lane. That is only
@@ -592,6 +607,106 @@ def open_asks(ledger: dict) -> list[dict]:
     )
 
 
+# --- origin: the routing key, stamped at creation (BRO-2179 follow-up,
+# automated at write time by BRO-2918) ---------------------------------------
+# An ask ledger is git-tracked, so an identical copy of every ledger exists in
+# every worktree. Nothing about the FILE says which session raised the ask,
+# which means an answer has no address to go back to. Paseo exports
+# PASEO_AGENT_ID and PASEO_AGENT_CWD into every agent session; recording them
+# at ask-creation time is what turns "answer the ask" into a delivery rather
+# than a guess. hooks/ask-origin-stamp-hook.sh calls `stamp` automatically on
+# every Write/Edit of a workspace's .control/asks/*.yaml.
+#
+# The write is a line insert rather than a yaml.dump round-trip on purpose:
+# pyyaml does not preserve comments, and re-emitting reflows every folded
+# scalar in the file. These ledgers are reviewed as diffs, so a 3-line change
+# must read as one.
+_ID_LINE = re.compile(r"^(\s*)(-\s+)?id:\s*(.+?)\s*$")
+
+
+def _strip_origin_blocks(lines: list[str], ids: set[str]) -> list[str]:
+    """Remove any `origin:` block already belonging to one of `ids`, so a forced
+    re-stamp replaces it instead of appending a second one. PyYAML silently keeps
+    whichever duplicate key comes LAST, so an unremoved old block would make the
+    file read as re-stamped while `load()` still returned the ORIGINAL session.
+
+    Tracks ask boundaries by indent, not by id value alone: an ask's `options:`
+    entries carry their own `- id: <option-id>` lines, which `_ID_LINE` also
+    matches. Only an id line at the same indent as the FIRST id line seen (the
+    ask list's own indent) is treated as entering a new ask; a deeper one is an
+    option and must not reset which ask's `origin:` we are looking for.
+    """
+    out: list[str] = []
+    i, n = 0, len(lines)
+    ask_indent_len: int | None = None
+    sibling_indent: str | None = None
+    while i < n:
+        line = lines[i]
+        stripped = line.rstrip("\n")
+        m = _ID_LINE.match(stripped)
+        if m:
+            this_indent_len = len(m.group(1))
+            if ask_indent_len is None:
+                ask_indent_len = this_indent_len
+            if this_indent_len == ask_indent_len:
+                sibling_indent = (
+                    " " * (len(m.group(1)) + len(m.group(2) or ""))
+                    if m.group(3) in ids else None
+                )
+            out.append(line)
+            i += 1
+            continue
+        if sibling_indent is not None and stripped == f"{sibling_indent}origin:":
+            i += 1
+            while i < n:
+                inner = lines[i].rstrip("\n")
+                inner_indent = len(inner) - len(inner.lstrip(" "))
+                if inner.strip() and inner_indent <= len(sibling_indent):
+                    break
+                i += 1
+            continue
+        out.append(line)
+        i += 1
+    return out
+
+
+def stamp_origin(path: Path, ask_id: str | None, agent_id: str, cwd: str,
+                 provider: str, session: str, force: bool = False,
+                 claude_session: str = "") -> list[str]:
+    """Insert an `origin:` block under each targeted ask. Returns the ids stamped."""
+    ledger = load(path)
+    targets = {str(a.get("id")) for a in (ledger.get("asks") or [])
+               if isinstance(a, dict) and (force or not a.get("origin"))}
+    if ask_id is not None:
+        if ask_id not in {str(a.get("id")) for a in (ledger.get("asks") or []) if isinstance(a, dict)}:
+            raise LedgerError(f"no ask '{ask_id}' in {path}")
+        targets &= {ask_id}
+
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    if force:
+        lines = _strip_origin_blocks(lines, targets)
+    out: list[str] = []
+    stamped: list[str] = []
+    for line in lines:
+        out.append(line)
+        m = _ID_LINE.match(line.rstrip("\n"))
+        if not m or m.group(3) not in targets:
+            continue
+        # The key column, not the leading whitespace: `  - id:` puts `id` at 4.
+        indent = " " * (len(m.group(1)) + len(m.group(2) or ""))
+        out.append(f"{indent}origin:\n")
+        for key, value in (("agent_id", agent_id), ("provider", provider),
+                           ("cwd", cwd), ("session", session),
+                           ("claude_session", claude_session)):
+            if value:
+                out.append(f"{indent}  {key}: {value}\n")
+        stamped.append(m.group(3))
+
+    if stamped:
+        path.write_text("".join(out), encoding="utf-8")
+    return stamped
+
+
 def _sweep_cmd(args) -> int:
     """`validate --all` / `open --all` over a directory of ledgers.
 
@@ -669,6 +784,17 @@ def main(argv: list[str] | None = None) -> int:
     d.add_argument("--flat", action="store_true",
                    help="least-confident first overall, ignoring verdict grouping")
 
+    st = sub.add_parser("stamp", help="record which Paseo session raised an ask, so an answer can be routed back")
+    st.add_argument("ledger", type=Path)
+    st.add_argument("--ask", default=None, help="stamp one ask; default is every unstamped ask")
+    st.add_argument("--agent-id", default=os.environ.get("PASEO_AGENT_ID", ""))
+    st.add_argument("--cwd", default=os.environ.get("PASEO_AGENT_CWD", os.getcwd()))
+    st.add_argument("--provider", default=os.environ.get("PASEO_AGENT_PROVIDER", "claude"))
+    st.add_argument("--session", default="", help="human-readable session name; defaults to the cwd basename")
+    st.add_argument("--claude-session", default=os.environ.get("CLAUDE_CODE_SESSION_ID", ""),
+                    help="the Claude transcript id, so an ended session can be found and resumed")
+    st.add_argument("--force", action="store_true", help="overwrite an existing origin")
+
     args = ap.parse_args(argv)
 
     if getattr(args, "all", False):
@@ -679,6 +805,24 @@ def main(argv: list[str] | None = None) -> int:
     except LedgerError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
+
+    if args.cmd == "stamp":
+        if not args.agent_id:
+            # Outside a Paseo session there is no id to record. Writing a blank one
+            # would be worse than writing none: it reads as "stamped" to the UI.
+            print("error: no --agent-id and PASEO_AGENT_ID is unset "
+                  "(run inside a Paseo session, or pass --agent-id)", file=sys.stderr)
+            return 2
+        session = args.session or Path(args.cwd).name
+        try:
+            stamped = stamp_origin(args.ledger, args.ask, args.agent_id, args.cwd,
+                                   args.provider, session, force=args.force,
+                                   claude_session=args.claude_session)
+        except LedgerError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        print(f"stamped {len(stamped)} ask(s): {', '.join(stamped) or '(none — already stamped)'}")
+        return 0
 
     if args.cmd == "validate":
         preauth = {}
