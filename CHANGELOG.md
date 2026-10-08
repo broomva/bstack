@@ -41,7 +41,9 @@ noticed. Nothing on disk had ever said the cron existed.
 - **Never blocks.** Every path exits 0; an error is one stderr line. The hooks.json
   command ends `|| true`. The hook sets its own 3 s deadline (SIGALRM), under
   hooks.json's 5 s timeout, because the writer's flock has no timeout and one stream
-  lock is shared by every session on the machine.
+  lock is shared by every session on the machine. The deadline raises rather than
+  exits, so the cache is still saved and an event written before it is never
+  written twice.
 - **Fails closed on SRI.** When git cannot answer (it is missing or timed out), the cwd
   counts as SRI for that call, and the answer is not cached. A relative
   `BROOMVA_HOME`, which the writer refuses, writes nothing, not even a cache inside
@@ -62,7 +64,7 @@ noticed. Nothing on disk had ever said the cron existed.
   by sha256, as BRO-2918 pinned `ask_ledger.py`. Importing the workspace checkout's
   copy would make every write depend on whichever branch that checkout is on.
 
-Tests: `tests/session-loops-hook.test.sh` (58 checks) replays payloads captured from a
+Tests: `tests/session-loops-hook.test.sh` (59 checks) replays payloads captured from a
 real interactive 2.1.280 session (`tests/fixtures/session-loops/`: CronCreate, one
 cron fire, CronDelete, /exit). It also covers:
 

@@ -223,6 +223,9 @@ took=$(python3 -I -c "import time; print(int(time.time() - $t0))")
 kill "$HOLDER" 2>/dev/null; wait "$HOLDER" 2>/dev/null
 check "a held stream lock: exit 0 within the 3 s deadline (took ${took}s)" [ "$rc$((took < 5))" = 01 ]
 check "and says it gave up" grep -q 'gave up after 3 s' "$H7f.stderr"
+# The deadline raises rather than exits, so main()'s finally still saves the cache:
+# an event already appended before it fired is never appended again next turn.
+check "the deadline still saves the cache (finally ran)" [ -f "$H7f/cache/session-loops/53305082-37ff-47ed-b9aa-1b33ec806891.json" ]
 
 # ── 7. the wiring and the vendored writer ────────────────────────────────────
 check "hooks.json runs it on Stop, UserPromptSubmit, SessionEnd and PostToolUse Cron*" python3 -I -c '

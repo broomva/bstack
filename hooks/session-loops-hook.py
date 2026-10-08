@@ -465,9 +465,23 @@ def main():
             save_cache(sid, s.cache)
 
 
-def _deadline(signum, frame):
-    sys.stderr.write("session-loops-hook: gave up after %d s (stream lock held?)\n" % DEADLINE_S)
+class Deadline(Exception):
+    pass
+
+
+def _hard_exit(signum, frame):
     os._exit(0)
+
+
+def _deadline(signum, frame):
+    # Raise, not exit: main()'s finally then saves the cache, so an event written
+    # before the deadline is not written again next turn. A second alarm is the
+    # backstop in case saving itself hangs.
+    import signal
+
+    signal.signal(signal.SIGALRM, _hard_exit)
+    signal.alarm(1)
+    raise Deadline("gave up after %d s (stream lock held?)" % DEADLINE_S)
 
 
 if __name__ == "__main__":
