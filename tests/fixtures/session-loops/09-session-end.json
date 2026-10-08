@@ -1,0 +1,8 @@
+{
+ "cwd": "/private/tmp/bro2932-scratch",
+ "hook_event_name": "SessionEnd",
+ "prompt_id": "2a72891e-e191-41e9-9f7f-7e62108a0bfb",
+ "reason": "prompt_input_exit",
+ "session_id": "53305082-37ff-47ed-b9aa-1b33ec806891",
+ "transcript_path": "/Users/operator/.claude/projects/-private-tmp-bro2932-scratch/53305082-37ff-47ed-b9aa-1b33ec806891.jsonl"
+}

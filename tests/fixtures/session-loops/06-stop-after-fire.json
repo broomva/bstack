@@ -1,0 +1,19 @@
+{
+ "background_tasks": [],
+ "cwd": "/private/tmp/bro2932-scratch",
+ "hook_event_name": "Stop",
+ "last_assistant_message": "OK",
+ "permission_mode": "bypassPermissions",
+ "prompt_id": "44456991-debe-4dc0-b542-7f58ece888f1",
+ "session_crons": [
+  {
+   "id": "25b1e2a5",
+   "prompt": "bro2932 smoke tick: reply only with the word OK",
+   "recurring": true,
+   "schedule": "* * * * *"
+  }
+ ],
+ "session_id": "53305082-37ff-47ed-b9aa-1b33ec806891",
+ "stop_hook_active": false,
+ "transcript_path": "/Users/operator/.claude/projects/-private-tmp-bro2932-scratch/53305082-37ff-47ed-b9aa-1b33ec806891.jsonl"
+}

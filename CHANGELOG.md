@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.44.0 — 2026-10-08
+
+### feat(hooks): session-loops — a session's crons land on the loops/session stream (BRO-2932)
+
+Loop layer P3 (spec: broomva/workspace `docs/specs/2026-10-07-unified-loop-layer.html`
+§5). A Claude Code session cron lives only in its session's memory. On 10-06 the
+coordinator's cron 42152ef6 died with its session, and about 30 h passed before anyone
+noticed. Nothing on disk had ever said the cron existed.
+
+- New hook `hooks/session-loops-hook.py`, wired by default on four events. It appends
+  to `<BROOMVA_HOME>/ledger/loops/session.jsonl` (default `~/.broomva`) in the
+  BRO-2909 envelope, so Maestro's session adapter can judge ORPHANED and EXPIRING:
+  - PostToolUse `CronCreate|CronDelete` → `loop.session.cron_created` /
+    `cron_deleted` with `via: CronCreate|CronDelete`.
+  - Stop → diffs `session_crons` against a per-session cache
+    (`<BROOMVA_HOME>/cache/session-loops/<sid>.json`). It writes only when the set
+    changed: `cron_created` / `cron_deleted` with `via: snapshot` for what no
+    PostToolUse saw (an expiry, a fired one-shot), then `loop.session.snapshot`.
+    When a cron is found on the hook's first sight of the session, it is marked
+    `created_at_lower_bound: true`.
+  - UserPromptSubmit → `loop.run.started` when the prompt equals a cached cron's
+    prompt. A cron fire carries no origin field, so equality is the correlation.
+  - SessionEnd → `loop.session.ended`, then the cache is removed and caches older
+    than 8 days are pruned.
+- The fields are as §5 specifies: subject `loop:cc/<sid>/<cronId>`, or `session:<sid>`
+  for a snapshot or an end; refs `{session, agent}`; actor `agent:<PASEO_AGENT_ID>`,
+  else `hook:session-loops`; data `pid` (`CLAUDE_PID`), `cwd`, `cron`, `recurring`,
+  `prompt_sha256`, `prompt_head`.
+- **No prompt text beyond a 120-character head.** The head becomes `[redacted]` if the
+  *whole* prompt matches one of the writer's secret patterns. Matching on the whole
+  prompt matters because a secret cut at character 120 would no longer match. Under
+  a Stimulus/SRI checkout (the BRO-2089 roots, worktrees resolved through git) the
+  record says `scope: sri` and carries no head at all.
+- **Silent where it has nothing to say.** A session that never had a cron writes no
+  line and creates no cache file. A Stop whose cron set is unchanged compares one
+  digest and exits.
+- **Never blocks.** Every path exits 0; an error is one stderr line. The hooks.json
+  command ends `|| true`.
+- **Budget, measured over 100 Stop events each** (hooks.json command, `sh -c`, M-series
+  Mac shared with other agents): bare `python3 -I -c pass` p95 24.7 ms; a session with
+  no cron p95 29.3 ms; one cron, unchanged p95 31.3 ms. Worst case, a cron set that
+  changes every turn (three fsync'd appends per Stop): p95 67.5 ms.
+- `scripts/broomva_home.py` is vendored byte-identical from
+  broomva/workspace@71d3e647e (BRO-2917). `tests/session-loops-hook.test.sh` pins it
+  by sha256, as BRO-2918 pinned `ask_ledger.py`. Importing the workspace checkout's
+  copy would make every write depend on whichever branch that checkout is on.
+
+Tests: `tests/session-loops-hook.test.sh` (47 checks) replays payloads captured from a
+real interactive 2.1.280 session (`tests/fixtures/session-loops/`: CronCreate, one
+cron fire, CronDelete, /exit). It also covers the Stop-only diff, secret redaction
+(including a secret cut at character 120), SRI scope, malformed input, an unwritable
+home, and the pin. `broomva_home.py verify` passes over every stream the tests write.
+`tests/hook-python-isolation.test.sh` drives all four registrations, and the mutation
+suite kills a missing `-I` on each one.
+
 ## 0.43.1 — 2026-10-08
 
 ### fix(ask_ledger): resync the vendored stamp block to broomva/workspace@580c2059f (BRO-2925)

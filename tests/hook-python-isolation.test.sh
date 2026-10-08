@@ -186,6 +186,10 @@ C_LOCK="$(hpy "$H/hookcmd.py" "$HJ" PreToolUse test-lock-hook.sh)" || exit 1
 C_GATE="bash \"\${CLAUDE_PLUGIN_ROOT}/scripts/control-gate-hook.sh\""          # bootstrap-deployed
 C_BRIDGE="bash \"\${CLAUDE_PLUGIN_ROOT}/scripts/conversation-bridge-hook.sh\""  # bootstrap-deployed
 C_ASKSTAMP="$(hpy "$H/hookcmd.py" "$HJ" PostToolUse ask-origin-stamp-hook.sh)" || exit 1
+C_SLOOPS="$(hpy "$H/hookcmd.py" "$HJ" Stop session-loops-hook.py)" || exit 1
+C_SLOOPS_TOOL="$(hpy "$H/hookcmd.py" "$HJ" PostToolUse session-loops-hook.py)" || exit 1
+C_SLOOPS_PROMPT="$(hpy "$H/hookcmd.py" "$HJ" UserPromptSubmit session-loops-hook.py)" || exit 1
+C_SLOOPS_END="$(hpy "$H/hookcmd.py" "$HJ" SessionEnd session-loops-hook.py)" || exit 1
 
 PASSNAME=A
 EXTRA_PYTHONPATH=""
@@ -333,9 +337,25 @@ EOF
     else
         note askstamp_miss "origin: not stamped"
     fi
+
+    # session-loops (BRO-2932), one event per registration: a CronCreate, the Stop
+    # that snapshots it, its fire, the session's end. Each lands on the loops/session
+    # stream through the bundled writer (scripts/broomva_home.py, loaded by path), so
+    # the stream names every registration that ran.
+    rm -rf "$T/broomva-$PASSNAME"
+    local sl="BROOMVA_HOME=$T/broomva-$PASSNAME" slh="HOME=$T/home-sloops"
+    run sloops_tool "$C_SLOOPS_TOOL" \
+        '{"hook_event_name":"PostToolUse","session_id":"S-loops","cwd":"/nonexistent","tool_name":"CronCreate","tool_input":{"cron":"* * * * *","prompt":"tick","recurring":true},"tool_response":{"id":"c1","recurring":true}}' "$sl" "$slh"
+    run sloops_stop "$C_SLOOPS" \
+        '{"hook_event_name":"Stop","session_id":"S-loops","cwd":"/nonexistent","session_crons":[{"id":"c1","schedule":"* * * * *","recurring":true,"prompt":"tick"}]}' "$sl" "$slh"
+    run sloops_prompt "$C_SLOOPS_PROMPT" \
+        '{"hook_event_name":"UserPromptSubmit","session_id":"S-loops","cwd":"/nonexistent","prompt":"tick"}' "$sl" "$slh"
+    run sloops_end "$C_SLOOPS_END" \
+        '{"hook_event_name":"SessionEnd","session_id":"S-loops","cwd":"/nonexistent","reason":"other"}' "$sl" "$slh"
+    note sloops_end "stream: $(hpy -c 'import json,sys; print(" ".join(json.loads(l)["type"] for l in open(sys.argv[1])))' "$T/broomva-$PASSNAME/ledger/loops/session.jsonl" 2>/dev/null || echo none)"
 }
 
-SCENARIOS="posture_bootstrap posture_quiet arc_block arc_handback arc_productive lock_edit lock_bash lock_allow l3_warn sensor_stop wakeup autoupdate gate_block gate_allow bridge bridge_ws askstamp_hit askstamp_miss"
+SCENARIOS="posture_bootstrap posture_quiet arc_block arc_handback arc_productive lock_edit lock_bash lock_allow l3_warn sensor_stop wakeup autoupdate gate_block gate_allow bridge bridge_ws askstamp_hit askstamp_miss sloops_tool sloops_stop sloops_prompt sloops_end"
 
 # ── pass A: no plants ────────────────────────────────────────────────────────
 PASSNAME=A; drive
@@ -368,6 +388,8 @@ expect "ask-origin-stamp: a Write with an agent id stamps origin.agent_id" \
     has askstamp_hit stdout "origin: stamped"
 expect "ask-origin-stamp: no agent id leaves the ask untouched" \
     has askstamp_miss stdout "origin: not stamped"
+expect "session-loops: CronCreate, Stop, its fire and SessionEnd each land on the stream" \
+    has sloops_end stdout "stream: loop.session.cron_created loop.session.snapshot loop.run.started loop.session.ended"
 if [ "$YAML_OK" = 1 ]; then
     expect "sensors: PyYAML loads under -I (policy not degraded)" \
         test -z "$(cat "$T/out/A/sensor_stop.stdout" "$T/out/A/wakeup.stdout" | grep -F 'could not load setpoints')"
@@ -449,7 +471,7 @@ if bad:
         bad "static: the enumerator missed a spelling (fixtures)"
     fi
     n="$(hpy "$REPO/tests/hook_python_sites.py" "$SRC" sites | awk -F'\t' '$3==1' | wc -l | tr -d ' ')"
-    [ "$n" -ge 22 ] && ok "static: $n isolated sites enumerated (>= the 22 known: 13 hook + 9 generated)" \
+    [ "$n" -ge 23 ] && ok "static: $n isolated sites enumerated (>= the 23 known: 14 hook + 9 generated)" \
         || bad "static: only $n isolated sites enumerated — the enumeration shrank"
 fi
 
