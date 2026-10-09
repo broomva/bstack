@@ -285,6 +285,8 @@ Every turn re-reads the whole context from cache, so a large context costs on ev
 
 **Driven sessions above 600k get a successor, not another resume.** Launch a fresh session in the same worktree, seeded with a handoff note: the ticket, the branch, the PRs and their heads, the session's final message, and the one next step. Then close out the old session (§6).
 
+A successor replaces a session and adds none, so `hold_launches` does not hold it, but it counts toward `max_driven`. When the cap is full, or the mode is `read_only`, the successor is deferred. Until it launches, the old session stays unresumed and unarchived, and it is named in `open`. The orchestrator's own rollover, below, is never held by the cadence mode: it lowers the cost of every later tick.
+
 **The orchestrator rolls over** when its own context passes 400k, or when it is otherwise past use (repeated compaction, or near its limit):
 1. Write `state.yaml`.
 2. Close the tick with `outcome: partial` and `data.handoff: true`.
