@@ -72,7 +72,7 @@ if [ "$RC" = 2 ] && grep -q "FOREGROUND" <<<"$ERR" && grep -q "subagent a269ed5d
 else bad "pending subagent under Paseo: rc=$RC"; fi
 if grep -q '"verdict": "BLOCK"' "$STATE/bg-task-guard.jsonl" 2>/dev/null; then ok "BLOCK logged"; else bad "BLOCK not logged"; fi
 
-if grep -q "only when its <task-notification>" <<<"$ERR" && grep -q "never proof" <<<"$ERR"; then
+if grep -q "only when its <task-notification>" <<<"$ERR" && grep -q "never proof" <<<"$ERR" && grep -q "left running" <<<"$ERR"; then
     ok "re-prompt: a subagent is done at its notification; a transcript grep is never proof"
 else bad "re-prompt lacks the subagent completion rule"; fi
 
@@ -220,6 +220,7 @@ if [ -z "$QUIET" ]; then
       "prompt-cap|$G|PROMPT_MAX = 2|PROMPT_MAX = 99"
       "id-key|$G|return str(t.get(\"id\") or|return str(__import__(\"time\").time_ns()) or str(t.get(\"id\") or"
       "subagent-wait|$G|never proof|proof"
+      "shell-warning|$G|a shell the subagent |the subagent "
       "opt-out|$G|== \"0\":|== \"never\":"
       "fail-closed|$G|    except Exception:
         return 0|    except Exception:
