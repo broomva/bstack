@@ -212,7 +212,7 @@ It recommends a `cadence`, taking the most severe rung that applies:
 | Mode | When | Fire period | Launches | Driven sessions |
 |---|---|---|---|---|
 | `normal` | headroom | 2 h | per the gates above | no cap |
-| `conserve` | `crosses_relief` | 4 h | held | at most 3 |
+| `conserve` | `crosses_relief`, or usage is stale or unreadable (fails closed) | 4 h | held | at most 3 |
 | `critical` | it crosses with under 12 h of runway, or every usable account is at 90% of 7 d or more | 6 h | held | at most 1 |
 | `read_only` | the active account's 5 h window is at 95% or more | 6 h | none | none, and no resume |
 
