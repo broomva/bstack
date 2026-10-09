@@ -50,7 +50,7 @@ bound a model that launches a new background task on every continuation. LIFE_MA
 blocks per session never reset, and stay generous so that a long-lived coordinator
 is not disarmed after a handful of real strands. State lives in
 $BROOMVA_AUTONOMOUS_HOME/bg-task-guard/<sid>.json. Every BLOCK, and the first CAP of
-each prompt, appends a line to $BROOMVA_AUTONOMOUS_HOME/bg-task-guard.jsonl.
+each non-empty prompt id, appends a line to $BROOMVA_AUTONOMOUS_HOME/bg-task-guard.jsonl.
 """
 import json
 import os
