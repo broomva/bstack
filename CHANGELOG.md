@@ -2,20 +2,25 @@
 
 ## 0.45.1 — 2026-10-09
 
-### fix(hooks): bg-task-stop-guard names a subagent wait condition that cannot match early (BRO-2815)
+### fix(hooks): bg-task-stop-guard says when a background subagent is actually done (BRO-2815)
 
-Dogfooded on a real Paseo turn (agent acb1ab0b, session cc0aedf2). The guard blocked the turn-end on a
+I dogfooded #134 on a real Paseo turn (agent acb1ab0b, session cc0aedf2). The guard blocked the turn-end on a
 background subagent, and the session waited in the foreground as told. But its until-loop grepped the
-subagent's output file for the token it expected back. That file is the subagent's transcript, and it
-already contains the subagent's own prompt, token included. So the loop matched within 2 s, and the model
-reported a verdict it had not received yet.
+subagent's output file for the token it expected back. That file is the subagent's transcript, and it already
+holds the subagent's own prompt, so the loop matched in 2 s. The model then reported a verdict it had not
+received; the real one landed 56 s later.
 
-The re-prompt now says so. It names the condition that marks a finished subagent: the transcript holds the
-final assistant message, `"stop_reason":"end_turn"`. Earlier turns carry `tool_use`. In that transcript
-the line appeared once, at completion, followed by an attachment line, so the wait has to grep the whole
-file; `tail -n1` misses it.
+**No grep on that transcript proves a subagent is done.** My first fix proposed `"stop_reason":"end_turn"` as
+the completion condition. Cross-review checked it against 400 real subagent transcripts:
+- 60 of the 359 that contain `end_turn` have an earlier one. In 48 of those, a SendMessage resumed the agent
+  after an end_turn; in 7, the agent's own background shell woke it.
+- 14 never write `end_turn` at all, because they end on a synthetic session-limit message.
 
-`tests/bg-task-stop-guard.test.sh` pins the wording, and a 16th mutant that drops it is killed.
+The re-prompt now says that a subagent is finished only when its `<task-notification>` for that task id has
+been delivered. That notification arrives after a foreground call returns. A transcript grep is a cue to look
+again, never proof. The warning about a shell left running behind an ended turn is back.
+
+`tests/bg-task-stop-guard.test.sh` pins the rule, and a 16th mutant that drops it is killed.
 
 ## 0.45.0 — 2026-10-09
 
