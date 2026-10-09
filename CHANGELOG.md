@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.45.1 — 2026-10-09
+
+### fix(hooks): bg-task-stop-guard says when a background subagent is actually done (BRO-2815)
+
+I dogfooded #134 on a real Paseo turn (agent acb1ab0b, session cc0aedf2). The guard blocked the turn-end on a
+background subagent, and the session waited in the foreground as told. But its until-loop grepped the
+subagent's output file for the token it expected back. That file is the subagent's transcript, and it already
+holds the subagent's own prompt, so the loop matched in 2 s. The model then reported a verdict it had not
+received; the real one landed 56 s later.
+
+**No grep on that transcript proves a subagent is done.** My first fix proposed `"stop_reason":"end_turn"` as
+the completion condition. Cross-review checked it against the 400 most recent of the 2,202 subagent
+transcripts under `~/.claude/projects/*/*/subagents/`:
+- 60 of the 359 that contain `end_turn` have an earlier one:
+  - in 48, a SendMessage resumed the agent after an end_turn;
+  - in 7, the agent's own background shell woke it;
+  - in 3, the final message was split across two lines;
+  - in 2, the agent kept working with no resume.
+- 14 never write `end_turn` at all, because they end on a synthetic session-limit message.
+
+The re-prompt now says that a subagent is finished only when its `<task-notification>` for that task id has
+been delivered. That notification arrives after a foreground call returns. A transcript grep is a cue to look
+again, never proof. The warning about a shell left running behind an ended turn is back.
+
+`tests/bg-task-stop-guard.test.sh` pins the rule, and a 16th mutant that drops it is killed.
+
 ## 0.45.0 — 2026-10-09
 
 ### feat(hooks): under Paseo, a turn cannot end while the session's own background task is still running (BRO-2815)
