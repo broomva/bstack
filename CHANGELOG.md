@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.44.1 — 2026-10-09
+
+### docs(references): orchestrator-tick — one base protocol for every standing orchestrator (BRO-2942)
+
+`references/orchestrator-tick.md` is the scope-neutral base that every orchestrator inherits. Each orchestrator's
+overlay, at `<repo>/.broomva/loops/prompts/<id>.md`, keeps only its scope, its sources and its tier assignments.
+Its snapshot script, at `<repo>/.broomva/loops/checks/<id>.sh`, gathers a tick's facts in one read-only run.
+
+The base covers:
+- the tick contract: the ticks.jsonl pair, and a guarded atomic state write;
+- cadence tiers: every fire, hourly, 4-hourly and daily, each with a recorded `last_run`;
+- a budget of fewer than 15 tool calls a tick;
+- a registry-based census;
+- session handling, the close-out rule and the archive cascade;
+- disk and usage guards;
+- Maestro-card launches, with the `ARC-STATUS` line;
+- a backlog state machine, a daily upkeep tier, rollover, and a report ending in `## Decided` / `## Ask`.
+
+It encodes six facts measured on the broomva coordinator between 2026-10-08 and 2026-10-09:
+- `list_agents` showed 6 of 34 live agents.
+- Archiving an agent cascades to the agents labelled with it as `paseo.parent-agent-id`.
+- Finish notices from idle sessions get lost.
+- An empty `state.yaml` parsed as `None` and passed a parse-only guard.
+- The owner's close-out rule (2026-10-08).
+- Maestro reads asks from worktrees as well as from `origin/main`.
+
+Documentation only. No hook, script or default changes.
+
 ## 0.44.0 — 2026-10-08
 
 ### feat(hooks): session-loops — a session's crons land on the loops/session stream (BRO-2932)
