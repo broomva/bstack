@@ -147,14 +147,42 @@ if [ "$caps" = 6 ]; then ok "CAP is logged once per prompt (6 wakes, 6 lines)"; 
 KEEP=1 run "$(with_prompt "$(with_tasks "$FX/shell-pending.json" "[$MON]")" w7)" "${PASEO[@]}"
 if [ "$(grep -c '"verdict": "CAP"' "$STATE/bg-task-guard.jsonl")" = 6 ]; then ok "a repeat stop in the same prompt adds no CAP line"; else bad "CAP log grows within one prompt"; fi
 
-# Lifetime: 7 turns each with a new task, exactly 5 blocked; the count never resets.
-run "$(with_tasks "$FX/shell-pending.json" '[{"id":"t1","type":"shell","status":"running","description":"d"}]')" "${PASEO[@]}"
-blocks=0; [ "$RC" = 2 ] && blocks=1
-for i in 2 3 4 5 6 7; do
-    KEEP=1 run "$(with_tasks "$FX/shell-pending.json" "[{\"id\":\"t$i\",\"type\":\"shell\",\"status\":\"running\",\"description\":\"d\"}]")" "${PASEO[@]}"
+# Consecutive: one prompt whose continuations keep launching new tasks -> 2 blocks.
+run "$(with_tasks "$FX/shell-pending.json" '[{"id":"c1","type":"shell","status":"running","description":"d"}]')" "${PASEO[@]}"
+cblocks=0; [ "$RC" = 2 ] && cblocks=1
+for i in 2 3 4 5; do
+    KEEP=1 run "$(with_tasks "$FX/shell-pending.json" "[{\"id\":\"c$i\",\"type\":\"shell\",\"status\":\"running\",\"description\":\"d\"}]")" "${PASEO[@]}"
+    [ "$RC" = 2 ] && cblocks=$((cblocks + 1))
+done
+if [ "$cblocks" = 2 ]; then ok "per-prompt cap: 5 new tasks in one prompt, exactly 2 blocked"; else bad "per-prompt cap: $cblocks of 5 blocked (want 2)"; fi
+
+# Lifetime: 23 prompts each with a new task -> exactly 20 blocked; never resets.
+blocks=0; first=1
+for i in $(seq 1 23); do
+    P="$(with_prompt "$(with_tasks "$FX/shell-pending.json" "[{\"id\":\"t$i\",\"type\":\"shell\",\"status\":\"running\",\"description\":\"d\"}]")" "lp$i")"
+    if [ "$first" = 1 ]; then run "$P" "${PASEO[@]}"; first=0; else KEEP=1 run "$P" "${PASEO[@]}"; fi
     [ "$RC" = 2 ] && blocks=$((blocks + 1))
 done
-if [ "$blocks" = 5 ]; then ok "lifetime cap: 7 new tasks, exactly 5 blocked"; else bad "lifetime cap: $blocks of 7 blocked (want 5)"; fi
+if [ "$blocks" = 20 ]; then ok "lifetime cap: 23 prompts with new tasks, exactly 20 blocked"; else bad "lifetime cap: $blocks of 23 blocked (want 20)"; fi
+
+# A task with no id is keyed by type + description: asked about once.
+NOID='[{"type":"subagent","status":"running","description":"P20 reviewer"}]'
+run "$(with_prompt "$(with_tasks "$FX/shell-pending.json" "$NOID")" n1)" "${PASEO[@]}"
+r1=$RC
+KEEP=1 run "$(with_prompt "$(with_tasks "$FX/shell-pending.json" "$NOID")" n2)" "${PASEO[@]}"
+if [ "$r1" = 2 ] && [ "$RC" = 0 ]; then ok "a task with no id: blocked once, then accepted"; else bad "no-id task: rc $r1 then $RC (want 2 then 0)"; fi
+
+# An empty prompt_id never grows the CAP log.
+run "$(with_prompt "$FX/shell-pending.json" "")" "${PASEO[@]}"
+for i in 1 2 3 4 5; do KEEP=1 run "$(with_prompt "$FX/shell-pending.json" "")" "${PASEO[@]}"; done
+if [ "$(grep -c '"verdict": "CAP"' "$STATE/bg-task-guard.jsonl" 2>/dev/null)" = 0 ]; then ok "empty prompt_id: no CAP log growth"; else bad "empty prompt_id grows the CAP log"; fi
+
+# A hand-corrupted state file (blocked_tasks a string) fails safe.
+run "$FX/shell-pending.json" "${PASEO[@]}"
+mkdir -p "$STATE/bg-task-guard"
+printf '{"blocked_tasks":"bnssbndta","total_blocks":"x"}' > "$STATE/bg-task-guard/a4db1711-2742-4637-be34-d67775aa5397.json"
+KEEP=1 run "$(with_prompt "$FX/shell-pending.json" fresh)" "${PASEO[@]}"
+if [ "$RC" = 0 ]; then ok "corrupt state (non-int total): fails open"; else bad "corrupt state: rc=$RC"; fi
 
 # ── fail-open ─────────────────────────────────────────────────────────────────
 printf 'not json' > "$T/bad.json"
@@ -183,8 +211,10 @@ if [ -z "$QUIET" ]; then
       "obeys-other-hooks|$G|    sid = re.sub(|    if payload.get(\"stop_hook_active\"):
         return \"ALLOW\", None
     sid = re.sub("
-      "cap-log-spam|$G|if state.get(\"last_cap_prompt\") != pid or not pid:|if True:"
-      "lifetime-cap|$G|LIFE_MAX = 5|LIFE_MAX = 99"
+      "cap-log-spam|$G|if pid and state.get(\"last_cap_prompt\") != pid:|if True:"
+      "lifetime-cap|$G|LIFE_MAX = 20|LIFE_MAX = 99"
+      "prompt-cap|$G|PROMPT_MAX = 2|PROMPT_MAX = 99"
+      "id-key|$G|return str(t.get(\"id\") or|return str(__import__(\"time\").time_ns()) or str(t.get(\"id\") or"
       "opt-out|$G|== \"0\":|== \"never\":"
       "fail-closed|$G|    except Exception:
         return 0|    except Exception:

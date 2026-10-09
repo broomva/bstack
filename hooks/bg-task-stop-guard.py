@@ -31,6 +31,7 @@ Decision (fail-open: any parse or I/O error allows the stop):
   background_tasks absent (older Claude Code)          -> allow (the coordinator tick is the backstop)
   no counted task in flight                            -> allow
   every in-flight task was already blocked on once     -> allow (CAP: one block per task)
+  this prompt_id already blocked PROMPT_MAX times      -> allow (CAP: consecutive)
   this session already blocked LIFE_MAX times          -> allow (CAP: lifetime)
   otherwise                                            -> BLOCK, exit 2, reason on stderr
 
@@ -43,9 +44,11 @@ it let another hook's block disarm this one. Instead each task id is blocked on 
 most once per session. So a stop can only be refused again if a task the guard has
 never asked about is in flight, for example a shell a subagent left behind. A task
 the model was asked about and kept (a dev server, a standing monitor) is accepted
-for the rest of the session, and it does not use up the lifetime budget, which
-stays LIFE_MAX blocks per session and never resets. This mirrors arc-continuation's
-consecutive and lifetime caps. State lives in
+for the rest of the session. Two counters back the per-task record, mirroring
+arc-continuation's consecutive and lifetime caps. PROMPT_MAX blocks per prompt_id
+bound a model that launches a new background task on every continuation. LIFE_MAX
+blocks per session never reset, and stay generous so that a long-lived coordinator
+is not disarmed after a handful of real strands. State lives in
 $BROOMVA_AUTONOMOUS_HOME/bg-task-guard/<sid>.json. Every BLOCK, and the first CAP of
 each prompt, appends a line to $BROOMVA_AUTONOMOUS_HOME/bg-task-guard.jsonl.
 """
@@ -57,7 +60,8 @@ import time
 
 COUNTED = {"shell", "subagent", "workflow", "monitor", "MCP task", "cloud session"}
 TERMINAL = {"completed", "failed", "killed", "stopped", "cancelled", "canceled"}
-LIFE_MAX = 5
+PROMPT_MAX = 2
+LIFE_MAX = 20
 
 
 def _home():
@@ -150,21 +154,24 @@ def decide(payload, env):
         state = {}
     if not isinstance(state, dict):
         state = {}
-    asked = set(state.get("blocked_tasks") or [])
+    bt = state.get("blocked_tasks")
+    asked = set(bt) if isinstance(bt, list) else set()
     fresh = [t for t in tasks if _task_key(t) not in asked]
     pid = str(payload.get("prompt_id") or "")
     total = int(state.get("total_blocks", 0))
+    in_prompt = int(state.get("prompt_blocks", 0)) if pid and state.get("prompt") == pid else 0
     rec = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "session_id": sid,
            "paseo_agent_id": env.get("PASEO_AGENT_ID"), "prompt_id": pid,
            "tasks": [{"type": t.get("type"), "id": t.get("id")} for t in tasks]}
-    if not fresh or total >= LIFE_MAX:
-        if state.get("last_cap_prompt") != pid or not pid:
+    if not fresh or total >= LIFE_MAX or in_prompt >= PROMPT_MAX:
+        if pid and state.get("last_cap_prompt") != pid:
             state["last_cap_prompt"] = pid
             _save(sdir, spath, state)
             rec["verdict"] = "CAP"
             _log(home, rec)
         return "CAP", None
     state["total_blocks"] = total + 1
+    state["prompt"], state["prompt_blocks"] = pid, in_prompt + 1
     state["blocked_tasks"] = sorted(asked | {_task_key(t) for t in tasks})
     _save(sdir, spath, state)
     rec["verdict"] = "BLOCK"
