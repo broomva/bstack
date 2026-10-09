@@ -99,6 +99,8 @@ Each step has a tier. A tier is due when its `last_run` in `state.tiers` is olde
 
 The overlay can move a step to another tier, or add its own steps to a tier. It cannot drop the tick contract or the census.
 
+**The fire period is dynamic.** The tick sets its own heartbeat's period from the snapshot's `capacity.cadence` (§7): 2 h with headroom, 4 h when the burn forecast runs out before relief, 6 h when it is critical, and read-only at 95% of the active account's 5 h window. When the recommended cron differs from the heartbeat's, the tick updates the heartbeat it is bound to, by name. It changes the cadence only, never the prompt, and records the change in state and in the tick's economy event. The loop row's `cadence` says `dynamic`, so a changed cron is not drift. Tiers are periods, not fire counts, so they hold at any fire period.
+
 **Budget: fewer than 15 tool calls a tick**, counted and recorded in `data.calls`. The snapshot script is what makes this possible. It reads, in one call, everything the `every` tier needs, including each driven session's final message (§5). Tool calls are spent on acting, not on reading.
 
 When a tick would exceed the budget, carry the remainder into `open` for the next fire. Don't stretch the tick.
@@ -113,6 +115,7 @@ git -C <repo> show <REF>:.broomva/loops/checks/<id>.sh | bash
 
 The contract for the script:
 - **Read-only.** It never prompts, archives, merges or writes outside its cache.
+- It includes a `capacity` section (§7) and a `sessions` section (§11), described there.
 - It includes a `census` section (§4), with the final assistant message of each `arc` agent and of each `owner` agent idle for more than 12 h. That message comes from the agent's transcript: `persistence.sessionId` in its registry file, and `~/.claude/projects/*/<sessionId>.jsonl`.
 - It prints one JSON object with one key per section.
 - A section that fails is `{"error": "..."}`, and the rest still print.
@@ -150,6 +153,7 @@ On an idle or finished session, act on the final message:
 | Final state | Action |
 |---|---|
 | Died on a usage limit | Resume it once the window clears. Usage gates the resume (§7) |
+| Context above 600k (`sessions.successor_due`) | Don't resume it. Launch a fresh successor seeded by a handoff note (§11) |
 | Died on an auth denial, or pinned to a disabled login | Start a fresh agent in the same worktree, seeded with the dead one's final message, ticket and branch. Clear the dead agent's children's parent labels (§6), then archive it |
 | Waiting on a background job (CI, a watcher) | Nudge it to wait in the **foreground**. A background wait ends the turn, and the result arrives nowhere |
 | Ended on a question | Answer it if the answer is a decision you can make with the evidence. Otherwise it goes to the owner as an ask (§8) |
@@ -197,6 +201,25 @@ Your own successor is such a child, so clear it on the successor before archivin
 - **Resumes and owner close-outs:** only while every account's 5 h window is under 90%.
 - **When the active account's 5 h window is at 95% or above:** no launch and no resume. Ticks keep running read-only.
 
+**The burn forecast gates launches before the windows do.** Present utilization says nothing about the run rate, so the snapshot's `capacity` section forecasts it:
+- **Burn rate**, per account, in 7 d percentage points per hour. It is measured over the last 24 h of usage samples, which the snapshot appends to its cache on every run, counting only samples inside the current 7 d window. With fewer than an hour of samples, it falls back to the window's average: 7 d utilization over the hours since the window opened.
+- **Runway**: the fleet's 7 d headroom, summed over the accounts that are not limited, divided by the summed rate of those accounts.
+- **Relief**: the earliest upcoming 7 d reset of any account.
+- **`crosses_relief`**: the runway ends before relief. That means a stretch with no capacity at all.
+
+It recommends a `cadence`, taking the most severe rung that applies:
+
+| Mode | When | Fire period | Launches | Driven sessions |
+|---|---|---|---|---|
+| `normal` | headroom | 2 h | per the gates above | no cap |
+| `conserve` | `crosses_relief`, or usage is stale or unreadable (fails closed) | 4 h | held | at most 3 |
+| `critical` | it crosses with under 12 h of runway, or every usable account is at 90% of 7 d or more | 6 h | held | at most 1 |
+| `read_only` | the active account's 5 h window is at 95% or more | 6 h | none | none, and no resume |
+
+`hold_launches` holds new launches and Maestro queuing. `max_driven` caps how many sessions the tick drives, resumes included. The forecast's runway, relief and mode go in the tick report. The overlay names the forecast's implementation and its fixture suite.
+
+Each tick appends one **economy event** to the `loops/economy` stream. It holds the capacity numbers, the session count, the top context consumers, and what the tick did: launches, resumes, merges, archives, successors and any cadence change. The overlay names the recorder and the evaluator that turns the stream into tokens per merged PR and burn trends.
+
 ## 8. Launching work, and owner answers
 
 **Launch through Maestro cards**, not a bare `create_agent`. The card gives the run a gate, a review state and a home in the owner's Decisions. Every brief carries:
@@ -205,6 +228,10 @@ Your own successor is such a child, so clear it on the successor before archivin
 - the scope boundary: what it must not touch;
 - what done means, as a quoted check;
 - the merge rule: pinned to `--match-head-commit`, on green gates, never `--admin`;
+- a **model tier**, recorded on the launch (in the card and the backlog item):
+  - **Haiku 4.5** for mechanical drives: rerun, update-branch, merge on green, cleanup, archiving;
+  - **Sonnet 5** for standard implementation and research;
+  - **Opus 5.5** (or Fable 5.1) only for design, governance-class changes and P20 reviewers;
 - a last line of exactly `ARC-STATUS: CLOSED` or `ARC-STATUS: HANDBACK <the one question>`.
 
 **Owner asks** go into a `.control/asks/*.yaml` ledger.
@@ -254,7 +281,13 @@ Once a day:
 
 ## 11. Rollover
 
-When the session's context is past use (repeated compaction, or near its limit):
+Every turn re-reads the whole context from cache, so a large context costs on every turn, not once. The snapshot's `sessions` section reports each live in-scope session's `context_k` (the last main-thread assistant usage: input + cache read + cache creation, in thousands) and its `cache_read_24h`, the orchestrator's own included (`sessions.self`). Sessions above 400k are `handoff_candidate`; driven sessions above 600k are `successor_due`.
+
+**Driven sessions above 600k get a successor, not another resume.** Launch a fresh session in the same worktree, seeded with a handoff note: the ticket, the branch, the PRs and their heads, the session's final message, and the one next step. Then close out the old session (§6).
+
+A successor replaces a session and adds none, so `hold_launches` does not hold it, but it counts toward `max_driven`. When the cap is full, or the mode is `read_only`, the successor is deferred. Until it launches, the old session stays unresumed and unarchived, and it is named in `open`. The orchestrator's own rollover, below, is never held by the cadence mode: it lowers the cost of every later tick.
+
+**The orchestrator rolls over** when its own context passes 400k, or when it is otherwise past use (repeated compaction, or near its limit):
 1. Write `state.yaml`.
 2. Close the tick with `outcome: partial` and `data.handoff: true`.
 3. Ask for the rollover through the overlay's channel.

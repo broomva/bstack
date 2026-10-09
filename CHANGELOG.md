@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.46.0 — 2026-10-09
+
+### feat(orchestrator-tick): fleet token economy — burn forecast, dynamic cadence, model tiers, context rollover (BRO-3013)
+
+Measured on 2026-10-09: about 43M input+output tokens and about 17.9B cache-read tokens in 24 h. Most of
+it came from long-lived sessions re-reading huge contexts on every turn. team@ went from 0% to 48% of its
+7 d window in about 23 h while devteam@ was limited until 10-12, so the fleet was heading for a stretch
+with no capacity, and the §7 gates (present utilization only) could not see it.
+
+- §2: the fire period is dynamic. The tick re-sets its own heartbeat from `capacity.cadence`: 2 h, 4 h,
+  6 h, or read-only.
+- §3: the snapshot adds `capacity` and `sessions` sections.
+- §5: driven sessions above 600k context get a successor, not a resume.
+- §7: the burn forecast. Per-account 7 d burn rate from 24 h of samples, with a window-average fallback.
+  Fleet runway against relief (the earliest 7 d reset). A cadence ladder with launch holds and caps on
+  driven sessions. Each tick appends an economy event to `loops/economy`.
+- §8: launch briefs carry a model tier: Haiku 4.5 for mechanical work, Sonnet 5 for standard work,
+  Opus 5.5 or Fable 5.1 for design, governance and P20.
+- §11: context accounting. A `handoff_candidate` above 400k, the orchestrator rolls over above 400k, and
+  successors are seeded by a handoff note.
+
+The broomva overlay's implementation is `scripts/fleet_economy.py` in broomva/workspace. It is
+fixture-tested and mutation-proved.
+
 ## 0.45.1 — 2026-10-09
 
 ### fix(hooks): bg-task-stop-guard says when a background subagent is actually done (BRO-2815)
