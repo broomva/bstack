@@ -190,6 +190,7 @@ C_SLOOPS="$(hpy "$H/hookcmd.py" "$HJ" Stop session-loops-hook.py)" || exit 1
 C_SLOOPS_TOOL="$(hpy "$H/hookcmd.py" "$HJ" PostToolUse session-loops-hook.py)" || exit 1
 C_SLOOPS_PROMPT="$(hpy "$H/hookcmd.py" "$HJ" UserPromptSubmit session-loops-hook.py)" || exit 1
 C_SLOOPS_END="$(hpy "$H/hookcmd.py" "$HJ" SessionEnd session-loops-hook.py)" || exit 1
+C_BGGUARD="$(hpy "$H/hookcmd.py" "$HJ" Stop bg-task-stop-guard.py)" || exit 1
 
 PASSNAME=A
 EXTRA_PYTHONPATH=""
@@ -353,9 +354,17 @@ EOF
     run sloops_end "$C_SLOOPS_END" \
         '{"hook_event_name":"SessionEnd","session_id":"S-loops","cwd":"/nonexistent","reason":"other"}' "$sl" "$slh"
     note sloops_end "stream: $(hpy -c 'import json,sys; print(" ".join(json.loads(l)["type"] for l in open(sys.argv[1])))' "$T/broomva-$PASSNAME/ledger/loops/session.jsonl" 2>/dev/null || echo none)"
+
+    # bg-task-stop-guard (BRO-2815): under Paseo, a Stop with the session's own
+    # background task in flight is blocked (exit 2); outside Paseo it is allowed.
+    rm -rf "$T/arc"
+    local bgp='{"hook_event_name":"Stop","session_id":"S-bg","prompt_id":"p1","stop_hook_active":false,"background_tasks":[{"id":"b1","type":"shell","status":"running","description":"d","command":"gh pr checks 1 --watch"}]}'
+    run bgguard_block "$C_BGGUARD" "$bgp" PASEO_AGENT_ID=iso-agent
+    rm -rf "$T/arc"
+    run bgguard_quiet "$C_BGGUARD" "$bgp"
 }
 
-SCENARIOS="posture_bootstrap posture_quiet arc_block arc_handback arc_productive lock_edit lock_bash lock_allow l3_warn sensor_stop wakeup autoupdate gate_block gate_allow bridge bridge_ws askstamp_hit askstamp_miss sloops_tool sloops_stop sloops_prompt sloops_end"
+SCENARIOS="posture_bootstrap posture_quiet arc_block arc_handback arc_productive lock_edit lock_bash lock_allow l3_warn sensor_stop wakeup autoupdate gate_block gate_allow bridge bridge_ws askstamp_hit askstamp_miss sloops_tool sloops_stop sloops_prompt sloops_end bgguard_block bgguard_quiet"
 
 # ── pass A: no plants ────────────────────────────────────────────────────────
 PASSNAME=A; drive
@@ -390,6 +399,9 @@ expect "ask-origin-stamp: no agent id leaves the ask untouched" \
     has askstamp_miss stdout "origin: not stamped"
 expect "session-loops: CronCreate, Stop, its fire and SessionEnd each land on the stream" \
     has sloops_end stdout "stream: loop.session.cron_created loop.session.snapshot loop.run.started loop.session.ended"
+expect "bg-task-stop-guard: a pending task under Paseo exits 2" rcis bgguard_block 2
+expect "bg-task-stop-guard: the block re-prompts a foreground wait" has bgguard_block stderr "FOREGROUND"
+expect "bg-task-stop-guard: outside Paseo it exits 0"         rcis bgguard_quiet 0
 if [ "$YAML_OK" = 1 ]; then
     expect "sensors: PyYAML loads under -I (policy not degraded)" \
         test -z "$(cat "$T/out/A/sensor_stop.stdout" "$T/out/A/wakeup.stdout" | grep -F 'could not load setpoints')"
