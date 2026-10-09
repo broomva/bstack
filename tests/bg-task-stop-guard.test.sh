@@ -72,6 +72,10 @@ if [ "$RC" = 2 ] && grep -q "FOREGROUND" <<<"$ERR" && grep -q "subagent a269ed5d
 else bad "pending subagent under Paseo: rc=$RC"; fi
 if grep -q '"verdict": "BLOCK"' "$STATE/bg-task-guard.jsonl" 2>/dev/null; then ok "BLOCK logged"; else bad "BLOCK not logged"; fi
 
+if grep -q '"stop_reason":"end_turn"' <<<"$ERR" && grep -q "already contains its own prompt" <<<"$ERR"; then
+    ok "re-prompt names the subagent completion condition, not a prompt token"
+else bad "re-prompt lacks the subagent end_turn condition"; fi
+
 run "$FX/shell-pending.json" "${PASEO[@]}"
 if [ "$RC" = 2 ] && grep -q "sleep 90; echo done" <<<"$ERR"; then ok "pending shell (or Monitor) under Paseo: exit 2, names the command"; else bad "pending shell under Paseo: rc=$RC"; fi
 
@@ -215,6 +219,7 @@ if [ -z "$QUIET" ]; then
       "lifetime-cap|$G|LIFE_MAX = 20|LIFE_MAX = 99"
       "prompt-cap|$G|PROMPT_MAX = 2|PROMPT_MAX = 99"
       "id-key|$G|return str(t.get(\"id\") or|return str(__import__(\"time\").time_ns()) or str(t.get(\"id\") or"
+      "subagent-wait|$G|already contains its own |contains no "
       "opt-out|$G|== \"0\":|== \"never\":"
       "fail-closed|$G|    except Exception:
         return 0|    except Exception:

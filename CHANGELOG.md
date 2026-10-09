@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.45.1 — 2026-10-09
+
+### fix(hooks): bg-task-stop-guard names a subagent wait condition that cannot match early (BRO-2815)
+
+Dogfooded on a real Paseo turn (agent acb1ab0b, session cc0aedf2). The guard blocked the turn-end on a
+background subagent, and the session waited in the foreground as told. But its until-loop grepped the
+subagent's output file for the token it expected back. That file is the subagent's transcript, and it
+already contains the subagent's own prompt, token included. So the loop matched within 2 s, and the model
+reported a verdict it had not received yet.
+
+The re-prompt now says so. It names the condition that marks a finished subagent: the transcript holds the
+final assistant message, `"stop_reason":"end_turn"`. Earlier turns carry `tool_use`. In that transcript
+the line appeared once, at completion, followed by an attachment line, so the wait has to grep the whole
+file; `tail -n1` misses it.
+
+`tests/bg-task-stop-guard.test.sh` pins the wording, and a 16th mutant that drops it is killed.
+
 ## 0.45.0 — 2026-10-09
 
 ### feat(hooks): under Paseo, a turn cannot end while the session's own background task is still running (BRO-2815)
