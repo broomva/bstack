@@ -220,7 +220,7 @@ if [ -z "$QUIET" ]; then
       "prompt-cap|$G|PROMPT_MAX = 2|PROMPT_MAX = 99"
       "id-key|$G|return str(t.get(\"id\") or|return str(__import__(\"time\").time_ns()) or str(t.get(\"id\") or"
       "subagent-wait|$G|never proof|proof"
-      "shell-warning|$G|a shell the subagent |the subagent "
+      "shell-warning|$G|left running|finished"
       "opt-out|$G|== \"0\":|== \"never\":"
       "fail-closed|$G|    except Exception:
         return 0|    except Exception:
