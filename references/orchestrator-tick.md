@@ -105,7 +105,7 @@ When a tick would exceed the budget, carry the remainder into `open` for the nex
 
 ## 3. Snapshot first
 
-The first tool call after opening the tick runs the overlay's snapshot script, from the overlay repo's `origin/main`:
+The first tool call after opening the tick runs the overlay's snapshot script, at the overlay's `<REF>`:
 
 ```bash
 git -C <repo> show <REF>:.broomva/loops/checks/<id>.sh | bash
@@ -133,7 +133,7 @@ Classify each live agent in scope, testing the classes in this order. The first 
 | Class | Test | Handling |
 |---|---|---|
 | `self` | this agent's id | none |
-| `other` | an orchestrator id the overlay lists, a descendant of one, or a Maestro run in another scope | never touched |
+| `other` | not a model session (`provider` is not `claude`, e.g. a Maestro or plugin agent), an orchestrator id the overlay lists, a descendant of one, or a Maestro run in another scope | never touched |
 | `arc` | a worker this orchestrator launched: the label `paseo.parent-agent-id` = self or a predecessor, the label `dispatched-by` names it, or a Maestro card it filed | driven (§5) |
 | `owner` | everything else | read at a >12 h idle; closed out on the owner rule (§6) |
 
@@ -239,8 +239,8 @@ Moves:
 | blocked | ready | the ask is answered or the blocker cleared |
 
 The rules:
-- **Move at least one item forward each tick.** The automatic moves above don't count toward this.
-- **Nothing is `active` without a session or an ask**, and nothing is `blocked` without an ask or a blocker.
+- **Move at least one item forward each tick** when a move is available. The automatic moves above don't count toward this. When no move is available, say why in the summary.
+- **Nothing is `active` without a session**, and nothing is `blocked` without an ask or a blocker.
 - A handed-back item is never relaunched while its ask is open.
 - Items in `ready` become queued Maestro work items, but only while §7 permits a launch. Maestro's own tick then starts them under its cap.
 - Prune items that have been `done` for 7 days.
