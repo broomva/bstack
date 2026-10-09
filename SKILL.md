@@ -463,6 +463,7 @@ This is the f₃ dynamics function at L3 of the RCS hierarchy. See [references/p
 
 - [references/primitives.md](references/primitives.md) — full P1–P20 reference with reflexive triggers
 - [references/ai-native-sdlc.md](references/ai-native-sdlc.md) — the AI-native SDLC playbook's twelve plays mapped onto the primitives, with the mechanisms and templates that hold them
+- [references/orchestrator-tick.md](references/orchestrator-tick.md) — the shared base protocol every standing orchestrator runs (tick contract, tiers, census, close-out, guards, backlog); each orchestrator adds a per-repo overlay
 - [references/prompts-integration.md](references/prompts-integration.md) — when/how to leverage the broomva.tech prompts library (5-step auto-tracing mandate, discovery, common traps)
 - [references/skills-roster.md](references/skills-roster.md) — all 30 skills with install commands
 - [references/stack-architecture.md](references/stack-architecture.md) — layer dependency diagram
