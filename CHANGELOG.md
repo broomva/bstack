@@ -1,5 +1,69 @@
 # Changelog
 
+## 0.45.0 — 2026-10-09
+
+### feat(hooks): under Paseo, a turn cannot end while the session's own background task is still running (BRO-2815)
+
+The defect: a Paseo session ends its turn on "I'll wait for the background reviewer / CI watch / verify
+step" and goes idle. The task finishes, nothing re-invokes the idle session, and the arc sits until a
+coordinator nudges it by hand. This happened at least nine times between 2026-10-03 and 10-09, four of them
+on 10-09 (SRI arcs 865fdebc, 706569b8, c44b36d8, 046f308f), under briefs that said "wait in the foreground".
+The p9 foreground slice (skills#272) covers CI waits only. This hook covers the session's own subagents,
+shells and monitors.
+
+`hooks/bg-task-stop-guard.py` is a Stop hook. Under Paseo (`PASEO_AGENT_ID` set), it blocks the stop with
+exit 2 when the Stop input's `background_tasks` lists a task of the session's own still in flight. The
+re-prompt names each task and says to wait for it in the FOREGROUND now, then act on the result in the same
+turn. It suggests a foreground until-loop on the condition the task produces, or a foreground `p9 watch`
+re-run for CI. A task meant to outlive the turn (a dev server, a standing monitor) gets one line saying so. TaskStop
+is only for a task nothing depends on.
+
+- **What it reads.** Measured on Claude Code 2.1.295: the Stop input carries `background_tasks`, one entry
+  per in-flight task with a friendly `type` label. The binary's label map: `shell` (run_in_background Bash,
+  and a Monitor watch), `subagent`, `workflow`, `monitor`, `MCP task`, `cloud session`, which are counted;
+  `teammate`, `dream`, `auto-mode scan`, `memory import`, which are harness-internal and not counted. An
+  unknown label is not counted either. A terminal status is not counted. Fixtures are real captured inputs:
+  `tests/fixtures/bg-task-stop-guard/`. There is no promise matcher: bstack#129's guard keyed on the closing
+  sentence and stalled at P20 on matcher false positives. The task list is the fact; the prose is not needed.
+- **It can never loop, and its caps are the guard's own.** Each task id is blocked on at most once per
+  session. A stop can be refused again only when a task the guard has never asked about is in flight, such
+  as a shell a subagent left behind. A task the model was asked about and kept (a dev server, a standing
+  monitor) is accepted from then on. Two counters back that, mirroring arc-continuation's consecutive and
+  lifetime caps:
+  - at most 2 blocks per `prompt_id`, which bounds a model that launches a new task on every continuation;
+  - at most 20 per session, never reset. The number is generous so that a long-lived coordinator is not
+    disarmed after a handful of real strands. Round 2 of review flagged a lifetime cap of 5 for exactly
+    that.
+  - The guard does not key on `stop_hook_active`. That flag is set after a block by ANY Stop hook, so in
+    round 1 of review an arc-continuation block disarmed this guard. That was reproduced.
+  - State lives in `$BROOMVA_AUTONOMOUS_HOME/bg-task-guard/<sid>.json`, separate from arc-continuation's
+    budget.
+  - Every BLOCK, and the first CAP of each non-empty prompt id, appends a line to
+    `$BROOMVA_AUTONOMOUS_HOME/bg-task-guard.jsonl`.
+- **Never outside Paseo.** With `PASEO_AGENT_ID` unset or empty, every stop is allowed. There, a finished
+  task re-invokes the session. "Paseo" means the env var: a `claude -p` started from inside a Paseo session
+  inherits it and is guarded too. `BSTACK_BG_TASK_GUARD=0` opts out. It fails open on any parse or I/O
+  error, and on a Claude Code that sends no `background_tasks`.
+- **Live run.** A real `claude -p` session under `PASEO_AGENT_ID` launched a background subagent and ended on
+  "Reviewer launched; I will wait for its notification."
+  - The hook blocked it.
+  - The model first tried `sleep 45`, which the harness refused. It then polled the subagent's output file
+    in foreground until-loops.
+  - It finished the same turn with the reviewer's result: "its output was `VERDICT-8`".
+  - In an earlier run, the subagent had left its own work running in a background shell, so its output file
+    showed an ended turn before the result existed. The re-prompt now says a subagent is done when its
+    notification arrives, and that leftover shell is a new task the guard blocks on.
+
+Tests: `tests/bg-task-stop-guard.test.sh` runs 40 cases through the registered `hooks.json` command, and
+kills 15 of 15 mutants:
+- the Paseo gate, the exit code, the type filter, the in-flight list, the terminal filter;
+- per-task dedupe, both ways, and the no-id key;
+- obeying another hook's `stop_hook_active`;
+- CAP log spam, the per-prompt cap, the lifetime cap, the opt-out, fail-open, and the registration.
+
+`tests/hook-python-isolation.test.sh` drives the hook on a blocking Stop, so removing its `-I` is killed
+dynamically as well as statically.
+
 ## 0.44.1 — 2026-10-09
 
 ### docs(references): orchestrator-tick — one base protocol for every standing orchestrator (BRO-2942)
