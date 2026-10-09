@@ -25,22 +25,38 @@ saying so.
   unknown label is not counted either. A terminal status is not counted. Fixtures are real captured inputs:
   `tests/fixtures/bg-task-stop-guard/`. There is no promise matcher: bstack#129's guard keyed on the closing
   sentence and stalled at P20 on matcher false positives. The task list is the fact; the prose is not needed.
-- **It can never loop.** It never blocks while `stop_hook_active`. It blocks at most once per `prompt_id`, and
-  at most 5 times per session; that lifetime count never resets. These mirror arc-continuation's consecutive
-  and lifetime caps. The state is its own, in `$BROOMVA_AUTONOMOUS_HOME/bg-task-guard/<sid>.json`, so it never
-  spends arc-continuation's budget. Each BLOCK and CAP appends a line to
-  `$BROOMVA_AUTONOMOUS_HOME/bg-task-guard.jsonl`.
-- **Never outside Paseo.** With `PASEO_AGENT_ID` unset or empty, it allows every stop. There, a finished task
-  re-invokes the session. `BSTACK_BG_TASK_GUARD=0` opts a Paseo session out. It fails open on any parse or
-  I/O error, and on a Claude Code that sends no `background_tasks`.
-- **Live run.** A real `claude -p` session under `PASEO_AGENT_ID` launched a background subagent and ended
-  on "Reviewer launched; I will wait for its notification." The hook blocked it. The session then ran a
-  foreground until-loop on the task's output file and reported the result in the same turn.
+- **It can never loop, and its caps are the guard's own.** Each task id is blocked on at most once per
+  session. On top of that, the session gets at most 5 blocks, and that count never resets. So a stop can be
+  refused again only when a task the guard has never asked about is in flight, such as a shell a subagent
+  left behind. A task the model was asked about and kept (a dev server, a standing monitor) is accepted
+  from then on, and it does not use up the budget a real strand needs. This mirrors arc-continuation's
+  consecutive and lifetime caps.
+  - The guard does not key on `stop_hook_active`. That flag is set after a block by ANY Stop hook, so in
+    round 1 of review an arc-continuation block disarmed this guard. That was reproduced.
+  - State lives in `$BROOMVA_AUTONOMOUS_HOME/bg-task-guard/<sid>.json`, separate from arc-continuation's
+    budget.
+  - Every BLOCK, and the first CAP of each prompt, appends a line to
+    `$BROOMVA_AUTONOMOUS_HOME/bg-task-guard.jsonl`.
+- **Never outside Paseo.** With `PASEO_AGENT_ID` unset or empty, every stop is allowed. There, a finished
+  task re-invokes the session. "Paseo" means the env var: a `claude -p` started from inside a Paseo session
+  inherits it and is guarded too. `BSTACK_BG_TASK_GUARD=0` opts out. It fails open on any parse or I/O
+  error, and on a Claude Code that sends no `background_tasks`.
+- **Live run.** A real `claude -p` session under `PASEO_AGENT_ID` launched a background subagent and ended on
+  "Reviewer launched; I will wait for its notification."
+  - The hook blocked it.
+  - The model first tried `sleep 45`, which the harness refused. It then polled the subagent's output file
+    in foreground until-loops.
+  - It finished the same turn with the reviewer's result: "its output was `VERDICT-8`".
+  - In an earlier run, the subagent had left its own work running in a background shell, so its output file
+    showed an ended turn before the result existed. The re-prompt now says a subagent is done when its
+    notification arrives, and that leftover shell is a new task the guard blocks on.
 
-Tests: `tests/bg-task-stop-guard.test.sh` runs 33 cases through the registered `hooks.json` command, and
-kills 11 of 11 mutants:
+Tests: `tests/bg-task-stop-guard.test.sh` runs 36 cases through the registered `hooks.json` command, and
+kills 13 of 13 mutants:
 - the Paseo gate, the exit code, the type filter, the in-flight list, the terminal filter;
-- `stop_hook_active`, the per-turn cap, the lifetime cap, the opt-out, fail-open, and the registration.
+- per-task dedupe, both ways;
+- obeying another hook's `stop_hook_active`;
+- CAP log spam, the lifetime cap, the opt-out, fail-open, and the registration.
 
 `tests/hook-python-isolation.test.sh` drives the hook on a blocking Stop, so removing its `-I` is killed
 dynamically as well as statically.

@@ -112,27 +112,49 @@ run "$FX/subagent-pending.json" "${PASEO[@]}" BSTACK_BG_TASK_GUARD=0
 if [ "$RC" = 0 ]; then ok "BSTACK_BG_TASK_GUARD=0 opts out"; else bad "BSTACK_BG_TASK_GUARD=0 still blocked: rc=$RC"; fi
 
 # ── caps: it can never loop ───────────────────────────────────────────────────
-run "$FX/shell-pending-hook-active.json" "${PASEO[@]}"
-if [ "$RC" = 0 ]; then ok "stop_hook_active (the real post-block stop): allowed"; else bad "stop_hook_active blocked: rc=$RC"; fi
-
-run "$FX/shell-pending.json" "${PASEO[@]}"
-KEEP=1 run "$FX/shell-pending.json" "${PASEO[@]}"
+# Loop safety is the guard's own per-task record, not stop_hook_active (which any
+# Stop hook's block sets). The real live-run pair: the block on subagent a269...,
+# then the continuation's stop (stop_hook_active: true) with a shell the subagent
+# left behind. That shell is a task the guard never asked about, so it blocks once.
+run "$FX/subagent-pending.json" "${PASEO[@]}"
+KEEP=1 run "$FX/shell-pending-hook-active.json" "${PASEO[@]}"
+if [ "$RC" = 2 ] && grep -q "buvv3m82b" <<<"$ERR"; then
+    ok "the real post-block stop with a NEW leftover shell: blocked once"
+else bad "leftover shell in the continuation was allowed: rc=$RC"; fi
+KEEP=1 run "$FX/shell-pending-hook-active.json" "${PASEO[@]}"
 if [ "$RC" = 0 ] && grep -q '"verdict": "CAP"' "$STATE/bg-task-guard.jsonl"; then
-    ok "second stop of the same prompt_id: allowed and logged CAP (one block per turn)"
-else bad "same prompt_id blocked twice: rc=$RC"; fi
+    ok "the same tasks again: allowed and logged CAP (never asks twice about a task)"
+else bad "same tasks blocked twice: rc=$RC"; fi
 
-run "$(with_prompt "$FX/shell-pending.json" p1)" "${PASEO[@]}"
+run "$FX/shell-pending-hook-active.json" "${PASEO[@]}"
+if [ "$RC" = 2 ]; then ok "stop_hook_active from another hook's block does not disarm the guard"; else bad "stop_hook_active disarmed the guard: rc=$RC"; fi
+
+# A standing monitor kept on purpose: asked about once, then accepted across wakes
+# (new prompt_ids), and it does not spend the lifetime budget a real strand needs.
+MON='{"id":"bmon1","type":"shell","status":"running","description":"standing monitor","command":"tail -f log"}'
+run "$(with_prompt "$(with_tasks "$FX/shell-pending.json" "[$MON]")" w1)" "${PASEO[@]}"
+mblocks=0; [ "$RC" = 2 ] && mblocks=1
+for i in 2 3 4 5 6 7; do
+    KEEP=1 run "$(with_prompt "$(with_tasks "$FX/shell-pending.json" "[$MON]")" "w$i")" "${PASEO[@]}"
+    [ "$RC" = 2 ] && mblocks=$((mblocks + 1))
+done
+KEEP=1 run "$(with_prompt "$(with_tasks "$FX/shell-pending.json" "[$MON,{\"id\":\"arev\",\"type\":\"subagent\",\"status\":\"running\",\"description\":\"P20 reviewer\"}]")" real)" "${PASEO[@]}"
+if [ "$mblocks" = 1 ] && [ "$RC" = 2 ]; then
+    ok "standing monitor: 1 block over 7 wakes, and a later real strand still blocks"
+else bad "standing monitor: $mblocks blocks over 7 wakes, real strand rc=$RC"; fi
+caps="$(grep -c '"verdict": "CAP"' "$STATE/bg-task-guard.jsonl")"
+if [ "$caps" = 6 ]; then ok "CAP is logged once per prompt (6 wakes, 6 lines)"; else bad "CAP lines: $caps (want 6)"; fi
+KEEP=1 run "$(with_prompt "$(with_tasks "$FX/shell-pending.json" "[$MON]")" w7)" "${PASEO[@]}"
+if [ "$(grep -c '"verdict": "CAP"' "$STATE/bg-task-guard.jsonl")" = 6 ]; then ok "a repeat stop in the same prompt adds no CAP line"; else bad "CAP log grows within one prompt"; fi
+
+# Lifetime: 7 turns each with a new task, exactly 5 blocked; the count never resets.
+run "$(with_tasks "$FX/shell-pending.json" '[{"id":"t1","type":"shell","status":"running","description":"d"}]')" "${PASEO[@]}"
 blocks=0; [ "$RC" = 2 ] && blocks=1
 for i in 2 3 4 5 6 7; do
-    KEEP=1 run "$(with_prompt "$FX/shell-pending.json" "p$i")" "${PASEO[@]}"
+    KEEP=1 run "$(with_tasks "$FX/shell-pending.json" "[{\"id\":\"t$i\",\"type\":\"shell\",\"status\":\"running\",\"description\":\"d\"}]")" "${PASEO[@]}"
     [ "$RC" = 2 ] && blocks=$((blocks + 1))
 done
-if [ "$blocks" = 5 ]; then ok "lifetime cap: 7 turns ending with a task pending, exactly 5 blocked"; else bad "lifetime cap: $blocks of 7 blocked (want 5)"; fi
-
-run "$(with_prompt "$FX/shell-pending.json" q1)" "${PASEO[@]}"
-KEEP=1 run "$FX/none-pending.json" "${PASEO[@]}"
-KEEP=1 run "$(with_prompt "$FX/shell-pending.json" q2)" "${PASEO[@]}"
-if [ "$RC" = 2 ]; then ok "a new turn after a clean stop is guarded again"; else bad "new turn not guarded: rc=$RC"; fi
+if [ "$blocks" = 5 ]; then ok "lifetime cap: 7 new tasks, exactly 5 blocked"; else bad "lifetime cap: $blocks of 7 blocked (want 5)"; fi
 
 # ── fail-open ─────────────────────────────────────────────────────────────────
 printf 'not json' > "$T/bad.json"
@@ -156,8 +178,12 @@ if [ -z "$QUIET" ]; then
       "type-filter|$G|if t.get(\"type\") not in COUNTED:|if False:"
       "never-in-flight|$G|        out.append(t)|        pass"
       "terminal-filter|$G|if str(t.get(\"status\", \"\")).lower() in TERMINAL:|if False:"
-      "stop-hook-active|$G|    if payload.get(\"stop_hook_active\"):|    if False:"
-      "turn-cap|$G|(pid and pid == state.get(\"last_blocked_prompt\")) or |"
+      "task-dedupe|$G|fresh = [t for t in tasks if _task_key(t) not in asked]|fresh = tasks"
+      "never-fresh|$G|fresh = [t for t in tasks if _task_key(t) not in asked]|fresh = []"
+      "obeys-other-hooks|$G|    sid = re.sub(|    if payload.get(\"stop_hook_active\"):
+        return \"ALLOW\", None
+    sid = re.sub("
+      "cap-log-spam|$G|if state.get(\"last_cap_prompt\") != pid or not pid:|if True:"
       "lifetime-cap|$G|LIFE_MAX = 5|LIFE_MAX = 99"
       "opt-out|$G|== \"0\":|== \"never\":"
       "fail-closed|$G|    except Exception:

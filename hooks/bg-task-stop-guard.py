@@ -27,20 +27,27 @@ that blocks on a type it cannot name would fight the operator after an upgrade.
 
 Decision (fail-open: any parse or I/O error allows the stop):
 
-  PASEO_AGENT_ID unset, or BSTACK_BG_TASK_GUARD=0     -> allow (never outside Paseo)
+  PASEO_AGENT_ID unset/empty, or BSTACK_BG_TASK_GUARD=0 -> allow
   background_tasks absent (older Claude Code)          -> allow (the coordinator tick is the backstop)
   no counted task in flight                            -> allow
-  stop_hook_active (already continuing from a block)   -> allow
-  this prompt_id was already blocked once              -> allow (CAP: one block per turn)
+  every in-flight task was already blocked on once     -> allow (CAP: one block per task)
   this session already blocked LIFE_MAX times          -> allow (CAP: lifetime)
   otherwise                                            -> BLOCK, exit 2, reason on stderr
 
-The caps mirror arc-continuation-hook.sh: a consecutive cap (here one block per
-prompt_id, so a turn that ignores the re-prompt ends on its next stop) and a
-lifetime cap that never resets, so a session holding a task on purpose (a dev
-server, a standing monitor) is asked at most LIFE_MAX times. State lives in
-$BROOMVA_AUTONOMOUS_HOME/bg-task-guard/<sid>.json. Every BLOCK and CAP appends a
-line to $BROOMVA_AUTONOMOUS_HOME/bg-task-guard.jsonl.
+"Paseo" means the env var. A `claude -p` started from inside a Paseo session
+inherits PASEO_AGENT_ID and is guarded too.
+
+Loop safety comes from the guard's own state, not from stop_hook_active: that flag
+is set after a block by ANY Stop hook (arc-continuation's included), so keying on
+it let another hook's block disarm this one. Instead each task id is blocked on at
+most once per session. So a stop can only be refused again if a task the guard has
+never asked about is in flight, for example a shell a subagent left behind. A task
+the model was asked about and kept (a dev server, a standing monitor) is accepted
+for the rest of the session, and it does not use up the lifetime budget, which
+stays LIFE_MAX blocks per session and never resets. This mirrors arc-continuation's
+consecutive and lifetime caps. State lives in
+$BROOMVA_AUTONOMOUS_HOME/bg-task-guard/<sid>.json. Every BLOCK, and the first CAP of
+each prompt, appends a line to $BROOMVA_AUTONOMOUS_HOME/bg-task-guard.jsonl.
 """
 import json
 import os
@@ -88,7 +95,7 @@ def reason(tasks):
         lines.append("  - ... and %d more" % (len(tasks) - 6))
     return (
         "[bstack bg-task-stop-guard, BRO-2815] Do not end this turn yet: %d background "
-        "task(s) you started are still running:\n%s\n"
+        "task(s) of this session are still running:\n%s\n"
         "This session runs under Paseo, where a background task finishing does not "
         "reliably wake an idle session, so ending the turn now can strand the arc. "
         "Wait for them in the FOREGROUND now, then act on the result in this same turn:\n"
@@ -97,10 +104,12 @@ def reason(tasks):
         "the condition the task produces works, e.g. polling its output file or "
         "`gh pr checks`, with timeout under 10 minutes; run it again if it times out. "
         "A long leading `sleep` is refused by the harness.\n"
+        "  - A subagent is done when its completion notification arrives. Its output "
+        "file can show an ended turn while a shell it left behind is still working.\n"
         "  - For a CI wait, re-run `p9 watch <pr>` in the foreground (exit 8 means run it again).\n"
-        "If a task is meant to outlive this turn (a dev server, a standing monitor), stop "
-        "it with TaskStop, or say so in one line and end the turn: this guard blocks at "
-        "most once per turn." % (len(tasks), "\n".join(lines))
+        "If a task is meant to outlive this turn (a dev server, a standing monitor), say "
+        "so in one line and end the turn. This guard never asks twice about the same task. "
+        "Stop a task with TaskStop only if nothing depends on it." % (len(tasks), "\n".join(lines))
     )
 
 
@@ -111,6 +120,10 @@ def _log(home, rec):
             f.write(json.dumps(rec) + "\n")
     except OSError:
         pass
+
+
+def _task_key(t):
+    return str(t.get("id") or "%s:%s" % (t.get("type"), _clip(t.get("description"), 200)))
 
 
 def decide(payload, env):
@@ -124,8 +137,6 @@ def decide(payload, env):
     tasks = in_flight(payload)
     if not tasks:
         return "ALLOW", None
-    if payload.get("stop_hook_active"):
-        return "ALLOW", None
     sid = re.sub(r"[^A-Za-z0-9_.-]", "_", str(payload.get("session_id") or ""))
     if not sid:
         return "ALLOW", None
@@ -137,25 +148,36 @@ def decide(payload, env):
             state = json.load(f)
     except (OSError, ValueError):
         state = {}
+    if not isinstance(state, dict):
+        state = {}
+    asked = set(state.get("blocked_tasks") or [])
+    fresh = [t for t in tasks if _task_key(t) not in asked]
     pid = str(payload.get("prompt_id") or "")
     total = int(state.get("total_blocks", 0))
     rec = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "session_id": sid,
            "paseo_agent_id": env.get("PASEO_AGENT_ID"), "prompt_id": pid,
            "tasks": [{"type": t.get("type"), "id": t.get("id")} for t in tasks]}
-    if (pid and pid == state.get("last_blocked_prompt")) or total >= LIFE_MAX:
-        rec["verdict"] = "CAP"
-        _log(home, rec)
+    if not fresh or total >= LIFE_MAX:
+        if state.get("last_cap_prompt") != pid or not pid:
+            state["last_cap_prompt"] = pid
+            _save(sdir, spath, state)
+            rec["verdict"] = "CAP"
+            _log(home, rec)
         return "CAP", None
     state["total_blocks"] = total + 1
-    state["last_blocked_prompt"] = pid
-    os.makedirs(sdir, exist_ok=True)
-    tmp = spath + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(state, f)
-    os.replace(tmp, spath)
+    state["blocked_tasks"] = sorted(asked | {_task_key(t) for t in tasks})
+    _save(sdir, spath, state)
     rec["verdict"] = "BLOCK"
     _log(home, rec)
     return "BLOCK", reason(tasks)
+
+
+def _save(sdir, spath, state):
+    os.makedirs(sdir, exist_ok=True)
+    tmp = "%s.%d.tmp" % (spath, os.getpid())
+    with open(tmp, "w") as f:
+        json.dump(state, f)
+    os.replace(tmp, spath)
 
 
 def main():
