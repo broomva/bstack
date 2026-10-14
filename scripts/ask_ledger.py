@@ -87,9 +87,13 @@ def _parse_ledger_text(path: Path, text: str) -> dict:
     `stamp_origin`) parses the bytes it is holding instead of racing a second,
     unlocked open against itself."""
     try:
-        data = yaml.safe_load(text)
+        # Strict: PyYAML's safe_load keeps the LAST of two duplicate keys without a word, so a file with
+        # two `status:` lines validated here while Maestro refused to read it (BRO-3109).
+        data = yaml.load(text, Loader=_StrictLoader)
     except yaml.YAMLError as e:
         raise LedgerError(f"{path}: unparseable YAML: {e}")
+    except LedgerError as e:  # a duplicate key
+        raise LedgerError(f"{path}: {e}")
     if not isinstance(data, dict):
         raise LedgerError(f"{path}: top level must be a mapping")
     return data

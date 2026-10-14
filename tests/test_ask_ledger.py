@@ -1250,3 +1250,47 @@ def test_the_vendored_stamp_block_has_not_drifted_from_its_pinned_hash():
         "(and the VENDORED-from comment's source SHA, if this was a deliberate resync "
         f"from a newer broomva/workspace commit) — got {digest}"
     )
+
+
+# ── a duplicate key is an error, not a silent "last one wins" (BRO-3109) ──────
+# Two SRI ledgers carried two `status:` lines, left by answer inserts. PyYAML's safe_load keeps the last one without
+# a word, so `validate` passed them while Maestro refused to read them and their asks vanished from Decisions.
+
+_DUPLICATE_STATUS = """\
+arc: demo
+opened: "2026-08-18T20:58Z"
+tz: America/Bogota
+lanes: [gate]
+asks:
+  - id: A1
+    ask: Merge PR 403
+    class: authority
+    gates: [gate]
+    exhausted: ["read: no prior decision on disk", "preauth: no standing grant covers this"]
+    blocking: false
+    default: leave it open
+    preanswerable: true
+    answered_at: null
+    status: open
+    status: resolved
+"""
+
+
+def test_validate_rejects_a_duplicate_status_key(tmp_path):
+    import subprocess
+    f = tmp_path / "l.yaml"
+    f.write_text(_DUPLICATE_STATUS)
+    r = subprocess.run([sys.executable, str(Path(__file__).parent.parent / "scripts" / "ask_ledger.py"), "validate", str(f)],
+                       capture_output=True, text=True)
+    assert r.returncode == 2
+    assert "duplicate key 'status'" in r.stderr and "line 16" in r.stderr, r.stderr
+
+
+def test_the_same_ledger_without_the_duplicate_key_validates(tmp_path):
+    """Positive control: the rejection above is the duplicate key, not the fixture."""
+    import subprocess
+    f = tmp_path / "l.yaml"
+    f.write_text(_DUPLICATE_STATUS.replace("    status: open\n", ""))
+    r = subprocess.run([sys.executable, str(Path(__file__).parent.parent / "scripts" / "ask_ledger.py"), "validate", str(f)],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr + r.stdout
