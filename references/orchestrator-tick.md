@@ -228,10 +228,14 @@ Each tick appends one **economy event** to the `loops/economy` stream. It holds 
 - the scope boundary: what it must not touch;
 - what done means, as a quoted check;
 - the merge rule: pinned to `--match-head-commit`, on green gates, never `--admin`;
-- a **model tier**, recorded on the launch (in the card and the backlog item):
-  - **Haiku 4.5** for mechanical drives: rerun, update-branch, merge on green, cleanup, archiving;
-  - **Sonnet 5** for standard implementation and research;
-  - **Opus 5.5** (or Fable 5.1) only for design, governance-class changes and P20 reviewers;
+- a **tier**, computed by the overlay's assessor from what the brief states, never chosen by feel, and
+  recorded on the launch (in the card and the backlog item). `mechanical` drives, `standard` implementation
+  and research from a spec, `frontier` design, governance-class changes and every P20 reviewer, `apex` only
+  with a stated reason. The overlay's ladder maps tiers to models. The tier never widens the brief's scope;
+- the **delegation block** from the assessor: tier, inputs, done check, verifier, the default tier for the
+  agents it starts, and the raise rule. Work the assessor says needs a spec or a decomposition gets that
+  frontier node first. Raises at any depth are allowed and re-plan the work. Full protocol:
+  [`delegation.md`](delegation.md);
 - a last line of exactly `ARC-STATUS: CLOSED` or `ARC-STATUS: HANDBACK <the one question>`.
 
 **Owner asks** go into a `.control/asks/*.yaml` ledger.
