@@ -46,7 +46,7 @@ reasons. The rules, in order:
 A mechanical kind that names any path is treated as work: the paths, not an LOC estimate, decide
 whether code is involved. The policy is read **fail-closed**: an unreadable policy stops classification
 (an empty list would quietly classify gated paths as ordinary work). A repo with no policy file says
-so explicitly (`policy: none` on its graph node).
+so explicitly (`policy: none` in the graph's `repos` entry).
 
 The tier selects **who reasons**; it never widens **what may be reached**. Scope, merge rule and gates
 come from the brief and the policy, the same at every tier. A router that lets "this looks easy" lower
