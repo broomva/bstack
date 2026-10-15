@@ -106,6 +106,8 @@ Each primitive carries a **short name** for use in agent prose. When referencing
 
 **Worktree discipline lives in P10** — P5 provides the *mechanism*; P10 the *discipline*. **The other writers are found by P15** — P5 assumes the fleet snapshot has already been taken.
 
+**Tiered (≥ 0.47.0)** — every agent P5 starts gets an assessed tier and an explicit model (Agent `model`; Paseo `model` and `thinkingOptionId`; Maestro `--tier`), never the orchestrator's model by inheritance. Work big enough to need a spec gets a frontier spec first; multi-node work is a validated agent graph; every brief carries the delegation block, which children copy into their own; a child may start a higher tier when the work outgrows its assessment, and says so (`TIER-RAISE:`); reviewers stay at frontier or cross-vendor. Protocol: [`delegation.md`](delegation.md).
+
 ---
 
 ## P6 — Knowledge Bookkeeping
