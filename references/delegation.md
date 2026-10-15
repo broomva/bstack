@@ -35,10 +35,18 @@ reasons. The rules, in order:
 2. `design`, `decompose`, `review` → `frontier`.
 3. A governance-class path (any `require_human` rule in the policy, plus the controller paths: loop
    prompts, `.control/`, this file, the tick, the assessor itself) or a one-way door → `frontier`, full P20.
-4. More than one repo → needs a frontier `decompose` node first: one node per repo.
-5. Substantive (>200 LOC, multi-file or public API) → `standard` with P20; **with no spec, a frontier
-   design node writes one first** (its done check is `spec_check.py` exit 0).
-6. Otherwise → `standard`, verified by its done check.
+4. Substantive (>200 LOC, multi-file or public API) → `standard` with P20. **A frontier design node
+   writes a spec first** only when the work is big enough to need one and has none: >200 LOC, a public
+   API, or more than three non-test files (its done check is `spec_check.py` exit 0). A fix plus its
+   test is reviewed, not specced.
+5. Otherwise → `standard`, verified by its done check.
+6. Across those, more than one repo → a frontier `decompose` node first: one node per repo. This holds
+   for governance work too.
+
+A mechanical kind that names any path is treated as work: the paths, not an LOC estimate, decide
+whether code is involved. The policy is read **fail-closed**: an unreadable policy stops classification
+(an empty list would quietly classify gated paths as ordinary work). A repo with no policy file says
+so explicitly (`policy: none` on its graph node).
 
 The tier selects **who reasons**; it never widens **what may be reached**. Scope, merge rule and gates
 come from the brief and the policy, the same at every tier. A router that lets "this looks easy" lower
@@ -84,8 +92,8 @@ Raises are measured, not just declared: Maestro reads each run's transcripts and
 - a kind that keeps raising (the economy's re-plan signal) gets a higher floor in the assessor, through a
   governance-class PR.
 
-A failed verification is the other feedback: the relaunch goes one rung up, frontier at most, apex only
-with a stated reason. The tier is fixed within a run (the dwell), so the system switches at run
+A failed verification is the other feedback: the observed floor applies first, then each failed attempt
+moves the relaunch one rung up, never down; frontier at most, apex only with a stated reason. The tier is fixed within a run (the dwell), so the system switches at run
 boundaries, where the orchestrator sees it.
 
 ## Reviewers are pinned
@@ -93,6 +101,13 @@ boundaries, where the orchestrator sees it.
 P20 reviewers, and Explore runs that serve a review, run at frontier or cross-vendor whatever tier the
 work ran at. Verification is not where tokens are saved: a cheaper reviewer is a weaker gate, and the
 measured cost of the fleet is long contexts, not reviews.
+
+## Routing through Maestro
+
+Maestro keeps its rule that how a run starts is the owner's: a session's work carries no provider or
+thinking. A session declares only a tier (`maestro new --tier`), and Maestro resolves it at dispatch
+through the **tier ladder in the owner's Settings**, which defaults to the overlay's ladder. Sessions
+route by label; the owner keeps the mapping.
 
 ## Economy by tier
 
