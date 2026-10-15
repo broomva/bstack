@@ -64,6 +64,12 @@ a call, that is a raise, not a guess.
 
 Work that is more than one node is planned as a graph (`docs/plans/<date>-<slug>.graph.yaml`): nodes with
 a kind, signals, inputs, produced files, dependencies, a done check, a verifier and a `spawn_default`.
+A graph that spans repos names them (`repos: {name: path}`, home `repo: name`), and every path in it is
+resolved once into a (repo, path) pair: a bare path is in its node's repo, and a path in another repo is
+written `name:path`. One resolver binds names to directories (`--repo name=path` overrides it), every
+consumer takes the pair, and a brief names the repo of a cross-repo input. A repo without a policy file
+declares `policy: none`, which is checked against the disk; a repo that is not checked out is an error,
+or, with `--skip-absent-repos` (CI), a named skip.
 `plan <graph>` validates it before anything launches: ids unique and acyclic; every node has a done
 check; no node below its assessed floor; any node above it says why; apex says why; the verifier at
 least as strong as required; reviewers at frontier; a substantive node's spec produced by an upstream
