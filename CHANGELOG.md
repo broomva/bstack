@@ -21,9 +21,14 @@ nothing drove it there. Non-claude sessions (`other`) were never touched, so 11 
   the PR's head), otherwise a claude successor lands or tickets the work.
 - §6: archive an owner session only after `ARC-STATUS: CLOSED` and 24 h of owner quiet. Every open item a
   driven session leaves is attached to an initiative, so the fleet proposes work from that ledger.
-- §3: the snapshot carries the drive sections, each session with one recommended action.
+- §3: the snapshot carries the drive sections (`drive_due`, `other_sessions`) under a documented contract
+  (fields, final-state classes, actions, thresholds as overlay inputs), so any orchestrator can copy it.
+- The close never orders cleanup: nothing is discarded or deleted, and a shared checkout is touched only
+  where the session wrote. One successor runs at a time, labelled with the session it closes. A card that
+  can't be read counts as open.
 
-The broomva overlay's implementation is `scripts/session_drive.py` in broomva/workspace, fixture-tested.
+The broomva overlay's implementation is `scripts/session_drive.py` in broomva/workspace: 48 fixtures, each
+guard mutation-proved.
 
 ## 0.47.0 — 2026-10-15
 
