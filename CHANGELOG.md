@@ -31,7 +31,7 @@ nothing drove it there. Non-claude sessions (`other`) were never touched, so 11 
   messages: all 185 closes kept).
 
 The broomva overlay's implementation is `scripts/session_drive.py` in broomva/workspace: one outcome
-classifier and one decision table for both providers, 86 fixtures including a walk of every combination,
+classifier and one decision table for both providers, 87 fixtures including a walk of every combination,
 and every guard mutation-proved.
 
 ## 0.47.0 — 2026-10-15
