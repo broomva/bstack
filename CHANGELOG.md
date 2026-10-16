@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.48.0 — 2026-10-16
+
+### feat(references): every session in scope is driven, owner-started too (BRO-3154)
+
+The owner, 2026-10-16: "consider not only the sessions you/maestro run, but keep control of everything,
+consider I also start sessions and those need to be driven too, so the ledgers need to consider the whole
+context."
+
+Measured the same day: 26 live sessions in the broomva scope, 13 of them started by the owner and none ever
+closed. Under 0.47.0 an `owner` session was only read after 12 h idle and archived "when fully finished", and
+nothing drove it there. Non-claude sessions (`other`) were never touched, so 11 sat outside every loop.
+
+- §5: owner sessions are driven with the arc close once they are idle past the overlay's threshold and the
+  owner has gone quiet for as long. Orchestrator prompts carry a marker so the owner's clock counts only the
+  owner. A personal, financial or client matter is filed nowhere. Two drives with no close are reported once,
+  and the session is left alone after that.
+- §4, §6: a model session of another provider (Antigravity, Codex) is never prompted. Its worktree decides:
+  archive when it is finished (clean, nothing unpushed, landed, and a squash-merged branch is landed only at
+  the PR's head), otherwise a claude successor lands or tickets the work.
+- §6: an owner session is archived only on the owner's approval of a per-session archive ask, newer than
+  the owner's last message. It is asked only after `ARC-STATUS: CLOSED` and 24 h on both clocks; no text
+  classifier decides an owner-session archive. Every open item a
+  driven session leaves is attached to an initiative, so the fleet proposes work from that ledger.
+- §3: the snapshot carries the drive sections (`drive_due`, `other_sessions`) under a documented contract
+  (fields, final-state classes, actions, thresholds as overlay inputs), so any orchestrator can copy it.
+- The close never orders cleanup: nothing is discarded or deleted, and a shared checkout is touched only
+  where the session wrote. One successor runs at a time, labelled with the session it closes. A card that
+  can't be read counts as open. The status line is accepted by exact grammar (replayed over 1,681 real final
+  messages: all 185 closes kept).
+
+The broomva overlay's implementation is `scripts/session_drive.py` in broomva/workspace: one outcome
+classifier and one decision table for both providers, 87 fixtures including a walk of every combination,
+and every guard mutation-proved.
+
 ## 0.47.0 — 2026-10-15
 
 ### feat(references): tiered delegation — computed tiers, spec-backed briefs, agent graphs, raises at any depth (BRO-3118)

@@ -92,9 +92,9 @@ Each step has a tier. A tier is due when its `last_run` in `state.tiers` is olde
 
 | Tier | Period | Default steps |
 |---|---|---|
-| `every` | each fire | snapshot, census, driven sessions, owner answers, PR queue, backlog advance, report |
+| `every` | each fire | snapshot, census, driven sessions (owner-started included), owner answers, PR queue, backlog advance, report |
 | `hourly` | 1 h | main health, loops drift |
-| `4h` | 4 h | owner-session close-outs, disk and usage trends |
+| `4h` | 4 h | initiative review (§6), disk and usage trends |
 | `daily` | 24 h | self-improvement, KG and memory promotion, loop upkeep (§10) |
 
 The overlay can move a step to another tier, or add its own steps to a tier. It cannot drop the tick contract or the census.
@@ -117,6 +117,11 @@ The contract for the script:
 - **Read-only.** It never prompts, archives, merges or writes outside its cache.
 - It includes a `capacity` section (§7) and a `sessions` section (§11), described there.
 - It includes a `census` section (§4), with the final assistant message of each `arc` agent and of each `owner` agent idle for more than 12 h. That message comes from the agent's transcript: `persistence.sessionId` in its registry file, and `~/.claude/projects/*/<sessionId>.jsonl`.
+- It includes the drive sections (§5), so the tick acts on an action and doesn't re-read the session. Any orchestrator can copy this contract; the overlay supplies only the scope and the thresholds:
+  - `drive_due`: one row per `owner` session that is due, already driven, or held. Fields: `id`, `title`, `cwd`, `status`, `idle_h`, `owner_h` (since the owner's last message; harness lines and the orchestrator's marked prompts don't count), `drive_h`, `drives` (marked prompts since the owner last spoke), `context_k`, `final_state` (`closed`, `routed`, `personal`, `handback`, `limit`, `question`, `finished`, `none`; the status is accepted only by exact grammar: a line that, once quote marks and one symmetric emphasis or code wrapper are stripped, is exactly the status line, followed by nothing but blank lines, fences or an ask block. Anything else, including a mention inside a sentence, is prose), `ask`, `tree`, `children`, `card`, `successor`, `action`. It also carries a `thresholds` object, the overlay's inputs: `idle_h`, `owner_quiet_h`, `archive_touch_h`, `successor_k`, `max_drives`.
+  - `other_sessions`: one row per model session of another provider, with `id`, `provider`, `title`, `cwd`, `status`, `idle_h`, `final` (when readable), `tree`, `children`, `successor`, `action`.
+  - `tree` is `{exists, shared, branch, dirty, unpushed, ahead, pr, landed, finished}`. A shared checkout is never attributed, and a failed PR lookup is shown as an error, never read as "not merged".
+  - `action` is one of: `drive`, `reprompt`, `resume`, `successor_close`, `successor`, `ask_archive`, `land_answer`, `archive_asked`, `owner_kept`, `archive`, `clear_children`, `card_open`, `routed`, `owner_held`, `stuck`, `out_of_scope`, `inspect`, `wait`, `hold_owner_touch`, `hands_off`. An action that gates on usage (`drive`, `reprompt`, `resume`, a successor) runs under §7. `ask_archive` writes one archive ask (§6); `land_answer` commits an answer the asks UI wrote in place into the asks PR, since an answer counts only once it is merged. `archive` and `clear_children` archive; for an owner session they only appear on the owner's approval. `inspect` never archives. Every other action only reads. `drive_due` rows also carry `archive_ask` (`id`, `state`, `option`) and `foreign_children`.
 - It prints one JSON object with one key per section.
 - A section that fails is `{"error": "..."}`, and the rest still print.
 - It exits 0 unless it cannot run at all.
@@ -136,9 +141,9 @@ Classify each live agent in scope, testing the classes in this order. The first 
 | Class | Test | Handling |
 |---|---|---|
 | `self` | this agent's id | none |
-| `other` | not a model session (`provider` is not `claude`, e.g. a Maestro or plugin agent), an orchestrator id the overlay lists, a descendant of one, or a Maestro run in another scope | never touched |
+| `other` | `provider` is not `claude`, an orchestrator id the overlay lists, a descendant of one, or a Maestro run in another scope | never prompted. A plugin agent (a Maestro inbox), another orchestrator and its descendants are never touched at all. A model session of another provider (Antigravity, Codex, …) is closed out by its worktree (§6) |
 | `arc` | a worker this orchestrator launched: the label `paseo.parent-agent-id` = self or a predecessor, the label `dispatched-by` names it, or a Maestro card it filed | driven (§5) |
-| `owner` | everything else | read at a >12 h idle; closed out on the owner rule (§6) |
+| `owner` | everything else, including the sessions the owner starts | driven to a close (§5), and archived on the owner rule (§6) |
 
 A cleared parent label is stored as `""`, not removed (measured). So "no parent" means missing or empty. Never treat `""` as a parent.
 
@@ -147,6 +152,14 @@ A cleared parent label is stored as `""`, not removed (measured). So "no parent"
 **Finish notices get lost.** An idle session's finish notice sometimes never reaches the orchestrator. So every tick re-reads the final message of each driven session, from the snapshot's census section, whether or not a notice arrived. Call `get_agent_activity` only on the session you are about to act on.
 
 **Never send a prompt to a running session**, because that interrupts its turn. Leave it a note it reads at its next turn boundary (`SendMessage` to a subagent; for a Paseo session, the overlay names the channel). Otherwise wait for it to go idle.
+
+**Every session in scope is driven, whoever started it.** The owner starts sessions too, and an owner session left idle with work open is work the fleet has lost. So an `owner` session is driven like an `arc`, under three extra guards:
+- **Due** only when it has been idle past the overlay's threshold **and** the owner hasn't messaged it for as long. Every prompt the orchestrator sends carries a marker the overlay names in its opening, after the slash command so the command still expands. That way the transcript tells the owner's messages from the orchestrator's. Lines the harness writes (notices, command output, compaction summaries) are not the owner's. The owner's answers through a tool are the owner's: a question answered, or a plan approved or rejected.
+- **Driven with a close, not new work.** The prompt asks for the arc close: PRs merged or closed, the session's own finished work committed and pushed, open items as tickets attached to an initiative, owner decisions as `.control/asks` entries, knowledge promoted, and a last line `ARC-STATUS: CLOSED` or `ARC-STATUS: HANDBACK <ask ref> <the one question>`. It never orders cleanup. Nothing is discarded or deleted, and in a shared checkout the session touches only what it wrote. A personal, financial or client matter is filed nowhere, and is handed back as personal.
+- **Capped.** Drives, resumes included, count toward the tick's `max_driven` (§7) and the overlay's per-tick cap. After two drives with no close, the session is reported once and no longer driven until the owner speaks to it. A session whose Maestro card is running is Maestro's to drive.
+- **One successor at a time, and no prompt above 600k.** Any prompt to a session above 600k becomes a fresh successor (§11), labelled with the session it closes. While that successor is live, nothing else is launched for the session. A successor's outcome counts only when it comes after the owner's last message, and it maps exactly as the session's own outcome would: closed, routed (an ask), or personal (held for the owner). Once a successor has run, the old session is never prompted again. Two successors that end with none of those make the session `stuck`, and a silent death counts as one. A running session is never prompted or archived, whatever its successor did. The overlay derives all of this from one outcome classifier and one table, shared by both providers, so a state handled on one path is handled on every path.
+
+A model session of another provider is never prompted: one provider's session is not driven through another's prompt. Its worktree decides. A finished worktree is closed out (§6). Unlanded work gets a fresh claude successor in that worktree, which lands the work or tickets it.
 
 On an idle or finished session, act on the final message:
 
@@ -157,7 +170,9 @@ On an idle or finished session, act on the final message:
 | Died on an auth denial, or pinned to a disabled login | Start a fresh agent in the same worktree, seeded with the dead one's final message, ticket and branch. Clear the dead agent's children's parent labels (§6), then archive it |
 | Waiting on a background job (CI, a watcher) | Nudge it to wait in the **foreground**. A background wait ends the turn, and the result arrives nowhere |
 | Ended on a question | Answer it if the answer is a decision you can make with the evidence. Otherwise it goes to the owner as an ask (§8) |
-| Finished | Close it out (§6) |
+| Handed back with an ask ref | Leave it. The ask is in the ledger, and the initiative's `waiting_on` carries it. The answer wakes it (§8) |
+| Finished, not closed (an `owner` session) | Drive it with the close prompt |
+| `ARC-STATUS: CLOSED` | Close it out (§6) |
 
 ## 6. Close-out and archiving
 
@@ -166,9 +181,13 @@ On an idle or finished session, act on the final message:
 2. **Tree clean.** `git status` is clean in its worktree, and no unpushed commit is left on its branch.
 3. **Follow-ups ticketed.** Every open item in its final message is a ticket, not a sentence.
 4. **Decisions recorded.** Any owner decision it raised is an entry in a `.control/asks` ledger.
-5. **Card in review or done.** If a Maestro card tracks the arc, the card is in `review` or `done` before the session is archived. Archiving a session whose card is still `running` lands the card in a false failure.
+5. **Card settled.** If a Maestro card tracks the arc, the card is in `review` or `done` before the session is archived. A card whose state can't be read counts as open. Archiving a session whose card is still `running` lands the card in a false failure.
 
-**Owner sessions** are archived only when they have been idle more than 12 h and are fully finished. Do at most 3 owner close-outs per tick, and only while usage allows it (§7).
+**Owner sessions are archived by the owner.** The orchestrator drives an owner session to a close. When the session is ready, it asks the owner, in a per-session archive ask (an `.control/asks` entry with the summary, the final message, the tree and PR state, and a recommendation), and archives the session only on an approval newer than the owner's last message. There is one ask per close cycle. An answer counts only once it is merged or on the asks UI's own answers branch, names an offered option, and falls after the ask was asked; a default is keep. A session with a child outside the orchestrator's scope is never archived, because the archive would cascade into that child. No text classifier decides an owner-session archive, so a misread status costs at most a drive. An owner session is ready only when it is fully finished and has ended `ARC-STATUS: CLOSED`, or its successor has. That close must come after the owner's last message: a close from before new owner work closes nothing, for the session as for its successor. Two clocks must both read 24 h: since the owner last spoke to the session, and since its last activity of any kind. The snapshot is minutes old, so the orchestrator re-reads a session's status right before it prompts or archives it. Never archive, or order worktree cleanup on, a session the owner touched in the last 24 h. A session the overlay marks as the owner's own is never touched. Drives and archives per tick are capped by the overlay, and drives only run while usage allows a resume (§7).
+
+**Other providers' sessions** are archived when they've been idle 24 h and their worktree is finished: clean, nothing unpushed, and the branch landed (in the default branch, or its PR merged). After a squash merge, the branch's commits are landed only up to the merged PR's head. A commit after it, pushed or not, is unlanded work. A readable final message that asks something is read before any archive.
+
+**The ledgers hold the whole context.** Every open item a driven session leaves, owner-started or not, is attached to an initiative (`.control/initiatives/`: `next_action`, `waiting_on`), or becomes one. The orchestrator proposes work from that ledger as well as from its own backlog (§9).
 
 **Archiving cascades.** Archiving agent X also archives every live agent labelled `paseo.parent-agent-id=X`. A worker or successor that X created carries that label. Before archiving X, clear the label on each live child that must survive, and re-read the child's registry file to confirm the label is now `""`:
 
