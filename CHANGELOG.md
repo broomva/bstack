@@ -27,8 +27,9 @@ nothing drove it there. Non-claude sessions (`other`) were never touched, so 11 
   where the session wrote. One successor runs at a time, labelled with the session it closes. A card that
   can't be read counts as open.
 
-The broomva overlay's implementation is `scripts/session_drive.py` in broomva/workspace: 48 fixtures, each
-guard mutation-proved.
+The broomva overlay's implementation is `scripts/session_drive.py` in broomva/workspace: one outcome
+classifier and one decision table for both providers, 68 fixtures including a walk of every combination,
+and every guard mutation-proved.
 
 ## 0.47.0 — 2026-10-15
 
