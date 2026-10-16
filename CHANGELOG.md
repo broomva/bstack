@@ -25,10 +25,11 @@ nothing drove it there. Non-claude sessions (`other`) were never touched, so 11 
   (fields, final-state classes, actions, thresholds as overlay inputs), so any orchestrator can copy it.
 - The close never orders cleanup: nothing is discarded or deleted, and a shared checkout is touched only
   where the session wrote. One successor runs at a time, labelled with the session it closes. A card that
-  can't be read counts as open.
+  can't be read counts as open. The status line is accepted by exact grammar (replayed over 1,681 real final
+  messages: all 185 closes kept).
 
 The broomva overlay's implementation is `scripts/session_drive.py` in broomva/workspace: one outcome
-classifier and one decision table for both providers, 74 fixtures including a walk of every combination,
+classifier and one decision table for both providers, 77 fixtures including a walk of every combination,
 and every guard mutation-proved.
 
 ## 0.47.0 — 2026-10-15
