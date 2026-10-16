@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.47.0 — 2026-10-15
+
+### feat(references): tiered delegation — computed tiers, spec-backed briefs, agent graphs, raises at any depth (BRO-3118)
+
+Measured on 2026-10-15: of 706 Paseo agents, about 83% ran on Opus (421 Opus 5.5, 166 Opus 5), 6 on Haiku,
+and thinking was almost always high or xhigh. All 129 Maestro runs were Claude, nearly all Opus. The §8 model
+tier from 0.46.0 was prose: nothing computed it, its model names had gone stale, and nothing carried it to
+the agents a delegate starts.
+
+- New `references/delegation.md`: tiers as roles (mechanical · standard · frontier · apex); a deterministic
+  assessment from what a brief states; frontier writes the spec, ADR or graph that a standard executor works
+  from; agent graphs validated before launch; reviewers pinned at frontier or cross-vendor; economy by tier.
+- **Raises are allowed at any depth.** The assessment is a floor, not a cap. An agent that finds the work
+  harder than assessed starts a higher-tier agent for that part and writes a `TIER-RAISE:` line. Maestro
+  measures raises from transcripts, and the orchestrator re-plans on them.
+- §8: the launch tier is computed by the overlay's assessor and carried as a delegation block. Model names
+  leave the base: the overlay's ladder holds them.
+
+The broomva overlay's implementation is `scripts/delegation.py` in broomva/workspace. It is fixture-tested
+and mutation-proved. Maestro's economy by tier ships in broomva/maestro-paseo.
+
 ## 0.46.0 — 2026-10-09
 
 ### feat(orchestrator-tick): fleet token economy — burn forecast, dynamic cadence, model tiers, context rollover (BRO-3013)
