@@ -19,7 +19,9 @@ nothing drove it there. Non-claude sessions (`other`) were never touched, so 11 
 - §4, §6: a model session of another provider (Antigravity, Codex) is never prompted. Its worktree decides:
   archive when it is finished (clean, nothing unpushed, landed, and a squash-merged branch is landed only at
   the PR's head), otherwise a claude successor lands or tickets the work.
-- §6: archive an owner session only after `ARC-STATUS: CLOSED` and 24 h of owner quiet. Every open item a
+- §6: an owner session is archived only on the owner's approval of a per-session archive ask, newer than
+  the owner's last message. It is asked only after `ARC-STATUS: CLOSED` and 24 h on both clocks; no text
+  classifier decides an owner-session archive. Every open item a
   driven session leaves is attached to an initiative, so the fleet proposes work from that ledger.
 - §3: the snapshot carries the drive sections (`drive_due`, `other_sessions`) under a documented contract
   (fields, final-state classes, actions, thresholds as overlay inputs), so any orchestrator can copy it.
@@ -29,7 +31,7 @@ nothing drove it there. Non-claude sessions (`other`) were never touched, so 11 
   messages: all 185 closes kept).
 
 The broomva overlay's implementation is `scripts/session_drive.py` in broomva/workspace: one outcome
-classifier and one decision table for both providers, 77 fixtures including a walk of every combination,
+classifier and one decision table for both providers, 83 fixtures including a walk of every combination,
 and every guard mutation-proved.
 
 ## 0.47.0 — 2026-10-15
