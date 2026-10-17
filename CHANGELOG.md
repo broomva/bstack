@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.48.1 — 2026-10-16
+
+### docs(SKILL): decision layer v2 — asks carry what it takes to decide them (BRO-3167)
+
+The ask-ledger paragraph now names the five optional v2 fields (`summary`, `tradeoffs`, `sources`,
+`media` on the ask and on each option, `details`), the floor the workspace validator enforces (a summary
+once an open ask raised from 2026-10-17 has three or more options or is about a spec or design; a source for every
+`docs/specs/` path it names) and where the rubric lives (`.control/asks/DECISION-LAYER.md`). Doc only:
+the vendored `scripts/ask_ledger.py` ignores the new keys, so every ledger it validated still validates.
+
 ## 0.48.0 — 2026-10-16
 
 ### feat(references): every session in scope is driven, owner-started too (BRO-3154)
