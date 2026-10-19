@@ -199,7 +199,11 @@ bstack_upgrade_vendored() {
     fi
 
     local tmp; tmp="$(mktemp -d)"
-    trap 'rm -rf "$tmp"' EXIT
+    # Expand $tmp now: the trap fires at script exit, after this function has
+    # returned and its local is gone, which under set -u failed with
+    # "tmp: unbound variable" and left the directory behind (BRO-3200).
+    # shellcheck disable=SC2064
+    trap "rm -rf -- '$tmp'" EXIT
 
     echo "Downloading $tarball..."
     if ! curl -fsSL --max-time 120 -o "$tmp/$tarball" "$base_url/$tarball" 2>>"$log"; then
@@ -313,6 +317,13 @@ bstack_release_tag() {
     local version tag
     version="$(bstack_version)"
     tag="v${version}"
+    local plugin_version
+    plugin_version="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' .claude-plugin/plugin.json 2>/dev/null | head -1)"
+    if [ "$plugin_version" != "$version" ]; then
+        echo "release: .claude-plugin/plugin.json says '${plugin_version:-?}' but VERSION is '$version'." >&2
+        echo "Set plugin.json \"version\" to $version first (BRO-3200)." >&2
+        return 1
+    fi
     if git rev-parse "$tag" >/dev/null 2>&1; then
         echo "release: $tag already exists." >&2
         return 1
