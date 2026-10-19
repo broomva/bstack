@@ -32,7 +32,8 @@ chmod +x "$INST/bin/"*
 # macOS `mktemp -d` ignores TMPDIR, so a TMPDIR check would pass vacuously.
 # A shim on PATH routes bare `mktemp -d` into a directory this test inspects.
 mkdir -p "$H/shim"
-printf '#!/bin/sh\nif [ "$#" -eq 1 ] && [ "$1" = "-d" ]; then exec /usr/bin/mktemp -d "%s/tmp.XXXXXX"; fi\nexec /usr/bin/mktemp "$@"\n' "$H/tmp" > "$H/shim/mktemp"
+REAL_MKTEMP="$(command -v mktemp)"
+printf '#!/bin/sh\nif [ "$#" -eq 1 ] && [ "$1" = "-d" ]; then exec %s -d "%s/tmp.XXXXXX"; fi\nexec %s "$@"\n' "$REAL_MKTEMP" "$H/tmp" "$REAL_MKTEMP" > "$H/shim/mktemp"
 chmod +x "$H/shim/mktemp"
 
 echo "== vendored upgrade, download fails after the trap is set =="
@@ -53,10 +54,17 @@ esac
 LEFT="$(find "$H/tmp" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')"
 [ "$LEFT" -eq 0 ] && ok "temp dir removed on exit" || bad "$LEFT temp entries left in TMPDIR"
 
-echo "== plugin.json version matches VERSION =="
-PV="$(python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1]))["version"])' "$BSTACK_REPO/.claude-plugin/plugin.json")"
+echo "== every manifest version matches VERSION =="
 V="$(tr -d '[:space:]' < "$BSTACK_REPO/VERSION")"
-[ "$PV" = "$V" ] && ok "plugin.json $PV == VERSION $V" || bad "plugin.json $PV != VERSION $V"
+for M in plugin.json marketplace.json; do
+  F="$BSTACK_REPO/.claude-plugin/$M"
+  [ -f "$F" ] || continue
+  MV="$(python3 -I -c 'import json,sys
+d=json.load(open(sys.argv[1]))
+v=d.get("version") or next((p.get("version") for p in d.get("plugins",[]) if isinstance(p,dict) and p.get("version")),"")
+print(v)' "$F")"
+  [ "$MV" = "$V" ] && ok "$M $MV == VERSION $V" || bad "$M $MV != VERSION $V"
+done
 
 echo
 echo "upgrade-trap-cleanup: $PASS passed, $FAIL failed"
