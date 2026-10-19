@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.48.2 — 2026-10-19
+
+### fix(upgrade): the vendored upgrade cleans up after itself, and plugin.json stops lying about the version (BRO-3200)
+
+`bstack_upgrade_vendored` made `tmp` a function local and registered `trap 'rm -rf "$tmp"' EXIT`. The trap
+fires when the script exits, after the function has returned, so every upgrade, dry run and failed download
+ended with `tmp: unbound variable` and left its temp directory behind. The trap now expands the path when it
+is set. `.claude-plugin/plugin.json` had said `0.41.2` since 0.41.2 while VERSION moved on to 0.48.1, so an
+install reported two versions at once: on one Mac that read as three copies of bstack at three versions.
+plugin.json now matches VERSION, and `bstack release tag` refuses to tag while they disagree.
+`tests/upgrade-trap-cleanup.test.sh` runs the failing download offline (a mktemp shim, because macOS
+`mktemp -d` ignores TMPDIR) and checks both.
+
 ## 0.48.1 — 2026-10-16
 
 ### docs(SKILL): decision layer v2 — asks carry what it takes to decide them (BRO-3167)

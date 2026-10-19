@@ -199,7 +199,11 @@ bstack_upgrade_vendored() {
     fi
 
     local tmp; tmp="$(mktemp -d)"
-    trap 'rm -rf "$tmp"' EXIT
+    # Expand $tmp now: the trap fires at script exit, after this function has
+    # returned and its local is gone, which under set -u failed with
+    # "tmp: unbound variable" and left the directory behind (BRO-3200).
+    # shellcheck disable=SC2064
+    trap "rm -rf -- $(printf %q "$tmp")" EXIT
 
     echo "Downloading $tarball..."
     if ! curl -fsSL --max-time 120 -o "$tmp/$tarball" "$base_url/$tarball" 2>>"$log"; then
@@ -313,6 +317,23 @@ bstack_release_tag() {
     local version tag
     version="$(bstack_version)"
     tag="v${version}"
+    # Every manifest that states a version must agree with VERSION (BRO-3200).
+    # plugin.json and marketplace.json both sat at 0.41.2 while VERSION moved on.
+    local manifest manifest_version
+    for manifest in .claude-plugin/plugin.json .claude-plugin/marketplace.json; do
+        [ -f "$manifest" ] || continue
+        manifest_version="$(python3 -I -c 'import json,sys
+d=json.load(open(sys.argv[1]))
+v=d.get("version")
+if v is None:
+    v=next((p.get("version") for p in d.get("plugins",[]) if isinstance(p,dict) and p.get("version")),"")
+print(v or "")' "$manifest" 2>/dev/null)"
+        if [ "$manifest_version" != "$version" ]; then
+            echo "release: $manifest says '${manifest_version:-?}' but VERSION is '$version'." >&2
+            echo "Set its version to $version first (BRO-3200)." >&2
+            return 1
+        fi
+    done
     if git rev-parse "$tag" >/dev/null 2>&1; then
         echo "release: $tag already exists." >&2
         return 1
