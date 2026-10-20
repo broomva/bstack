@@ -23,7 +23,7 @@ BROOMVA_REPO_LEGACY_DIR=".control"
 # entry may be a folder (hooks/); matching a written path against it is the gate's job.
 BROOMVA_OWNER_PATHS="@@OWNER@@"
 
-# _broomva_repo_entry NAME -> "PATH HAS_LEGACY" (1 or 0). Takes one scope prefix.
+# _broomva_repo_entry NAME -> "PATH HAS_LEGACY OWNER" (1 or 0 each). Takes one scope prefix.
 _broomva_repo_entry() {
     local n=$1
     case "$n" in repo.*) n=${n#repo.} ;; workspace.*) n=${n#workspace.} ;; esac
@@ -59,12 +59,12 @@ _broomva_home() {
     local h=${HOME:-} u
     if [ -z "$h" ]; then
         u=$(id -un 2>/dev/null) || return 2
-        case "$u" in ""|*[!A-Za-z0-9._-]*) return 2 ;; esac
-        eval "h=~$u"  # u is a plain account name, checked above
+        # A letter or _ first: `0`, `1`, `-` would expand bash's directory stack or OLDPWD.
+        case "$u" in [A-Za-z_]*) ;; *) return 2 ;; esac
+        case "$u" in *[!A-Za-z0-9._@-]*) return 2 ;; esac
+        eval "h=~$u"  # u is a plain account name (no shell syntax), checked above
     fi
-    case "$h" in /*) ;; *) return 2 ;; esac
-    while [ "${#h}" -gt 1 ] && [ "${h%/}" != "$h" ]; do h=${h%/}; done
-    printf '%s\n' "$h"
+    _broomva_normpath "$h"  # 2 when relative
 }
 
 # A leading ~ or ~/ is the home; a trailing slash is dropped. (~user is left as it
@@ -94,6 +94,30 @@ _broomva_dirname() {
     esac
 }
 
+# _broomva_normpath ABSOLUTE -> the path with `.`, `..` and repeated slashes collapsed,
+# lexically, as Python's os.path.normpath does. 2 for a relative path.
+_broomva_normpath() {
+    local rest=${1#/} out="" c
+    case "$1" in /*) ;; *) return 2 ;; esac
+    while [ -n "$rest" ]; do
+        c=${rest%%/*}
+        case "$rest" in */*) rest=${rest#*/} ;; *) rest="" ;; esac
+        case "$c" in ""|.) ;; ..) out=${out%/*} ;; *) out="$out/$c" ;; esac
+    done
+    printf '%s\n' "${out:-/}"
+}
+
+# _broomva_links FILE -> its hard-link count, from `ls -ld` (portable across BSD and GNU).
+_broomva_links() {
+    local l
+    l=$(ls -ld -- "$1" 2>/dev/null) || return 3
+    l=${l#* }
+    while [ "${l# }" != "$l" ]; do l=${l# }; done
+    l=${l%% *}
+    case "$l" in ""|*[!0-9]*) return 3 ;; esac
+    printf '%s\n' "$l"
+}
+
 # git without the caller's GIT_DIR / GIT_WORK_TREE (set inside git hooks and rebase --exec).
 _broomva_git() {
     env -u GIT_DIR -u GIT_WORK_TREE git "$@"
@@ -103,7 +127,7 @@ _broomva_git() {
 _broomva_absolute() {
     local v
     v=$(_broomva_expand "$1") || return 2
-    case "$v" in /*) printf '%s\n' "$v" ;; *) return 2 ;; esac
+    _broomva_normpath "$v"  # 2 when relative; `..` collapses as in Python
 }
 
 broomva_machine_root() {
@@ -141,7 +165,7 @@ broomva_repo_root() {
     [ "$rc" -eq 127 ] && return 3  # git (or env) could not run: never read as "not a repo"
     [ "$rc" -eq 0 ] || return 1
     [ -n "$top" ] || return 1
-    home=$(_broomva_home) || return 1
+    home=$(_broomva_home) || return 2  # a bad HOME is a usage error, never "no repo"
     # -ef: the same folder, whatever its case or links.
     if [ "$top" -ef "$home" ]; then return 1; fi
     printf '%s\n' "$top"
@@ -150,12 +174,21 @@ broomva_repo_root() {
 # broomva_repo_key ROOT -> the repo's name in machine state: its folder name plus the
 # first 12 hex digits of the sha256 of its real path (`_root` for /), as in Python.
 broomva_repo_key() {
-    local root=${1:-} real name sum
-    [ -n "$root" ] || return 2
-    [ -d "$root" ] || return 2  # keyed by its real path: a repo folder that exists
-    # ./ before a relative root: cd then ignores CDPATH, and `-r` is not an option.
-    case "$root" in /*) ;; *) root="./$root" ;; esac
-    real=$(cd "$root" && pwd -P) || return 3
+    local root=${1:-} real name sum d rest="" base
+    _broomva_root_ok "$root" || return 2
+    case "$root" in /*) ;; *) root="$(pwd -P)/$root" ;; esac
+    root=$(_broomva_normpath "$root") || return 2
+    # The real path of the nearest existing folder, then the rest as named: the same key
+    # before the folder exists (a workspace not cloned yet) and after, as in Python.
+    d=$root
+    while [ ! -d "$d" ]; do
+        base=${d##*/}
+        rest="/$base$rest"
+        d=$(_broomva_dirname "$d")
+    done
+    real=$(cd "$d" && pwd -P) || return 3
+    real="${real%/}$rest"
+    [ -n "$real" ] || real=/
     while [ "${#real}" -gt 1 ] && [ "${real%/}" != "$real" ]; do real=${real%/}; done
     name=${real##*/}
     [ -n "$name" ] || name=_root
@@ -185,20 +218,33 @@ broomva_repo_rels() {
     if [ "${rest%% *}" = 1 ]; then printf '%s\n' "$BROOMVA_REPO_LEGACY_DIR/$p"; fi
 }
 
-# _broomva_contained ROOT -> 3 when .broomva/ or .control/ is a symlink (paths would leave the repo)
+# _broomva_root_ok ROOT -> 2 for an empty root or one with a `..` part (a git top level has none)
+_broomva_root_ok() {
+    [ -n "${1:-}" ] || return 2
+    case "/$1/" in */../*) return 2 ;; esac
+    return 0
+}
+
+# _broomva_contained ROOT -> 3 when .broomva/ or .control/ is a symlink (paths would leave
+# the repo) or something other than a folder
 _broomva_contained() {
-    if [ -L "$1/$BROOMVA_REPO_DIR" ] || [ -L "$1/$BROOMVA_REPO_LEGACY_DIR" ]; then return 3; fi
+    local d
+    for d in "$1/$BROOMVA_REPO_DIR" "$1/$BROOMVA_REPO_LEGACY_DIR"; do
+        if [ -L "$d" ]; then return 3; fi
+        if [ -e "$d" ] && [ ! -d "$d" ]; then return 3; fi
+    done
     return 0
 }
 
 # broomva_moved ROOT -> 0 when any name with a legacy location is already under .broomva/
 broomva_moved() {
     local p
-    [ -n "${1:-}" ] || return 2
+    _broomva_root_ok "${1:-}" || return 2
     _broomva_contained "$1" || return 3
     # A folder that cannot be searched cannot be answered for: 3, as in Python.
     if [ -d "$1/$BROOMVA_REPO_DIR" ] && [ ! -x "$1/$BROOMVA_REPO_DIR" ]; then return 3; fi
     for p in @@LEGACYLIST@@; do
+        if [ -L "$1/$BROOMVA_REPO_DIR/$p" ]; then return 3; fi
         if [ -e "$1/$BROOMVA_REPO_DIR/$p" ]; then return 0; fi
     done
     return 1
@@ -207,12 +253,13 @@ broomva_moved() {
 # broomva_repo_path NAME ROOT -> where NAME lives on disk in the repo at ROOT
 # (ROOT is the repo's top level, as broomva_repo_root prints it)
 broomva_repo_path() {
-    local e p new old rest legacy rc root=${2:-}
+    local e p new old rest legacy owner rc root=${2:-}
     while [ "${#root}" -gt 1 ] && [ "${root%/}" != "$root" ]; do root=${root%/}; done
+    _broomva_root_ok "$root" || return 2
     if e=$(_broomva_state_entry "$1"); then
-        new=$(broomva_state_dir "$root") || return $?  # 2 on an empty root, 3 with no hash tool
         _broomva_contained "$root" || return 3
         _broomva_readable "$root" || return 3
+        new=$(broomva_state_dir "$root") || return $?  # 3 with no hash tool
         new="$new/$e"
         old="$root/$BROOMVA_REPO_LEGACY_DIR/$e"
         _broomva_pick "$new" "$old" 1 "$root"
@@ -220,12 +267,12 @@ broomva_repo_path() {
     fi
     e=$(_broomva_repo_entry "$1") || return 2
     [ -n "$root" ] || return 2
-    p=${e%% *}; rest=${e#* }; legacy=${rest%% *}
+    p=${e%% *}; rest=${e#* }; legacy=${rest%% *}; owner=${rest##* }
     new="$root/$BROOMVA_REPO_DIR/$p"
     old="$root/$BROOMVA_REPO_LEGACY_DIR/$p"
     _broomva_contained "$root" || return 3
     _broomva_readable "$root" || return 3
-    _broomva_pick "$new" "$old" "$legacy" "$root"
+    _broomva_pick "$new" "$old" "$legacy" "$root" "$owner"
 }
 
 # Folders that cannot be searched cannot be answered for: 3, as in Python.
@@ -237,16 +284,28 @@ _broomva_readable() {
     return 0
 }
 
-# _broomva_pick NEW OLD HAS_LEGACY ROOT -> the migration rule; an existing entry that
-# is a symlink is refused (3): a path returned must lie inside the repo.
+# _broomva_ok PATH OWNER -> 3 for a symlink, or for an owner-written file with more than
+# one link (a hard link elsewhere would let an ungoverned write change it).
+_broomva_ok() {
+    local n
+    if [ -L "$1" ]; then return 3; fi
+    if [ "$2" = 1 ] && [ -f "$1" ]; then
+        n=$(_broomva_links "$1") || return 3
+        if [ "$n" -gt 1 ]; then return 3; fi
+    fi
+    return 0
+}
+
+# _broomva_pick NEW OLD HAS_LEGACY ROOT [OWNER] -> the migration rule; an existing entry
+# that is a symlink (or a multiply-linked owner file) is refused (3).
 _broomva_pick() {
-    local rc
+    local rc owner=${5:-0}
     if [ -e "$1" ] || [ -L "$1" ] || [ "$3" = 0 ]; then
-        if [ -L "$1" ]; then return 3; fi
+        if [ -e "$1" ] || [ -L "$1" ]; then _broomva_ok "$1" "$owner" || return 3; fi
         printf '%s\n' "$1"; return 0
     fi
     if [ -e "$2" ] || [ -L "$2" ]; then
-        if [ -L "$2" ]; then return 3; fi
+        _broomva_ok "$2" "$owner" || return 3
         printf '%s\n' "$2"; return 0
     fi
     if [ -d "$4/$BROOMVA_REPO_LEGACY_DIR" ]; then
@@ -270,9 +329,23 @@ broomva_machine_path() {
     new=$(broomva_machine_root) || return 2
     new="$new/${e% *}"
     old=${e##* }
-    if [ "$old" != - ]; then old=$(_broomva_expand "$old"); fi
+    if [ "$old" != - ]; then old=$(_broomva_expand "$old") || return 2; fi
     if [ -e "$new" ] || [ "$old" = - ] || [ ! -e "$old" ]; then printf '%s\n' "$new"
     else printf '%s\n' "$old"; fi
+}
+
+# _broomva_tree_contained ROOT REV -> 3 when .broomva or .control is a committed symlink
+_broomva_tree_contained() {
+    local out line
+    out=$(_broomva_git -C "$1" ls-tree --full-tree "$2" -- "$BROOMVA_REPO_DIR" "$BROOMVA_REPO_LEGACY_DIR" 2>/dev/null) || return 3
+    while IFS= read -r line; do
+        case "${line#*	}" in
+            "$BROOMVA_REPO_DIR"|"$BROOMVA_REPO_LEGACY_DIR") if [ "${line%% *}" != 040000 ]; then return 3; fi ;;
+        esac
+    done <<EOF_TREE
+$out
+EOF_TREE
+    return 0
 }
 
 # broomva_tree_path NAME ROOT [REV] -> the path NAME has in git tree REV (default
@@ -288,15 +361,16 @@ broomva_tree_path() {
         e=$(_broomva_repo_entry "$1") || return 2
         p=${e%% *}; rest=${e#* }; legacy=${rest%% *}
     fi
-    [ -n "${2:-}" ] || return 2
+    _broomva_root_ok "${2:-}" || return 2
     case "$rev" in -*|"") return 2 ;; esac
     _broomva_git -C "$2" rev-parse --verify --quiet "$rev^{tree}" >/dev/null 2>&1 || return 3
+    _broomva_tree_contained "$2" "$rev" || return 3
     for rel in "$first/$p" "$BROOMVA_REPO_LEGACY_DIR/$p"; do
         if [ "$rel" = "$BROOMVA_REPO_LEGACY_DIR/$p" ] && [ "$legacy" != 1 ]; then break; fi
         out=$(_broomva_git -C "$2" ls-tree --full-tree "$rev" -- "$rel" 2>/dev/null) || return 3
         # "MODE TYPE SHA<tab>PATH": a committed symlink (120000) is refused, as in Python.
         if [ -n "$out" ] && [ "${out#*	}" = "$rel" ]; then
-            if [ "${out%% *}" = 120000 ]; then return 3; fi
+            case "${out%% *}" in 040000|100644|100755) ;; *) return 3 ;; esac  # no symlink, no gitlink
             printf '%s\n' "$rel"; return 0
         fi
     done

@@ -12,7 +12,7 @@ set -uo pipefail
 
 BSTACK_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$BSTACK_REPO" || exit 1
-MIN_TESTS=69
+MIN_TESTS=87
 
 PASS=0
 FAIL=0
@@ -84,6 +84,12 @@ expect_gap() {  # expect_gap LABEL PATTERN
 section30_unset() { HOME="$SCRATCH/home" BROOMVA_WORKSPACE='' MAESTRO_WORKSPACE='' BSTACK_WORKSPACE='' \
     bash -c 'cd "$1" && bash "$2/scripts/doctor.sh"' _ "$WS" "$COPY" 2>&1 | sed -n '/^30\. Path registry/,/^$/p'; }
 git -C "$WS" init -q 2>/dev/null
+OUT="$(section30_unset)"
+if printf '%s\n' "$OUT" | grep -q "\[gap\]"; then
+    assert_fail "doctor §30 is clean on a CI layout (no readers' workspace)" "$OUT"
+else
+    assert_pass "doctor §30 is clean on a CI layout (no readers' workspace)"
+fi
 mkdir -p "$WS/.broomva/asks"
 OUT="$(section30_unset)"
 if printf '%s\n' "$OUT" | grep -q "\[gap\] names under both .broomva/ and .control/ in .*asks" \
@@ -97,6 +103,10 @@ rmdir "$WS/.broomva/asks"
 mkdir -p "$WS/.broomva" && touch "$WS/.broomva/policy.yaml"
 expect_gap "a partially moved workspace" ".* has moved to .broomva/ but these are still under .control/: asks"
 rm -f "$WS/.broomva/policy.yaml" && rmdir "$WS/.broomva"
+
+mkdir -p "$SCRATCH/elsewhere" && ln -s "$SCRATCH/elsewhere" "$WS/.broomva"
+expect_gap "a symlinked .broomva (paths would leave the repo)" "a registry name does not resolve in .*symlink"
+rm -f "$WS/.broomva"
 
 mkdir "$SCRATCH/home/.control"
 expect_gap "a ~/.control (a tool fell back to \$HOME)" '\$HOME/.control exists'

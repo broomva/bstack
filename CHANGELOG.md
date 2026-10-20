@@ -26,10 +26,14 @@ of `$CLAUDE_PROJECT_DIR`; never the cwd, never an empty target, never `$HOME`; g
 `GIT_DIR`, from the nearest real (not symlinked) folder, and "no git" is an error, not "not a repo".
 Env roots must be absolute and the workspace is never `$HOME`; `~` and `~/` expand alike in both,
 `~user` and a relative `HOME` are refused. Containment, not provenance: a path the readers return
-lies inside the repo (`.broomva/` and `.control/` must be real folders, an entry must not be a symlink,
-a committed symlink in a tree is refused: `LayoutError`, exit 3); who wrote a file is not something a
-reader can know (`cp -r` makes plain files), so owner-written governance is protected by the gates and
-Owner Signature, and doctor reports a name under both roots. For the gates (step 2), `OWNER_PATHS` is
+lies inside the repo (`.broomva/` and `.control/` must be real, searchable folders; an entry must not be
+a symlink, dangling or not; an owner-written file must have one link; in a tree, registry paths are
+folders or files, never a committed symlink or gitlink: `LayoutError`, exit 3); who wrote a file is not
+something a reader can know (`cp -r` makes plain files), so owner-written governance is protected by the
+gates and Owner Signature, and doctor reports a name under both roots. Containment holds when checked
+(a caller that needs it at use opens with no-follow), and machine-scope names have none. Roots with a
+`..` part are refused; env roots and `HOME` are normalized the same way in both readers, and a workspace
+not cloned yet resolves as it will once cloned. For the gates (step 2), `OWNER_PATHS` is
 the literal owner list; matching a written path against it (case, `..`) stays in the gates. The shell reader's git calls have no
 timeout (macOS has no portable `timeout`); the Python reader's have 10 s. Nothing switches to the
 registry in this release.
@@ -39,9 +43,9 @@ registry in this release.
 `$HOME` (by identity), a name under both roots, a repo that has moved but still holds governance under
 `.control/`, `~/.control`, and any repo-scope name at the top of `~/.broomva`, on both the workspace
 doctor audits and the one the readers resolve; a check that cannot run is a gap, never an ok.
-`tests/broomva-paths.test.sh`: 69 unit cases (shell and Python agreeing on every disk, tree and
-environment state, on bash 3.2 and 5) and 11 doctor fixtures; every rule mutation-proven. P20 rounds
-1 to 3 found the injection, fail-soft, cwd, state-collision and containment faults this now refuses.
+`tests/broomva-paths.test.sh`: 87 unit cases (shell and Python agreeing on every disk, tree and
+environment state, on bash 3.2 and 5) and 13 doctor fixtures; every rule mutation-proven. P20 rounds
+1 to 4 found the injection, fail-soft, cwd, state-collision and containment faults this now refuses.
 
 ## 0.48.2 — 2026-10-19
 

@@ -95,6 +95,11 @@ def validate(data: dict) -> tuple[list[tuple[str, str, bool, bool]], list[tuple[
     # `a/b` cannot both exist when `a` is a file. Compared case-insensitively, since
     # `Policy.yaml` and `policy.yaml` are one file on APFS.
     in_repo = [r[1] for r in repo] + [r[1] for r in state]
+    # One component deep: the readers' containment check covers .broomva/ and the
+    # entry, so a nested path would leave an unchecked folder in between.
+    for p in in_repo:
+        if "/" in p:
+            raise RegistryError(f"repo paths are one component deep: {p!r}")
     folded = [p.lower() for p in in_repo]
     if len(set(folded)) != len(folded):
         raise RegistryError("two repo or repo_state names share a path (compared case-insensitively)")
@@ -152,7 +157,8 @@ def render(raw: bytes) -> tuple[str, str]:
           .replace("@@MACHINE@@", py_machine).replace("@@OWNER@@", py_owner)
           .replace("@@STATE@@", py_state).replace("@@NEVERMACHINE@@", py_never))
     # Patterns are quoted: a name such as `esac` or `in` must stay a word, not syntax.
-    sh_repo = "\n".join(f"        '{n}') printf '%s\\n' '{p} {1 if legacy else 0}' ;;" for n, p, legacy, _ in repo)
+    sh_repo = "\n".join(f"        '{n}') printf '%s\\n' '{p} {1 if legacy else 0} {1 if owner else 0}' ;;"
+                        for n, p, legacy, owner in repo)
     sh_machine = "\n".join(f"        '{n}') printf '%s\\n' '{p} {legacy or '-'}' ;;" for n, p, legacy in machine)
     sh_legacy = " ".join(f"'{p}'" for _, p, legacy, _ in repo if legacy)
     sh_state = "\n".join(f"        '{n}') printf '%s\\n' '{p}' ;;" for n, p in state)
