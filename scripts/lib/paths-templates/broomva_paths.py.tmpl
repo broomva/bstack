@@ -26,7 +26,11 @@ to must not be a symlink (repo paths are one level deep, so that is every
 component); a committed symlink in a tree is refused the same way (LayoutError).
 An owner-written file must also have a single link: a hard link elsewhere in
 the repo lets a write to an ungoverned name change it, past every lexical gate,
-and git cannot record the alias for Owner Signature to see. They cannot tell who
+and git cannot record the alias for Owner Signature to see. That check sees only
+a link that still exists (one made, written through and removed leaves nothing),
+any process on the volume can trip it by linking the file (backup tools that
+hard-link do), and files inside a folder entry (hooks/) are not counted. An entry
+that is neither a regular file nor a folder (a FIFO, socket or device) is refused. They cannot tell who
 wrote a file: a `.broomva/policy.yaml` an agent created with `cp -r` reads like
 the owner's. Owner-written governance is protected where
 it is written, by the gates (literal lists, OWNER_PATHS) and Owner Signature
@@ -146,7 +150,13 @@ def repo_key(root: os.PathLike) -> str:
     never share state. `_root` stands in for the name of `/`."""
     root = _require_root(root)
     # The real path of the nearest existing folder, then the rest as named: the same key
-    # before the folder exists (a workspace not cloned yet) and after.
+    # before the folder exists (a workspace not cloned yet) and after. A dangling symlink
+    # on the way up is refused: it names a place that does not exist (both readers agree).
+    probe = Path(os.path.abspath(str(root)))
+    while not os.path.exists(probe) and probe != probe.parent:
+        if os.path.islink(probe):
+            raise ValueError(f"{probe} is a dangling symlink above the repo root {root}")
+        probe = probe.parent
     real = os.path.realpath(root)
     name = Path(real).name or "_root"
     return f"{name}-{hashlib.sha256(real.encode()).hexdigest()[:12]}"
@@ -172,12 +182,25 @@ def _home() -> Path:
         home = Path(value)
     else:
         try:
-            home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+            account = pwd.getpwuid(os.getuid())
         except KeyError as e:
             raise ValueError("HOME is empty and this account has no home in the password database") from e
+        # The shell reader's rule for the account name (it reaches eval there): a letter or _ first.
+        name = account.pw_name
+        if not name or not (name[0].isascii() and (name[0].isalpha() or name[0] == "_")) \
+                or any(not (c.isascii() and (c.isalnum() or c in "._@-")) for c in name):
+            raise ValueError(f"HOME is empty and the account name {name!r} cannot be used to find a home")
+        home = Path(account.pw_dir)
     if not home.is_absolute():
         raise ValueError(f"HOME must be an absolute path: {value!r}")
-    return Path(os.path.normpath(str(home)))
+    return _norm(home)
+
+
+def _norm(path: Path) -> Path:
+    """normpath, with a leading `//` collapsed as the shell reader collapses it (on macOS
+    and Linux `//` names the root; POSIX leaves it implementation-defined)."""
+    p = os.path.normpath(str(path))
+    return Path("/" + p.lstrip("/")) if p.startswith("//") else Path(p)
 
 
 def _same(a: Path, b: Path) -> bool:
@@ -207,7 +230,7 @@ def _absolute(key: str, value: str) -> Path:
     path = _expand(value)
     if not path.is_absolute():
         raise ValueError(f"{key} must be an absolute path (or start with ~/): {value!r}")
-    return Path(os.path.normpath(str(path)))  # `..` and `.` collapse, as in the shell reader
+    return _norm(path)  # `..` and `.` collapse, as in the shell reader
 
 
 def machine_root() -> Path:
@@ -285,6 +308,8 @@ def _entry(path: Path, owner: bool = False) -> Path:
         return path
     if stat.S_ISLNK(info.st_mode):
         raise LayoutError(f"{path} is a symlink; a registry entry is a real file or folder")
+    if not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode)):
+        raise LayoutError(f"{path} is neither a file nor a folder")
     if owner and stat.S_ISREG(info.st_mode) and info.st_nlink > 1:
         raise LayoutError(f"{path} has {info.st_nlink} links; an owner-written file has one")
     return path
@@ -342,10 +367,10 @@ def moved(root: os.PathLike) -> bool:
     survive a pull) then no longer draws new files back."""
     root = _require_root(root)
     _contained(root)
-    found = [root / REPO_DIR / path for path, legacy, _ in REPO.values() if legacy]
-    found = [p for p in found if _lstat(p) is not None]
-    for p in found:
-        _entry(p)
+    found = [(root / REPO_DIR / path, owner) for path, legacy, owner in REPO.values() if legacy]
+    found = [(p, owner) for p, owner in found if _lstat(p) is not None]
+    for p, owner in found:
+        _entry(p, owner)
     return bool(found)
 
 

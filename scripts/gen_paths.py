@@ -161,10 +161,12 @@ def render(raw: bytes) -> tuple[str, str]:
                         for n, p, legacy, owner in repo)
     sh_machine = "\n".join(f"        '{n}') printf '%s\\n' '{p} {legacy or '-'}' ;;" for n, p, legacy in machine)
     sh_legacy = " ".join(f"'{p}'" for _, p, legacy, _ in repo if legacy)
+    # Owner paths with a legacy spelling, for broomva_moved's link check; never empty as a pattern.
+    sh_owner_legacy = "|".join(f"'{p}'" for _, p, legacy, owner in repo if legacy and owner) or "''"
     sh_state = "\n".join(f"        '{n}') printf '%s\\n' '{p}' ;;" for n, p in state)
     sh = ((TEMPLATES / "broomva-paths.sh.tmpl").read_text().replace("@@SHA@@", sha)
           .replace("@@OWNER@@", " ".join(owners))
-          .replace("@@REPO@@", sh_repo).replace("@@MACHINE@@", sh_machine).replace("@@LEGACYLIST@@", sh_legacy)
+          .replace("@@REPO@@", sh_repo).replace("@@MACHINE@@", sh_machine).replace("@@LEGACYLIST@@", sh_legacy).replace("@@OWNERLEGACY@@", sh_owner_legacy)
           .replace("@@STATE@@", sh_state))
     return py, sh
 

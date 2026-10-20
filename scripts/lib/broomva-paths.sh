@@ -10,7 +10,9 @@
 # Same rules and answers as scripts/broomva_paths.py; bash 3.2 compatible; every
 # function keeps its variables local. Return codes: 0 found, 1 absent (or no
 # repo), 2 usage error or unknown name, 3 could not read (a git tree, an
-# unreadable folder, no git) or a path that would leave the repo. Containment,
+# unreadable folder, no git) or a path that would leave the repo. External tools are
+# called through `command`, so a caller's function named ls, git, env or id is never
+# used in their place. Containment,
 # not provenance: .broomva/ and .control/ must be real folders and an entry must
 # not be a symlink; who wrote a file is the gates' and Owner Signature's concern.
 # Unlike the Python reader, git calls here have no timeout: macOS ships no
@@ -109,7 +111,7 @@ _broomva_machine_entry() {
 _broomva_home() {
     local h=${HOME:-} u
     if [ -z "$h" ]; then
-        u=$(id -un 2>/dev/null) || return 2
+        u=$(command id -un 2>/dev/null) || return 2
         # A letter or _ first: `0`, `1`, `-` would expand bash's directory stack or OLDPWD.
         case "$u" in [A-Za-z_]*) ;; *) return 2 ;; esac
         case "$u" in *[!A-Za-z0-9._@-]*) return 2 ;; esac
@@ -161,7 +163,7 @@ _broomva_normpath() {
 # _broomva_links FILE -> its hard-link count, from `ls -ld` (portable across BSD and GNU).
 _broomva_links() {
     local l
-    l=$(ls -ld -- "$1" 2>/dev/null) || return 3
+    l=$(command ls -ld -- "$1" 2>/dev/null) || return 3
     l=${l#* }
     while [ "${l# }" != "$l" ]; do l=${l# }; done
     l=${l%% *}
@@ -171,7 +173,7 @@ _broomva_links() {
 
 # git without the caller's GIT_DIR / GIT_WORK_TREE (set inside git hooks and rebase --exec).
 _broomva_git() {
-    env -u GIT_DIR -u GIT_WORK_TREE git "$@"
+    command env -u GIT_DIR -u GIT_WORK_TREE git "$@"
 }
 
 # An env root must be absolute (or ~/), as broomva_home.py requires: 2 otherwise.
@@ -233,6 +235,8 @@ broomva_repo_key() {
     # before the folder exists (a workspace not cloned yet) and after, as in Python.
     d=$root
     while [ ! -d "$d" ]; do
+        # A dangling symlink on the way up names a place that does not exist: 2, as in Python.
+        if [ -L "$d" ]; then return 2; fi
         base=${d##*/}
         rest="/$base$rest"
         d=$(_broomva_dirname "$d")
@@ -243,8 +247,8 @@ broomva_repo_key() {
     while [ "${#real}" -gt 1 ] && [ "${real%/}" != "$real" ]; do real=${real%/}; done
     name=${real##*/}
     [ -n "$name" ] || name=_root
-    if command -v sha256sum >/dev/null 2>&1; then sum=$(printf '%s' "$real" | sha256sum)
-    elif command -v shasum >/dev/null 2>&1; then sum=$(printf '%s' "$real" | shasum -a 256)
+    if command -v sha256sum >/dev/null 2>&1; then sum=$(printf '%s' "$real" | command sha256sum)
+    elif command -v shasum >/dev/null 2>&1; then sum=$(printf '%s' "$real" | command shasum -a 256)
     else return 3; fi
     [ "${#sum}" -ge 12 ] || return 3
     printf '%s-%s\n' "$name" "${sum:0:12}"
@@ -289,16 +293,23 @@ _broomva_contained() {
 
 # broomva_moved ROOT -> 0 when any name with a legacy location is already under .broomva/
 broomva_moved() {
-    local p
+    local p f owner found
     _broomva_root_ok "${1:-}" || return 2
+    _broomva_readable "$1" || return 3
     _broomva_contained "$1" || return 3
-    # A folder that cannot be searched cannot be answered for: 3, as in Python.
-    if [ -d "$1/$BROOMVA_REPO_DIR" ] && [ ! -x "$1/$BROOMVA_REPO_DIR" ]; then return 3; fi
+    # Every entry is checked before answering, as in Python: a symlinked or multiply-linked
+    # one later in the list is not hidden by an earlier one that exists.
+    found=1
     for p in 'policy.yaml' 'preauth.yaml' 'allowed_signers' 'asks' 'initiatives' 'arcs.yaml' 'bands' 'decisions.jsonl' 'grants.jsonl' 'rcs-parameters.toml' 'leverage-setpoints.yaml' 'hillclimb' 'spec-contract-grandfathered.txt' 'i2p-profile.json' 'i2p-profile.example.json' 'improvement-log.jsonl' 'commands.yaml' 'topology.yaml' 'state.json' 'plant.yaml' 'runtime.yaml' 'problem-spec.template.yaml' 'egri.yaml' 'egri-journal.jsonl' 'evals' 'schemas'; do
-        if [ -L "$1/$BROOMVA_REPO_DIR/$p" ]; then return 3; fi
-        if [ -e "$1/$BROOMVA_REPO_DIR/$p" ]; then return 0; fi
+        f="$1/$BROOMVA_REPO_DIR/$p"
+        if [ -e "$f" ] || [ -L "$f" ]; then
+            owner=0
+            case "$p" in 'policy.yaml'|'preauth.yaml'|'allowed_signers') owner=1 ;; esac
+            _broomva_ok "$f" "$owner" || return 3
+            found=0
+        fi
     done
-    return 1
+    return "$found"
 }
 
 # broomva_repo_path NAME ROOT -> where NAME lives on disk in the repo at ROOT
@@ -326,10 +337,11 @@ broomva_repo_path() {
     _broomva_pick "$new" "$old" "$legacy" "$root" "$owner"
 }
 
-# Folders that cannot be searched cannot be answered for: 3, as in Python.
+# Folders that cannot be searched cannot be answered for: 3, as in Python. The repo
+# root itself too: under it, .broomva and .control cannot even be stat-ed.
 _broomva_readable() {
     local d
-    for d in "$1/$BROOMVA_REPO_DIR" "$1/$BROOMVA_REPO_LEGACY_DIR"; do
+    for d in "$1" "$1/$BROOMVA_REPO_DIR" "$1/$BROOMVA_REPO_LEGACY_DIR"; do
         if [ -d "$d" ] && [ ! -x "$d" ]; then return 3; fi
     done
     return 0
@@ -340,6 +352,8 @@ _broomva_readable() {
 _broomva_ok() {
     local n
     if [ -L "$1" ]; then return 3; fi
+    # Neither a regular file nor a folder (a FIFO, socket or device): 3, as in Python.
+    if [ -e "$1" ] && [ ! -f "$1" ] && [ ! -d "$1" ]; then return 3; fi
     if [ "$2" = 1 ] && [ -f "$1" ]; then
         n=$(_broomva_links "$1") || return 3
         if [ "$n" -gt 1 ]; then return 3; fi

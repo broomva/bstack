@@ -1017,10 +1017,19 @@ class Round4B(Tmp):
             bp.repo_path("asks", repo)
         self.assertEqual(sh(f'broomva_repo_path asks "{repo}"').returncode, 3)
 
+    def _fake_id(self, name: str) -> dict:
+        # The library calls `command id`, so the stub is an executable ahead on PATH.
+        bindir = self.tmp / f"bin-{abs(hash(name))}"
+        bindir.mkdir(exist_ok=True)
+        stub = bindir / "id"
+        stub.write_text(f"#!/bin/sh\nprintf '%s\\n' '{name}'\n")
+        stub.chmod(0o755)
+        return {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}", "HOME": ""}
+
     def test_the_account_name_guard_keeps_eval_inert(self) -> None:
         marker = self.tmp / "pwned"
-        out = subprocess.run([BASH, "-c", f'. "{SH_LIB}"; id() {{ printf "%s\\n" "x;touch {marker}"; }}; HOME=; broomva_machine_root'],
-                             capture_output=True, text=True)
+        out = subprocess.run([BASH, "-c", f'. "{SH_LIB}"; broomva_machine_root'],
+                             capture_output=True, text=True, env=self._fake_id(f"x;touch {marker}"))
         self.assertEqual(out.returncode, 2)
         self.assertFalse(marker.exists(), "the account name never reached eval")
 
@@ -1063,8 +1072,8 @@ class Round4C(Tmp):
 
     def test_numeric_or_dash_account_names_never_reach_eval(self) -> None:
         for name in ("0", "1", "-", "+1"):
-            out = subprocess.run([BASH, "-c", f'. "{SH_LIB}"; id() {{ printf "%s\\n" "{name}"; }}; HOME=; broomva_machine_root'],
-                                 capture_output=True, text=True, cwd=self.tmp)
+            out = subprocess.run([BASH, "-c", f'. "{SH_LIB}"; broomva_machine_root'],
+                                 capture_output=True, text=True, cwd=self.tmp, env=Round4B._fake_id(self, name))
             with self.subTest(name):
                 self.assertEqual(out.returncode, 2, out.stdout)
 
@@ -1080,6 +1089,82 @@ class Round4C(Tmp):
         with self.assertRaises(bp.LayoutError):
             bp.tree_path("asks", repo, "HEAD")
         self.assertEqual(sh(f'broomva_tree_path asks "{repo}" HEAD').returncode, 3)
+
+
+class Round5(Tmp):
+    """Round-5 review (Strata A, B, C): each finding, as a case that fails if it returns."""
+
+    def test_a_dangling_ancestor_is_refused_by_both_key_readers(self) -> None:
+        (self.tmp / "dang").symlink_to(self.tmp / "nowhere")
+        root = self.tmp / "dang" / "ws"
+        with self.assertRaises(ValueError):
+            bp.repo_key(root)
+        self.assertEqual(sh(f'broomva_repo_key "{root}"').returncode, 2)
+
+    def test_a_leading_double_slash_normalizes_alike(self) -> None:
+        env = {"HOME": str(self.tmp), "BROOMVA_HOME": f"/{self.tmp}/mh"}
+        with mock.patch.dict(os.environ, env):
+            want = str(bp.machine_root())
+        self.assertFalse(want.startswith("//"))
+        self.assertEqual(sh("broomva_machine_root", env).stdout.strip(), want)
+
+    def test_a_passwd_account_name_follows_the_shell_rule(self) -> None:
+        for name, ok in (("0", False), ("-", False), ("a;b", False), ("svc_x", True), ("me@corp", True)):
+            account = mock.Mock(pw_name=name, pw_dir=str(self.tmp))
+            with self.subTest(name), mock.patch.dict(os.environ, {"HOME": "", "BROOMVA_HOME": ""}), \
+                    mock.patch.object(bp.pwd, "getpwuid", return_value=account):
+                if ok:
+                    self.assertEqual(bp.machine_root(), self.tmp / ".broomva")
+                else:
+                    with self.assertRaises(ValueError):
+                        bp.machine_root()
+
+    def test_an_entry_that_is_not_a_file_or_folder_is_refused(self) -> None:
+        repo = self.tmp / "r"
+        (repo / ".broomva").mkdir(parents=True)
+        os.mkfifo(repo / ".broomva" / "policy.yaml")
+        with self.assertRaises(bp.LayoutError):
+            bp.repo_path("policy", repo)
+        self.assertEqual(sh(f'broomva_repo_path policy "{repo}"').returncode, 3)
+
+    def test_moved_checks_every_entry_and_owner_links(self) -> None:
+        repo = self.tmp / "r"
+        (repo / ".broomva" / "asks").mkdir(parents=True)  # first in the list, real
+        (repo / ".broomva" / "decisions.jsonl").symlink_to(self.tmp / "evil")  # later, a link
+        with self.assertRaises(bp.LayoutError):
+            bp.moved(repo)
+        self.assertEqual(sh(f'broomva_moved "{repo}"').returncode, 3)
+        linked = self.tmp / "l"
+        (linked / ".broomva").mkdir(parents=True)
+        (linked / ".broomva" / "policy.yaml").write_text("owner\n")
+        os.link(linked / ".broomva" / "policy.yaml", linked / "alias.yaml")
+        with self.assertRaises(bp.LayoutError):
+            bp.moved(linked)
+        self.assertEqual(sh(f'broomva_moved "{linked}"').returncode, 3)
+
+    def test_a_callers_function_never_replaces_the_librarys_tools(self) -> None:
+        repo = self.tmp / "r"
+        (repo / ".broomva").mkdir(parents=True)
+        (repo / ".broomva" / "policy.yaml").write_text("owner\n")
+        os.link(repo / ".broomva" / "policy.yaml", repo / "alias.yaml")
+        out = sh(f'ls() {{ printf "%s\\n" "-rw-r--r--  1 u g 1 Jan 1 00:00 x"; }}; broomva_repo_path policy "{repo}"')
+        self.assertEqual(out.returncode, 3, "a fake link count of 1 must not pass a linked owner file")
+
+    def test_a_callers_id_function_is_never_used(self) -> None:
+        with mock.patch.dict(os.environ, {"HOME": "", "BROOMVA_HOME": ""}):
+            want = str(bp.machine_root())
+        out = subprocess.run([BASH, "-c", f'. "{SH_LIB}"; id() {{ printf "%s\\n" 0; }}; broomva_machine_root'],
+                             capture_output=True, text=True, env={**os.environ, "HOME": "", "BROOMVA_HOME": ""})
+        self.assertEqual((out.returncode, out.stdout.strip()), (0, want), "the real account, not the function's")
+
+    def test_an_unsearchable_repo_root_is_unreadable_in_both(self) -> None:
+        repo = self.tmp / "r"
+        (repo / ".broomva").mkdir(parents=True)
+        repo.chmod(0)
+        self.addCleanup(repo.chmod, 0o755)
+        with self.assertRaises(OSError):
+            bp.repo_path("policy", repo)
+        self.assertEqual(sh(f'broomva_repo_path policy "{repo}"').returncode, 3)
 
 
 if __name__ == "__main__":
