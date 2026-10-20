@@ -1968,50 +1968,90 @@ PY
 fi
 
 # ── Section 30: Path registry (BRO-3216) ───────────────────────────────────
-# The registry (references/paths.toml) is embedded in its generated readers.
-# A reader whose embedded hash differs from the table is stale, and would
-# resolve names the table no longer holds. Two layout faults fail here because
-# the readers cannot see them: a git repo at $HOME (the repo and machine scopes
-# coincide) and a name present under both roots (the prefer-new rule hides the
-# legacy copy). Legacy roots still present are expected until the move (ADR
-# step 4), so they are reported, not failed.
+# The registry (references/paths.toml) is embedded in its generated readers. A
+# reader the generator would not write today is stale: with Python 3.11+ the
+# generator's own --check proves it (a hand edit that kept the hash line fails
+# too); without it, only the embedded hash is compared. The rest are the layout
+# rules of the unified-layout ADR, decision 1, that the readers cannot see:
+# a git repo at $HOME, a name under both roots, ~/.control, and a repo-scope
+# name at the top of ~/.broomva. A check that cannot run is a gap, never an ok.
 section "30. Path registry (BRO-3216)"
 _PR_PY="$BSTACK_REPO/scripts/broomva_paths.py"
 _PR_SH="$BSTACK_REPO/scripts/lib/broomva-paths.sh"
 _PR_TOML="$BSTACK_REPO/references/paths.toml"
+_PR_GEN="$BSTACK_REPO/scripts/gen_paths.py"
 if [ ! -f "$_PR_TOML" ] || [ ! -f "$_PR_PY" ] || [ ! -f "$_PR_SH" ]; then
     gap "path registry incomplete (references/paths.toml and both generated readers)" \
         "reinstall bstack, or run python3 scripts/gen_paths.py in the bstack repo"
 elif ! command -v python3 >/dev/null 2>&1; then
-    [ "$QUIET" = "0" ] && echo "  [info] python3 unavailable — skipping the path-registry check"
+    gap "python3 unavailable: the path registry cannot be checked" "install python3 (3.9+)"
 else
-    _pr_want="$(python3 -I -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$_PR_TOML" 2>/dev/null)"
-    _pr_py="$(python3 -I "$_PR_PY" hash 2>/dev/null)"
-    _pr_sh="$(sed -n 's/^BROOMVA_REGISTRY_SHA256="\([0-9a-f]*\)"$/\1/p' "$_PR_SH")"
-    if [ -n "$_pr_want" ] && [ "$_pr_py" = "$_pr_want" ] && [ "$_pr_sh" = "$_pr_want" ]; then
-        ok "path registry readers carry the table's hash (${_pr_want:0:12})"
+    if [ -f "$_PR_GEN" ] && python3 -I -c 'import tomllib' >/dev/null 2>&1; then
+        if _pr_out="$(python3 -I "$_PR_GEN" --check 2>&1)"; then
+            ok "path registry readers are what gen_paths.py writes from the table"
+        else
+            gap "path registry readers are stale or hand-edited: $(printf '%s' "$_pr_out" | tr '\n' ' ')" \
+                "run python3 scripts/gen_paths.py in the bstack repo"
+        fi
     else
-        gap "path registry readers are stale (table ${_pr_want:0:12}, python ${_pr_py:0:12}, shell ${_pr_sh:0:12})" \
-            "run python3 scripts/gen_paths.py in the bstack repo"
+        _pr_want="$(python3 -I -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$_PR_TOML" 2>/dev/null)"
+        _pr_py="$(python3 -I "$_PR_PY" hash 2>/dev/null)"
+        _pr_sh="$(sed -n 's/^BROOMVA_REGISTRY_SHA256="\([0-9a-f]*\)"$/\1/p' "$_PR_SH")"
+        if [ -n "$_pr_want" ] && [ "$_pr_py" = "$_pr_want" ] && [ "$_pr_sh" = "$_pr_want" ]; then
+            ok "path registry readers carry the table's hash (${_pr_want:0:12}; a deep check needs Python 3.11+)"
+        else
+            gap "path registry readers are stale (table ${_pr_want:0:12}, python ${_pr_py:0:12}, shell ${_pr_sh:0:12})" \
+                "run python3 scripts/gen_paths.py in the bstack repo"
+        fi
+    fi
+    # The workspace the readers will use (BROOMVA_WORKSPACE, MAESTRO_WORKSPACE,
+    # BSTACK_WORKSPACE, ~/broomva), which can differ from the one doctor audits.
+    if ! _pr_ws="$(python3 -I "$_PR_PY" root workspace 2>&1)"; then
+        gap "the registry's workspace root does not resolve: $_pr_ws" "set BROOMVA_WORKSPACE to an absolute path"
+        _pr_ws="$WORKSPACE"
+    fi
+    if _pr_out="$(python3 -I "$_PR_PY" check --root "$_pr_ws" 2>&1)"; then
+        ok "every registry name resolves (workspace $_pr_ws)"
+    else
+        gap "a registry name does not resolve: $_pr_out" "run python3 $_PR_PY check --root $_pr_ws"
     fi
     _pr_home="$(cd "$HOME" && pwd -P)"
-    _pr_top="$(git -C "$HOME" rev-parse --show-toplevel 2>/dev/null || true)"
+    _pr_top="$(env -u GIT_DIR -u GIT_WORK_TREE git -C "$HOME" rev-parse --show-toplevel 2>/dev/null || true)"
     if [ -n "$_pr_top" ] && [ "$(cd "$_pr_top" && pwd -P)" = "$_pr_home" ]; then
         gap "\$HOME is a git top level: the repo and machine scopes coincide" \
             "move the repository out of \$HOME (unified-layout ADR, decision 1)"
     else
         ok "\$HOME is not a git top level"
     fi
-    _pr_shadow="$(python3 -I "$_PR_PY" shadowed --root "$WORKSPACE" 2>/dev/null | tr '\n' ' ')"
-    if [ -n "$_pr_shadow" ]; then
-        gap "names under both .broomva/ and .control/ in $WORKSPACE: $_pr_shadow" \
-            "keep one copy of each; the readers prefer .broomva/ and would hide the other"
+    _pr_shadow="$(python3 -I "$_PR_PY" shadowed --root "$_pr_ws" 2>&1)"
+    case $? in
+        0) ok "no name is under both .broomva/ and .control/ in the workspace" ;;
+        1) gap "names under both .broomva/ and .control/ in $_pr_ws: $(printf '%s' "$_pr_shadow" | tr '\n' ' ')" \
+               "keep one copy of each; the readers prefer .broomva/ and would hide the other" ;;
+        *) gap "could not check $_pr_ws for names under both roots: $_pr_shadow" \
+               "make .broomva/ and .control/ readable" ;;
+    esac
+    if [ -e "$HOME/.control" ]; then
+        gap "\$HOME/.control exists: a tool fell back to \$HOME instead of a repo" \
+            "find the writer (ADR decision 1 lists the tools with a cwd fallback), then move its files to the repo or ~/.broomva/state"
     else
-        ok "no name is under both .broomva/ and .control/ in the workspace"
+        ok "no ~/.control"
     fi
-    if [ "$QUIET" = "0" ]; then
-        [ -d "$WORKSPACE/.control" ] && echo "  [info] $WORKSPACE/.control still holds governance: expected until the move (ADR step 4)"
-        [ -d "$HOME/.control" ] && echo "  [info] ~/.control exists (a tool fell back to \$HOME): reported until the move, then a gap"
+    _pr_mroot="$(python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); import broomva_paths as b; print(b.machine_root())' "$BSTACK_REPO/scripts" 2>/dev/null)"
+    _pr_stray=""
+    for _pr_n in $(python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); import broomva_paths as b; print(" ".join(b.REPO_NAMES_NEVER_IN_MACHINE_ROOT))' "$BSTACK_REPO/scripts" 2>/dev/null); do
+        [ -e "$_pr_mroot/$_pr_n" ] && _pr_stray="$_pr_stray $_pr_n"
+    done
+    if [ -z "$_pr_mroot" ]; then
+        gap "could not resolve the machine root" "run python3 $_PR_PY resolve machine.config"
+    elif [ -n "$_pr_stray" ]; then
+        gap "repo-scope names at the top of $_pr_mroot:$_pr_stray" \
+            "these belong to a repo's .broomva/; a tool wrote them with \$HOME as its repo"
+    else
+        ok "no repo-scope name at the top of the machine root"
+    fi
+    if [ "$QUIET" = "0" ] && [ -d "$_pr_ws/.control" ]; then
+        echo "  [info] $_pr_ws/.control still holds governance: expected until the move (ADR step 4)"
     fi
 fi
 

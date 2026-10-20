@@ -12,7 +12,7 @@ set -uo pipefail
 
 BSTACK_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$BSTACK_REPO" || exit 1
-MIN_TESTS=29
+MIN_TESTS=51
 
 PASS=0
 FAIL=0
@@ -58,7 +58,7 @@ section30() { HOME="$SCRATCH/home" BROOMVA_WORKSPACE="$1" bash "$COPY/scripts/do
 mkdir -p "$SCRATCH/home"
 
 OUT="$(section30 "$WS")"
-if printf '%s\n' "$OUT" | grep -q "\[ok\] path registry readers carry the table's hash" \
+if printf '%s\n' "$OUT" | grep -q "\[ok\] path registry readers are what gen_paths.py writes" \
     && ! printf '%s\n' "$OUT" | grep -q "\[gap\]"; then
     assert_pass "doctor §30 passes a clean fixture"
 else
@@ -74,13 +74,40 @@ else
 fi
 rmdir "$WS/.broomva/asks"
 
-printf '\n# a hand edit the readers never saw\n' >> "$COPY/references/paths.toml"
-OUT="$(section30 "$WS")"
-if printf '%s\n' "$OUT" | grep -q "\[gap\] path registry readers are stale"; then
-    assert_pass "doctor §30 fails readers that do not carry the table's hash"
+expect_gap() {  # expect_gap LABEL PATTERN
+    OUT="$(section30 "$WS")"
+    if printf '%s\n' "$OUT" | grep -q "\[gap\] $2"; then assert_pass "doctor §30 fails $1"; else assert_fail "doctor §30 fails $1" "$OUT"; fi
+}
+
+mkdir "$SCRATCH/home/.control"
+expect_gap "a ~/.control (a tool fell back to \$HOME)" '\$HOME/.control exists'
+rmdir "$SCRATCH/home/.control"
+
+mkdir -p "$SCRATCH/home/.broomva" && touch "$SCRATCH/home/.broomva/policy.yaml"
+expect_gap "a repo-scope name at the top of ~/.broomva" "repo-scope names at the top of .*policy.yaml"
+rm -f "$SCRATCH/home/.broomva/policy.yaml"
+
+mkdir -p "$WS/.broomva/asks"
+chmod 0 "$WS/.broomva"
+expect_gap "a workspace it cannot read (never an ok)" "could not check"
+chmod 755 "$WS/.broomva" && rmdir "$WS/.broomva/asks" "$WS/.broomva"
+
+git -C "$SCRATCH/home" init -q
+expect_gap "a git repo at \$HOME" '\$HOME is a git top level'
+mv "$SCRATCH/home/.git" "$SCRATCH/home-git-was-here"
+
+# A hand edit that keeps the hash line: only the generator's own --check sees it.
+cp "$COPY/scripts/broomva_paths.py" "$SCRATCH/reader.bak"
+sed -i.orig "s|'policy': ('policy.yaml'|'policy': ('../../etc/passwd'|" "$COPY/scripts/broomva_paths.py"
+if cmp -s "$COPY/scripts/broomva_paths.py" "$SCRATCH/reader.bak"; then
+    assert_fail "the hand-edit fixture applied" "sed matched nothing"
 else
-    assert_fail "doctor §30 fails readers that do not carry the table's hash" "$OUT"
+    expect_gap "a hand-edited reader that kept its hash line" "path registry readers are stale or hand-edited"
 fi
+cp "$SCRATCH/reader.bak" "$COPY/scripts/broomva_paths.py"
+
+printf '\n# a table edit the readers never saw\n' >> "$COPY/references/paths.toml"
+expect_gap "readers older than the table" "path registry readers are stale"
 
 echo ""
 echo "passed: $PASS  failed: $FAIL"

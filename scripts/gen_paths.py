@@ -5,7 +5,8 @@
     python3 scripts/gen_paths.py --check   # exit 1 if a committed reader is stale
 
 Writes scripts/broomva_paths.py (Python 3.9+, stdlib only) and
-scripts/lib/broomva-paths.sh (bash 3.2+). Each embeds the table and the sha256
+scripts/lib/broomva-paths.sh (bash 3.2+) from the templates in
+scripts/lib/paths-templates/, substituting the table. Each embeds the table and the sha256
 of paths.toml, so no reader looks for the registry at run time (unified-layout
 ADR, decision 2). Needs Python 3.11+ for tomllib; the readers it writes do not.
 """
@@ -14,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import re
 import sys
 from pathlib import Path
@@ -25,6 +27,9 @@ SH_OUT = ROOT / "scripts" / "lib" / "broomva-paths.sh"
 
 NAME = re.compile(r"^[a-z][a-z0-9_]*$")
 REL = re.compile(r"^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$")
+# A machine legacy location: absolute or ~/, the same safe characters as REL. The
+# readers paste it into generated code, so nothing outside this set may pass.
+LEGACY = re.compile(r"^(~|)/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$")
 
 
 class RegistryError(ValueError):
@@ -40,15 +45,20 @@ def load(raw: bytes) -> dict:
 
 
 def _rel(name: str, value: object) -> str:
-    if not isinstance(value, str) or not REL.match(value) or ".." in value.split("/"):
-        raise RegistryError(f"{name}: path must be relative, without `..` or spaces: {value!r}")
+    if not isinstance(value, str) or not REL.match(value) or set(value.split("/")) & {".", ".."}:
+        raise RegistryError(f"{name}: path must be relative, without `.`/`..` parts or spaces: {value!r}")
     return value
 
 
-def validate(data: dict) -> tuple[list[tuple[str, str, bool, bool]], list[tuple[str, str, str | None]]]:
-    """The repo and machine tables as ordered rows, or RegistryError."""
-    if data.get("version") != 1:
-        raise RegistryError("version must be 1")
+def validate(data: dict) -> tuple[list[tuple[str, str, bool, bool]], list[tuple[str, str]], list[tuple[str, str, str | None]]]:
+    """The repo, repo_state and machine tables as ordered rows, or RegistryError."""
+    unknown = set(data) - {"version", "roots", "repo", "repo_state", "machine"}
+    if unknown:
+        raise RegistryError(f"unknown tables or keys: {sorted(unknown)} (a typo would be dropped silently)")
+    if type(data.get("version")) is not int or data["version"] != 1:
+        raise RegistryError("version must be the integer 1")
+    if set(data.get("roots", {})) != {"repo", "machine", "workspace"}:
+        raise RegistryError("roots must hold exactly repo, machine and workspace")
     roots = data.get("roots", {})
     if roots.get("repo") != {"dir": ".broomva", "legacy": ".control"}:
         raise RegistryError("roots.repo must be {dir = \".broomva\", legacy = \".control\"}")
@@ -68,6 +78,15 @@ def validate(data: dict) -> tuple[list[tuple[str, str, bool, bool]], list[tuple[
         if not isinstance(legacy, bool) or not isinstance(owner, bool):
             raise RegistryError(f"repo.{name}: legacy and owner are booleans")
         repo.append((name, _rel(f"repo.{name}", entry.get("path")), legacy, owner))
+    state: list[tuple[str, str]] = []
+    for name, entry in data.get("repo_state", {}).items():
+        if not NAME.match(name) or not isinstance(entry, dict) or set(entry) != {"path"}:
+            raise RegistryError(f"repo_state.{name}: an entry is {{ path = ... }}")
+        if name in {r[0] for r in repo}:
+            raise RegistryError(f"repo_state.{name}: also a repo name; the two share one namespace")
+        state.append((name, _rel(f"repo_state.{name}", entry.get("path"))))
+    if {r[1] for r in repo} & {r[1] for r in state}:
+        raise RegistryError("repo and repo_state share a path")
     machine: list[tuple[str, str, str | None]] = []
     for name, entry in data.get("machine", {}).items():
         if not NAME.match(name) or not isinstance(entry, dict):
@@ -75,8 +94,8 @@ def validate(data: dict) -> tuple[list[tuple[str, str, bool, bool]], list[tuple[
         if set(entry) - {"path", "legacy"}:
             raise RegistryError(f"machine.{name}: unknown keys")
         legacy = entry.get("legacy")
-        if legacy is not None and (not isinstance(legacy, str) or not (legacy.startswith("~/") or legacy.startswith("/"))
-                                   or " " in legacy or ".." in legacy.split("/")):
+        if legacy is not None and (not isinstance(legacy, str) or not LEGACY.match(legacy)
+                                   or set(legacy.split("/")) & {".", ".."}):
             raise RegistryError(f"machine.{name}: legacy must be an absolute or ~/ path: {legacy!r}")
         machine.append((name, _rel(f"machine.{name}", entry.get("path")), legacy))
     for kind, rows in (("repo", repo), ("machine", machine)):
@@ -85,7 +104,7 @@ def validate(data: dict) -> tuple[list[tuple[str, str, bool, bool]], list[tuple[
             raise RegistryError(f"{kind}: two names share a path")
     if not repo or not machine:
         raise RegistryError("repo and machine tables must not be empty")
-    return repo, machine
+    return repo, state, machine
 
 
 def owner_paths(repo: list[tuple[str, str, bool, bool]]) -> list[str]:
@@ -98,375 +117,31 @@ def owner_paths(repo: list[tuple[str, str, bool, bool]]) -> list[str]:
     return out
 
 
-PY_TEMPLATE = '''#!/usr/bin/env python3
-# GENERATED by scripts/gen_paths.py from references/paths.toml. Do not edit:
-# change paths.toml and run `python3 scripts/gen_paths.py`.
-"""Where Broomva state lives: the path registry, embedded (BRO-3216).
-
-Three scopes (unified-layout ADR, decision 1):
-
-- repo:      <git top level of the target>/.broomva/<path>, legacy .control/<path>
-- workspace: the repo names under the governing workspace, $BROOMVA_WORKSPACE
-             (then MAESTRO_WORKSPACE, then the deprecated BSTACK_WORKSPACE), ~/broomva
-- machine:   $BROOMVA_HOME/<path>, default ~/.broomva
-
-Migration rule, on disk: a name resolves to its new location when that exists;
-otherwise to the legacy one when that exists, or when the repo still has its
-legacy root (it has not moved yet, so a writer must not split the ledger);
-otherwise to the new one. Inside a git tree (``tree_path``): the new path when
-the tree holds it, else the legacy path, else None.
-
-A repo root is never searched for by name and never falls back to the cwd: it is
-the git top level of the path a tool operates on, or of $CLAUDE_PROJECT_DIR when
-the tool has none, and none at all when $HOME is that top level.
-
-Python 3.9+, stdlib only. CLI: ``broomva_paths.py --help``.
-"""
-
-from __future__ import annotations
-
-import argparse
-import os
-import subprocess
-import sys
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple
-
-REGISTRY_SHA256 = "@@SHA@@"
-
-REPO_DIR = ".broomva"
-REPO_LEGACY_DIR = ".control"
-WORKSPACE_ENV = ("BROOMVA_WORKSPACE", "MAESTRO_WORKSPACE", "BSTACK_WORKSPACE")
-WORKSPACE_DEFAULT = "~/broomva"
-MACHINE_ENV = "BROOMVA_HOME"
-MACHINE_DEFAULT = "~/.broomva"
-
-# name -> (path, has a legacy location, owner-written)
-REPO: Dict[str, Tuple[str, bool, bool]] = {
-@@REPO@@
-}
-
-# name -> (path, legacy location or None)
-MACHINE: Dict[str, Tuple[str, Optional[str]]] = {
-@@MACHINE@@
-}
-
-# Owner-written governance under both spellings: the literal list gates hold.
-OWNER_PATHS: Tuple[str, ...] = (
-@@OWNER@@
-)
-
-# Every repo-scope path starts with one of these.
-GOVERNANCE_PREFIXES: Tuple[str, ...] = (".broomva/", ".control/")
-
-
-class UnknownName(KeyError):
-    """A name the registry does not hold."""
-
-
-def _strip(name: str, scope: str) -> str:
-    prefix = scope + "."
-    return name[len(prefix):] if name.startswith(prefix) else name
-
-
-def _repo_entry(name: str) -> Tuple[str, bool, bool]:
-    key = _strip(_strip(name, "repo"), "workspace")
-    if key not in REPO:
-        raise UnknownName(name)
-    return REPO[key]
-
-
-def _machine_entry(name: str) -> Tuple[str, Optional[str]]:
-    key = _strip(name, "machine")
-    if key not in MACHINE:
-        raise UnknownName(name)
-    return MACHINE[key]
-
-
-def _home() -> Path:
-    return Path(os.path.expanduser("~"))
-
-
-def machine_root() -> Path:
-    value = os.environ.get(MACHINE_ENV)
-    return Path(value).expanduser() if value else Path(os.path.expanduser(MACHINE_DEFAULT))
-
-
-def workspace_root() -> Path:
-    for key in WORKSPACE_ENV:
-        value = os.environ.get(key)
-        if value:
-            return Path(value).expanduser()
-    return Path(os.path.expanduser(WORKSPACE_DEFAULT))
-
-
-def _toplevel(target: Path) -> Optional[Path]:
-    directory = target if target.is_dir() else target.parent
-    # A file about to be written may sit in a folder that does not exist yet.
-    while not directory.exists() and directory != directory.parent:
-        directory = directory.parent
-    try:
-        out = subprocess.run(
-            ["git", "-C", str(directory), "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, timeout=10, check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if out.returncode != 0 or not out.stdout.strip():
-        return None
-    top = Path(out.stdout.strip())
-    if top.resolve() == _home().resolve():
-        return None  # a git repo at $HOME would make the repo and machine scopes coincide
-    return top
-
-
-def repo_root(target: Optional[os.PathLike] = None) -> Optional[Path]:
-    """The repo a tool operates on: the git top level of ``target``, else of
-    $CLAUDE_PROJECT_DIR, else None. Never the cwd by default."""
-    if target is not None:
-        return _toplevel(Path(target))
-    project = os.environ.get("CLAUDE_PROJECT_DIR")
-    return _toplevel(Path(project)) if project else None
-
-
-def repo_rels(name: str) -> Tuple[str, ...]:
-    """The repo-relative paths a name may hold, new first: for tree reads and gates."""
-    path, legacy, _ = _repo_entry(name)
-    new = f"{REPO_DIR}/{path}"
-    return (new, f"{REPO_LEGACY_DIR}/{path}") if legacy else (new,)
-
-
-def repo_path(name: str, root: os.PathLike) -> Path:
-    """Where ``name`` lives on disk in the repo at ``root`` (see the migration rule)."""
-    path, legacy, _ = _repo_entry(name)
-    root = Path(root)
-    new = root / REPO_DIR / path
-    if new.exists() or not legacy:
-        return new
-    old = root / REPO_LEGACY_DIR / path
-    if old.exists() or (root / REPO_LEGACY_DIR).is_dir():
-        return old
-    return new
-
-
-def workspace_path(name: str) -> Path:
-    return repo_path(name, workspace_root())
-
-
-def machine_path(name: str) -> Path:
-    path, legacy = _machine_entry(name)
-    new = machine_root() / path
-    if new.exists() or legacy is None:
-        return new
-    old = Path(os.path.expanduser(legacy))
-    return old if old.exists() else new
-
-
-def tree_path(name: str, root: os.PathLike, rev: str = "HEAD") -> Optional[str]:
-    """The repo-relative path ``name`` has in git tree ``rev`` of the repo at
-    ``root``, new before legacy; None when the tree holds neither."""
-    if not rev or rev.startswith("-"):
-        raise ValueError(f"not a revision: {rev!r}")
-    for rel in repo_rels(name):
-        out = subprocess.run(
-            ["git", "-C", str(root), "cat-file", "-e", f"{rev}:{rel}"],
-            capture_output=True, timeout=10, check=False,
-        )
-        if out.returncode == 0:
-            return rel
-    return None
-
-
-def shadowed(root: os.PathLike) -> List[str]:
-    """Names present under both roots: the prefer-new rule would hide the legacy copy."""
-    root = Path(root)
-    return [
-        name for name, (path, legacy, _) in REPO.items()
-        if legacy and (root / REPO_DIR / path).exists() and (root / REPO_LEGACY_DIR / path).exists()
-    ]
-
-
-def resolve(name: str, root: Optional[os.PathLike] = None) -> Path:
-    """Resolve a scoped name: ``repo.X`` (needs ``root``), ``workspace.X`` or ``machine.X``."""
-    if name.startswith("machine."):
-        return machine_path(name)
-    if name.startswith("workspace."):
-        return workspace_path(name)
-    if name.startswith("repo."):
-        if root is None:
-            raise ValueError("a repo name needs a root")
-        return repo_path(name, root)
-    raise UnknownName(name)
-
-
-def main(argv: Optional[List[str]] = None) -> int:
-    parser = argparse.ArgumentParser(prog="broomva_paths.py", description="The Broomva path registry.")
-    sub = parser.add_subparsers(dest="cmd", required=True)
-    p = sub.add_parser("resolve", help="print where a scoped name lives on disk")
-    p.add_argument("name")
-    p.add_argument("--root", help="a path inside the repo (for repo.* names)")
-    p = sub.add_parser("tree", help="print the path a repo name has in a git tree")
-    p.add_argument("name")
-    p.add_argument("--root", required=True)
-    p.add_argument("--rev", default="HEAD")
-    p = sub.add_parser("rels", help="print the repo-relative paths a name may hold")
-    p.add_argument("name")
-    p = sub.add_parser("shadowed", help="print names present under both roots of a repo")
-    p.add_argument("--root", required=True)
-    sub.add_parser("hash", help="print the embedded registry sha256")
-    sub.add_parser("list", help="print every scoped name")
-    args = parser.parse_args(argv)
-    try:
-        if args.cmd == "resolve":
-            root = None
-            if args.name.startswith("repo."):
-                root = repo_root(args.root) if args.root else repo_root()
-                if root is None:
-                    print("not inside a git repo (and no CLAUDE_PROJECT_DIR)", file=sys.stderr)
-                    return 2
-            print(resolve(args.name, root))
-        elif args.cmd == "tree":
-            rel = tree_path(args.name, args.root, args.rev)
-            if rel is None:
-                return 1
-            print(rel)
-        elif args.cmd == "rels":
-            print("\\n".join(repo_rels(args.name)))
-        elif args.cmd == "shadowed":
-            names = shadowed(args.root)
-            if names:
-                print("\\n".join(names))
-            return 1 if names else 0
-        elif args.cmd == "hash":
-            print(REGISTRY_SHA256)
-        elif args.cmd == "list":
-            print("\\n".join([f"repo.{n}" for n in REPO] + [f"machine.{n}" for n in MACHINE]))
-    except UnknownName as e:
-        print(f"unknown name: {e.args[0]}", file=sys.stderr)
-        return 2
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
-'''
-
-SH_TEMPLATE = '''# shellcheck shell=bash
-# GENERATED by scripts/gen_paths.py from references/paths.toml. Do not edit:
-# change paths.toml and run `python3 scripts/gen_paths.py`.
-#
-# The Broomva path registry for shell readers (BRO-3216). Source it:
-#   . "$BSTACK_REPO/scripts/lib/broomva-paths.sh"
-#   policy=$(broomva_repo_path policy "$root")
-# Same rules as scripts/broomva_paths.py; bash 3.2 compatible.
-
-# Read by the scripts that source this file.
-# shellcheck disable=SC2034
-BROOMVA_REGISTRY_SHA256="@@SHA@@"
-BROOMVA_REPO_DIR=".broomva"
-BROOMVA_REPO_LEGACY_DIR=".control"
-# Owner-written governance under both spellings: the literal list gates hold.
-# shellcheck disable=SC2034
-BROOMVA_OWNER_PATHS="@@OWNER@@"
-
-# _broomva_repo_entry NAME -> "PATH HAS_LEGACY" (1 or 0)
-_broomva_repo_entry() {
-    case "${1#repo.}" in
-@@REPO@@
-        *) return 2 ;;
-    esac
-}
-
-# _broomva_machine_entry NAME -> "PATH LEGACY" (LEGACY is - when none)
-_broomva_machine_entry() {
-    case "${1#machine.}" in
-@@MACHINE@@
-        *) return 2 ;;
-    esac
-}
-
-broomva_machine_root() {
-    if [ -n "${BROOMVA_HOME:-}" ]; then printf '%s\\n' "$BROOMVA_HOME"; else printf '%s\\n' "$HOME/.broomva"; fi
-}
-
-broomva_workspace_root() {
-    if [ -n "${BROOMVA_WORKSPACE:-}" ]; then printf '%s\\n' "$BROOMVA_WORKSPACE"
-    elif [ -n "${MAESTRO_WORKSPACE:-}" ]; then printf '%s\\n' "$MAESTRO_WORKSPACE"
-    elif [ -n "${BSTACK_WORKSPACE:-}" ]; then printf '%s\\n' "$BSTACK_WORKSPACE"
-    else printf '%s\\n' "$HOME/broomva"; fi
-}
-
-# broomva_repo_root [TARGET] -> the git top level of TARGET (else of
-# $CLAUDE_PROJECT_DIR); fails outside a repo, and when $HOME is that top level.
-broomva_repo_root() {
-    _br_t=${1:-${CLAUDE_PROJECT_DIR:-}}
-    [ -n "$_br_t" ] || return 1
-    [ -d "$_br_t" ] || _br_t=$(dirname "$_br_t")
-    while [ ! -d "$_br_t" ] && [ "$_br_t" != "/" ]; do _br_t=$(dirname "$_br_t"); done
-    _br_top=$(git -C "$_br_t" rev-parse --show-toplevel 2>/dev/null) || return 1
-    [ -n "$_br_top" ] || return 1
-    if [ "$(cd "$_br_top" && pwd -P)" = "$(cd "$HOME" && pwd -P)" ]; then return 1; fi
-    printf '%s\\n' "$_br_top"
-}
-
-# broomva_repo_rels NAME -> the repo-relative paths NAME may hold, new first
-broomva_repo_rels() {
-    _br_e=$(_broomva_repo_entry "$1") || return 2
-    printf '%s\\n' "$BROOMVA_REPO_DIR/${_br_e% *}"
-    [ "${_br_e##* }" = 1 ] && printf '%s\\n' "$BROOMVA_REPO_LEGACY_DIR/${_br_e% *}"
-    return 0
-}
-
-# broomva_repo_path NAME ROOT -> where NAME lives on disk in the repo at ROOT
-broomva_repo_path() {
-    _br_e=$(_broomva_repo_entry "$1") || return 2
-    _br_p=${_br_e% *}
-    _br_new="$2/$BROOMVA_REPO_DIR/$_br_p"
-    _br_old="$2/$BROOMVA_REPO_LEGACY_DIR/$_br_p"
-    if [ -e "$_br_new" ] || [ "${_br_e##* }" = 0 ]; then printf '%s\\n' "$_br_new"
-    elif [ -e "$_br_old" ] || [ -d "$2/$BROOMVA_REPO_LEGACY_DIR" ]; then printf '%s\\n' "$_br_old"
-    else printf '%s\\n' "$_br_new"; fi
-}
-
-broomva_workspace_path() {
-    broomva_repo_path "${1#workspace.}" "$(broomva_workspace_root)"
-}
-
-# broomva_machine_path NAME -> where NAME lives under $BROOMVA_HOME (or its legacy)
-broomva_machine_path() {
-    _br_e=$(_broomva_machine_entry "$1") || return 2
-    _br_new="$(broomva_machine_root)/${_br_e% *}"
-    _br_old=${_br_e##* }
-    case "$_br_old" in \\~/*) _br_old="$HOME/${_br_old#\\~/}" ;; esac
-    if [ -e "$_br_new" ] || [ "$_br_old" = - ] || [ ! -e "$_br_old" ]; then printf '%s\\n' "$_br_new"
-    else printf '%s\\n' "$_br_old"; fi
-}
-
-# broomva_tree_path NAME ROOT [REV] -> the path NAME has in git tree REV (default HEAD)
-broomva_tree_path() {
-    _br_rev=${3:-HEAD}
-    case "$_br_rev" in -*|"") return 2 ;; esac
-    for _br_rel in $(broomva_repo_rels "$1") ; do
-        if git -C "$2" cat-file -e "$_br_rev:$_br_rel" 2>/dev/null; then printf '%s\\n' "$_br_rel"; return 0; fi
-    done
-    return 1
-}
-'''
+TEMPLATES = ROOT / "scripts" / "lib" / "paths-templates"
 
 
 def render(raw: bytes) -> tuple[str, str]:
-    repo, machine = validate(load(raw))
+    repo, state, machine = validate(load(raw))
     sha = hashlib.sha256(raw).hexdigest()
     owners = owner_paths(repo)
     py_repo = "\n".join(f"    {n!r}: ({p!r}, {legacy!r}, {owner!r})," for n, p, legacy, owner in repo)
     py_machine = "\n".join(f"    {n!r}: ({p!r}, {legacy!r})," for n, p, legacy in machine)
     py_owner = "\n".join(f"    {p!r}," for p in owners)
-    py = (PY_TEMPLATE.replace("@@SHA@@", sha).replace("@@REPO@@", py_repo)
-          .replace("@@MACHINE@@", py_machine).replace("@@OWNER@@", py_owner))
-    sh_repo = "\n".join(f"        {n}) printf '%s\\n' '{p} {1 if legacy else 0}' ;;" for n, p, legacy, _ in repo)
-    sh_machine = "\n".join(f"        {n}) printf '%s\\n' '{p} {legacy or '-'}' ;;" for n, p, legacy in machine)
-    sh = (SH_TEMPLATE.replace("@@SHA@@", sha).replace("@@OWNER@@", " ".join(owners))
-          .replace("@@REPO@@", sh_repo).replace("@@MACHINE@@", sh_machine))
+    py_state = "\n".join(f"    {n!r}: {p!r}," for n, p in state)
+    py = ((TEMPLATES / "broomva_paths.py.tmpl").read_text().replace("@@SHA@@", sha).replace("@@REPO@@", py_repo)
+          .replace("@@MACHINE@@", py_machine).replace("@@OWNER@@", py_owner)
+          .replace("@@STATE@@", py_state))
+    # Patterns are quoted: a name such as `esac` or `in` must stay a word, not syntax.
+    sh_repo = "\n".join(f"        '{n}') printf '%s\\n' '{p} {1 if legacy else 0}' ;;" for n, p, legacy, _ in repo)
+    sh_machine = "\n".join(f"        '{n}') printf '%s\\n' '{p} {legacy or '-'}' ;;" for n, p, legacy in machine)
+    sh_legacy = " ".join(f"'{p}'" for _, p, legacy, _ in repo if legacy)
+    sh_state = "\n".join(f"        '{n}') printf '%s\\n' '{p}' ;;" for n, p in state)
+    # With no owner entries the pattern must still be a pattern: one no path can be.
+    owner_case = "|".join(f"{q}|{q}/*" for q in owners) or "'/ no owner path /'"
+    sh = ((TEMPLATES / "broomva-paths.sh.tmpl").read_text().replace("@@SHA@@", sha)
+          .replace("@@OWNERCASE@@", owner_case).replace("@@OWNER@@", " ".join(owners))
+          .replace("@@REPO@@", sh_repo).replace("@@MACHINE@@", sh_machine).replace("@@LEGACYLIST@@", sh_legacy)
+          .replace("@@STATE@@", sh_state))
     return py, sh
 
 
@@ -482,7 +157,7 @@ def main(argv: list[str] | None = None) -> int:
     stale = [out for out, text in ((PY_OUT, py), (SH_OUT, sh)) if not out.exists() or out.read_text() != text]
     if args.check:
         for out in stale:
-            print(f"stale: {out.relative_to(ROOT)} (run python3 scripts/gen_paths.py)", file=sys.stderr)
+            print(f"stale: {os.path.relpath(out, ROOT)} (run python3 scripts/gen_paths.py)", file=sys.stderr)
         return 1 if stale else 0
     for out, text in ((PY_OUT, py), (SH_OUT, sh)):
         out.write_text(text)

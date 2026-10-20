@@ -6,21 +6,31 @@
 
 Step 3 of the unified-layout ADR (workspace `docs/adrs/2026-10-19-unified-broomva-layout.html`,
 decision 2), shipped first by owner decision on 2026-10-20 so that no new reader names `.control/`.
-`references/paths.toml` lists every name in three scopes: `repo.*` under the git top level a tool
-operates on (`.broomva/`, legacy `.control/`), `workspace.*` under `$BROOMVA_WORKSPACE`, and `machine.*`
-under `$BROOMVA_HOME`. `scripts/gen_paths.py` embeds it into two readers, `scripts/broomva_paths.py`
-(Python 3.9+, the Mac's system python) and `scripts/lib/broomva-paths.sh` (bash 3.2), each carrying the
-table's sha256; nothing looks the registry up at run time.
+`references/paths.toml` lists every name a Broomva reader uses today, in four tables: `repo.*` under
+the git top level a tool operates on (`.broomva/`, legacy `.control/`); `repo_state` (a repo's untracked
+runtime files: `audit/`, `leverage-*`), which the ADR moves to `$BROOMVA_HOME/state/repos/<repo>/`;
+`workspace.*`, the repo names under `$BROOMVA_WORKSPACE`; and `machine.*` under `$BROOMVA_HOME`.
+`scripts/gen_paths.py` validates the table and fills two templates (`scripts/lib/paths-templates/`)
+into `scripts/broomva_paths.py` (Python 3.9+, the Mac's system python) and
+`scripts/lib/broomva-paths.sh` (bash 3.2), each carrying the table's sha256; nothing looks the
+registry up at run time.
 
-Both readers apply the migration rule on disk and inside a git tree: the new location when it exists,
-else the legacy one, and while a repo still has its `.control/` a name with no file yet resolves there,
-so a writer never splits a ledger before the move. A repo root is the git top level of the target, or
-of `$CLAUDE_PROJECT_DIR`, never the cwd, and never `$HOME`. `OWNER_PATHS` is the literal owner list
-under both spellings, for the gates to hold (step 2). Nothing switches to the registry in this release:
-it only adds it. `bstack doctor` §30 fails a stale reader, a git repo at `$HOME`, and a name present
-under both roots, and reports the legacy roots still present (expected until the move).
-`tests/broomva-paths.test.sh`: 29 unit cases, shell and Python agreeing on every disk and tree state,
-the generator's `--check`, and §30 against seeded faults; every rule mutation-proven (22 of 22).
+Both readers give the same answers, on disk and inside a git tree: the new location when it exists,
+else the legacy one; while a repo has not moved (no legacy-capable name under `.broomva/` yet) a name
+with no file resolves under `.control/`, so a writer never splits a ledger, and a `.control/` left
+behind after the move draws nothing back. A tree that cannot be read (an unknown revision, no git,
+not a repo) is an error (exit 3), never "absent". A repo root is the git top level of the target, or
+of `$CLAUDE_PROJECT_DIR`; never the cwd, never an empty target, never `$HOME`; git runs without
+`GIT_DIR`. Env roots must be absolute (`~/` expands in both). For the gates (step 2): `OWNER_PATHS` and
+`is_owner_path` (folder entries match what is inside them) and `relative_to_repo` (compares folders
+physically: macOS `/tmp` is `/private/tmp`). Nothing switches to the registry in this release.
+
+`bstack doctor` §30 fails a reader the generator would not write today (its own `--check` with Python
+3.11+, so a hand edit that kept the hash line fails too), a name that does not resolve, a git repo at
+`$HOME`, a name under both roots, `~/.control`, and a repo-scope name at the top of `~/.broomva`; a
+check that cannot run is a gap, never an ok. `tests/broomva-paths.test.sh`: 51 unit cases (shell and
+Python agreeing on every disk, tree and environment state) and 8 doctor fixtures; every rule
+mutation-proven (45 of 45). P20 round 1 found the injection, fail-soft and cwd faults this now refuses.
 
 ## 0.48.2 — 2026-10-19
 
