@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.49.0 — 2026-10-20
+
+### feat(references): the path registry — one table of where Broomva state lives (BRO-3216)
+
+Step 3 of the unified-layout ADR (workspace `docs/adrs/2026-10-19-unified-broomva-layout.html`,
+decision 2), shipped first by owner decision on 2026-10-20 so that no new reader names `.control/`.
+`references/paths.toml` lists every name a Broomva reader uses today, in four tables: `repo.*` under
+the git top level a tool operates on (`.broomva/`, legacy `.control/`); `repo_state` (a repo's untracked
+runtime files: `audit/`, `leverage-*`), which the ADR moves to `$BROOMVA_HOME/state/repos/<repo>/`
+(`<repo>` is the folder name plus 12 hex digits of the sha256 of its real path, so two checkouts
+with one name never share state);
+`workspace.*`, the repo names under `$BROOMVA_WORKSPACE`; and `machine.*` under `$BROOMVA_HOME`.
+`scripts/gen_paths.py` validates the table and fills two templates (`scripts/lib/paths-templates/`)
+into `scripts/broomva_paths.py` (Python 3.9+, the Mac's system python) and
+`scripts/lib/broomva-paths.sh` (bash 3.2), each carrying the table's sha256; nothing looks the
+registry up at run time.
+
+Both readers give the same answers, on disk and inside a git tree: the new location when it exists,
+else the legacy one; while a repo has not moved (no legacy-capable name under `.broomva/` yet) a name
+with no file resolves under `.control/`, so a writer never splits a ledger, and a `.control/` left
+behind after the move draws nothing back. A tree that cannot be read (an unknown revision, no git,
+not a repo) is an error (exit 3), never "absent". A repo root is the git top level of the target, or
+of `$CLAUDE_PROJECT_DIR`; never the cwd, never an empty target, never `$HOME`; git runs without
+`GIT_DIR`, from the nearest real (not symlinked) folder, and "no git" is an error, not "not a repo".
+Env roots must be absolute and the workspace is never `$HOME`; `~` and `~/` expand alike in both,
+`~user` and a relative `HOME` are refused. Containment, not provenance: a path the readers return
+lies inside the repo (`.broomva/` and `.control/` must be real, searchable folders; an entry is a regular
+file or a folder, never a symlink (dangling or not), FIFO or device; an owner-written file must have one
+link, a check that sees only links that still exist; in a tree, registry paths are
+folders or files, never a committed symlink or gitlink: `LayoutError`, exit 3); who wrote a file is not
+something a reader can know (`cp -r` makes plain files), so owner-written governance is protected by the
+gates and Owner Signature, and doctor reports a name under both roots. Containment holds when checked
+(a caller that needs it at use opens with no-follow), and machine-scope names have none. Roots with a
+`..` part are refused; env roots and `HOME` are normalized the same way in both readers, and a workspace
+not cloned yet resolves as it will once cloned. For the gates (step 2), `OWNER_PATHS` is
+the literal owner list; matching a written path against it (case, `..`) stays in the gates. The shell reader's git calls have no
+timeout (macOS has no portable `timeout`); the Python reader's have 10 s. Nothing switches to the
+registry in this release.
+
+`bstack doctor` §30 fails a reader the generator would not write today (its own `--check` with Python
+3.11+, so a hand edit that kept the hash line fails too), a name that does not resolve, a git repo at
+`$HOME` (by identity), a name under both roots, a repo that has moved but still holds governance under
+`.control/`, `~/.control`, and any repo-scope name at the top of `~/.broomva`, on both the workspace
+doctor audits and the one the readers resolve; a check that cannot run is a gap, never an ok.
+`tests/broomva-paths.test.sh`: 95 unit cases (shell and Python agreeing on every disk, tree and
+environment state, on bash 3.2 and 5) and 13 doctor fixtures; every rule mutation-proven. P20 rounds
+1 to 5 found the injection, fail-soft, cwd, state-collision and containment faults this now refuses.
+
 ## 0.48.2 — 2026-10-19
 
 ### fix(upgrade): the vendored upgrade cleans up after itself, and plugin.json stops lying about the version (BRO-3200)

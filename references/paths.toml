@@ -1,0 +1,116 @@
+# The Broomva path registry (BRO-3216; unified-layout ADR, decision 2).
+#
+# The one table of where Broomva state lives: every name a Broomva reader uses
+# today (a name nothing reads yet is added with its first reader). Readers never search the disk for
+# it: scripts/gen_paths.py embeds it into the generated readers
+# (scripts/broomva_paths.py, scripts/lib/broomva-paths.sh), and each carries
+# this file's sha256 so `bstack doctor` can tell a stale reader.
+#
+# Three scopes:
+#   repo.*       under the git top level of the repo a tool operates on, in
+#                `.broomva/` (legacy `.control/`).
+#   workspace.*  the same names under the governing workspace:
+#                $BROOMVA_WORKSPACE (alias MAESTRO_WORKSPACE, then the deprecated
+#                BSTACK_WORKSPACE), default ~/broomva.
+#   machine.*    under $BROOMVA_HOME, default ~/.broomva.
+#
+# During the migration a reader takes the new location when it exists and the
+# legacy one otherwise, on disk and inside a git tree (ADR, decision 2). An entry
+# with `legacy = false` was never under `.control/`.
+#
+# `owner = true` marks owner-written governance: gates block agent writes to it
+# under both spellings. Gates never read this file at run time; they will hold
+# the literal list generated from it (OWNER_PATHS), with a test that the two
+# agree, when they switch to it (ADR step 2).
+#
+# Editing: change this file, then `python3 scripts/gen_paths.py`. CI runs
+# `gen_paths.py --check`, so a hand-edited reader or a stale one fails.
+
+version = 1
+
+[roots.repo]
+dir = ".broomva"
+legacy = ".control"
+
+[roots.machine]
+env = "BROOMVA_HOME"
+default = "~/.broomva"
+
+[roots.workspace]
+env = ["BROOMVA_WORKSPACE", "MAESTRO_WORKSPACE", "BSTACK_WORKSPACE"]
+default = "~/broomva"
+
+# ── repo scope: <top level>/.broomva/<path>, legacy <top level>/.control/<path>
+[repo]
+# owner-written governance
+policy = { path = "policy.yaml", owner = true }
+preauth = { path = "preauth.yaml", owner = true }
+allowed_signers = { path = "allowed_signers", owner = true }
+hooks = { path = "hooks", owner = true, legacy = false }
+# Maestro ledgers
+asks = { path = "asks" }
+initiatives = { path = "initiatives" }
+arcs = { path = "arcs.yaml" }
+bands = { path = "bands" }
+decisions = { path = "decisions.jsonl" }
+grants = { path = "grants.jsonl" }
+loops = { path = "loops", legacy = false }
+# change plane
+checks = { path = "checks", legacy = false }
+# control metalayer
+rcs_parameters = { path = "rcs-parameters.toml" }
+leverage_setpoints = { path = "leverage-setpoints.yaml" }
+hillclimb = { path = "hillclimb" }
+spec_contract_grandfathered = { path = "spec-contract-grandfathered.txt" }
+i2p_profile = { path = "i2p-profile.json" }
+i2p_profile_example = { path = "i2p-profile.example.json" }
+improvement_log = { path = "improvement-log.jsonl" }
+commands = { path = "commands.yaml" }
+topology = { path = "topology.yaml" }
+state = { path = "state.json" }
+plant = { path = "plant.yaml" }
+runtime = { path = "runtime.yaml" }
+problem_spec_template = { path = "problem-spec.template.yaml" }
+egri = { path = "egri.yaml" }
+egri_journal = { path = "egri-journal.jsonl" }
+evals = { path = "evals" }
+schemas = { path = "schemas" }
+
+# ── repo runtime state: untracked files a repo's tools write. ADR decision 1 moves
+# them out of the repo: new $BROOMVA_HOME/state/repos/<repo top-level name>/<path>,
+# legacy <top level>/.control/<path>. They are named like repo names (repo.audit)
+# and follow the same migration rule.
+[repo_state]
+audit = { path = "audit" }
+leverage_metrics = { path = "leverage-metrics.jsonl" }
+leverage_state = { path = "leverage-state.json" }
+leverage_ship_state = { path = "leverage-ship-state.json" }
+
+# ── machine scope: $BROOMVA_HOME/<path> (BRO-2909 layout, plus this ADR's dirs)
+# `legacy` is an absolute (or ~) path read when the new one does not exist yet.
+# Only the destinations the ADR states are listed; the rest of the old roots
+# move at step 4, and get their entries then. Files the broomva CLI keeps at the
+# top of ~/.broomva today are listed where they are; step 4 gives them a place
+# under the layout below, and a legacy column.
+[machine]
+config = { path = "config" }
+secrets = { path = "secrets" }
+ledger = { path = "ledger" }
+loop_ticks = { path = "ledger/loops/ticks.jsonl" }
+work = { path = "work", legacy = "~/maestro" }
+runs = { path = "runs" }
+notes = { path = "notes" }
+views = { path = "views" }
+index = { path = "index" }
+cache = { path = "cache" }
+locks = { path = "locks" }
+state = { path = "state" }
+data = { path = "data" }
+releases = { path = "releases" }
+logs = { path = "logs" }
+cli_config = { path = "config.json" }
+agent_keys = { path = "agent-keys" }
+session = { path = "session" }
+sessions = { path = "sessions" }
+daemon_log = { path = "daemon.log" }
+last_update_check = { path = "last-update-check" }
