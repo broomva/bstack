@@ -1967,6 +1967,54 @@ PY
     done <<< "$_CL_REPORT"
 fi
 
+# ── Section 30: Path registry (BRO-3216) ───────────────────────────────────
+# The registry (references/paths.toml) is embedded in its generated readers.
+# A reader whose embedded hash differs from the table is stale, and would
+# resolve names the table no longer holds. Two layout faults fail here because
+# the readers cannot see them: a git repo at $HOME (the repo and machine scopes
+# coincide) and a name present under both roots (the prefer-new rule hides the
+# legacy copy). Legacy roots still present are expected until the move (ADR
+# step 4), so they are reported, not failed.
+section "30. Path registry (BRO-3216)"
+_PR_PY="$BSTACK_REPO/scripts/broomva_paths.py"
+_PR_SH="$BSTACK_REPO/scripts/lib/broomva-paths.sh"
+_PR_TOML="$BSTACK_REPO/references/paths.toml"
+if [ ! -f "$_PR_TOML" ] || [ ! -f "$_PR_PY" ] || [ ! -f "$_PR_SH" ]; then
+    gap "path registry incomplete (references/paths.toml and both generated readers)" \
+        "reinstall bstack, or run python3 scripts/gen_paths.py in the bstack repo"
+elif ! command -v python3 >/dev/null 2>&1; then
+    [ "$QUIET" = "0" ] && echo "  [info] python3 unavailable — skipping the path-registry check"
+else
+    _pr_want="$(python3 -I -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$_PR_TOML" 2>/dev/null)"
+    _pr_py="$(python3 -I "$_PR_PY" hash 2>/dev/null)"
+    _pr_sh="$(sed -n 's/^BROOMVA_REGISTRY_SHA256="\([0-9a-f]*\)"$/\1/p' "$_PR_SH")"
+    if [ -n "$_pr_want" ] && [ "$_pr_py" = "$_pr_want" ] && [ "$_pr_sh" = "$_pr_want" ]; then
+        ok "path registry readers carry the table's hash (${_pr_want:0:12})"
+    else
+        gap "path registry readers are stale (table ${_pr_want:0:12}, python ${_pr_py:0:12}, shell ${_pr_sh:0:12})" \
+            "run python3 scripts/gen_paths.py in the bstack repo"
+    fi
+    _pr_home="$(cd "$HOME" && pwd -P)"
+    _pr_top="$(git -C "$HOME" rev-parse --show-toplevel 2>/dev/null || true)"
+    if [ -n "$_pr_top" ] && [ "$(cd "$_pr_top" && pwd -P)" = "$_pr_home" ]; then
+        gap "\$HOME is a git top level: the repo and machine scopes coincide" \
+            "move the repository out of \$HOME (unified-layout ADR, decision 1)"
+    else
+        ok "\$HOME is not a git top level"
+    fi
+    _pr_shadow="$(python3 -I "$_PR_PY" shadowed --root "$WORKSPACE" 2>/dev/null | tr '\n' ' ')"
+    if [ -n "$_pr_shadow" ]; then
+        gap "names under both .broomva/ and .control/ in $WORKSPACE: $_pr_shadow" \
+            "keep one copy of each; the readers prefer .broomva/ and would hide the other"
+    else
+        ok "no name is under both .broomva/ and .control/ in the workspace"
+    fi
+    if [ "$QUIET" = "0" ]; then
+        [ -d "$WORKSPACE/.control" ] && echo "  [info] $WORKSPACE/.control still holds governance: expected until the move (ADR step 4)"
+        [ -d "$HOME/.control" ] && echo "  [info] ~/.control exists (a tool fell back to \$HOME): reported until the move, then a gap"
+    fi
+fi
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 TOTAL=$((PASSES + GAPS))
