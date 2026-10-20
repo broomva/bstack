@@ -41,7 +41,10 @@ def load(raw: bytes) -> dict:
         import tomllib
     except ModuleNotFoundError:  # pragma: no cover - depends on the interpreter
         raise SystemExit("gen_paths.py needs Python 3.11+ (tomllib); the readers it writes run on 3.9")
-    return tomllib.loads(raw.decode("utf-8"))
+    try:
+        return tomllib.loads(raw.decode("utf-8"))
+    except (tomllib.TOMLDecodeError, UnicodeDecodeError) as err:
+        raise RegistryError(f"not valid TOML: {err}") from err
 
 
 def _rel(name: str, value: object) -> str:
@@ -85,8 +88,17 @@ def validate(data: dict) -> tuple[list[tuple[str, str, bool, bool]], list[tuple[
         if name in {r[0] for r in repo}:
             raise RegistryError(f"repo_state.{name}: also a repo name; the two share one namespace")
         state.append((name, _rel(f"repo_state.{name}", entry.get("path"))))
-    if {r[1] for r in repo} & {r[1] for r in state}:
-        raise RegistryError("repo and repo_state share a path")
+    # Repo and repo_state paths share .control/ (legacy) and must not nest: `a` and
+    # `a/b` cannot both exist when `a` is a file. Compared case-insensitively, since
+    # `Policy.yaml` and `policy.yaml` are one file on APFS.
+    in_repo = [r[1] for r in repo] + [r[1] for r in state]
+    folded = [p.lower() for p in in_repo]
+    if len(set(folded)) != len(folded):
+        raise RegistryError("two repo or repo_state names share a path (compared case-insensitively)")
+    for a in folded:
+        for b in folded:
+            if b.startswith(a + "/"):
+                raise RegistryError(f"repo paths nest: {a!r} holds {b!r}")
     machine: list[tuple[str, str, str | None]] = []
     for name, entry in data.get("machine", {}).items():
         if not NAME.match(name) or not isinstance(entry, dict):
@@ -98,10 +110,9 @@ def validate(data: dict) -> tuple[list[tuple[str, str, bool, bool]], list[tuple[
                                    or set(legacy.split("/")) & {".", ".."}):
             raise RegistryError(f"machine.{name}: legacy must be an absolute or ~/ path: {legacy!r}")
         machine.append((name, _rel(f"machine.{name}", entry.get("path")), legacy))
-    for kind, rows in (("repo", repo), ("machine", machine)):
-        paths = [r[1] for r in rows]
-        if len(set(paths)) != len(paths):
-            raise RegistryError(f"{kind}: two names share a path")
+    machine_paths = [r[1].lower() for r in machine]
+    if len(set(machine_paths)) != len(machine_paths):
+        raise RegistryError("machine: two names share a path (compared case-insensitively)")
     if not repo or not machine:
         raise RegistryError("repo and machine tables must not be empty")
     return repo, state, machine
@@ -128,18 +139,23 @@ def render(raw: bytes) -> tuple[str, str]:
     py_machine = "\n".join(f"    {n!r}: ({p!r}, {legacy!r})," for n, p, legacy in machine)
     py_owner = "\n".join(f"    {p!r}," for p in owners)
     py_state = "\n".join(f"    {n!r}: {p!r}," for n, p in state)
+    # Repo-scope names that must never sit at the top of the machine root: every repo
+    # path's first part, except where a machine name already has that spelling.
+    machine_top = {p.split("/")[0].lower() for _, p, _ in machine}
+    never = sorted({p.split("/")[0] for _, p, _, _ in repo} - {m for m in machine_top})
+    never = [n for n in never if n.lower() not in machine_top]
+    py_never = "\n".join(f"    {n!r}," for n in never)
     py = ((TEMPLATES / "broomva_paths.py.tmpl").read_text().replace("@@SHA@@", sha).replace("@@REPO@@", py_repo)
           .replace("@@MACHINE@@", py_machine).replace("@@OWNER@@", py_owner)
-          .replace("@@STATE@@", py_state))
+          .replace("@@STATE@@", py_state).replace("@@NEVERMACHINE@@", py_never))
     # Patterns are quoted: a name such as `esac` or `in` must stay a word, not syntax.
-    sh_repo = "\n".join(f"        '{n}') printf '%s\\n' '{p} {1 if legacy else 0}' ;;" for n, p, legacy, _ in repo)
+    sh_repo = "\n".join(f"        '{n}') printf '%s\\n' '{p} {1 if legacy else 0} {1 if owner else 0}' ;;"
+                        for n, p, legacy, owner in repo)
     sh_machine = "\n".join(f"        '{n}') printf '%s\\n' '{p} {legacy or '-'}' ;;" for n, p, legacy in machine)
     sh_legacy = " ".join(f"'{p}'" for _, p, legacy, _ in repo if legacy)
     sh_state = "\n".join(f"        '{n}') printf '%s\\n' '{p}' ;;" for n, p in state)
-    # With no owner entries the pattern must still be a pattern: one no path can be.
-    owner_case = "|".join(f"{q}|{q}/*" for q in owners) or "'/ no owner path /'"
     sh = ((TEMPLATES / "broomva-paths.sh.tmpl").read_text().replace("@@SHA@@", sha)
-          .replace("@@OWNERCASE@@", owner_case).replace("@@OWNER@@", " ".join(owners))
+          .replace("@@OWNER@@", " ".join(owners))
           .replace("@@REPO@@", sh_repo).replace("@@MACHINE@@", sh_machine).replace("@@LEGACYLIST@@", sh_legacy)
           .replace("@@STATE@@", sh_state))
     return py, sh

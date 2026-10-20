@@ -12,7 +12,7 @@ set -uo pipefail
 
 BSTACK_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$BSTACK_REPO" || exit 1
-MIN_TESTS=51
+MIN_TESTS=61
 
 PASS=0
 FAIL=0
@@ -79,6 +79,25 @@ expect_gap() {  # expect_gap LABEL PATTERN
     if printf '%s\n' "$OUT" | grep -q "\[gap\] $2"; then assert_pass "doctor §30 fails $1"; else assert_fail "doctor §30 fails $1" "$OUT"; fi
 }
 
+# C round-2 N1: the readers' workspace ($HOME/broomva) does not exist, and the one
+# doctor audits holds both roots. That must still be a gap, never a vacuous ok.
+section30_unset() { HOME="$SCRATCH/home" BROOMVA_WORKSPACE='' MAESTRO_WORKSPACE='' BSTACK_WORKSPACE='' \
+    bash -c 'cd "$1" && bash "$2/scripts/doctor.sh"' _ "$WS" "$COPY" 2>&1 | sed -n '/^30\. Path registry/,/^$/p'; }
+git -C "$WS" init -q 2>/dev/null
+mkdir -p "$WS/.broomva/asks"
+OUT="$(section30_unset)"
+if printf '%s\n' "$OUT" | grep -q "\[gap\] names under both .broomva/ and .control/ in .*asks" \
+    && printf '%s\n' "$OUT" | grep -q "\[info\] the readers' workspace .* does not exist"; then
+    assert_pass "doctor §30 checks the audited workspace when the readers' one is missing"
+else
+    assert_fail "doctor §30 checks the audited workspace when the readers' one is missing" "$OUT"
+fi
+rmdir "$WS/.broomva/asks"
+
+mkdir -p "$WS/.broomva" && touch "$WS/.broomva/policy.yaml"
+expect_gap "a partially moved workspace" ".* has moved to .broomva/ but these are still under .control/: asks"
+rm -f "$WS/.broomva/policy.yaml" && rmdir "$WS/.broomva"
+
 mkdir "$SCRATCH/home/.control"
 expect_gap "a ~/.control (a tool fell back to \$HOME)" '\$HOME/.control exists'
 rmdir "$SCRATCH/home/.control"
@@ -89,12 +108,19 @@ rm -f "$SCRATCH/home/.broomva/policy.yaml"
 
 mkdir -p "$WS/.broomva/asks"
 chmod 0 "$WS/.broomva"
-expect_gap "a workspace it cannot read (never an ok)" "could not check"
+expect_gap "a workspace it cannot read (never an ok)" "could not check .* for names under both roots"
 chmod 755 "$WS/.broomva" && rmdir "$WS/.broomva/asks" "$WS/.broomva"
 
 git -C "$SCRATCH/home" init -q
 expect_gap "a git repo at \$HOME" '\$HOME is a git top level'
 mv "$SCRATCH/home/.git" "$SCRATCH/home-git-was-here"
+mkdir -p "$SCRATCH/realhome" && git -C "$SCRATCH/realhome" init -q && ln -s "$SCRATCH/realhome" "$SCRATCH/linkhome"
+OUT="$(HOME="$SCRATCH/linkhome" BROOMVA_WORKSPACE="$WS" bash "$COPY/scripts/doctor.sh" 2>&1 | sed -n '/^30\. Path registry/,/^$/p')"
+if printf '%s\n' "$OUT" | grep -q '\[gap\] \$HOME is a git top level'; then
+    assert_pass "doctor §30 fails a \$HOME that is a symlink to a git repo"
+else
+    assert_fail "doctor §30 fails a \$HOME that is a symlink to a git repo" "$OUT"
+fi
 
 # A hand edit that keeps the hash line: only the generator's own --check sees it.
 cp "$COPY/scripts/broomva_paths.py" "$SCRATCH/reader.bak"

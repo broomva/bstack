@@ -432,7 +432,6 @@ class Hardening(Tmp):
         os.chdir(repo)
         with mock.patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": ""}):
             self.assertIsNone(bp.repo_root(""))
-            self.assertIsNone(bp.relative_to_repo(""))
             for call in (lambda: bp.repo_path("policy", ""), lambda: bp.tree_path("asks", ""), lambda: bp.shadowed("")):
                 with self.assertRaises(ValueError):
                     call()
@@ -482,32 +481,6 @@ class Hardening(Tmp):
             bp.resolve("repo.workspace.policy", self.tmp)
         self.assertEqual(sh(f'broomva_repo_path repo.workspace.policy "{self.tmp}"').returncode, 2)
         self.assertTrue(any(n.startswith("workspace.") for n in bp.all_names()))
-
-    def test_owner_paths_match_inside_folder_entries(self) -> None:
-        cases = {".broomva/policy.yaml": True, ".control/policy.yaml": True, "./.control/preauth.yaml": True,
-                 ".broomva/hooks/x.sh": True, ".broomva/hooks": True, ".control/hooks/x.sh": False,
-                 ".control/asks/a.yaml": False, ".broomva/policy.yaml.bak": False, "policy.yaml": False}
-        for rel, want in cases.items():
-            with self.subTest(rel):
-                self.assertEqual(bp.is_owner_path(rel), want)
-                self.assertEqual(sh(f'broomva_is_owner_path "{rel}"').returncode, 0 if want else 1)
-
-    def test_relative_paths_compare_physical_folders(self) -> None:
-        repo = make_repo(self.tmp / "r")
-        (repo / "sub").mkdir()
-        link = self.tmp / "link"
-        link.symlink_to(repo)
-        (repo / "sub" / "real.yaml").write_text("x")
-        (repo / "sub" / "alias.yaml").symlink_to(repo / "sub" / "real.yaml")
-        for target, want in ((link / "sub" / "new" / "f.yaml", "sub/new/f.yaml"), (link / "sub" / "alias.yaml", "sub/alias.yaml"),
-                             (repo, "."), (repo / "./sub/x", "sub/x")):
-            with self.subTest(str(target)):
-                got = bp.relative_to_repo(target)
-                self.assertEqual(got[1] if got else None, want)
-                self.assertEqual(sh(f'broomva_repo_relpath "{target}"').stdout.strip(), want)
-        for bad in (repo / "sub" / ".." / "x", self.tmp / "outside"):
-            self.assertIsNone(bp.relative_to_repo(bad))
-            self.assertEqual(sh(f'broomva_repo_relpath "{bad}"').returncode, 1)
 
     def test_a_compatibility_symlink_shadows_nothing_and_an_unreadable_root_is_an_error(self) -> None:
         (self.tmp / ".control" / "asks").mkdir(parents=True)
@@ -609,8 +582,9 @@ class Round1More(Tmp):
             self.assertEqual(bp.repo_path("audit", repo), repo / ".control" / "audit", "unmoved: legacy")
             self.assertEqual(bp.repo_path("repo.leverage_state", repo), repo / ".control" / "leverage-state.json",
                              "unmoved, no file yet: legacy (a writer keeps one place)")
-            (home / "state" / "repos" / "myrepo" / "audit").mkdir(parents=True)
-            self.assertEqual(bp.repo_path("audit", repo), home / "state" / "repos" / "myrepo" / "audit", "moved state: new")
+            self.assertEqual(bp.state_dir(repo).parent, home / "state" / "repos")
+            (bp.state_dir(repo) / "audit").mkdir(parents=True)
+            self.assertEqual(bp.repo_path("audit", repo), bp.state_dir(repo) / "audit", "moved state: new")
             self.assertIn("audit", bp.shadowed(repo))
             self.assertEqual(bp.repo_rels("audit"), (".control/audit",))
             for name in ("audit", "leverage_state"):
@@ -618,8 +592,159 @@ class Round1More(Tmp):
             self.assertEqual(sh("broomva_repo_rels audit").stdout.split(), [".control/audit"])
             gone = self.tmp / "gone"
             gone.mkdir()
-            self.assertEqual(bp.repo_path("leverage_state", gone), home / "state" / "repos" / "gone" / "leverage-state.json")
+            self.assertEqual(bp.repo_path("leverage_state", gone), bp.state_dir(gone) / "leverage-state.json")
         self.assertIn("repo.audit", bp.all_names())
+
+
+class Round2(Tmp):
+    """Round-2 review (Strata A, B, C): each finding, as a case that fails if it returns."""
+
+    def test_two_repos_with_one_name_keep_separate_state(self) -> None:
+        a, b = self.tmp / "x" / "checkout", self.tmp / "y" / "checkout"
+        a.mkdir(parents=True)
+        b.mkdir(parents=True)
+        env = {"BROOMVA_HOME": str(self.tmp / "mh")}
+        with mock.patch.dict(os.environ, env):
+            da, db = bp.state_dir(a), bp.state_dir(b)
+            self.assertNotEqual(da, db)
+            self.assertTrue(da.name.startswith("checkout-") and len(da.name) == len("checkout-") + 12)
+            for root, want in ((a, da), (b, db), (Path(str(a) + "/."), da)):
+                self.assertEqual(sh(f'broomva_state_dir "{root}"', env).stdout.strip(), str(want), str(root))
+            self.assertEqual(bp.state_dir(Path(str(a) + "/.")), da, "a trailing /. is the same repo")
+            link = self.tmp / "link-to-a"
+            link.symlink_to(a)
+            self.assertEqual(bp.state_dir(link), da, "the same repo through a symlink: the real path decides")
+            self.assertEqual(sh(f'broomva_state_dir "{link}"', env).stdout.strip(), str(da))
+            self.assertTrue(bp.repo_key("/").startswith("_root-"))
+            self.assertEqual(sh('broomva_repo_key /').stdout.strip(), bp.repo_key("/"))
+
+    def test_tilde_rules_are_one_rule(self) -> None:
+        for value in ("~root", "~nobody/x"):
+            with self.subTest(value), mock.patch.dict(os.environ, {"BROOMVA_HOME": value}):
+                with self.assertRaises(ValueError):
+                    bp.machine_root()
+                self.assertEqual(sh("broomva_machine_root", {"BROOMVA_HOME": value}).returncode, 2)
+        env = {"HOME": "", "BROOMVA_HOME": "~/reg"}
+        with mock.patch.dict(os.environ, env):
+            want = str(bp.machine_root())
+        self.assertFalse(want.startswith("/reg"), "an empty HOME is the account's home, not /")
+        self.assertEqual(sh("broomva_machine_root", env).stdout.strip(), want)
+        env = {"BROOMVA_HOME": f"{self.tmp}/h///", "BROOMVA_WORKSPACE": f"{self.tmp}/ws/"}
+        with mock.patch.dict(os.environ, env):
+            want = [str(bp.machine_root()), str(bp.workspace_root()), str(bp.machine_path("config"))]
+        self.assertEqual(sh("broomva_machine_root; broomva_workspace_root; broomva_machine_path config", env).stdout.split(), want)
+        self.assertEqual(want[0], f"{self.tmp}/h")
+
+    def test_the_workspace_root_is_never_home(self) -> None:
+        for value in ("~", str(self.tmp)):
+            env = {"HOME": str(self.tmp), "BROOMVA_WORKSPACE": value}
+            with self.subTest(value), mock.patch.dict(os.environ, env):
+                with self.assertRaises(ValueError):
+                    bp.workspace_root()
+                self.assertEqual(sh("broomva_workspace_root", env).returncode, 2)
+                self.assertEqual(sh("broomva_workspace_path policy", env).returncode, 2)
+
+    def test_an_owner_name_is_never_read_through_a_symlink(self) -> None:
+        ws = self.tmp / "ws"
+        (ws / ".control").mkdir(parents=True)
+        (ws / ".control" / "policy.yaml").write_text("owner: true\n")
+        evil = self.tmp / "evil.yaml"
+        evil.write_text("agent: true\n")
+        (ws / ".broomva").mkdir()
+        (ws / ".broomva" / "policy.yaml").symlink_to(evil)
+        with self.assertRaises(bp.UnsafePath):
+            bp.repo_path("policy", ws)
+        self.assertEqual(sh(f'broomva_repo_path policy "{ws}"').returncode, 3)
+        self.assertEqual(bp.main(["resolve", "repo.policy", "--root", str(ws)]), 2 if bp.repo_root(ws) is None else 3)
+        (ws / ".broomva" / "asks").symlink_to(ws / ".control")  # not owner-written: followed as before
+        self.assertEqual(bp.repo_path("asks", ws), ws / ".broomva" / "asks")
+
+    def test_a_control_file_and_a_symlinked_folder_find_the_same_root(self) -> None:
+        repo = make_repo(self.tmp / "r")
+        (repo / ".control").write_text("not a folder\n")
+        self.assertEqual(bp.repo_root(repo / ".control" / "policy.yaml"), repo)
+        self.assertEqual(sh(f'broomva_repo_root "{repo}/.control/policy.yaml"').stdout.strip(), str(repo))
+        outside = self.tmp / "outside"
+        outside.mkdir()
+        (repo / "link").symlink_to(outside)
+        self.assertEqual(bp.repo_root(repo / "link" / "x.yaml"), repo, "a symlinked folder does not take git out")
+        self.assertEqual(sh(f'broomva_repo_root "{repo}/link/x.yaml"').stdout.strip(), str(repo))
+
+    def test_an_explicit_empty_revision_is_a_usage_error_in_both(self) -> None:
+        repo = make_repo(self.tmp / "r")
+        (repo / "f").write_text("x\n")
+        git(repo, "add", ".")
+        git(repo, "commit", "-qm", "c")
+        self.assertEqual(sh(f'broomva_tree_path asks "{repo}" ""').returncode, 2)
+        self.assertEqual(sh(f'broomva_tree_path asks "{repo}"').returncode, 1, "an absent REV is HEAD")
+
+    def test_an_unreadable_new_root_is_unreadable_in_both(self) -> None:
+        root = self.tmp / "u"
+        (root / ".control" / "asks").mkdir(parents=True)
+        (root / ".broomva").mkdir()
+        (root / ".broomva").chmod(0)
+        self.addCleanup((root / ".broomva").chmod, 0o755)
+        with self.assertRaises(OSError):
+            bp.repo_path("preauth", root)
+        self.assertEqual(sh(f'broomva_repo_path preauth "{root}"').returncode, 3)
+        self.assertEqual(sh(f'broomva_moved "{root}"').returncode, 3)
+        lone = self.tmp / "lone"  # no .control: only the unreadable-folder check can tell
+        (lone / ".broomva").mkdir(parents=True)
+        (lone / ".broomva").chmod(0)
+        self.addCleanup((lone / ".broomva").chmod, 0o755)
+        with self.assertRaises(OSError):
+            bp.repo_path("asks", lone)
+        self.assertEqual(sh(f'broomva_repo_path asks "{lone}"').returncode, 3)
+
+    def test_no_git_is_an_error_not_a_missing_repo(self) -> None:
+        repo = make_repo(self.tmp / "r")
+        with mock.patch.dict(os.environ, {"PATH": str(self.tmp / "nowhere")}):
+            with self.assertRaises(bp.TreeReadError):
+                bp.repo_root(repo / "x")
+            self.assertEqual(bp.main(["resolve", "repo.policy", "--root", str(repo)]), 3)
+        self.assertEqual(sh(f'PATH=/nonexistent broomva_repo_root "{repo}/x"').returncode, 3)
+        # Without the external dirname the walk up must still end (it hung, round 3).
+        out = subprocess.run([BASH, "-c", f'. "{SH_LIB}"; command() {{ return 0; }}; PATH=/nonexistent; '
+                              f'broomva_repo_root "{repo}/a/b/c/x"'], capture_output=True, text=True, timeout=20)
+        self.assertIn(out.returncode, (1, 3))
+        for path, want in (("/a/b", "/a"), ("/a", "/"), ("/", "/"), ("a", "."), ("a/b/", "a"), ("/a//", "/")):
+            self.assertEqual(sh(f'_broomva_dirname "{path}"').stdout.strip(), want, path)
+
+    def test_the_generator_refuses_nesting_case_duplicates_and_bad_toml(self) -> None:
+        base = Generator.BASE + '[repo]\nx = { path = "a" }\n'
+        bad = {
+            "repo nests repo": base + 'y = { path = "a/b" }\n',
+            "state nests in repo": base + '[repo_state]\ns = { path = "a/b" }\n',
+            "case duplicate": base + 'y = { path = "A" }\n',
+            "machine case duplicate": base.replace('config = { path = "config" }', 'config = { path = "config" }\nConfig2 = { path = "Config" }'),
+            "invalid toml": base + "y = {\n",
+        }
+        for why, toml in bad.items():
+            with self.subTest(why), self.assertRaises(gen_paths.RegistryError):
+                gen_paths.render(toml.encode())
+        gen_paths.render((Generator.BASE + '[repo]\nx = { path = "a" }\n').replace(
+            'config = { path = "config" }', 'ledger = { path = "ledger" }\nticks = { path = "ledger/t.jsonl" }').encode())
+
+    def test_a_partial_move_is_named(self) -> None:
+        root = self.tmp / "p"
+        (root / ".broomva").mkdir(parents=True)
+        (root / ".broomva" / "policy.yaml").write_text("")
+        (root / ".control" / "asks").mkdir(parents=True)
+        (root / ".control" / "audit").mkdir()  # runtime state: not a split
+        self.assertEqual(bp.partially_moved(root), ["asks"])
+        self.assertEqual(bp.main(["split", "--root", str(root)]), 1)
+        unmoved = self.tmp / "q"
+        (unmoved / ".control" / "asks").mkdir(parents=True)
+        self.assertEqual(bp.partially_moved(unmoved), [])
+
+    def test_check_refuses_a_root_that_does_not_exist(self) -> None:
+        self.assertEqual(bp.main(["check", "--root", str(self.tmp / "absent")]), 3)
+
+    def test_the_machine_root_stray_list_covers_every_repo_name(self) -> None:
+        tops = {p.split("/")[0] for p, _, _ in bp.REPO.values()}
+        machine_tops = {p.split("/")[0].lower() for p, _ in bp.MACHINE.values()}
+        self.assertEqual(set(bp.REPO_NAMES_NEVER_IN_MACHINE_ROOT), {t for t in tops if t.lower() not in machine_tops})
+        self.assertIn("allowed_signers", bp.REPO_NAMES_NEVER_IN_MACHINE_ROOT)
 
 
 if __name__ == "__main__":

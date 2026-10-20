@@ -9,49 +9,52 @@
 #   policy=$(broomva_repo_path policy "$root")
 # Same rules and answers as scripts/broomva_paths.py; bash 3.2 compatible; every
 # function keeps its variables local. Return codes: 0 found, 1 absent (or no
-# repo), 2 usage error or unknown name, 3 could not read a git tree.
+# repo), 2 usage error or unknown name, 3 could not read (a git tree, an
+# unreadable folder, no git) or an owner-written name that is a symlink.
+# Unlike the Python reader, git calls here have no timeout: macOS ships no
+# portable `timeout`.
 
 BROOMVA_REGISTRY_SHA256="9172b7757d13f9c0412599e63f29691142e1f3d46c11fb5d068e02a17647e5ac"
 BROOMVA_REPO_DIR=".broomva"
 BROOMVA_REPO_LEGACY_DIR=".control"
-# Owner-written governance under both spellings, for display. To test a path,
-# use broomva_is_owner_path, which also matches what is inside a folder entry.
+# Owner-written governance under both spellings: the literal list gates hold. An
+# entry may be a folder (hooks/); matching a written path against it is the gate's job.
 BROOMVA_OWNER_PATHS=".broomva/policy.yaml .control/policy.yaml .broomva/preauth.yaml .control/preauth.yaml .broomva/allowed_signers .control/allowed_signers .broomva/hooks"
 
-# _broomva_repo_entry NAME -> "PATH HAS_LEGACY" (1 or 0). Takes one scope prefix.
+# _broomva_repo_entry NAME -> "PATH HAS_LEGACY OWNER" (1 or 0 each). Takes one scope prefix.
 _broomva_repo_entry() {
     local n=$1
     case "$n" in repo.*) n=${n#repo.} ;; workspace.*) n=${n#workspace.} ;; esac
     case "$n" in
-        'policy') printf '%s\n' 'policy.yaml 1' ;;
-        'preauth') printf '%s\n' 'preauth.yaml 1' ;;
-        'allowed_signers') printf '%s\n' 'allowed_signers 1' ;;
-        'hooks') printf '%s\n' 'hooks 0' ;;
-        'asks') printf '%s\n' 'asks 1' ;;
-        'initiatives') printf '%s\n' 'initiatives 1' ;;
-        'arcs') printf '%s\n' 'arcs.yaml 1' ;;
-        'bands') printf '%s\n' 'bands 1' ;;
-        'decisions') printf '%s\n' 'decisions.jsonl 1' ;;
-        'grants') printf '%s\n' 'grants.jsonl 1' ;;
-        'loops') printf '%s\n' 'loops 0' ;;
-        'checks') printf '%s\n' 'checks 0' ;;
-        'rcs_parameters') printf '%s\n' 'rcs-parameters.toml 1' ;;
-        'leverage_setpoints') printf '%s\n' 'leverage-setpoints.yaml 1' ;;
-        'hillclimb') printf '%s\n' 'hillclimb 1' ;;
-        'spec_contract_grandfathered') printf '%s\n' 'spec-contract-grandfathered.txt 1' ;;
-        'i2p_profile') printf '%s\n' 'i2p-profile.json 1' ;;
-        'i2p_profile_example') printf '%s\n' 'i2p-profile.example.json 1' ;;
-        'improvement_log') printf '%s\n' 'improvement-log.jsonl 1' ;;
-        'commands') printf '%s\n' 'commands.yaml 1' ;;
-        'topology') printf '%s\n' 'topology.yaml 1' ;;
-        'state') printf '%s\n' 'state.json 1' ;;
-        'plant') printf '%s\n' 'plant.yaml 1' ;;
-        'runtime') printf '%s\n' 'runtime.yaml 1' ;;
-        'problem_spec_template') printf '%s\n' 'problem-spec.template.yaml 1' ;;
-        'egri') printf '%s\n' 'egri.yaml 1' ;;
-        'egri_journal') printf '%s\n' 'egri-journal.jsonl 1' ;;
-        'evals') printf '%s\n' 'evals 1' ;;
-        'schemas') printf '%s\n' 'schemas 1' ;;
+        'policy') printf '%s\n' 'policy.yaml 1 1' ;;
+        'preauth') printf '%s\n' 'preauth.yaml 1 1' ;;
+        'allowed_signers') printf '%s\n' 'allowed_signers 1 1' ;;
+        'hooks') printf '%s\n' 'hooks 0 1' ;;
+        'asks') printf '%s\n' 'asks 1 0' ;;
+        'initiatives') printf '%s\n' 'initiatives 1 0' ;;
+        'arcs') printf '%s\n' 'arcs.yaml 1 0' ;;
+        'bands') printf '%s\n' 'bands 1 0' ;;
+        'decisions') printf '%s\n' 'decisions.jsonl 1 0' ;;
+        'grants') printf '%s\n' 'grants.jsonl 1 0' ;;
+        'loops') printf '%s\n' 'loops 0 0' ;;
+        'checks') printf '%s\n' 'checks 0 0' ;;
+        'rcs_parameters') printf '%s\n' 'rcs-parameters.toml 1 0' ;;
+        'leverage_setpoints') printf '%s\n' 'leverage-setpoints.yaml 1 0' ;;
+        'hillclimb') printf '%s\n' 'hillclimb 1 0' ;;
+        'spec_contract_grandfathered') printf '%s\n' 'spec-contract-grandfathered.txt 1 0' ;;
+        'i2p_profile') printf '%s\n' 'i2p-profile.json 1 0' ;;
+        'i2p_profile_example') printf '%s\n' 'i2p-profile.example.json 1 0' ;;
+        'improvement_log') printf '%s\n' 'improvement-log.jsonl 1 0' ;;
+        'commands') printf '%s\n' 'commands.yaml 1 0' ;;
+        'topology') printf '%s\n' 'topology.yaml 1 0' ;;
+        'state') printf '%s\n' 'state.json 1 0' ;;
+        'plant') printf '%s\n' 'plant.yaml 1 0' ;;
+        'runtime') printf '%s\n' 'runtime.yaml 1 0' ;;
+        'problem_spec_template') printf '%s\n' 'problem-spec.template.yaml 1 0' ;;
+        'egri') printf '%s\n' 'egri.yaml 1 0' ;;
+        'egri_journal') printf '%s\n' 'egri-journal.jsonl 1 0' ;;
+        'evals') printf '%s\n' 'evals 1 0' ;;
+        'schemas') printf '%s\n' 'schemas 1 0' ;;
         *) return 2 ;;
     esac
 }
@@ -99,17 +102,32 @@ _broomva_machine_entry() {
     esac
 }
 
+# $HOME when set and non-empty, else the account's home (as the Python reader does).
 _broomva_home() {
-    if [ -n "${HOME:-}" ]; then printf '%s\n' "$HOME"; else (cd ~ 2>/dev/null && pwd); fi
+    if [ -n "${HOME:-}" ]; then printf '%s\n' "$HOME"; else (unset HOME; cd ~ 2>/dev/null && pwd); fi
 }
 
-# A leading ~ expands as Python's expanduser does.
+# A leading ~ or ~/ is the home; a trailing slash is dropped. (~user is left as it
+# is: never absolute, so _broomva_absolute refuses it, as Python does.)
 _broomva_expand() {
-    local h
-    case "$1" in
-        \~) _broomva_home ;;
-        \~/*) h=$(_broomva_home) || return 1; printf '%s\n' "$h/${1#\~/}" ;;
-        *) printf '%s\n' "$1" ;;
+    local h v=$1
+    case "$v" in
+        \~) v=$(_broomva_home) || return 1 ;;
+        \~/*) h=$(_broomva_home) || return 1; v="$h/${v#\~/}" ;;
+    esac
+    while [ "${#v}" -gt 1 ] && [ "${v%/}" != "$v" ]; do v=${v%/}; done
+    printf '%s\n' "$v"
+}
+
+# _broomva_dirname PATH: dirname in bash alone. Each call is shorter or is / or ., so a
+# walk up always ends, even when PATH cannot reach the external dirname.
+_broomva_dirname() {
+    local p=$1
+    while [ "${#p}" -gt 1 ] && [ "${p%/}" != "$p" ]; do p=${p%/}; done
+    case "$p" in
+        /) printf '/\n' ;;
+        */*) p=${p%/*}; [ -n "$p" ] || p=/; printf '%s\n' "$p" ;;
+        *) printf '.\n' ;;
     esac
 }
 
@@ -131,22 +149,31 @@ broomva_machine_root() {
 }
 
 broomva_workspace_root() {
-    if [ -n "${BROOMVA_WORKSPACE:-}" ]; then _broomva_absolute "$BROOMVA_WORKSPACE"
-    elif [ -n "${MAESTRO_WORKSPACE:-}" ]; then _broomva_absolute "$MAESTRO_WORKSPACE"
-    elif [ -n "${BSTACK_WORKSPACE:-}" ]; then _broomva_absolute "$BSTACK_WORKSPACE"
-    else printf '%s/broomva\n' "$(_broomva_home)"; fi
+    local ws home
+    if [ -n "${BROOMVA_WORKSPACE:-}" ]; then ws=$(_broomva_absolute "$BROOMVA_WORKSPACE") || return 2
+    elif [ -n "${MAESTRO_WORKSPACE:-}" ]; then ws=$(_broomva_absolute "$MAESTRO_WORKSPACE") || return 2
+    elif [ -n "${BSTACK_WORKSPACE:-}" ]; then ws=$(_broomva_absolute "$BSTACK_WORKSPACE") || return 2
+    else ws="$(_broomva_home)/broomva"; fi
+    home=$(_broomva_home) || return 2
+    # Never $HOME: workspace.* would land in the machine root.
+    if [ "$ws" -ef "$home" ]; then return 2; fi
+    printf '%s\n' "$ws"
 }
 
 # broomva_repo_root [TARGET] -> the git top level of TARGET (else of
 # $CLAUDE_PROJECT_DIR; an empty TARGET is none); returns 1 outside a repo, and
 # when $HOME is that top level. Never the cwd.
 broomva_repo_root() {
-    local t=${1:-} top home
+    local t=${1:-} top home rc
     [ -n "$t" ] || t=${CLAUDE_PROJECT_DIR:-}
     [ -n "$t" ] || return 1
-    [ -d "$t" ] || t=$(dirname -- "$t")
-    while [ ! -d "$t" ] && [ "$t" != "/" ] && [ "$t" != "." ]; do t=$(dirname -- "$t"); done
-    top=$(_broomva_git -C "$t" rev-parse --show-toplevel 2>/dev/null) || return 1
+    # Start from the nearest real folder: one about to be created does not exist yet,
+    # and a symlinked one would take git out of the repo.
+    if [ -L "$t" ] || [ ! -d "$t" ]; then t=$(_broomva_dirname "$t"); fi
+    while { [ -L "$t" ] || [ ! -d "$t" ]; } && [ "$t" != "/" ] && [ "$t" != "." ]; do t=$(_broomva_dirname "$t"); done
+    top=$(_broomva_git -C "$t" rev-parse --show-toplevel 2>/dev/null); rc=$?
+    [ "$rc" -eq 127 ] && return 3  # git (or env) could not run: never read as "not a repo"
+    [ "$rc" -eq 0 ] || return 1
     [ -n "$top" ] || return 1
     home=$(_broomva_home) || return 1
     # -ef: the same folder, whatever its case or links.
@@ -154,63 +181,48 @@ broomva_repo_root() {
     printf '%s\n' "$top"
 }
 
-# broomva_repo_relpath TARGET -> TARGET's path inside its repo, '/'-separated.
-# The folders are compared physically (macOS /tmp is /private/tmp), the last
-# component as named. Returns 1 outside a repo, or for a path with a `..` part.
-broomva_repo_relpath() {
-    local t=${1:-} root rootp d rest="" base
-    [ -n "$t" ] || return 1
-    case "/$t/" in */../*) return 1 ;; esac
-    root=$(broomva_repo_root "$t") || return 1
-    rootp=$(cd "$root" && pwd -P) || return 1
-    case "$t" in /*) ;; *) t="$PWD/$t" ;; esac
-    base=$(basename -- "$t")
-    [ "$base" = . ] || rest="/$base"
-    d=$(dirname -- "$t")
-    while [ ! -d "$d" ]; do
-        base=$(basename -- "$d")
-        [ "$base" = . ] || rest="/$base$rest"
-        d=$(dirname -- "$d")
-    done
-    d="$(cd "$d" && pwd -P)$rest"
-    case "$d" in
-        "$rootp") printf '.\n' ;;
-        "$rootp"/*) printf '%s\n' "${d#"$rootp"/}" ;;
-        *) return 1 ;;
-    esac
-}
-
-# broomva_is_owner_path REL -> 0 when repo-relative REL is owner-written governance
-broomva_is_owner_path() {
-    local rel=${1#./}
-    case "$rel" in
-        .broomva/policy.yaml|.broomva/policy.yaml/*|.control/policy.yaml|.control/policy.yaml/*|.broomva/preauth.yaml|.broomva/preauth.yaml/*|.control/preauth.yaml|.control/preauth.yaml/*|.broomva/allowed_signers|.broomva/allowed_signers/*|.control/allowed_signers|.control/allowed_signers/*|.broomva/hooks|.broomva/hooks/*) return 0 ;;
-    esac
-    return 1
+# broomva_repo_key ROOT -> the repo's name in machine state: its folder name plus the
+# first 12 hex digits of the sha256 of its real path (`_root` for /), as in Python.
+broomva_repo_key() {
+    local root=${1:-} real name sum
+    [ -n "$root" ] || return 2
+    if [ -d "$root" ]; then real=$(cd "$root" && pwd -P) || return 3
+    else case "$root" in /*) real=$root ;; *) real="$PWD/$root" ;; esac; fi
+    while [ "${#real}" -gt 1 ] && [ "${real%/}" != "$real" ]; do real=${real%/}; done
+    name=${real##*/}
+    [ -n "$name" ] || name=_root
+    if command -v sha256sum >/dev/null 2>&1; then sum=$(printf '%s' "$real" | sha256sum)
+    elif command -v shasum >/dev/null 2>&1; then sum=$(printf '%s' "$real" | shasum -a 256)
+    else return 3; fi
+    [ "${#sum}" -ge 12 ] || return 3
+    printf '%s-%s\n' "$name" "${sum:0:12}"
 }
 
 # broomva_state_dir ROOT -> where the repo at ROOT keeps its runtime state once moved
 broomva_state_dir() {
-    local m root=${1%/}
-    [ -n "$root" ] || return 2
+    local m key
+    key=$(broomva_repo_key "$1") || return $?
     m=$(broomva_machine_root) || return 2
-    printf '%s/state/repos/%s\n' "$m" "$(basename -- "$root")"
+    printf '%s/state/repos/%s\n' "$m" "$key"
 }
 
 # broomva_repo_rels NAME -> the repo-relative paths NAME may hold, new first.
 # Runtime state leaves the repo when it moves, so only its legacy path is in-repo.
 broomva_repo_rels() {
-    local e
+    local e p rest
     if e=$(_broomva_state_entry "$1"); then printf '%s\n' "$BROOMVA_REPO_LEGACY_DIR/$e"; return 0; fi
     e=$(_broomva_repo_entry "$1") || return 2
-    printf '%s\n' "$BROOMVA_REPO_DIR/${e% *}"
-    if [ "${e##* }" = 1 ]; then printf '%s\n' "$BROOMVA_REPO_LEGACY_DIR/${e% *}"; fi
+    p=${e%% *}; rest=${e#* }
+    printf '%s\n' "$BROOMVA_REPO_DIR/$p"
+    if [ "${rest%% *}" = 1 ]; then printf '%s\n' "$BROOMVA_REPO_LEGACY_DIR/$p"; fi
 }
 
 # broomva_moved ROOT -> 0 when any name with a legacy location is already under .broomva/
 broomva_moved() {
     local p
     [ -n "${1:-}" ] || return 2
+    # A folder that cannot be searched cannot be answered for: 3, as in Python.
+    if [ -d "$1/$BROOMVA_REPO_DIR" ] && [ ! -x "$1/$BROOMVA_REPO_DIR" ]; then return 3; fi
     for p in 'policy.yaml' 'preauth.yaml' 'allowed_signers' 'asks' 'initiatives' 'arcs.yaml' 'bands' 'decisions.jsonl' 'grants.jsonl' 'rcs-parameters.toml' 'leverage-setpoints.yaml' 'hillclimb' 'spec-contract-grandfathered.txt' 'i2p-profile.json' 'i2p-profile.example.json' 'improvement-log.jsonl' 'commands.yaml' 'topology.yaml' 'state.json' 'plant.yaml' 'runtime.yaml' 'problem-spec.template.yaml' 'egri.yaml' 'egri-journal.jsonl' 'evals' 'schemas'; do
         if [ -e "$1/$BROOMVA_REPO_DIR/$p" ]; then return 0; fi
     done
@@ -220,27 +232,38 @@ broomva_moved() {
 # broomva_repo_path NAME ROOT -> where NAME lives on disk in the repo at ROOT
 # (ROOT is the repo's top level, as broomva_repo_root prints it)
 broomva_repo_path() {
-    local e p new old root=${2:-}
-    root=${root%/}
+    local e p new old rest legacy owner rc root=${2:-}
+    while [ "${#root}" -gt 1 ] && [ "${root%/}" != "$root" ]; do root=${root%/}; done
     if e=$(_broomva_state_entry "$1"); then
         new=$(broomva_state_dir "$root") || return 2  # 2 on an empty root too
         new="$new/$e"
         old="$root/$BROOMVA_REPO_LEGACY_DIR/$e"
-        if [ -e "$new" ]; then printf '%s\n' "$new"
-        elif [ -e "$old" ]; then printf '%s\n' "$old"
-        elif [ -d "$root/$BROOMVA_REPO_LEGACY_DIR" ] && ! broomva_moved "$root"; then printf '%s\n' "$old"
-        else printf '%s\n' "$new"; fi
+        if [ -e "$new" ]; then printf '%s\n' "$new"; return 0; fi
+        if [ -e "$old" ]; then printf '%s\n' "$old"; return 0; fi
+        if [ -d "$root/$BROOMVA_REPO_LEGACY_DIR" ]; then
+            broomva_moved "$root"; rc=$?
+            [ "$rc" -eq 3 ] && return 3
+            if [ "$rc" -ne 0 ]; then printf '%s\n' "$old"; return 0; fi
+        fi
+        printf '%s\n' "$new"
         return 0
     fi
     e=$(_broomva_repo_entry "$1") || return 2
     [ -n "$root" ] || return 2
-    p=${e% *}
+    p=${e%% *}; rest=${e#* }; legacy=${rest%% *}; owner=${rest##* }
     new="$root/$BROOMVA_REPO_DIR/$p"
     old="$root/$BROOMVA_REPO_LEGACY_DIR/$p"
-    if [ -e "$new" ] || [ "${e##* }" = 0 ]; then printf '%s\n' "$new"
-    elif [ -e "$old" ]; then printf '%s\n' "$old"
-    elif [ -d "$root/$BROOMVA_REPO_LEGACY_DIR" ] && ! broomva_moved "$root"; then printf '%s\n' "$old"
-    else printf '%s\n' "$new"; fi
+    # An owner-written name is never read through a symlink: 3.
+    if [ "$owner" = 1 ] && { [ -L "$new" ] || [ -L "$old" ]; }; then return 3; fi
+    if [ -d "$root/$BROOMVA_REPO_DIR" ] && [ ! -x "$root/$BROOMVA_REPO_DIR" ]; then return 3; fi
+    if [ -e "$new" ] || [ "$legacy" = 0 ]; then printf '%s\n' "$new"; return 0; fi
+    if [ -e "$old" ]; then printf '%s\n' "$old"; return 0; fi
+    if [ -d "$root/$BROOMVA_REPO_LEGACY_DIR" ]; then
+        broomva_moved "$root"; rc=$?
+        [ "$rc" -eq 3 ] && return 3
+        if [ "$rc" -ne 0 ]; then printf '%s\n' "$old"; return 0; fi
+    fi
+    printf '%s\n' "$new"
 }
 
 broomva_workspace_path() {
@@ -264,19 +287,21 @@ broomva_machine_path() {
 # broomva_tree_path NAME ROOT [REV] -> the path NAME has in git tree REV (default
 # HEAD), new before legacy. 1 when the tree holds neither; 3 when it cannot be read.
 broomva_tree_path() {
-    local e p rev=${3:-HEAD} rel out first="$BROOMVA_REPO_DIR"
+    local e p rest legacy rev=HEAD rel out first="$BROOMVA_REPO_DIR"
+    # An empty REV given explicitly is a usage error, as in Python; only an absent one is HEAD.
+    if [ "$#" -ge 3 ]; then rev=$3; fi
     if e=$(_broomva_state_entry "$1"); then
-        e="$e 1"
+        p=$e; legacy=1
         first="$BROOMVA_REPO_LEGACY_DIR"  # runtime state is never under .broomva/ in a tree
     else
         e=$(_broomva_repo_entry "$1") || return 2
+        p=${e%% *}; rest=${e#* }; legacy=${rest%% *}
     fi
     [ -n "${2:-}" ] || return 2
     case "$rev" in -*|"") return 2 ;; esac
-    p=${e% *}
     _broomva_git -C "$2" rev-parse --verify --quiet "$rev^{tree}" >/dev/null 2>&1 || return 3
     for rel in "$first/$p" "$BROOMVA_REPO_LEGACY_DIR/$p"; do
-        if [ "$rel" = "$BROOMVA_REPO_LEGACY_DIR/$p" ] && [ "${e##* }" != 1 ]; then break; fi
+        if [ "$rel" = "$BROOMVA_REPO_LEGACY_DIR/$p" ] && [ "$legacy" != 1 ]; then break; fi
         out=$(_broomva_git -C "$2" ls-tree --full-tree --name-only "$rev" -- "$rel" 2>/dev/null) || return 3
         if [ "$out" = "$rel" ]; then printf '%s\n' "$rel"; return 0; fi
     done

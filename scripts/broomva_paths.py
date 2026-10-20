@@ -34,7 +34,9 @@ runs on 3.9). Python 3.9+, stdlib only. CLI: ``broomva_paths.py --help``.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
+import pwd
 import subprocess
 import sys
 from pathlib import Path
@@ -117,9 +119,9 @@ MACHINE: Dict[str, Tuple[str, Optional[str]]] = {
     'last_update_check': ('last-update-check', None),
 }
 
-# Owner-written governance under both spellings: the literal list gates hold.
-# An entry may be a folder (hooks): use is_owner_path(), which also matches
-# what is inside one, rather than testing membership in this tuple.
+# Owner-written governance under both spellings: the literal list gates hold. An
+# entry may be a folder (hooks/). Matching a written path against it (case, `..`,
+# symlinks) is the gate's job, not this module's: the step-2 gates do it.
 OWNER_PATHS: Tuple[str, ...] = (
     '.broomva/policy.yaml',
     '.control/policy.yaml',
@@ -135,7 +137,37 @@ GOVERNANCE_PREFIXES: Tuple[str, ...] = (".broomva/", ".control/")
 
 # Names that must never appear at the top of the machine root: a repo-scope
 # file there means a tool fell back to $HOME (ADR, decision 1).
-REPO_NAMES_NEVER_IN_MACHINE_ROOT: Tuple[str, ...] = ("policy.yaml", "preauth.yaml", "asks", "initiatives", "loops")
+REPO_NAMES_NEVER_IN_MACHINE_ROOT: Tuple[str, ...] = (
+    'allowed_signers',
+    'arcs.yaml',
+    'asks',
+    'bands',
+    'checks',
+    'commands.yaml',
+    'decisions.jsonl',
+    'egri-journal.jsonl',
+    'egri.yaml',
+    'evals',
+    'grants.jsonl',
+    'hillclimb',
+    'hooks',
+    'i2p-profile.example.json',
+    'i2p-profile.json',
+    'improvement-log.jsonl',
+    'initiatives',
+    'leverage-setpoints.yaml',
+    'loops',
+    'plant.yaml',
+    'policy.yaml',
+    'preauth.yaml',
+    'problem-spec.template.yaml',
+    'rcs-parameters.toml',
+    'runtime.yaml',
+    'schemas',
+    'spec-contract-grandfathered.txt',
+    'state.json',
+    'topology.yaml',
+)
 
 EXIT_OK, EXIT_ABSENT, EXIT_USAGE, EXIT_UNREADABLE = 0, 1, 2, 3
 
@@ -146,6 +178,11 @@ class UnknownName(KeyError):
 
 class TreeReadError(OSError):
     """A git tree could not be read: an unknown revision, no git, or not a repo."""
+
+
+class UnsafePath(OSError):
+    """An owner-written name is a symlink: an agent could point it anywhere, and the
+    prefer-new rule would then read it in place of the owner's file."""
 
 
 def _scoped(name: str, scopes: Sequence[str]) -> str:
@@ -168,9 +205,19 @@ def _state_entry(name: str) -> Optional[str]:
     return REPO_STATE.get(_scoped(name, ("repo", "workspace")))
 
 
+def repo_key(root: os.PathLike) -> str:
+    """A repo's name in machine state: its top-level folder name plus the first 12 hex
+    digits of the sha256 of its real path, so two checkouts both called `checkout`
+    never share state. `_root` stands in for the name of `/`."""
+    root = _require_root(root)
+    real = os.path.realpath(root) if os.path.isdir(root) else os.path.abspath(root)
+    name = Path(real).name or "_root"
+    return f"{name}-{hashlib.sha256(real.encode()).hexdigest()[:12]}"
+
+
 def state_dir(root: os.PathLike) -> Path:
-    """Where a repo's runtime state lives once moved: $BROOMVA_HOME/state/repos/<name>."""
-    return machine_root() / "state" / "repos" / _require_root(root).name
+    """Where a repo's runtime state lives once moved: $BROOMVA_HOME/state/repos/<repo_key>."""
+    return machine_root() / "state" / "repos" / repo_key(root)
 
 
 def _machine_entry(name: str) -> Tuple[str, Optional[str]]:
@@ -181,11 +228,21 @@ def _machine_entry(name: str) -> Tuple[str, Optional[str]]:
 
 
 def _home() -> Path:
-    return Path(os.path.expanduser("~"))
+    """$HOME when set and non-empty, else the account's home: the shell reader's rule."""
+    value = os.environ.get("HOME")
+    return Path(value) if value else Path(pwd.getpwuid(os.getuid()).pw_dir)
 
 
 def _expand(value: str) -> Path:
-    return Path(os.path.expanduser(value))
+    """A leading ~ or ~/ becomes the home; ~user is refused (the shell reader cannot
+    look up another account the same way); a trailing slash is dropped."""
+    if value == "~":
+        return _home()
+    if value.startswith("~/"):
+        return _home() / value[2:]
+    if value.startswith("~"):
+        raise ValueError(f"~user paths are not supported: {value!r}")
+    return Path(value)
 
 
 def _absolute(key: str, value: str) -> Path:
@@ -201,11 +258,21 @@ def machine_root() -> Path:
 
 
 def workspace_root() -> Path:
+    root = None
     for key in WORKSPACE_ENV:
         value = os.environ.get(key)
         if value:
-            return _absolute(key, value)
-    return _expand(WORKSPACE_DEFAULT)
+            root = _absolute(key, value)
+            break
+    if root is None:
+        root = _expand(WORKSPACE_DEFAULT)
+    try:
+        at_home = os.path.samefile(root, _home())
+    except OSError:
+        at_home = False
+    if at_home:
+        raise ValueError(f"the workspace root cannot be $HOME: {root} (workspace.* would land in the machine root)")
+    return root
 
 
 def _git(args: List[str]) -> subprocess.CompletedProcess:
@@ -230,14 +297,17 @@ def _require_root(root: Optional[os.PathLike]) -> Path:
 
 
 def _toplevel(target: Path) -> Optional[Path]:
-    directory = target if target.is_dir() else target.parent
-    # A file about to be written may sit in a folder that does not exist yet.
-    while not directory.exists() and directory != directory.parent:
+    """The git top level of ``target``. git starts from the nearest ancestor that is a
+    real folder: a folder about to be created does not exist yet, and a symlinked one
+    (`.broomva -> elsewhere`) would take git out of the repo. Raises TreeReadError
+    when git cannot run, so "no git" is never read as "not a repo"."""
+    directory = target if (target.is_dir() and not target.is_symlink()) else target.parent
+    while (directory.is_symlink() or not directory.is_dir()) and directory != directory.parent:
         directory = directory.parent
     try:
         out = _git(["-C", str(directory), "rev-parse", "--show-toplevel"])
-    except (OSError, subprocess.SubprocessError):
-        return None
+    except (OSError, subprocess.SubprocessError) as e:
+        raise TreeReadError(f"git could not run: {e}") from e
     if out.returncode != 0 or not out.stdout.strip():
         return None
     top = Path(out.stdout.strip())
@@ -252,37 +322,12 @@ def _toplevel(target: Path) -> Optional[Path]:
 
 def repo_root(target: Optional[os.PathLike] = None) -> Optional[Path]:
     """The repo a tool operates on: the git top level of ``target``, else of
-    $CLAUDE_PROJECT_DIR, else None. Never the cwd: an empty target is no target."""
+    $CLAUDE_PROJECT_DIR, else None. Never the cwd: an empty target is no target.
+    Raises TreeReadError when git cannot run."""
     if target is not None and str(target) != "":
         return _toplevel(Path(target))
     project = os.environ.get("CLAUDE_PROJECT_DIR")
     return _toplevel(Path(project)) if project else None
-
-
-def relative_to_repo(target: os.PathLike) -> Optional[Tuple[Path, str]]:
-    """(repo root, the target's path inside it, '/'-separated), or None outside a repo.
-
-    git reports the real path of the top level, and a caller may hold a lexical
-    one (macOS /tmp is /private/tmp, a worktree may sit behind a symlink), so the
-    folders are compared resolved. The last component is kept as named: a symlink
-    in the repo is the path being written. A path with a `..` part is refused."""
-    if str(target) == "" or ".." in Path(str(target)).parts:
-        return None
-    root = repo_root(target)
-    if root is None:
-        return None
-    lexical = Path(os.path.abspath(str(target)))
-    try:
-        rel = (lexical.parent.resolve() / lexical.name).relative_to(root.resolve())
-    except ValueError:
-        return None
-    return root, (rel.as_posix() or ".")
-
-
-def is_owner_path(rel: str) -> bool:
-    """Whether repo-relative ``rel`` is owner-written governance, under either spelling."""
-    rel = rel[2:] if rel.startswith("./") else rel
-    return any(rel == p or rel.startswith(p + "/") for p in OWNER_PATHS)
 
 
 def repo_rels(name: str) -> Tuple[str, ...]:
@@ -304,6 +349,16 @@ def moved(root: os.PathLike) -> bool:
     return any(_exists(root / REPO_DIR / path) for path, legacy, _ in REPO.values() if legacy)
 
 
+def partially_moved(root: os.PathLike) -> List[str]:
+    """Names still under .control/ in a repo that has moved. One stray file under
+    .broomva/ marks a repo moved, and from then on new files go there while these
+    stay behind: the ledgers split, and no name is under both roots to show it."""
+    root = _require_root(root)
+    if not moved(root):
+        return []
+    return [name for name, (path, legacy, _) in REPO.items() if legacy and _exists(root / REPO_LEGACY_DIR / path)]
+
+
 def repo_path(name: str, root: os.PathLike) -> Path:
     """Where ``name`` lives on disk in the repo at ``root`` (see the migration rule).
     ``root`` is the repo's top level, as repo_root() returns it."""
@@ -316,12 +371,16 @@ def repo_path(name: str, root: os.PathLike) -> Path:
         if _exists(old) or ((root / REPO_LEGACY_DIR).is_dir() and not moved(root)):
             return old
         return new
-    path, legacy, _ = _repo_entry(name)
+    path, legacy, owner = _repo_entry(name)
     root = _require_root(root)
     new = root / REPO_DIR / path
+    old = root / REPO_LEGACY_DIR / path
+    if owner:
+        for candidate in (new, old):
+            if candidate.is_symlink():
+                raise UnsafePath(f"{candidate} is a symlink; an owner-written file never is")
     if not legacy or _exists(new):
         return new
-    old = root / REPO_LEGACY_DIR / path
     if _exists(old) or ((root / REPO_LEGACY_DIR).is_dir() and not moved(root)):
         return old
     return new
@@ -442,10 +501,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     p = sub.add_parser("shadowed", help="print names present under both roots of a repo")
     p.add_argument("--root", required=True)
     p.add_argument("--rev", help="look in this git tree instead of on disk")
+    p = sub.add_parser("split", help="print names still under .control/ in a repo that has moved")
+    p.add_argument("--root", required=True)
     p = sub.add_parser("root", help="print a scope's root: workspace or machine")
     p.add_argument("scope", choices=["workspace", "machine"])
-    p = sub.add_parser("is-owner", help="exit 0 when a repo-relative path is owner-written governance")
-    p.add_argument("rel")
     p = sub.add_parser("check", help="resolve every name; exit 0 when all resolve")
     p.add_argument("--root", required=True, help="a repo to resolve repo.* names in")
     sub.add_parser("hash", help="print the embedded registry sha256")
@@ -474,11 +533,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             if names:
                 print("\n".join(names))
             return EXIT_ABSENT if names else EXIT_OK
-        elif args.cmd == "is-owner":
-            return EXIT_OK if is_owner_path(args.rel) else EXIT_ABSENT
         elif args.cmd == "check":
+            if not Path(args.root).is_dir():
+                raise FileNotFoundError(f"no such folder: {args.root}")
             for name in all_names():
                 resolve(name, args.root)
+        elif args.cmd == "split":
+            names = partially_moved(args.root)
+            if names:
+                print("\n".join(names))
+            return EXIT_ABSENT if names else EXIT_OK
         elif args.cmd == "root":
             print(workspace_root() if args.scope == "workspace" else machine_root())
         elif args.cmd == "hash":

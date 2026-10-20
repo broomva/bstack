@@ -2004,33 +2004,55 @@ else
                 "run python3 scripts/gen_paths.py in the bstack repo"
         fi
     fi
-    # The workspace the readers will use (BROOMVA_WORKSPACE, MAESTRO_WORKSPACE,
-    # BSTACK_WORKSPACE, ~/broomva), which can differ from the one doctor audits.
-    if ! _pr_ws="$(python3 -I "$_PR_PY" root workspace 2>&1)"; then
-        gap "the registry's workspace root does not resolve: $_pr_ws" "set BROOMVA_WORKSPACE to an absolute path"
-        _pr_ws="$WORKSPACE"
-    fi
-    if _pr_out="$(python3 -I "$_PR_PY" check --root "$_pr_ws" 2>&1)"; then
-        ok "every registry name resolves (workspace $_pr_ws)"
+    # Two workspaces can matter: the one doctor audits, and the one the readers resolve
+    # (BROOMVA_WORKSPACE, MAESTRO_WORKSPACE, BSTACK_WORKSPACE, ~/broomva). Every check
+    # runs on each that exists; one that does not exist is reported, never passed.
+    _pr_roots="$WORKSPACE"
+    if _pr_ws="$(python3 -I "$_PR_PY" root workspace 2>&1)"; then
+        if [ ! -d "$_pr_ws" ]; then
+            [ "$QUIET" = "0" ] && echo "  [info] the readers' workspace $_pr_ws does not exist (workspace.* names point there)"
+        elif [ ! "$_pr_ws" -ef "$WORKSPACE" ]; then
+            _pr_roots="$WORKSPACE
+$_pr_ws"
+        fi
     else
-        gap "a registry name does not resolve: $_pr_out" "run python3 $_PR_PY check --root $_pr_ws"
+        gap "the readers' workspace root does not resolve: $_pr_ws" "set BROOMVA_WORKSPACE to an absolute path that is not \$HOME"
     fi
-    _pr_home="$(cd "$HOME" && pwd -P)"
+    while IFS= read -r _pr_root; do
+        [ -n "$_pr_root" ] || continue
+        if _pr_out="$(python3 -I "$_PR_PY" check --root "$_pr_root" 2>&1)"; then
+            ok "every registry name resolves in $_pr_root"
+        else
+            gap "a registry name does not resolve in $_pr_root: $_pr_out" "run python3 $_PR_PY check --root $_pr_root"
+        fi
+        _pr_shadow="$(python3 -I "$_PR_PY" shadowed --root "$_pr_root" 2>&1)"
+        case $? in
+            0) ok "no name is under both .broomva/ and .control/ in $_pr_root" ;;
+            1) gap "names under both .broomva/ and .control/ in $_pr_root: $(printf '%s' "$_pr_shadow" | tr '\n' ' ')" \
+                   "keep one copy of each; the readers prefer .broomva/ and would hide the other" ;;
+            *) gap "could not check $_pr_root for names under both roots: $_pr_shadow" \
+                   "make .broomva/ and .control/ readable" ;;
+        esac
+        _pr_split="$(python3 -I "$_PR_PY" split --root "$_pr_root" 2>&1)"
+        case $? in
+            0) ok "$_pr_root is not partially moved" ;;
+            1) gap "$_pr_root has moved to .broomva/ but these are still under .control/: $(printf '%s' "$_pr_split" | tr '\n' ' ')" \
+                   "finish the move (git mv them), or remove the stray .broomva/ entry that marked the repo moved" ;;
+            *) gap "could not check whether $_pr_root is partially moved: $_pr_split" "make .broomva/ and .control/ readable" ;;
+        esac
+        if [ "$QUIET" = "0" ] && [ -d "$_pr_root/.control" ]; then
+            echo "  [info] $_pr_root/.control still holds governance: expected until the move (ADR step 4)"
+        fi
+    done <<EOF_ROOTS
+$_pr_roots
+EOF_ROOTS
     _pr_top="$(env -u GIT_DIR -u GIT_WORK_TREE git -C "$HOME" rev-parse --show-toplevel 2>/dev/null || true)"
-    if [ -n "$_pr_top" ] && [ "$(cd "$_pr_top" && pwd -P)" = "$_pr_home" ]; then
+    if [ -n "$_pr_top" ] && [ "$_pr_top" -ef "$HOME" ]; then
         gap "\$HOME is a git top level: the repo and machine scopes coincide" \
             "move the repository out of \$HOME (unified-layout ADR, decision 1)"
     else
         ok "\$HOME is not a git top level"
     fi
-    _pr_shadow="$(python3 -I "$_PR_PY" shadowed --root "$_pr_ws" 2>&1)"
-    case $? in
-        0) ok "no name is under both .broomva/ and .control/ in the workspace" ;;
-        1) gap "names under both .broomva/ and .control/ in $_pr_ws: $(printf '%s' "$_pr_shadow" | tr '\n' ' ')" \
-               "keep one copy of each; the readers prefer .broomva/ and would hide the other" ;;
-        *) gap "could not check $_pr_ws for names under both roots: $_pr_shadow" \
-               "make .broomva/ and .control/ readable" ;;
-    esac
     if [ -e "$HOME/.control" ]; then
         gap "\$HOME/.control exists: a tool fell back to \$HOME instead of a repo" \
             "find the writer (ADR decision 1 lists the tools with a cwd fallback), then move its files to the repo or ~/.broomva/state"
@@ -2049,9 +2071,6 @@ else
             "these belong to a repo's .broomva/; a tool wrote them with \$HOME as its repo"
     else
         ok "no repo-scope name at the top of the machine root"
-    fi
-    if [ "$QUIET" = "0" ] && [ -d "$_pr_ws/.control" ]; then
-        echo "  [info] $_pr_ws/.control still holds governance: expected until the move (ADR step 4)"
     fi
 fi
 
