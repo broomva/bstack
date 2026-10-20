@@ -25,10 +25,12 @@ not a repo) is an error (exit 3), never "absent". A repo root is the git top lev
 of `$CLAUDE_PROJECT_DIR`; never the cwd, never an empty target, never `$HOME`; git runs without
 `GIT_DIR`, from the nearest real (not symlinked) folder, and "no git" is an error, not "not a repo".
 Env roots must be absolute and the workspace is never `$HOME`; `~` and `~/` expand alike in both,
-`~user` is refused. An owner-written name (policy, preauth, allowed_signers, hooks) is never read
-through a symlink: under the prefer-new rule a symlinked `.broomva/policy.yaml` would otherwise replace
-the owner's file. For the gates (step 2), `OWNER_PATHS` is the literal owner list; matching a written
-path against it (case, `..`, symlinks) stays in the gates. The shell reader's git calls have no
+`~user` and a relative `HOME` are refused. Containment, not provenance: a path the readers return
+lies inside the repo (`.broomva/` and `.control/` must be real folders, an entry must not be a symlink,
+a committed symlink in a tree is refused: `LayoutError`, exit 3); who wrote a file is not something a
+reader can know (`cp -r` makes plain files), so owner-written governance is protected by the gates and
+Owner Signature, and doctor reports a name under both roots. For the gates (step 2), `OWNER_PATHS` is
+the literal owner list; matching a written path against it (case, `..`) stays in the gates. The shell reader's git calls have no
 timeout (macOS has no portable `timeout`); the Python reader's have 10 s. Nothing switches to the
 registry in this release.
 
@@ -37,9 +39,9 @@ registry in this release.
 `$HOME` (by identity), a name under both roots, a repo that has moved but still holds governance under
 `.control/`, `~/.control`, and any repo-scope name at the top of `~/.broomva`, on both the workspace
 doctor audits and the one the readers resolve; a check that cannot run is a gap, never an ok.
-`tests/broomva-paths.test.sh`: 61 unit cases (shell and Python agreeing on every disk, tree and
-environment state) and 11 doctor fixtures; every rule mutation-proven. P20 rounds 1 and 2 found the
-injection, fail-soft, cwd, state-collision and symlink faults this now refuses.
+`tests/broomva-paths.test.sh`: 69 unit cases (shell and Python agreeing on every disk, tree and
+environment state, on bash 3.2 and 5) and 11 doctor fixtures; every rule mutation-proven. P20 rounds
+1 to 3 found the injection, fail-soft, cwd, state-collision and containment faults this now refuses.
 
 ## 0.48.2 — 2026-10-19
 

@@ -12,7 +12,7 @@ set -uo pipefail
 
 BSTACK_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$BSTACK_REPO" || exit 1
-MIN_TESTS=61
+MIN_TESTS=69
 
 PASS=0
 FAIL=0

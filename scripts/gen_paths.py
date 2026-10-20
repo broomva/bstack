@@ -60,6 +60,9 @@ def validate(data: dict) -> tuple[list[tuple[str, str, bool, bool]], list[tuple[
         raise RegistryError(f"unknown tables or keys: {sorted(unknown)} (a typo would be dropped silently)")
     if type(data.get("version")) is not int or data["version"] != 1:
         raise RegistryError("version must be the integer 1")
+    for table in ("roots", "repo", "repo_state", "machine"):
+        if not isinstance(data.get(table, {}), dict):
+            raise RegistryError(f"[{table}] must be a table, not {type(data[table]).__name__}")
     if set(data.get("roots", {})) != {"repo", "machine", "workspace"}:
         raise RegistryError("roots must hold exactly repo, machine and workspace")
     roots = data.get("roots", {})
@@ -149,8 +152,7 @@ def render(raw: bytes) -> tuple[str, str]:
           .replace("@@MACHINE@@", py_machine).replace("@@OWNER@@", py_owner)
           .replace("@@STATE@@", py_state).replace("@@NEVERMACHINE@@", py_never))
     # Patterns are quoted: a name such as `esac` or `in` must stay a word, not syntax.
-    sh_repo = "\n".join(f"        '{n}') printf '%s\\n' '{p} {1 if legacy else 0} {1 if owner else 0}' ;;"
-                        for n, p, legacy, owner in repo)
+    sh_repo = "\n".join(f"        '{n}') printf '%s\\n' '{p} {1 if legacy else 0}' ;;" for n, p, legacy, _ in repo)
     sh_machine = "\n".join(f"        '{n}') printf '%s\\n' '{p} {legacy or '-'}' ;;" for n, p, legacy in machine)
     sh_legacy = " ".join(f"'{p}'" for _, p, legacy, _ in repo if legacy)
     sh_state = "\n".join(f"        '{n}') printf '%s\\n' '{p}' ;;" for n, p in state)

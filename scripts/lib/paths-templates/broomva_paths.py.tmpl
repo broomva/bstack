@@ -20,6 +20,16 @@ the tree holds it, else the legacy path, else None. A tree that cannot be read
 "could not look" are never the same answer, because a gate reading "no signers
 file" must not get it from a failed git call.
 
+Containment, not provenance. A path these readers return lies inside the repo:
+`.broomva/` and `.control/` must be real folders, and the entry a name resolves
+to must not be a symlink (repo paths are one level deep, so that is every
+component); a committed symlink in a tree is refused the same way (LayoutError).
+They cannot tell who wrote a file: a `.broomva/policy.yaml` an agent created
+with `cp -r` reads like the owner's. Owner-written governance is protected where
+it is written, by the gates (literal lists, OWNER_PATHS) and Owner Signature
+(ADR decision 2: gates never consult the registry), and doctor reports a name
+under both roots after the fact.
+
 A repo root is never searched for by name and never falls back to the cwd: it is
 the git top level of the path a tool operates on, or of $CLAUDE_PROJECT_DIR when
 the tool passes none (None or ""), and none at all when $HOME is that top level.
@@ -95,9 +105,10 @@ class TreeReadError(OSError):
     """A git tree could not be read: an unknown revision, no git, or not a repo."""
 
 
-class UnsafePath(OSError):
-    """An owner-written name is a symlink: an agent could point it anywhere, and the
-    prefer-new rule would then read it in place of the owner's file."""
+class LayoutError(OSError):
+    """A path would leave the repo: .broomva/ or .control/ is a symlink, or the entry a
+    name resolves to is (on disk, or as a committed symlink in a tree)."""
+
 
 
 def _scoped(name: str, scopes: Sequence[str]) -> str:
@@ -125,7 +136,9 @@ def repo_key(root: os.PathLike) -> str:
     digits of the sha256 of its real path, so two checkouts both called `checkout`
     never share state. `_root` stands in for the name of `/`."""
     root = _require_root(root)
-    real = os.path.realpath(root) if os.path.isdir(root) else os.path.abspath(root)
+    if not os.path.isdir(root):
+        raise ValueError(f"not a folder: {root} (a repo's state is keyed by its real path)")
+    real = os.path.realpath(root)
     name = Path(real).name or "_root"
     return f"{name}-{hashlib.sha256(real.encode()).hexdigest()[:12]}"
 
@@ -143,9 +156,24 @@ def _machine_entry(name: str) -> Tuple[str, Optional[str]]:
 
 
 def _home() -> Path:
-    """$HOME when set and non-empty, else the account's home: the shell reader's rule."""
+    """$HOME when set and non-empty, else the account's home: the shell reader's rule.
+    A relative $HOME is refused: every root built on it would follow the cwd."""
     value = os.environ.get("HOME")
-    return Path(value) if value else Path(pwd.getpwuid(os.getuid()).pw_dir)
+    home = Path(value) if value else Path(pwd.getpwuid(os.getuid()).pw_dir)
+    if not home.is_absolute():
+        raise ValueError(f"HOME must be an absolute path: {value!r}")
+    return home
+
+
+def _same(a: Path, b: Path) -> bool:
+    """One folder: equal once normalized (so two paths that do not exist yet compare
+    too), or the same file by identity (case, links)."""
+    if os.path.normpath(str(a)) == os.path.normpath(str(b)):
+        return True
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return False
 
 
 def _expand(value: str) -> Path:
@@ -181,11 +209,7 @@ def workspace_root() -> Path:
             break
     if root is None:
         root = _expand(WORKSPACE_DEFAULT)
-    try:
-        at_home = os.path.samefile(root, _home())
-    except OSError:
-        at_home = False
-    if at_home:
+    if _same(root, _home()):
         raise ValueError(f"the workspace root cannot be $HOME: {root} (workspace.* would land in the machine root)")
     return root
 
@@ -209,6 +233,20 @@ def _require_root(root: Optional[os.PathLike]) -> Path:
     if root is None or str(root) == "":
         raise ValueError("a repo root is required (an empty one would mean the cwd)")
     return Path(root)
+
+
+def _contained(root: Path) -> None:
+    """Refuse a repo whose .broomva/ or .control/ is a symlink: every path under it
+    would leave the repo, and writes would land wherever the link points."""
+    for folder in (REPO_DIR, REPO_LEGACY_DIR):
+        if (root / folder).is_symlink():
+            raise LayoutError(f"{root / folder} is a symlink; it must be a real folder in the repo")
+
+
+def _entry(path: Path) -> Path:
+    if path.is_symlink():
+        raise LayoutError(f"{path} is a symlink; a registry entry is a real file or folder")
+    return path
 
 
 def _toplevel(target: Path) -> Optional[Path]:
@@ -261,6 +299,7 @@ def moved(root: os.PathLike) -> bool:
     is already under .broomva/. A .control/ left behind (untracked runtime files
     survive a pull) then no longer draws new files back."""
     root = _require_root(root)
+    _contained(root)
     return any(_exists(root / REPO_DIR / path) for path, legacy, _ in REPO.values() if legacy)
 
 
@@ -280,24 +319,22 @@ def repo_path(name: str, root: os.PathLike) -> Path:
     state = _state_entry(name)
     if state is not None:
         root = _require_root(root)
+        _contained(root)
         new, old = state_dir(root) / state, root / REPO_LEGACY_DIR / state
         if _exists(new):
-            return new
+            return _entry(new)
         if _exists(old) or ((root / REPO_LEGACY_DIR).is_dir() and not moved(root)):
-            return old
+            return _entry(old)
         return new
-    path, legacy, owner = _repo_entry(name)
+    path, legacy, _ = _repo_entry(name)
     root = _require_root(root)
+    _contained(root)
     new = root / REPO_DIR / path
     old = root / REPO_LEGACY_DIR / path
-    if owner:
-        for candidate in (new, old):
-            if candidate.is_symlink():
-                raise UnsafePath(f"{candidate} is a symlink; an owner-written file never is")
     if not legacy or _exists(new):
-        return new
+        return _entry(new)
     if _exists(old) or ((root / REPO_LEGACY_DIR).is_dir() and not moved(root)):
-        return old
+        return _entry(old)
     return new
 
 
@@ -327,13 +364,17 @@ def tree_path(name: str, root: os.PathLike, rev: str = "HEAD") -> Optional[str]:
         if ok.returncode != 0:
             raise TreeReadError(f"cannot read revision {rev!r} in {root}")
         for rel in rels:
-            out = _git(["-C", str(root), "ls-tree", "--full-tree", "--name-only", "-z", rev, "--", rel])
+            out = _git(["-C", str(root), "ls-tree", "--full-tree", "-z", rev, "--", rel])
             if out.returncode != 0:
                 raise TreeReadError(f"git ls-tree failed in {root}: {out.stderr.strip()}")
-            if rel in out.stdout.split("\0"):
-                return rel
+            for line in out.stdout.split("\0"):
+                meta, _, entry = line.partition("\t")
+                if entry == rel:
+                    if meta.startswith("120000 "):
+                        raise LayoutError(f"{rel} is a committed symlink in {rev}")
+                    return rel
     except (OSError, subprocess.SubprocessError) as e:
-        if isinstance(e, TreeReadError):
+        if isinstance(e, (TreeReadError, LayoutError)):
             raise
         raise TreeReadError(f"git could not run in {root}: {e}") from e
     return None
@@ -349,9 +390,9 @@ def _tree_entries(root: Path, rev: str, folder: str) -> List[str]:
 def shadowed(root: os.PathLike, rev: Optional[str] = None) -> List[str]:
     """Names present under both roots, where the prefer-new rule would hide the
     legacy copy: on disk, or in git tree ``rev`` (a branch cut before the move,
-    such as maestro/answers, recreates .control/ entries). Two roots that are the
-    same folder (a compatibility symlink) shadow nothing. Raises OSError (on
-    disk) or TreeReadError (in a tree) when a root cannot be read."""
+    such as maestro/answers, recreates .control/ entries). Raises OSError (on
+    disk; LayoutError for a symlinked root) or TreeReadError (in a tree) when a
+    root cannot be read."""
     root = _require_root(root)
     if rev is not None:
         if not rev or rev.startswith("-"):
@@ -366,9 +407,8 @@ def shadowed(root: os.PathLike, rev: Optional[str] = None) -> List[str]:
                 raise
             raise TreeReadError(f"git could not run in {root}: {e}") from e
         return [name for name, (path, legacy, _) in REPO.items() if legacy and path in new and path in old]
+    _contained(root)
     new_root, old_root = root / REPO_DIR, root / REPO_LEGACY_DIR
-    if new_root.is_dir() and old_root.is_dir() and new_root.resolve() == old_root.resolve():
-        return []
     names = [
         name for name, (path, legacy, _) in REPO.items()
         if legacy and _exists(new_root / path) and _exists(old_root / path)
