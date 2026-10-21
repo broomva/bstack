@@ -1208,6 +1208,16 @@ class Round6(Tmp):
         self.assertEqual(bp.repo_root(plain), plain)
         self.assertEqual(sh(f'broomva_repo_root "{spaced}"').stdout, f"{spaced}\n")
 
+    def test_a_path_that_is_not_utf8(self) -> None:
+        # Python carries the byte as a surrogate; the Rust reader refuses it (its stated
+        # difference), which the replay checks as Invalid rather than as Python's answer.
+        odd = os.fsdecode(os.fsencode(str(self.tmp)) + b"/r\x80")
+        self.assertEqual(bp.repo_path("policy", odd), Path(odd) / ".broomva" / "policy.yaml")
+        self.assertIsNone(bp.repo_root(odd))
+        self.assertFalse(bp.moved(odd))
+        with self.assertRaises(ValueError):
+            bp.repo_key(odd)
+
     def test_a_nul_in_a_root_or_revision_is_a_value_error(self) -> None:
         repo = make_repo(self.tmp / "r")
         calls = {
@@ -1260,6 +1270,10 @@ REPLAYED = ("repo_key", "state_dir", "machine_root", "workspace_root", "repo_roo
             "partially_moved", "repo_path", "workspace_path", "machine_path", "tree_path", "shadowed",
             "resolve", "all_names")
 PRISTINE_TABLES = (dict(bp.REPO), dict(bp.REPO_STATE), dict(bp.MACHINE))
+# Parameters the Rust API takes as a &Path (any bytes); every other one is a &str (UTF-8).
+PATH_PARAMETERS = {"root", "target"}
+NOT_UTF8 = "an argument that is not UTF-8 (refused: the Rust reader's stated difference)"
+NO_STR = "a string argument that is not UTF-8 (a &str cannot hold it)"
 
 
 def build_rust_reader(source: str, out: Path, strict: bool = True) -> Path:
@@ -1319,6 +1333,7 @@ class Recorder:
         self.test = "?"
         self.replayed: dict[str, int] = {}
         self.skipped: list[tuple[str, str, str]] = []
+        self.refused = 0
         self.mismatches: list[str] = []
 
     def wrap(self, name: str, original):
@@ -1334,25 +1349,41 @@ class Recorder:
                 cwd = None
             bound = signature.bind(*args, **kwargs)
             bound.apply_defaults()
-            # Hex: argv cannot carry a NUL byte, and a test may pass one.
-            argv = ["n:" if v is None else "h:" + str(v).encode().hex() for v in bound.arguments.values()]
+            # Hex of the bytes: argv cannot carry a NUL, and a path may hold a byte that is not UTF-8.
+            argv, odd = [], None
+            for param, v in bound.arguments.items():
+                if v is None:
+                    argv.append("n:")
+                    continue
+                raw = os.fsencode(v) if param in PATH_PARAMETERS else str(v).encode("utf-8", "surrogateescape")
+                try:
+                    raw.decode("utf-8")
+                except UnicodeDecodeError:
+                    odd = odd or (NOT_UTF8 if param in PATH_PARAMETERS else NO_STR)
+                argv.append("h:" + raw.hex())
             self.depth += 1
             try:
                 try:
                     result = original(*args, **kwargs)
                 except Exception as e:
-                    self.compare(name, argv, env, cwd, error_kind(e))
+                    self.compare(name, argv, env, cwd, error_kind(e), odd)
                     raise
-                self.compare(name, argv, env, cwd, spell(result))
+                self.compare(name, argv, env, cwd, spell(result), odd)
                 return result
             finally:
                 self.depth -= 1
 
         return wrapper
 
-    def compare(self, name: str, argv: list[str], env: dict, cwd: str | None, want: str) -> None:
+    def compare(self, name: str, argv: list[str], env: dict, cwd: str | None, want: str,
+                odd: str | None = None) -> None:
         reason = None
-        if (dict(bp.REPO), dict(bp.REPO_STATE), dict(bp.MACHINE)) != PRISTINE_TABLES:
+        if odd == NOT_UTF8:
+            want = "err value"  # whatever Python answered: the Rust reader refuses the path
+            self.refused += 1
+        elif odd == NO_STR:
+            reason = NO_STR
+        elif (dict(bp.REPO), dict(bp.REPO_STATE), dict(bp.MACHINE)) != PRISTINE_TABLES:
             reason = "a registry table is patched"
         elif isinstance(bp.pwd.getpwuid, mock.NonCallableMock):
             reason = "the password database is mocked"
@@ -1434,9 +1465,11 @@ class RustReader(unittest.TestCase):
         # another process; they are listed, and only those two reasons are allowed.
         reasons = {r for _, _, r in recorder.skipped}
         self.assertLessEqual(reasons, {"a registry table is patched", "the password database is mocked"})
+        self.assertGreater(recorder.refused, 0, "a non-UTF-8 path was replayed and refused")
         self.assertGreater(calls, 200, "the replay reached the reader")
         print(f"\n[rust reader] {calls} calls replayed from {len(recorder.replayed)} of {total} tests; "
-              f"{len(recorder.skipped)} skipped ({', '.join(sorted(reasons)) or 'none'})", file=sys.stderr)
+              f"{len(recorder.skipped)} skipped ({', '.join(sorted(reasons)) or 'none'}); "
+              f"{recorder.refused} non-UTF-8 paths refused as stated", file=sys.stderr)
 
     def test_the_ported_helpers_agree(self) -> None:
         spellings = ["", ".", "..", "/", "//", "///", "a", "a/", "a//b", "./a", "a/./b", "a/../b", "/a/../..",

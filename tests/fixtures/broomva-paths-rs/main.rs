@@ -1,7 +1,8 @@
 // The replay driver for the Rust path reader (BRO-3265). tests/test_broomva_paths.py
 // compiles it next to a copy of scripts/lib/broomva_paths.rs and runs one reader call
 // per process: `main <function> [args...]`, each argument `s:<string>`, `h:<hex of its
-// UTF-8 bytes>` (carries any string, a NUL included) or `n:` (None).
+// bytes>` (carries any string, a NUL included; a path argument may hold bytes that are
+// not UTF-8, as a Unix path can) or `n:` (None).
 //
 // Output, compared line for line with the Python reader's answer:
 //   ok path <p> | ok none | ok str <s> | ok bool <true|false> | ok list, then `item <s>` lines
@@ -9,6 +10,8 @@
 mod broomva_paths;
 
 use broomva_paths as bp;
+use std::ffi::OsStr;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 enum Answer {
@@ -21,38 +24,38 @@ enum Answer {
 }
 
 fn call(op: &str, raw: &[String]) -> bp::Result<Answer> {
-    let a: Vec<Option<String>> = raw
+    let a: Vec<Option<Vec<u8>>> = raw
         .iter()
         .map(|r| match r.split_once(':') {
-            Some(("s", v)) => Some(v.to_string()),
-            Some(("h", hex)) => {
-                let bytes = (0..hex.len())
-                    .step_by(2)
-                    .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).expect("hex"))
-                    .collect::<Vec<u8>>();
-                Some(String::from_utf8(bytes).expect("a UTF-8 argument"))
-            }
+            Some(("s", v)) => Some(v.as_bytes().to_vec()),
+            Some(("h", hex)) => Some(
+                (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i + 2], 16).expect("hex")).collect(),
+            ),
             Some(("n", "")) => None,
             _ => panic!("{op}: an argument is `s:<string>`, `h:<hex>` or `n:`, not {r:?}"),
         })
         .collect();
-    let opt_arg = |i: usize| a.get(i).unwrap_or_else(|| panic!("{op}: argument {i} missing")).as_deref();
+    let raw_arg = |i: usize| a.get(i).unwrap_or_else(|| panic!("{op}: argument {i} missing")).as_deref();
+    // A string argument is a &str in the reader's API, so it must be UTF-8; a path need not be.
+    let opt_arg = |i: usize| raw_arg(i).map(|b| std::str::from_utf8(b).expect("a string argument is UTF-8"));
     let arg = |i: usize| opt_arg(i).unwrap_or_else(|| panic!("{op}: argument {i} is None"));
+    let opt_path = |i: usize| raw_arg(i).map(|b| Path::new(OsStr::from_bytes(b)));
+    let path = |i: usize| opt_path(i).unwrap_or_else(|| panic!("{op}: argument {i} is None"));
     Ok(match op {
-        "repo_key" => Answer::Str(bp::repo_key(Path::new(arg(0)))?),
-        "state_dir" => Answer::Path(bp::state_dir(Path::new(arg(0)))?),
+        "repo_key" => Answer::Str(bp::repo_key(path(0))?),
+        "state_dir" => Answer::Path(bp::state_dir(path(0))?),
         "machine_root" => Answer::Path(bp::machine_root()?),
         "workspace_root" => Answer::Path(bp::workspace_root()?),
-        "repo_root" => Answer::OptPath(bp::repo_root(opt_arg(0).map(Path::new))?),
+        "repo_root" => Answer::OptPath(bp::repo_root(opt_path(0))?),
         "repo_rels" => Answer::List(bp::repo_rels(arg(0))?),
-        "moved" => Answer::Bool(bp::moved(Path::new(arg(0)))?),
-        "partially_moved" => Answer::List(bp::partially_moved(Path::new(arg(0)))?),
-        "repo_path" => Answer::Path(bp::repo_path(arg(0), Path::new(arg(1)))?),
+        "moved" => Answer::Bool(bp::moved(path(0))?),
+        "partially_moved" => Answer::List(bp::partially_moved(path(0))?),
+        "repo_path" => Answer::Path(bp::repo_path(arg(0), path(1))?),
         "workspace_path" => Answer::Path(bp::workspace_path(arg(0))?),
         "machine_path" => Answer::Path(bp::machine_path(arg(0))?),
-        "tree_path" => Answer::OptStr(bp::tree_path(arg(0), Path::new(arg(1)), arg(2))?),
-        "shadowed" => Answer::List(bp::shadowed(Path::new(arg(0)), opt_arg(1))?),
-        "resolve" => Answer::Path(bp::resolve(arg(0), opt_arg(1).map(Path::new))?),
+        "tree_path" => Answer::OptStr(bp::tree_path(arg(0), path(1), arg(2))?),
+        "shadowed" => Answer::List(bp::shadowed(path(0), opt_arg(1))?),
+        "resolve" => Answer::Path(bp::resolve(arg(0), opt_path(1))?),
         "all_names" => Answer::List(bp::all_names()),
         // The ported helpers, for the spelling and hashing cases.
         "pl" => Answer::Str(bp::pl(arg(0))),
