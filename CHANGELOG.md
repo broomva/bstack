@@ -27,18 +27,20 @@ locale, without newline translation.
 Parity is checked, not asserted: `tests/test_broomva_paths.py` compiles the module with a small
 driver (`tests/fixtures/broomva-paths-rs/main.rs`) and runs the whole suite again with every public
 reader call replayed through it, in the same environment, folder and file state, the moment Python
-answers: 242 calls from 75 of the 100 tests agree, byte for byte, on value or error kind (a layout error also on its
-message), and 10 calls made under a patched table or a mocked password database are listed as
-skipped. The ported helpers (pathlib spelling, `normpath`, `abspath`, `realpath` through links and
-loops, sha256 across padding boundaries) are compared directly. Fifteen mutants, each removing one
-guard (symlinked, file or unsearchable root folder; symlinked or FIFO entry; a hard-linked owner
-file; `moved()` without its entry check; a committed symlink as root or entry; a repo at `$HOME`;
-a dangling new entry falling back to legacy; runtime state without the root-folder check; git
-outliving its deadline through the pipes; a top level losing its trailing space), are each killed
-by the replay, and a Rust-only case kills the fifteenth (a timeout that leaves git's process group
-running); five new shared cases hold the last four for every reader. `gen_paths.py` reads and writes
-UTF-8 whatever the locale (`--check` failed under `LC_ALL=C`), and the Rust template is ASCII. `--check` and doctor §30 cover the Rust reader
-like the other two (a stale or missing reader is a gap; with Python < 3.11 its hash is compared).
+answers (arguments travel hex-encoded, so a NUL is carried): 253 calls from 76 of the 101 tests agree,
+byte for byte, on value or error kind (a layout error also on its message); 10 calls made under a
+patched table or a mocked password database are listed as skipped. The ported helpers (pathlib
+spelling, `normpath`, `abspath`, `realpath` through links and loops, sha256 across padding
+boundaries) are compared directly. Sixteen mutants each remove one guard, and each is killed:
+fifteen by the replay (symlinked, file or unsearchable root folder; symlinked or FIFO entry; a
+hard-linked owner file; `moved()` without its entry check; a committed symlink as root or entry; a
+repo at `$HOME`; a dangling new entry falling back to legacy; runtime state without the root-folder
+check; git outliving its deadline through the pipes; a NUL in a root reaching the file system; a top
+level losing its trailing space) and one by a Rust-only case (a timeout that leaves git's process
+group running). Six new shared cases hold the review's findings for every reader. `gen_paths.py`
+reads and writes UTF-8 whatever the locale (`--check` failed under `LC_ALL=C`), and the Rust template
+is ASCII. `--check` and doctor §30 cover the Rust reader like the other two (a stale or missing
+reader is a gap; with Python < 3.11 its hash is compared).
 
 ## 0.49.0 — 2026-10-20
 
