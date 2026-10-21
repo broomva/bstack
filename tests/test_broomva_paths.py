@@ -1208,6 +1208,26 @@ class Round6(Tmp):
         self.assertEqual(bp.repo_root(plain), plain)
         self.assertEqual(sh(f'broomva_repo_root "{spaced}"').stdout, f"{spaced}\n")
 
+    def test_a_nul_in_a_root_or_revision_is_a_value_error(self) -> None:
+        repo = make_repo(self.tmp / "r")
+        calls = {
+            "repo_path": lambda: bp.repo_path("policy", f"{repo}\0x"),
+            "state path": lambda: bp.repo_path("audit", f"{repo}\0x"),
+            "repo_key": lambda: bp.repo_key(f"{repo}\0"),
+            "moved": lambda: bp.moved(f"{repo}\0"),
+            "tree_path rev": lambda: bp.tree_path("asks", repo, "HEAD\0"),
+            "tree_path root": lambda: bp.tree_path("asks", f"{repo}\0", "HEAD"),
+            "shadowed rev": lambda: bp.shadowed(repo, "HEAD\0"),
+            "shadowed root": lambda: bp.shadowed(f"{repo}\0"),
+        }
+        for label, call in calls.items():
+            with self.subTest(label), self.assertRaises(ValueError):
+                call()
+        # repo_root walks up to the nearest real folder, so a part holding a NUL is never looked up.
+        self.assertEqual(bp.repo_root(repo / "x\0"), repo)
+        self.assertEqual(bp.repo_root(repo / "a\0b" / "c"), repo)
+        self.assertIsNone(bp.repo_root(f"{repo}\0/x"))
+
     def test_a_top_level_whose_name_ends_in_a_carriage_return_is_itself(self) -> None:
         cr, plain = make_repo(self.tmp / "repo\r"), make_repo(self.tmp / "repo")
         self.assertEqual(bp.repo_root(cr), cr)
@@ -1314,7 +1334,8 @@ class Recorder:
                 cwd = None
             bound = signature.bind(*args, **kwargs)
             bound.apply_defaults()
-            argv = ["n:" if v is None else f"s:{v}" for v in bound.arguments.values()]
+            # Hex: argv cannot carry a NUL byte, and a test may pass one.
+            argv = ["n:" if v is None else "h:" + str(v).encode().hex() for v in bound.arguments.values()]
             self.depth += 1
             try:
                 try:
@@ -1526,6 +1547,7 @@ class RustReaderMutants(unittest.TestCase):
          "        let root = require_root(root)?;\n        let new = join(&state_dir_str"),
         ("git may outlive its deadline through the pipes", "let stdout = out_rx.recv_timeout(left())",
          "let stdout = out_rx.recv()"),
+        ("a NUL in a path reaches the file system", "    if s.contains('\\0') {", "    if false {"),
         ("the top level loses a trailing space", "out.stdout.strip_suffix('\\n').unwrap_or(&out.stdout)",
          "out.stdout.trim()"),
     )

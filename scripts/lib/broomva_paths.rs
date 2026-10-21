@@ -508,8 +508,8 @@ fn workspace_root_str() -> Result<String> {
 enum GitError {
     /// git could not run, or ran past GIT_TIMEOUT (Python: OSError, SubprocessError).
     Run(String),
-    /// Its output is not UTF-8 (Python: UnicodeDecodeError, a ValueError).
-    Decode,
+    /// A NUL byte in an argument, or output that is not UTF-8 (Python: ValueError).
+    Invalid,
 }
 
 struct GitOut {
@@ -520,11 +520,14 @@ struct GitOut {
 
 /// Strict UTF-8, no newline translation (a folder name may hold a `\r`).
 fn text(bytes: Vec<u8>) -> std::result::Result<String, GitError> {
-    String::from_utf8(bytes).map_err(|_| GitError::Decode)
+    String::from_utf8(bytes).map_err(|_| GitError::Invalid)
 }
 
 /// `_git`: git with GIT_DIR and GIT_WORK_TREE removed, bounded by GIT_TIMEOUT.
 fn git(args: &[&str]) -> std::result::Result<GitOut, GitError> {
+    if args.iter().any(|a| a.contains('\0')) {
+        return Err(GitError::Invalid);
+    }
     let mut child = Command::new("git")
         .args(args)
         .env_remove("GIT_DIR")
@@ -583,7 +586,7 @@ fn git(args: &[&str]) -> std::result::Result<GitOut, GitError> {
 fn tree_git(root: &str, args: &[&str]) -> Result<GitOut> {
     git(args).map_err(|e| match e {
         GitError::Run(m) => Error::TreeRead(format!("git could not run in {root}: {m}")),
-        GitError::Decode => Error::Invalid(format!("git output in {root} is not UTF-8")),
+        GitError::Invalid => Error::Invalid(format!("a NUL in git's arguments, or its output in {root} is not UTF-8")),
     })
 }
 
@@ -623,6 +626,11 @@ fn machine_entry(name: &str) -> Result<(&'static str, Option<&'static str>)> {
 /// `_require_root`: a non-empty root without a `..` part.
 fn require_root(root: &Path) -> Result<String> {
     let s = path_str(root)?;
+    // Every reader that takes a root passes it to lstat or git, which refuse a NUL
+    // byte in Python (ValueError); refusing it here gives that answer up front.
+    if s.contains('\0') {
+        return Err(Error::Invalid(format!("a repo root holds a NUL byte: {s:?}")));
+    }
     if s.is_empty() {
         return Err(Error::Invalid("a repo root is required (an empty one would mean the cwd)".into()));
     }
@@ -709,7 +717,9 @@ fn toplevel(target: &str) -> Result<Option<String>> {
     let out = match git(&["-C", &dir, "rev-parse", "--show-toplevel"]) {
         Ok(o) => o,
         Err(GitError::Run(m)) => return Err(Error::TreeRead(format!("git could not run: {m}"))),
-        Err(GitError::Decode) => return Err(Error::Invalid("git output is not UTF-8".into())),
+        Err(GitError::Invalid) => {
+            return Err(Error::Invalid("a NUL in git's arguments, or its output is not UTF-8".into()));
+        }
     };
     // Only git's newline is dropped: a folder name may end in a space.
     let printed = out.stdout.strip_suffix('\n').unwrap_or(&out.stdout);
@@ -837,7 +847,7 @@ pub fn machine_path(name: &str) -> Result<PathBuf> {
 }
 
 fn check_rev(rev: &str) -> Result<()> {
-    if rev.is_empty() || rev.starts_with('-') {
+    if rev.is_empty() || rev.starts_with('-') || rev.contains('\0') {
         return Err(Error::Invalid(format!("not a revision: {rev:?}")));
     }
     Ok(())
