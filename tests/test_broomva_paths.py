@@ -1207,6 +1207,26 @@ class Round6(Tmp):
         self.assertEqual(bp.repo_root(plain), plain)
         self.assertEqual(sh(f'broomva_repo_root "{spaced}"').stdout, f"{spaced}\n")
 
+    def test_a_top_level_whose_name_ends_in_a_carriage_return_is_itself(self) -> None:
+        cr, plain = make_repo(self.tmp / "repo\r"), make_repo(self.tmp / "repo")
+        self.assertEqual(bp.repo_root(cr), cr)
+        self.assertEqual(bp.repo_root(plain), plain)
+        out = subprocess.run([BASH, "-c", f'. "{SH_LIB}"; broomva_repo_root "{cr}"'], capture_output=True)
+        self.assertEqual(out.stdout, f"{cr}\n".encode(), "bytes: text mode would translate the \\r")
+
+    def test_git_that_leaves_its_pipes_open_still_times_out(self) -> None:
+        # git exits, but a process it started holds stdout open past the deadline.
+        bindir = self.tmp / "bin"
+        bindir.mkdir()
+        (bindir / "git").write_text(f'#!/bin/sh\nsleep {bp.GIT_TIMEOUT + 4} &\nexec "{shutil.which("git")}" "$@"\n')
+        (bindir / "git").chmod(0o755)
+        repo = make_repo(self.tmp / "r")
+        # Without the deadline the call returns the repo once the sleep ends; with it, an error.
+        # (No wall-clock assert: under the Rust replay the window holds both readers' timeouts.)
+        with mock.patch.dict(os.environ, {"PATH": f"{bindir}:{os.environ['PATH']}"}):
+            with self.assertRaises(bp.TreeReadError):
+                bp.repo_root(repo)
+
 
 # ── The Rust reader (BRO-3265) ───────────────────────────────────────────────
 # scripts/lib/broomva_paths.rs is compiled with a small driver (one reader call per
@@ -1319,9 +1339,11 @@ class Recorder:
         if reason:
             self.skipped.append((self.test, name, reason))
             return
-        done = subprocess.run([str(self.binary), name, *argv], env=env, cwd=cwd, capture_output=True, text=True,
-                              timeout=60)
-        got = done.stdout.rstrip("\n") if done.returncode == 0 else f"crash {done.returncode}: {done.stderr[-300:]}"
+        done = subprocess.run([str(self.binary), name, *argv], env=env, cwd=cwd, capture_output=True, timeout=60)
+        # Bytes, one trailing newline dropped: a `\r` or an extra newline in an answer is a difference.
+        out = done.stdout.decode("utf-8", "replace")
+        out = out[:-1] if out.endswith("\n") else out
+        got = out if done.returncode == 0 else f"crash {done.returncode}: {done.stderr.decode(errors='replace')[-300:]}"
         self.replayed[self.test] = self.replayed.get(self.test, 0) + 1
         if got != want:
             self.mismatches.append(f"{self.test}: {name}{tuple(argv)}\n    python: {want!r}\n    rust:   {got!r}")
@@ -1476,6 +1498,8 @@ class RustReaderMutants(unittest.TestCase):
         ("runtime state skips the root-folder check",
          "        let root = require_root(root)?;\n        contained(&root)?;\n        let new = join(&state_dir_str",
          "        let root = require_root(root)?;\n        let new = join(&state_dir_str"),
+        ("git may outlive its deadline through the pipes", "let stdout = out_rx.recv_timeout(left())",
+         "let stdout = out_rx.recv()"),
         ("the top level loses a trailing space", "out.stdout.strip_suffix('\\n').unwrap_or(&out.stdout)",
          "out.stdout.trim()"),
     )

@@ -339,9 +339,10 @@ def workspace_root() -> Path:
 
 def _git(args: List[str]) -> subprocess.CompletedProcess:
     env = {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_WORK_TREE")}
-    # UTF-8 whatever the locale: git prints paths as bytes, and the shell and Rust readers read UTF-8.
-    return subprocess.run(["git", *args], capture_output=True, encoding="utf-8", timeout=GIT_TIMEOUT, check=False,
-                          env=env)
+    done = subprocess.run(["git", *args], capture_output=True, timeout=GIT_TIMEOUT, check=False, env=env)
+    # UTF-8 whatever the locale, and no newline translation: a folder name may hold a `\r`.
+    return subprocess.CompletedProcess(done.args, done.returncode, done.stdout.decode("utf-8"),
+                                       done.stderr.decode("utf-8"))
 
 
 def _exists(path: Path) -> bool:
