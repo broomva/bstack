@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -1313,7 +1314,7 @@ class Recorder:
                 cwd = None
             bound = signature.bind(*args, **kwargs)
             bound.apply_defaults()
-            argv = ["@none" if v is None else str(v) for v in bound.arguments.values()]
+            argv = ["n:" if v is None else f"s:{v}" for v in bound.arguments.values()]
             self.depth += 1
             try:
                 try:
@@ -1394,10 +1395,11 @@ class RustReader(unittest.TestCase):
     def tearDownClass(cls) -> None:
         shutil.rmtree(cls.tmp, True)
 
-    def run_rust(self, *argv: str, cwd: Path | None = None) -> str:
-        done = subprocess.run([str(self.binary), *argv], capture_output=True, text=True, cwd=cwd)
+    def run_rust(self, op: str, *args: str, cwd: Path | None = None) -> str:
+        done = subprocess.run([str(self.binary), op, *(f"s:{a}" for a in args)], capture_output=True, cwd=cwd)
         self.assertEqual(done.returncode, 0, done.stderr)
-        return done.stdout.rstrip("\n")
+        out = done.stdout.decode("utf-8")
+        return out[:-1] if out.endswith("\n") else out
 
     def test_every_fixture_of_the_suite_agrees(self) -> None:
         recorder, result, total = replay_suite(self.binary)
@@ -1461,8 +1463,12 @@ class RustReader(unittest.TestCase):
         toml = Generator.BASE + '[repo]\nfn = { path = "fn.yaml", owner = true }\ntype = { path = "t", legacy = false }\n'
         _, _, rust = gen_paths.render(toml.encode())
         binary = build_rust_reader(rust, self.tmp / "other")
-        done = subprocess.run([str(binary), "repo_rels", "repo.fn"], capture_output=True, text=True)
+        done = subprocess.run([str(binary), "repo_rels", "s:repo.fn"], capture_output=True, text=True)
         self.assertEqual(done.stdout.split("\n")[:3], ["ok list", "item .broomva/fn.yaml", "item .control/fn.yaml"])
+
+    def test_a_timeout_ends_what_git_left_behind(self) -> None:
+        # Rust only: Python closes its pipe ends; the Rust reader's threads need the writer gone.
+        self.assertFalse(git_leftover_survives(self.binary, self.tmp / "leftover"))
 
     @staticmethod
     def _in(folder: Path, fn, arg: str) -> str:
@@ -1472,6 +1478,27 @@ class RustReader(unittest.TestCase):
             return fn(arg)
         finally:
             os.chdir(before)
+
+
+def git_leftover_survives(binary: Path, work: Path) -> bool:
+    """Whether a process a timed-out git left holding the pipes is still running afterwards."""
+    bindir, repo, pidfile = work / "bin", work / "r", work / "leftover.pid"
+    bindir.mkdir(parents=True)
+    make_repo(repo)
+    (bindir / "git").write_text(f'#!/bin/sh\nsleep {bp.GIT_TIMEOUT + 20} &\necho $! > "{pidfile}"\n'
+                                f'exec "{shutil.which("git")}" "$@"\n')
+    (bindir / "git").chmod(0o755)
+    done = subprocess.run([str(binary), "repo_root", f"s:{repo}"], capture_output=True, text=True,
+                          env={**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}"}, timeout=60)
+    assert done.stdout.strip() == "err tree", done.stdout + done.stderr
+    pid = int(pidfile.read_text())
+    time.sleep(0.5)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    os.kill(pid, 9)
+    return True
 
 
 class RustReaderMutants(unittest.TestCase):
@@ -1516,8 +1543,14 @@ class RustReaderMutants(unittest.TestCase):
                 recorder, _, _ = replay_suite(binary, stop_at_first=True)
                 if not recorder.mismatches:
                     survivors.append(label)
+        # The process-group kill has no Python counterpart, so its own case judges it.
+        old = '.args(["-KILL", "--", &group])'
+        self.assertEqual(source.count(old), 1)
+        binary = build_rust_reader(source.replace(old, '.args(["-0", "--", &group])'), tmp / "group", strict=False)
+        if not git_leftover_survives(binary, tmp / "group-work"):
+            survivors.append("a timeout leaves git's process group running")
         self.assertEqual(survivors, [], "these guards can be removed without any case noticing")
-        print(f"\n[rust reader] mutation {len(self.MUTANTS) - len(survivors)} of {len(self.MUTANTS)} killed",
+        print(f"\n[rust reader] mutation {len(self.MUTANTS) + 1 - len(survivors)} of {len(self.MUTANTS) + 1} killed",
               file=sys.stderr)
 
 

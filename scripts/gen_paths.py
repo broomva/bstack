@@ -155,7 +155,7 @@ def render(raw: bytes) -> tuple[str, str, str]:
     never = sorted({p.split("/")[0] for _, p, _, _ in repo} - {m for m in machine_top})
     never = [n for n in never if n.lower() not in machine_top]
     py_never = "\n".join(f"    {n!r}," for n in never)
-    py = ((TEMPLATES / "broomva_paths.py.tmpl").read_text().replace("@@SHA@@", sha).replace("@@REPO@@", py_repo)
+    py = ((TEMPLATES / "broomva_paths.py.tmpl").read_text(encoding="utf-8").replace("@@SHA@@", sha).replace("@@REPO@@", py_repo)
           .replace("@@MACHINE@@", py_machine).replace("@@OWNER@@", py_owner)
           .replace("@@STATE@@", py_state).replace("@@NEVERMACHINE@@", py_never))
     # Patterns are quoted: a name such as `esac` or `in` must stay a word, not syntax.
@@ -166,7 +166,7 @@ def render(raw: bytes) -> tuple[str, str, str]:
     # Owner paths with a legacy spelling, for broomva_moved's link check; never empty as a pattern.
     sh_owner_legacy = "|".join(f"'{p}'" for _, p, legacy, owner in repo if legacy and owner) or "''"
     sh_state = "\n".join(f"        '{n}') printf '%s\\n' '{p}' ;;" for n, p in state)
-    sh = ((TEMPLATES / "broomva-paths.sh.tmpl").read_text().replace("@@SHA@@", sha)
+    sh = ((TEMPLATES / "broomva-paths.sh.tmpl").read_text(encoding="utf-8").replace("@@SHA@@", sha)
           .replace("@@OWNER@@", " ".join(owners))
           .replace("@@REPO@@", sh_repo).replace("@@MACHINE@@", sh_machine).replace("@@LEGACYLIST@@", sh_legacy).replace("@@OWNERLEGACY@@", sh_owner_legacy)
           .replace("@@STATE@@", sh_state))
@@ -177,7 +177,7 @@ def render(raw: bytes) -> tuple[str, str, str]:
                            for n, p, legacy in machine)
     rs_owner = "\n".join(f'    "{p}",' for p in owners)
     rs_never = "\n".join(f'    "{n}",' for n in never)
-    rs = ((TEMPLATES / "broomva_paths.rs.tmpl").read_text().replace("@@SHA@@", sha).replace("@@REPO@@", rs_repo)
+    rs = ((TEMPLATES / "broomva_paths.rs.tmpl").read_text(encoding="utf-8").replace("@@SHA@@", sha).replace("@@REPO@@", rs_repo)
           .replace("@@STATE@@", rs_state).replace("@@MACHINE@@", rs_machine).replace("@@OWNER@@", rs_owner)
           .replace("@@NEVERMACHINE@@", rs_never))
     return py, sh, rs
@@ -193,13 +193,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"references/paths.toml: {e}", file=sys.stderr)
         return 2
     outputs = ((PY_OUT, py), (SH_OUT, sh), (RS_OUT, rs))
-    stale = [out for out, text in outputs if not out.exists() or out.read_text() != text]
+    stale = [out for out, text in outputs if not out.exists() or out.read_text(encoding="utf-8") != text]
     if args.check:
         for out in stale:
             print(f"stale: {os.path.relpath(out, ROOT)} (run python3 scripts/gen_paths.py)", file=sys.stderr)
         return 1 if stale else 0
     for out, text in outputs:
-        out.write_text(text)
+        out.write_text(text, encoding="utf-8")
     PY_OUT.chmod(0o755)
     print(f"wrote {', '.join(str(out.relative_to(ROOT)) for out, _ in outputs)}")
     return 0

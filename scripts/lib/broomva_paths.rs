@@ -22,7 +22,9 @@
 //! `unsafe` (Maestro forbids it), so with HOME empty the home is
 //! `std::env::home_dir()` (the password database) and the account-name rule the
 //! shell reader needs for its `eval` is not applied; "searchable" is an lstat of
-//! `<folder>/.` where Python calls `access(X_OK)`; and every path and environment
+//! `<folder>/.` where Python calls `access(X_OK)`; git runs in its own process
+//! group, which a timeout kills (Python closes its pipe ends and leaves what git
+//! started running); and every path and environment
 //! value must be UTF-8 (anything else is `Error::Invalid`, where Python would carry
 //! it as surrogates). Paths come back spelled as pathlib spells them, so `display()`
 //! prints what `str(path)` prints in Python.
@@ -36,8 +38,9 @@ use std::fmt;
 use std::fs::{self, Metadata};
 use std::io::{self, Read};
 use std::os::unix::fs::MetadataExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -206,7 +209,7 @@ fn io_err(path: &str, e: io::Error) -> Error {
     Error::Io(path.to_string(), e)
 }
 
-// ── Path spelling (pathlib and posixpath, ported) ────────────────────────────
+// --- Path spelling (pathlib and posixpath, ported) ---
 
 /// `str(Path(s))`: empty and `.` parts dropped, a trailing slash dropped, exactly
 /// two leading slashes kept (POSIX leaves `//` implementation-defined), `..` kept.
@@ -368,7 +371,7 @@ fn env_str(key: &str) -> Result<Option<String>> {
     }
 }
 
-// ── File checks ──────────────────────────────────────────────────────────────
+// --- File checks ---
 
 fn absent(e: &io::Error) -> bool {
     matches!(e.kind(), io::ErrorKind::NotFound | io::ErrorKind::NotADirectory)
@@ -420,7 +423,7 @@ fn searchable(p: &str) -> bool {
     fs::symlink_metadata(format!("{p}/.")).is_ok()
 }
 
-// ── Roots ────────────────────────────────────────────────────────────────────
+// --- Roots ---
 
 /// `_home`: $HOME when set and non-empty, else the account's home; never relative.
 fn home() -> Result<String> {
@@ -500,7 +503,7 @@ fn workspace_root_str() -> Result<String> {
     Ok(root)
 }
 
-// ── git ──────────────────────────────────────────────────────────────────────
+// --- git ---
 
 enum GitError {
     /// git could not run, or ran past GIT_TIMEOUT (Python: OSError, SubprocessError).
@@ -529,13 +532,26 @@ fn git(args: &[&str]) -> std::result::Result<GitOut, GitError> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .process_group(0)
         .spawn()
         .map_err(|e| GitError::Run(e.to_string()))?;
     // The deadline covers the pipes too, as Python's communicate(timeout) does: a
-    // process git leaves behind can hold them open after git itself exits. On a
-    // timeout the two reader threads are left to finish when that process does.
+    // process git leaves behind can hold them open after git itself exits. A timeout
+    // kills git's whole process group, so the reader threads below reach EOF and end.
     let deadline = Instant::now() + GIT_TIMEOUT;
-    let timed_out = || GitError::Run(format!("git timed out after {} s", GIT_TIMEOUT.as_secs()));
+    let give_up = |child: &mut Child| {
+        let group = format!("-{}", child.id());
+        let quiet = || Stdio::null();
+        let _ = Command::new("/bin/kill")
+            .args(["-KILL", "--", &group])
+            .stdin(quiet())
+            .stdout(quiet())
+            .stderr(quiet())
+            .status();
+        let _ = child.kill();
+        let _ = child.wait();
+        GitError::Run(format!("git timed out after {} s", GIT_TIMEOUT.as_secs()))
+    };
     let (out_tx, out_rx) = mpsc::channel();
     let (err_tx, err_rx) = mpsc::channel();
     for (mut pipe, tx) in [
@@ -552,17 +568,13 @@ fn git(args: &[&str]) -> std::result::Result<GitOut, GitError> {
         match child.try_wait() {
             Ok(Some(s)) => break s,
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
-            Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(timed_out());
-            }
+            Ok(None) => return Err(give_up(&mut child)),
             Err(e) => return Err(GitError::Run(e.to_string())),
         }
     };
     let left = || deadline.saturating_duration_since(Instant::now());
-    let stdout = out_rx.recv_timeout(left()).map_err(|_| timed_out())?;
-    let stderr = err_rx.recv_timeout(left()).map_err(|_| timed_out())?;
+    let stdout = out_rx.recv_timeout(left()).map_err(|_| give_up(&mut child))?;
+    let stderr = err_rx.recv_timeout(left()).map_err(|_| give_up(&mut child))?;
     Ok(GitOut { code: status.code(), stdout: text(stdout)?, stderr: text(stderr)? })
 }
 
@@ -574,7 +586,7 @@ fn tree_git(root: &str, args: &[&str]) -> Result<GitOut> {
     })
 }
 
-// ── Repo scope ───────────────────────────────────────────────────────────────
+// --- Repo scope ---
 
 fn scoped<'a>(name: &'a str, scopes: &[&str]) -> &'a str {
     for scope in scopes {
@@ -945,7 +957,7 @@ pub fn all_names() -> Vec<String> {
     out
 }
 
-// ── sha256 (FIPS 180-4), for repo_key ────────────────────────────────────────
+// --- sha256 (FIPS 180-4), for repo_key ---
 
 const K: [u32; 64] = [
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98,
