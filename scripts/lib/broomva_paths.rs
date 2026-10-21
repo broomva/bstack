@@ -538,12 +538,13 @@ fn git(args: &[&str]) -> std::result::Result<GitOut, GitError> {
     // The deadline covers the pipes too, as Python's communicate(timeout) does: a
     // process git leaves behind can hold them open after git itself exits. A timeout
     // kills git's whole process group, so the reader threads below reach EOF and end.
+    // git is reaped only after both pipes close, so its pid (the group's id) is still
+    // reserved whenever the group is signalled: the kill cannot reach a reused pid.
     let deadline = Instant::now() + GIT_TIMEOUT;
     let give_up = |child: &mut Child| {
-        let group = format!("-{}", child.id());
         let quiet = || Stdio::null();
-        let _ = Command::new("/bin/kill")
-            .args(["-KILL", "--", &group])
+        let _ = Command::new("/bin/sh")
+            .args(["-c", "kill -s KILL -- \"-$1\"", "sh", &child.id().to_string()])
             .stdin(quiet())
             .stdout(quiet())
             .stderr(quiet())
@@ -564,6 +565,9 @@ fn git(args: &[&str]) -> std::result::Result<GitOut, GitError> {
             let _ = tx.send(v);
         });
     }
+    let left = || deadline.saturating_duration_since(Instant::now());
+    let stdout = out_rx.recv_timeout(left()).map_err(|_| give_up(&mut child))?;
+    let stderr = err_rx.recv_timeout(left()).map_err(|_| give_up(&mut child))?;
     let status = loop {
         match child.try_wait() {
             Ok(Some(s)) => break s,
@@ -572,9 +576,6 @@ fn git(args: &[&str]) -> std::result::Result<GitOut, GitError> {
             Err(e) => return Err(GitError::Run(e.to_string())),
         }
     };
-    let left = || deadline.saturating_duration_since(Instant::now());
-    let stdout = out_rx.recv_timeout(left()).map_err(|_| give_up(&mut child))?;
-    let stderr = err_rx.recv_timeout(left()).map_err(|_| give_up(&mut child))?;
     Ok(GitOut { code: status.code(), stdout: text(stdout)?, stderr: text(stderr)? })
 }
 

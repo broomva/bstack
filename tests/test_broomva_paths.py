@@ -1493,9 +1493,8 @@ def git_leftover_survives(binary: Path, work: Path) -> bool:
     assert done.stdout.strip() == "err tree", done.stdout + done.stderr
     pid = int(pidfile.read_text())
     time.sleep(0.5)
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
+    state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+    if not state or state.startswith("Z"):  # gone, or killed and not yet reaped by its new parent
         return False
     os.kill(pid, 9)
     return True
@@ -1544,9 +1543,9 @@ class RustReaderMutants(unittest.TestCase):
                 if not recorder.mismatches:
                     survivors.append(label)
         # The process-group kill has no Python counterpart, so its own case judges it.
-        old = '.args(["-KILL", "--", &group])'
+        old = '"kill -s KILL -- \\"-$1\\""'
         self.assertEqual(source.count(old), 1)
-        binary = build_rust_reader(source.replace(old, '.args(["-0", "--", &group])'), tmp / "group", strict=False)
+        binary = build_rust_reader(source.replace(old, '"kill -s 0 -- \\"-$1\\""'), tmp / "group", strict=False)
         if not git_leftover_survives(binary, tmp / "group-work"):
             survivors.append("a timeout leaves git's process group running")
         self.assertEqual(survivors, [], "these guards can be removed without any case noticing")
