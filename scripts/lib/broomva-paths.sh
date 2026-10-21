@@ -18,7 +18,7 @@
 # Unlike the Python reader, git calls here have no timeout: macOS ships no
 # portable `timeout`.
 
-BROOMVA_REGISTRY_SHA256="9172b7757d13f9c0412599e63f29691142e1f3d46c11fb5d068e02a17647e5ac"
+BROOMVA_REGISTRY_SHA256="13283b88b8ead3a05ae11b8467405c2d428c9ba15cc7e3952773414ebd11ffb8"
 BROOMVA_REPO_DIR=".broomva"
 BROOMVA_REPO_LEGACY_DIR=".control"
 # Owner-written governance under both spellings: the literal list gates hold. An

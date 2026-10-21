@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.50.0 — 2026-10-21
+
+### feat(references): the path registry in Rust — `scripts/lib/broomva_paths.rs` (BRO-3265)
+
+`scripts/gen_paths.py` now writes a third reader from `references/paths.toml`: a Rust module (std
+only, edition 2024, Unix) that Maestro vendors (BRO-3266), so the Rust Maestro reads `.broomva/` with
+the `.control/` fallback from the same table instead of a hand-kept list. It is a port of
+`scripts/broomva_paths.py`: the same tables and scopes, the migration rule on disk and in a git tree,
+the containment checks, the repo-root rules, `repo_key` (with its own sha256) and the error kinds
+(`UnknownName`, `Invalid` for ValueError, `TreeRead`, `Layout`, `Io`; absent is `Ok(None)`). It
+carries the table's sha256, is `#![forbid(unsafe_code)]` (Maestro's workspace lints forbid it) and is
+formatted as Maestro formats (`max_width = 120`), so a vendored copy passes `cargo fmt --check` and
+`cargo clippy -D warnings`. It differs in stated ways: Unix only; with HOME empty the home is
+`std::env::home_dir()` and the account-name rule (which only the shell reader's `eval` needs) is not
+applied; "searchable" is an lstat of `<folder>/.`; non-UTF-8 paths are refused. Its git calls are
+bounded by the 10 s timeout including the pipes, as Python's `communicate(timeout=…)` is; git runs in
+its own process group, which a timeout kills, so nothing git left behind keeps the reader's pipe
+threads alive (Python closes its pipe ends instead and leaves those processes running).
+
+Two fixes to the Python reader, found while porting: the git top level keeps a trailing space or
+`\r` in a folder name (it was `.strip()`ped and newline-translated, so `repo ` or `repo\r` resolved to a
+sibling `repo`; the shell reader was already right), and git output is decoded as UTF-8 whatever the
+locale, without newline translation.
+
+Parity is checked, not asserted: `tests/test_broomva_paths.py` compiles the module with a small
+driver (`tests/fixtures/broomva-paths-rs/main.rs`) and runs the whole suite again with every public
+reader call replayed through it, in the same environment, folder and file state, the moment Python
+answers (arguments travel as hex bytes, so a NUL or a non-UTF-8 path is carried): 257 calls from 77
+of the 102 tests agree, byte for byte, on value or error kind (a layout error also on its message); a
+non-UTF-8 path must come back `Invalid` (the stated difference, 4 calls); 10 calls made under a
+patched table or a mocked password database are listed as skipped. The ported helpers (pathlib
+spelling, `normpath`, `abspath`, `realpath` through links and loops, sha256 across padding
+boundaries) are compared directly. Sixteen mutants each remove one guard, and each is killed:
+fifteen by the replay (symlinked, file or unsearchable root folder; symlinked or FIFO entry; a
+hard-linked owner file; `moved()` without its entry check; a committed symlink as root or entry; a
+repo at `$HOME`; a dangling new entry falling back to legacy; runtime state without the root-folder
+check; git outliving its deadline through the pipes; a NUL in a root reaching the file system; a top
+level losing its trailing space) and one by a Rust-only case (a timeout that leaves git's process
+group running). Seven new shared cases hold the review's findings for every reader. `gen_paths.py`
+reads and writes UTF-8 whatever the locale (`--check` failed under `LC_ALL=C`), and the Rust template
+is ASCII. `--check` and doctor §30 cover the Rust reader like the other two (a stale or missing
+reader is a gap; with Python < 3.11 its hash is compared).
+
 ## 0.49.0 — 2026-10-20
 
 ### feat(references): the path registry — one table of where Broomva state lives (BRO-3216)

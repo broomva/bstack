@@ -65,7 +65,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
-REGISTRY_SHA256 = "9172b7757d13f9c0412599e63f29691142e1f3d46c11fb5d068e02a17647e5ac"
+REGISTRY_SHA256 = "13283b88b8ead3a05ae11b8467405c2d428c9ba15cc7e3952773414ebd11ffb8"
 
 REPO_DIR = ".broomva"
 REPO_LEGACY_DIR = ".control"
@@ -339,7 +339,10 @@ def workspace_root() -> Path:
 
 def _git(args: List[str]) -> subprocess.CompletedProcess:
     env = {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_WORK_TREE")}
-    return subprocess.run(["git", *args], capture_output=True, text=True, timeout=GIT_TIMEOUT, check=False, env=env)
+    done = subprocess.run(["git", *args], capture_output=True, timeout=GIT_TIMEOUT, check=False, env=env)
+    # UTF-8 whatever the locale, and no newline translation: a folder name may hold a `\r`.
+    return subprocess.CompletedProcess(done.args, done.returncode, done.stdout.decode("utf-8"),
+                                       done.stderr.decode("utf-8"))
 
 
 def _exists(path: Path) -> bool:
@@ -413,9 +416,10 @@ def _toplevel(target: Path) -> Optional[Path]:
         out = _git(["-C", str(directory), "rev-parse", "--show-toplevel"])
     except (OSError, subprocess.SubprocessError) as e:
         raise TreeReadError(f"git could not run: {e}") from e
-    if out.returncode != 0 or not out.stdout.strip():
+    printed = out.stdout[:-1] if out.stdout.endswith("\n") else out.stdout  # a name may end in a space
+    if out.returncode != 0 or not printed:
         return None
-    top = Path(out.stdout.strip())
+    top = Path(printed)
     try:
         at_home = os.path.samefile(top, _home())  # the same folder, whatever its case or links
     except OSError:

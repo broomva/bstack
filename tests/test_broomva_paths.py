@@ -11,6 +11,8 @@ shell and Python agreeing on every case.
 from __future__ import annotations
 
 import ast
+import contextlib
+import inspect
 import re
 import hashlib
 import os
@@ -18,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -28,6 +31,8 @@ import broomva_paths as bp  # noqa: E402
 import gen_paths  # noqa: E402
 
 SH_LIB = REPO / "scripts" / "lib" / "broomva-paths.sh"
+RS_LIB = REPO / "scripts" / "lib" / "broomva_paths.rs"
+RS_DRIVER = REPO / "tests" / "fixtures" / "broomva-paths-rs" / "main.rs"
 BASH = "/bin/bash" if Path("/bin/bash").exists() else shutil.which("bash")
 
 
@@ -62,6 +67,7 @@ class Generator(unittest.TestCase):
         want = hashlib.sha256((REPO / "references" / "paths.toml").read_bytes()).hexdigest()
         self.assertEqual(bp.REGISTRY_SHA256, want)
         self.assertIn(f'BROOMVA_REGISTRY_SHA256="{want}"', SH_LIB.read_text())
+        self.assertIn(f'pub const REGISTRY_SHA256: &str = "{want}";', RS_LIB.read_text())
 
     def test_python_reader_parses_as_python_3_9(self) -> None:
         # Hooks run under the Mac's system python3, which is 3.9.
@@ -152,6 +158,12 @@ config = { path = "config" }
             self.assertEqual(gen_paths.main(["--check"]), 1, "a hand edit that kept the hash line")
         with mock.patch.object(gen_paths, "PY_OUT", tmp / "absent.py"):
             self.assertEqual(gen_paths.main(["--check"]), 1, "a missing reader")
+        stale_rs = tmp / "p.rs"
+        stale_rs.write_text(gen_paths.RS_OUT.read_text().replace('"policy.yaml"', '"../../etc/passwd"'))
+        with mock.patch.object(gen_paths, "RS_OUT", stale_rs):
+            self.assertEqual(gen_paths.main(["--check"]), 1, "a hand-edited Rust reader")
+        with mock.patch.object(gen_paths, "RS_OUT", tmp / "absent.rs"):
+            self.assertEqual(gen_paths.main(["--check"]), 1, "a missing Rust reader")
 
     def test_more_invalid_registries_are_refused(self) -> None:
         base = self.BASE + '[repo]\nx = { path = "p" }\n'
@@ -173,7 +185,7 @@ config = { path = "config" }
     def test_names_that_are_shell_words_stay_words(self) -> None:
         names = ("esac", "in", "do", "done", "fi", "then")
         toml = self.BASE + "[repo]\n" + "".join(f'{n} = {{ path = "{n}.yaml" }}\n' for n in names)
-        _, shell = gen_paths.render(toml.encode())
+        _, shell, _ = gen_paths.render(toml.encode())
         lib = Path(tempfile.mkdtemp(prefix="gen-words-")) / "lib.sh"
         self.addCleanup(shutil.rmtree, lib.parent, True)
         lib.write_text(shell)
@@ -1165,6 +1177,435 @@ class Round5(Tmp):
         with self.assertRaises(OSError):
             bp.repo_path("policy", repo)
         self.assertEqual(sh(f'broomva_repo_path policy "{repo}"').returncode, 3)
+
+
+
+class Round6(Tmp):
+    """Cases the Rust reader's review found the suite did not hold (BRO-3265)."""
+
+    def test_a_dangling_new_entry_is_refused_even_beside_a_real_legacy_one(self) -> None:
+        repo = self.tmp / "r"
+        (repo / ".control").mkdir(parents=True)
+        (repo / ".control" / "policy.yaml").write_text("x\n")
+        (repo / ".broomva").mkdir()
+        (repo / ".broomva" / "policy.yaml").symlink_to("nowhere")
+        with self.assertRaises(bp.LayoutError):
+            bp.repo_path("policy", repo)
+        self.assertEqual(sh(f'broomva_repo_path policy "{repo}"').returncode, 3)
+
+    def test_runtime_state_refuses_a_symlinked_legacy_root(self) -> None:
+        repo, outside = self.tmp / "r", self.tmp / "outside"
+        (outside / "audit").mkdir(parents=True)
+        repo.mkdir()
+        (repo / ".control").symlink_to(outside)
+        with self.assertRaises(bp.LayoutError):
+            bp.repo_path("audit", repo)
+        self.assertEqual(sh(f'broomva_repo_path audit "{repo}"').returncode, 3)
+
+    def test_a_top_level_whose_name_ends_in_a_space_is_itself(self) -> None:
+        spaced, plain = make_repo(self.tmp / "repo "), make_repo(self.tmp / "repo")
+        self.assertEqual(bp.repo_root(spaced), spaced)
+        self.assertEqual(bp.repo_root(plain), plain)
+        self.assertEqual(sh(f'broomva_repo_root "{spaced}"').stdout, f"{spaced}\n")
+
+    def test_a_path_that_is_not_utf8(self) -> None:
+        # Python carries the byte as a surrogate; the Rust reader refuses it (its stated
+        # difference), which the replay checks as Invalid rather than as Python's answer.
+        odd = os.fsdecode(os.fsencode(str(self.tmp)) + b"/r\x80")
+        self.assertEqual(bp.repo_path("policy", odd), Path(odd) / ".broomva" / "policy.yaml")
+        self.assertIsNone(bp.repo_root(odd))
+        self.assertFalse(bp.moved(odd))
+        with self.assertRaises(ValueError):
+            bp.repo_key(odd)
+
+    def test_a_nul_in_a_root_or_revision_is_a_value_error(self) -> None:
+        repo = make_repo(self.tmp / "r")
+        calls = {
+            "repo_path": lambda: bp.repo_path("policy", f"{repo}\0x"),
+            "state path": lambda: bp.repo_path("audit", f"{repo}\0x"),
+            "repo_key": lambda: bp.repo_key(f"{repo}\0"),
+            "moved": lambda: bp.moved(f"{repo}\0"),
+            "tree_path rev": lambda: bp.tree_path("asks", repo, "HEAD\0"),
+            "tree_path root": lambda: bp.tree_path("asks", f"{repo}\0", "HEAD"),
+            "shadowed rev": lambda: bp.shadowed(repo, "HEAD\0"),
+            "shadowed root": lambda: bp.shadowed(f"{repo}\0"),
+        }
+        for label, call in calls.items():
+            with self.subTest(label), self.assertRaises(ValueError):
+                call()
+        # repo_root walks up to the nearest real folder, so a part holding a NUL is never looked up.
+        self.assertEqual(bp.repo_root(repo / "x\0"), repo)
+        self.assertEqual(bp.repo_root(repo / "a\0b" / "c"), repo)
+        self.assertIsNone(bp.repo_root(f"{repo}\0/x"))
+
+    def test_a_top_level_whose_name_ends_in_a_carriage_return_is_itself(self) -> None:
+        cr, plain = make_repo(self.tmp / "repo\r"), make_repo(self.tmp / "repo")
+        self.assertEqual(bp.repo_root(cr), cr)
+        self.assertEqual(bp.repo_root(plain), plain)
+        out = subprocess.run([BASH, "-c", f'. "{SH_LIB}"; broomva_repo_root "{cr}"'], capture_output=True)
+        self.assertEqual(out.stdout, f"{cr}\n".encode(), "bytes: text mode would translate the \\r")
+
+    def test_git_that_leaves_its_pipes_open_still_times_out(self) -> None:
+        # git exits, but a process it started holds stdout open past the deadline.
+        bindir = self.tmp / "bin"
+        bindir.mkdir()
+        (bindir / "git").write_text(f'#!/bin/sh\nsleep {bp.GIT_TIMEOUT + 4} &\nexec "{shutil.which("git")}" "$@"\n')
+        (bindir / "git").chmod(0o755)
+        repo = make_repo(self.tmp / "r")
+        # Without the deadline the call returns the repo once the sleep ends; with it, an error.
+        # (No wall-clock assert: under the Rust replay the window holds both readers' timeouts.)
+        with mock.patch.dict(os.environ, {"PATH": f"{bindir}:{os.environ['PATH']}"}):
+            with self.assertRaises(bp.TreeReadError):
+                bp.repo_root(repo)
+
+
+# ── The Rust reader (BRO-3265) ───────────────────────────────────────────────
+# scripts/lib/broomva_paths.rs is compiled with a small driver (one reader call per
+# process) and every public reader call the suite above makes is replayed through it,
+# in the same environment, working folder and file state, the moment Python answers.
+# The two answers must be the same value, or the same error kind.
+
+# The public reader functions; a call made inside one of them is not replayed again.
+REPLAYED = ("repo_key", "state_dir", "machine_root", "workspace_root", "repo_root", "repo_rels", "moved",
+            "partially_moved", "repo_path", "workspace_path", "machine_path", "tree_path", "shadowed",
+            "resolve", "all_names")
+PRISTINE_TABLES = (dict(bp.REPO), dict(bp.REPO_STATE), dict(bp.MACHINE))
+# Parameters the Rust API takes as a &Path (any bytes); every other one is a &str (UTF-8).
+PATH_PARAMETERS = {"root", "target"}
+NOT_UTF8 = "an argument that is not UTF-8 (refused: the Rust reader's stated difference)"
+NO_STR = "a string argument that is not UTF-8 (a &str cannot hold it)"
+
+
+def build_rust_reader(source: str, out: Path, strict: bool = True) -> Path:
+    """Compile ``source`` (a broomva_paths.rs) with the driver; the binary's path.
+    ``strict`` adds -D warnings (a mutant may leave a variable unused)."""
+    rustc = shutil.which("rustc")
+    if rustc is None:
+        raise AssertionError("rustc is not on PATH: the Rust reader cannot be checked (install a Rust toolchain)")
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "broomva_paths.rs").write_text(source)
+    shutil.copy(RS_DRIVER, out / "main.rs")
+    binary = out / "reader"
+    # Maestro builds with edition 2024 and -D warnings; so does this.
+    # -F unsafe_code: Maestro's workspace lints forbid it, so a vendored copy must not need it.
+    flags = ["-D", "warnings", "-F", "unsafe_code"] if strict else []
+    done = subprocess.run([rustc, "--edition", "2024", *flags, "-o", str(binary), str(out / "main.rs")],
+                          capture_output=True, text=True)
+    if done.returncode != 0:
+        raise AssertionError(f"the Rust reader does not compile:\n{done.stderr}")
+    return binary
+
+
+def spell(value: object) -> str:
+    """A Python answer in the driver's output format."""
+    if value is None:
+        return "ok none"
+    if isinstance(value, bool):
+        return f"ok bool {str(value).lower()}"
+    if isinstance(value, Path):
+        return f"ok path {value}"
+    if isinstance(value, str):
+        return f"ok str {value}"
+    if isinstance(value, (list, tuple)):
+        return "\n".join(["ok list", *(f"item {v}" for v in value)])
+    return f"ok ?{type(value).__name__}"
+
+
+def error_kind(e: BaseException) -> str:
+    """The error kind; a LayoutError carries its message too, which names the rule that fired."""
+    if isinstance(e, bp.LayoutError):
+        return f"err layout {e}"
+    for cls, kind in ((bp.UnknownName, "unknown"), (bp.LayoutError, "layout"), (bp.TreeReadError, "tree"),
+                      (ValueError, "value"), (OSError, "os")):
+        if isinstance(e, cls):
+            return f"err {kind}"
+    return f"err ?{type(e).__name__}"
+
+
+class Recorder:
+    """Wraps the reader's public functions; replays each outermost call through ``binary``."""
+
+    def __init__(self, binary: Path, stop_at_first: bool = False) -> None:
+        self.binary = binary
+        self.stop_at_first = stop_at_first  # a mutant needs one mismatch, not all of them
+        self.result: unittest.TestResult | None = None
+        self.depth = 0
+        self.test = "?"
+        self.replayed: dict[str, int] = {}
+        self.skipped: list[tuple[str, str, str]] = []
+        self.refused = 0
+        self.mismatches: list[str] = []
+
+    def wrap(self, name: str, original):
+        signature = inspect.signature(original)
+
+        def wrapper(*args, **kwargs):
+            if self.depth:
+                return original(*args, **kwargs)
+            env = dict(os.environ)
+            try:
+                cwd: str | None = os.getcwd()
+            except OSError:
+                cwd = None
+            bound = signature.bind(*args, **kwargs)
+            bound.apply_defaults()
+            # Hex of the bytes: argv cannot carry a NUL, and a path may hold a byte that is not UTF-8.
+            argv, odd = [], None
+            for param, v in bound.arguments.items():
+                if v is None:
+                    argv.append("n:")
+                    continue
+                raw = os.fsencode(v) if param in PATH_PARAMETERS else str(v).encode("utf-8", "surrogateescape")
+                try:
+                    raw.decode("utf-8")
+                except UnicodeDecodeError:
+                    odd = odd or (NOT_UTF8 if param in PATH_PARAMETERS else NO_STR)
+                argv.append("h:" + raw.hex())
+            self.depth += 1
+            try:
+                try:
+                    result = original(*args, **kwargs)
+                except Exception as e:
+                    self.compare(name, argv, env, cwd, error_kind(e), odd)
+                    raise
+                self.compare(name, argv, env, cwd, spell(result), odd)
+                return result
+            finally:
+                self.depth -= 1
+
+        return wrapper
+
+    def compare(self, name: str, argv: list[str], env: dict, cwd: str | None, want: str,
+                odd: str | None = None) -> None:
+        reason = None
+        if odd == NOT_UTF8:
+            want = "err value"  # whatever Python answered: the Rust reader refuses the path
+            self.refused += 1
+        elif odd == NO_STR:
+            reason = NO_STR
+        elif (dict(bp.REPO), dict(bp.REPO_STATE), dict(bp.MACHINE)) != PRISTINE_TABLES:
+            reason = "a registry table is patched"
+        elif isinstance(bp.pwd.getpwuid, mock.NonCallableMock):
+            reason = "the password database is mocked"
+        elif cwd is None:
+            reason = "the working folder is gone"
+        if reason:
+            self.skipped.append((self.test, name, reason))
+            return
+        done = subprocess.run([str(self.binary), name, *argv], env=env, cwd=cwd, capture_output=True, timeout=60)
+        # Bytes, one trailing newline dropped: a `\r` or an extra newline in an answer is a difference.
+        out = done.stdout.decode("utf-8", "replace")
+        out = out[:-1] if out.endswith("\n") else out
+        got = out if done.returncode == 0 else f"crash {done.returncode}: {done.stderr.decode(errors='replace')[-300:]}"
+        self.replayed[self.test] = self.replayed.get(self.test, 0) + 1
+        if got != want:
+            self.mismatches.append(f"{self.test}: {name}{tuple(argv)}\n    python: {want!r}\n    rust:   {got!r}")
+            if self.stop_at_first and self.result is not None:
+                self.result.stop()
+
+
+def fixture_suite() -> unittest.TestSuite:
+    """Every test of this module except the Rust reader's own."""
+    loader = unittest.TestLoader()
+    suite = unittest.TestSuite()
+    for obj in list(globals().values()):
+        if isinstance(obj, type) and issubclass(obj, unittest.TestCase) and obj.__module__ == __name__ \
+                and not getattr(obj, "rust_reader", False):
+            suite.addTests(loader.loadTestsFromTestCase(obj))
+    return suite
+
+
+def replay_suite(binary: Path, stop_at_first: bool = False) -> tuple[Recorder, unittest.TestResult, int]:
+    """Run the fixture suite with every public reader call replayed through ``binary``."""
+    recorder = Recorder(binary, stop_at_first)
+
+    class Result(unittest.TestResult):
+        def startTest(self, test: unittest.TestCase) -> None:
+            recorder.test = test.id().rsplit(".", 2)[-2] + "." + test.id().rsplit(".", 1)[-1]
+            super().startTest(test)
+
+    suite = fixture_suite()
+    result = recorder.result = Result()
+    with contextlib.ExitStack() as stack:
+        for name in REPLAYED:
+            stack.enter_context(mock.patch.object(bp, name, recorder.wrap(name, getattr(bp, name))))
+        suite.run(result)
+    return recorder, result, suite.countTestCases()
+
+
+class RustReader(unittest.TestCase):
+    """scripts/lib/broomva_paths.rs gives the Python reader's answer on every case above."""
+
+    rust_reader = True
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.tmp = Path(tempfile.mkdtemp(prefix="broomva-paths-rs-")).resolve()
+        cls.binary = build_rust_reader(RS_LIB.read_text(), cls.tmp / "build")
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        shutil.rmtree(cls.tmp, True)
+
+    def run_rust(self, op: str, *args: str, cwd: Path | None = None) -> str:
+        done = subprocess.run([str(self.binary), op, *(f"s:{a}" for a in args)], capture_output=True, cwd=cwd)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        out = done.stdout.decode("utf-8")
+        return out[:-1] if out.endswith("\n") else out
+
+    def test_every_fixture_of_the_suite_agrees(self) -> None:
+        recorder, result, total = replay_suite(self.binary)
+        problems = [f"{t}: {tb.splitlines()[-1]}" for t, tb in result.failures + result.errors]
+        self.assertEqual(problems, [], "the suite must pass with the recorder in place")
+        self.assertEqual(result.testsRun, total)
+        self.assertGreaterEqual(total, 95, "the parity run covers the whole suite")
+        self.assertEqual(recorder.mismatches, [], "\n" + "\n".join(recorder.mismatches[:25]))
+        calls = sum(recorder.replayed.values())
+        # Calls under a patched table or a mocked password database cannot be replayed in
+        # another process; they are listed, and only those two reasons are allowed.
+        reasons = {r for _, _, r in recorder.skipped}
+        self.assertLessEqual(reasons, {"a registry table is patched", "the password database is mocked"})
+        self.assertGreater(recorder.refused, 0, "a non-UTF-8 path was replayed and refused")
+        self.assertGreater(calls, 200, "the replay reached the reader")
+        print(f"\n[rust reader] {calls} calls replayed from {len(recorder.replayed)} of {total} tests; "
+              f"{len(recorder.skipped)} skipped ({', '.join(sorted(reasons)) or 'none'}); "
+              f"{recorder.refused} non-UTF-8 paths refused as stated", file=sys.stderr)
+
+    def test_the_ported_helpers_agree(self) -> None:
+        spellings = ["", ".", "..", "/", "//", "///", "a", "a/", "a//b", "./a", "a/./b", "a/../b", "/a/../..",
+                     "//a/b/", "///a", "../a", "a/..", "/./", "~", "~/x", "a/.../b", "//..", "/..", "x/./../y/"]
+        for s in spellings:
+            with self.subTest(spelling=s):
+                self.assertEqual(self.run_rust("pl", s), f"ok str {Path(s)}")
+                self.assertEqual(self.run_rust("normpath", s), f"ok str {os.path.normpath(s)}")
+                self.assertEqual(self.run_rust("parent", s), f"ok str {Path(s).parent}")
+                self.assertEqual(self.run_rust("abspath", s, cwd=self.tmp), f"ok str {self._in(self.tmp, os.path.abspath, s)}")
+                for b in ("b", "", "/c", "./d/", "e/../f"):
+                    self.assertEqual(self.run_rust("join", s, b), f"ok str {Path(s) / b}")
+        # realpath through links: relative, absolute, chained, dangling, looping, and `..` after a link.
+        t = self.tmp / "links"
+        (t / "real" / "deep").mkdir(parents=True)
+        (t / "rel").symlink_to("real")
+        (t / "abs").symlink_to(t / "real" / "deep")
+        (t / "chain").symlink_to("rel/deep")
+        (t / "dangling").symlink_to("nowhere/at/all")
+        (t / "loop1").symlink_to("loop2")
+        (t / "loop2").symlink_to("loop1")
+        for s in ("rel", "abs/..", "chain/x/y", "dangling", "dangling/z", "loop1", "loop1/q", "rel/../abs",
+                  "real/deep/../../chain", ".", "missing/..", "abs/../../links/rel", "/", "//x"):
+            target = s if s.startswith("/") else str(t / s)
+            with self.subTest(realpath=s):
+                self.assertEqual(self.run_rust("realpath", target), f"ok str {os.path.realpath(target)}")
+        self.assertEqual(self.run_rust("realpath", "rel/deep", cwd=t), f"ok str {self._in(t, os.path.realpath, 'rel/deep')}")
+        # sha256 across the padding boundaries and in UTF-8.
+        for n in list(range(0, 130)) + [1000]:
+            data = "".join(chr(97 + i % 26) for i in range(n))
+            self.assertEqual(self.run_rust("sha256", data), f"ok str {hashlib.sha256(data.encode()).hexdigest()}", n)
+        self.assertEqual(self.run_rust("sha256", "ñandú/日本"), f"ok str {hashlib.sha256('ñandú/日本'.encode()).hexdigest()}")
+        self.assertEqual(self.run_rust("hash"), f"ok str {bp.REGISTRY_SHA256}")
+
+    def test_the_reader_is_formatted_as_maestro_formats(self) -> None:
+        # Maestro vendors the file and runs `cargo fmt --check` (core/maestro/rustfmt.toml).
+        rustfmt = shutil.which("rustfmt")
+        self.assertIsNotNone(rustfmt, "rustfmt is not on PATH")
+        done = subprocess.run([rustfmt, "--check", "--edition", "2024", "--config", "max_width=120,use_small_heuristics=Max",
+                               str(RS_LIB)], capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stdout[-2000:] + done.stderr[-500:])
+
+    def test_another_registry_renders_a_reader_that_compiles(self) -> None:
+        # No repo_state, no machine legacy, names that are Rust keywords: still a module.
+        toml = Generator.BASE + '[repo]\nfn = { path = "fn.yaml", owner = true }\ntype = { path = "t", legacy = false }\n'
+        _, _, rust = gen_paths.render(toml.encode())
+        binary = build_rust_reader(rust, self.tmp / "other")
+        done = subprocess.run([str(binary), "repo_rels", "s:repo.fn"], capture_output=True, text=True)
+        self.assertEqual(done.stdout.split("\n")[:3], ["ok list", "item .broomva/fn.yaml", "item .control/fn.yaml"])
+
+    def test_a_timeout_ends_what_git_left_behind(self) -> None:
+        # Rust only: Python closes its pipe ends; the Rust reader's threads need the writer gone.
+        self.assertFalse(git_leftover_survives(self.binary, self.tmp / "leftover"))
+
+    @staticmethod
+    def _in(folder: Path, fn, arg: str) -> str:
+        before = os.getcwd()
+        os.chdir(folder)
+        try:
+            return fn(arg)
+        finally:
+            os.chdir(before)
+
+
+def git_leftover_survives(binary: Path, work: Path) -> bool:
+    """Whether a process a timed-out git left holding the pipes is still running afterwards."""
+    bindir, repo, pidfile = work / "bin", work / "r", work / "leftover.pid"
+    bindir.mkdir(parents=True)
+    make_repo(repo)
+    (bindir / "git").write_text(f'#!/bin/sh\nsleep {bp.GIT_TIMEOUT + 20} &\necho $! > "{pidfile}"\n'
+                                f'exec "{shutil.which("git")}" "$@"\n')
+    (bindir / "git").chmod(0o755)
+    done = subprocess.run([str(binary), "repo_root", f"s:{repo}"], capture_output=True, text=True,
+                          env={**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}"}, timeout=60)
+    assert done.stdout.strip() == "err tree", done.stdout + done.stderr
+    pid = int(pidfile.read_text())
+    time.sleep(0.5)
+    state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+    if not state or state.startswith("Z"):  # gone, or killed and not yet reaped by its new parent
+        return False
+    os.kill(pid, 9)
+    return True
+
+
+class RustReaderMutants(unittest.TestCase):
+    """Each guard of the Rust reader (containment, the repo-root rules), removed, turns the parity run red."""
+
+    rust_reader = True
+
+    # (label, the guard as the reader spells it, the same line without the guard)
+    MUTANTS = (
+        ("root folder may be a symlink",
+         'if info.file_type().is_symlink() {\n            return Err(Error::Layout(format!("{p} is a symlink; it must',
+         'if false {\n            return Err(Error::Layout(format!("{p} is a symlink; it must'),
+        ("root folder may be a file", "if !info.is_dir() {", "if false {"),
+        ("root folder need not be searchable", "if !searchable(&p) {", "if false {"),
+        ("entry may be a symlink", "if kind.is_symlink() {", "if false {"),
+        ("entry may be a FIFO", "if !(kind.is_file() || kind.is_dir()) {", "if false {"),
+        ("owner file may be hard-linked", "if owner && kind.is_file() && info.nlink() > 1 {", "if false {"),
+        ("moved() skips the entry check", "        entry(p, owner)?;\n", "        let _ = (p, owner);\n"),
+        ("tree root may be a symlink", '&& !meta.starts_with("040000 ")', "&& false"),
+        ("tree entry may be a symlink", 'if !["040000", "100644", "100755"].contains(&mode) {', "if false {"),
+        ("a repo at $HOME is a root", "if samefile(&top, &home()?) {", "if false {"),
+        ("a dangling new entry falls back to legacy", "if !legacy || exists(&new)? || lstat(&new)?.is_some() {",
+         "if !legacy || exists(&new)? {"),
+        ("runtime state skips the root-folder check",
+         "        let root = require_root(root)?;\n        contained(&root)?;\n        let new = join(&state_dir_str",
+         "        let root = require_root(root)?;\n        let new = join(&state_dir_str"),
+        ("git may outlive its deadline through the pipes", "let stdout = out_rx.recv_timeout(left())",
+         "let stdout = out_rx.recv()"),
+        ("a NUL in a path reaches the file system", "    if s.contains('\\0') {", "    if false {"),
+        ("the top level loses a trailing space", "out.stdout.strip_suffix('\\n').unwrap_or(&out.stdout)",
+         "out.stdout.trim()"),
+    )
+
+    def test_every_containment_mutant_is_killed(self) -> None:
+        tmp = Path(tempfile.mkdtemp(prefix="broomva-paths-rs-mut-")).resolve()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        source = RS_LIB.read_text()
+        survivors = []
+        for i, (label, old, new) in enumerate(self.MUTANTS):
+            with self.subTest(label):
+                self.assertEqual(source.count(old), 1, f"the guard is spelled once in the reader: {old!r}")
+                binary = build_rust_reader(source.replace(old, new), tmp / f"m{i}", strict=False)
+                recorder, _, _ = replay_suite(binary, stop_at_first=True)
+                if not recorder.mismatches:
+                    survivors.append(label)
+        # The process-group kill has no Python counterpart, so its own case judges it.
+        old = '"kill -s KILL -- \\"-$1\\""'
+        self.assertEqual(source.count(old), 1)
+        binary = build_rust_reader(source.replace(old, '"kill -s 0 -- \\"-$1\\""'), tmp / "group", strict=False)
+        if not git_leftover_survives(binary, tmp / "group-work"):
+            survivors.append("a timeout leaves git's process group running")
+        self.assertEqual(survivors, [], "these guards can be removed without any case noticing")
+        print(f"\n[rust reader] mutation {len(self.MUTANTS) + 1 - len(survivors)} of {len(self.MUTANTS) + 1} killed",
+              file=sys.stderr)
 
 
 if __name__ == "__main__":

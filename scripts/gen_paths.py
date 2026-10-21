@@ -4,8 +4,9 @@
     python3 scripts/gen_paths.py           # write the readers
     python3 scripts/gen_paths.py --check   # exit 1 if a committed reader is stale
 
-Writes scripts/broomva_paths.py (Python 3.9+, stdlib only) and
-scripts/lib/broomva-paths.sh (bash 3.2+) from the templates in
+Writes scripts/broomva_paths.py (Python 3.9+, stdlib only),
+scripts/lib/broomva-paths.sh (bash 3.2+) and scripts/lib/broomva_paths.rs (a Rust
+module, std only, for Maestro to vendor; BRO-3265) from the templates in
 scripts/lib/paths-templates/, substituting the table. Each embeds the table and the sha256
 of paths.toml, so no reader looks for the registry at run time (unified-layout
 ADR, decision 2). Needs Python 3.11+ for tomllib; the readers it writes do not.
@@ -24,6 +25,7 @@ ROOT = Path(__file__).resolve().parent.parent
 REGISTRY = ROOT / "references" / "paths.toml"
 PY_OUT = ROOT / "scripts" / "broomva_paths.py"
 SH_OUT = ROOT / "scripts" / "lib" / "broomva-paths.sh"
+RS_OUT = ROOT / "scripts" / "lib" / "broomva_paths.rs"
 
 NAME = re.compile(r"^[a-z][a-z0-9_]*$")
 REL = re.compile(r"^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$")
@@ -139,7 +141,7 @@ def owner_paths(repo: list[tuple[str, str, bool, bool]]) -> list[str]:
 TEMPLATES = ROOT / "scripts" / "lib" / "paths-templates"
 
 
-def render(raw: bytes) -> tuple[str, str]:
+def render(raw: bytes) -> tuple[str, str, str]:
     repo, state, machine = validate(load(raw))
     sha = hashlib.sha256(raw).hexdigest()
     owners = owner_paths(repo)
@@ -153,7 +155,7 @@ def render(raw: bytes) -> tuple[str, str]:
     never = sorted({p.split("/")[0] for _, p, _, _ in repo} - {m for m in machine_top})
     never = [n for n in never if n.lower() not in machine_top]
     py_never = "\n".join(f"    {n!r}," for n in never)
-    py = ((TEMPLATES / "broomva_paths.py.tmpl").read_text().replace("@@SHA@@", sha).replace("@@REPO@@", py_repo)
+    py = ((TEMPLATES / "broomva_paths.py.tmpl").read_text(encoding="utf-8").replace("@@SHA@@", sha).replace("@@REPO@@", py_repo)
           .replace("@@MACHINE@@", py_machine).replace("@@OWNER@@", py_owner)
           .replace("@@STATE@@", py_state).replace("@@NEVERMACHINE@@", py_never))
     # Patterns are quoted: a name such as `esac` or `in` must stay a word, not syntax.
@@ -164,11 +166,21 @@ def render(raw: bytes) -> tuple[str, str]:
     # Owner paths with a legacy spelling, for broomva_moved's link check; never empty as a pattern.
     sh_owner_legacy = "|".join(f"'{p}'" for _, p, legacy, owner in repo if legacy and owner) or "''"
     sh_state = "\n".join(f"        '{n}') printf '%s\\n' '{p}' ;;" for n, p in state)
-    sh = ((TEMPLATES / "broomva-paths.sh.tmpl").read_text().replace("@@SHA@@", sha)
+    sh = ((TEMPLATES / "broomva-paths.sh.tmpl").read_text(encoding="utf-8").replace("@@SHA@@", sha)
           .replace("@@OWNER@@", " ".join(owners))
           .replace("@@REPO@@", sh_repo).replace("@@MACHINE@@", sh_machine).replace("@@LEGACYLIST@@", sh_legacy).replace("@@OWNERLEGACY@@", sh_owner_legacy)
           .replace("@@STATE@@", sh_state))
-    return py, sh
+    # Names and paths passed REL/NAME/LEGACY above: no `"` or `\\` can reach a Rust literal.
+    rs_repo = "\n".join(f'    ("{n}", "{p}", {str(legacy).lower()}, {str(owner).lower()}),' for n, p, legacy, owner in repo)
+    rs_state = "\n".join(f'    ("{n}", "{p}"),' for n, p in state)
+    rs_machine = "\n".join(f'    ("{n}", "{p}", ' + (f'Some("{legacy}")' if legacy else "None") + "),"
+                           for n, p, legacy in machine)
+    rs_owner = "\n".join(f'    "{p}",' for p in owners)
+    rs_never = "\n".join(f'    "{n}",' for n in never)
+    rs = ((TEMPLATES / "broomva_paths.rs.tmpl").read_text(encoding="utf-8").replace("@@SHA@@", sha).replace("@@REPO@@", rs_repo)
+          .replace("@@STATE@@", rs_state).replace("@@MACHINE@@", rs_machine).replace("@@OWNER@@", rs_owner)
+          .replace("@@NEVERMACHINE@@", rs_never))
+    return py, sh, rs
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -176,19 +188,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--check", action="store_true", help="exit 1 if a committed reader is stale")
     args = parser.parse_args(argv)
     try:
-        py, sh = render(REGISTRY.read_bytes())
+        py, sh, rs = render(REGISTRY.read_bytes())
     except RegistryError as e:
         print(f"references/paths.toml: {e}", file=sys.stderr)
         return 2
-    stale = [out for out, text in ((PY_OUT, py), (SH_OUT, sh)) if not out.exists() or out.read_text() != text]
+    outputs = ((PY_OUT, py), (SH_OUT, sh), (RS_OUT, rs))
+    stale = [out for out, text in outputs if not out.exists() or out.read_text(encoding="utf-8") != text]
     if args.check:
         for out in stale:
             print(f"stale: {os.path.relpath(out, ROOT)} (run python3 scripts/gen_paths.py)", file=sys.stderr)
         return 1 if stale else 0
-    for out, text in ((PY_OUT, py), (SH_OUT, sh)):
-        out.write_text(text)
+    for out, text in outputs:
+        out.write_text(text, encoding="utf-8")
     PY_OUT.chmod(0o755)
-    print(f"wrote {PY_OUT.relative_to(ROOT)} and {SH_OUT.relative_to(ROOT)}")
+    print(f"wrote {', '.join(str(out.relative_to(ROOT)) for out, _ in outputs)}")
     return 0
 
 

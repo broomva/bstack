@@ -1968,7 +1968,8 @@ PY
 fi
 
 # ── Section 30: Path registry (BRO-3216) ───────────────────────────────────
-# The registry (references/paths.toml) is embedded in its generated readers. A
+# The registry (references/paths.toml) is embedded in its generated readers (Python,
+# shell, and the Rust module Maestro vendors, BRO-3265). A
 # reader the generator would not write today is stale: with Python 3.11+ the
 # generator's own --check proves it (a hand edit that kept the hash line fails
 # too); without it, only the embedded hash is compared. The rest are the layout
@@ -1978,10 +1979,11 @@ fi
 section "30. Path registry (BRO-3216)"
 _PR_PY="$BSTACK_REPO/scripts/broomva_paths.py"
 _PR_SH="$BSTACK_REPO/scripts/lib/broomva-paths.sh"
+_PR_RS="$BSTACK_REPO/scripts/lib/broomva_paths.rs"
 _PR_TOML="$BSTACK_REPO/references/paths.toml"
 _PR_GEN="$BSTACK_REPO/scripts/gen_paths.py"
-if [ ! -f "$_PR_TOML" ] || [ ! -f "$_PR_PY" ] || [ ! -f "$_PR_SH" ]; then
-    gap "path registry incomplete (references/paths.toml and both generated readers)" \
+if [ ! -f "$_PR_TOML" ] || [ ! -f "$_PR_PY" ] || [ ! -f "$_PR_SH" ] || [ ! -f "$_PR_RS" ]; then
+    gap "path registry incomplete (references/paths.toml and the three generated readers)" \
         "reinstall bstack, or run python3 scripts/gen_paths.py in the bstack repo"
 elif ! command -v python3 >/dev/null 2>&1; then
     gap "python3 unavailable: the path registry cannot be checked" "install python3 (3.9+)"
@@ -1997,10 +1999,11 @@ else
         _pr_want="$(python3 -I -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$_PR_TOML" 2>/dev/null)"
         _pr_py="$(python3 -I "$_PR_PY" hash 2>/dev/null)"
         _pr_sh="$(sed -n 's/^BROOMVA_REGISTRY_SHA256="\([0-9a-f]*\)"$/\1/p' "$_PR_SH")"
-        if [ -n "$_pr_want" ] && [ "$_pr_py" = "$_pr_want" ] && [ "$_pr_sh" = "$_pr_want" ]; then
+        _pr_rs="$(sed -n 's/^pub const REGISTRY_SHA256: &str = "\([0-9a-f]*\)";$/\1/p' "$_PR_RS")"
+        if [ -n "$_pr_want" ] && [ "$_pr_py" = "$_pr_want" ] && [ "$_pr_sh" = "$_pr_want" ] && [ "$_pr_rs" = "$_pr_want" ]; then
             ok "path registry readers carry the table's hash (${_pr_want:0:12}; a deep check needs Python 3.11+)"
         else
-            gap "path registry readers are stale (table ${_pr_want:0:12}, python ${_pr_py:0:12}, shell ${_pr_sh:0:12})" \
+            gap "path registry readers are stale (table ${_pr_want:0:12}, python ${_pr_py:0:12}, shell ${_pr_sh:0:12}, rust ${_pr_rs:0:12})" \
                 "run python3 scripts/gen_paths.py in the bstack repo"
         fi
     fi
