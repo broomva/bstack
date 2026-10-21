@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.50.0 — 2026-10-21
+
+### feat(references): the path registry in Rust — `scripts/lib/broomva_paths.rs` (BRO-3265)
+
+`scripts/gen_paths.py` now writes a third reader from `references/paths.toml`: a Rust module (std
+only, edition 2024, Unix) that Maestro vendors (BRO-3266), so the Rust Maestro reads `.broomva/` with
+the `.control/` fallback from the same table instead of a hand-kept list. It is a port of
+`scripts/broomva_paths.py`: the same tables and scopes, the migration rule on disk and in a git tree,
+the containment checks, the repo-root rules, `repo_key` (with its own sha256) and the error kinds
+(`UnknownName`, `Invalid` for ValueError, `TreeRead`, `Layout`, `Io`; absent is `Ok(None)`). It
+carries the table's sha256 and is formatted as Maestro formats (`max_width = 120`), so a vendored
+copy passes `cargo fmt --check` and `cargo clippy -D warnings`. It differs in three stated ways:
+Unix only, three C calls std already links (`getuid`, `getpwuid_r`, `access`), and non-UTF-8 paths
+are refused.
+
+Parity is checked, not asserted: `tests/test_broomva_paths.py` compiles the module with a small
+driver (`tests/fixtures/broomva-paths-rs/main.rs`) and runs the whole suite again with every public
+reader call replayed through it, in the same environment, folder and file state, the moment Python
+answers: 235 calls from 70 of the 95 tests agree on value or error kind (a layout error also on its
+message), and 10 calls made under a patched table or a mocked password database are listed as
+skipped. The ported helpers (pathlib spelling, `normpath`, `abspath`, `realpath` through links and
+loops, sha256 across padding boundaries) are compared directly. Ten mutants, each removing one
+containment guard (symlinked, file or unsearchable root folder; symlinked or FIFO entry; a
+hard-linked owner file; `moved()` without its entry check; a committed symlink as root or entry;
+a repo at `$HOME`), are each killed by the replay. `--check` and doctor §30 cover the Rust reader
+like the other two (a stale or missing reader is a gap; with Python < 3.11 its hash is compared).
+
 ## 0.49.0 — 2026-10-20
 
 ### feat(references): the path registry — one table of where Broomva state lives (BRO-3216)

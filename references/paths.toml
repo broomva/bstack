@@ -3,7 +3,8 @@
 # The one table of where Broomva state lives: every name a Broomva reader uses
 # today (a name nothing reads yet is added with its first reader). Readers never search the disk for
 # it: scripts/gen_paths.py embeds it into the generated readers
-# (scripts/broomva_paths.py, scripts/lib/broomva-paths.sh), and each carries
+# (scripts/broomva_paths.py, scripts/lib/broomva-paths.sh, and
+# scripts/lib/broomva_paths.rs, which Maestro vendors), and each carries
 # this file's sha256 so `bstack doctor` can tell a stale reader.
 #
 # Three scopes:

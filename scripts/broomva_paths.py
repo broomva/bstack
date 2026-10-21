@@ -65,7 +65,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
-REGISTRY_SHA256 = "9172b7757d13f9c0412599e63f29691142e1f3d46c11fb5d068e02a17647e5ac"
+REGISTRY_SHA256 = "13283b88b8ead3a05ae11b8467405c2d428c9ba15cc7e3952773414ebd11ffb8"
 
 REPO_DIR = ".broomva"
 REPO_LEGACY_DIR = ".control"
