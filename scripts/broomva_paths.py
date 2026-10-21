@@ -339,7 +339,9 @@ def workspace_root() -> Path:
 
 def _git(args: List[str]) -> subprocess.CompletedProcess:
     env = {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_WORK_TREE")}
-    return subprocess.run(["git", *args], capture_output=True, text=True, timeout=GIT_TIMEOUT, check=False, env=env)
+    # UTF-8 whatever the locale: git prints paths as bytes, and the shell and Rust readers read UTF-8.
+    return subprocess.run(["git", *args], capture_output=True, encoding="utf-8", timeout=GIT_TIMEOUT, check=False,
+                          env=env)
 
 
 def _exists(path: Path) -> bool:
@@ -413,9 +415,10 @@ def _toplevel(target: Path) -> Optional[Path]:
         out = _git(["-C", str(directory), "rev-parse", "--show-toplevel"])
     except (OSError, subprocess.SubprocessError) as e:
         raise TreeReadError(f"git could not run: {e}") from e
-    if out.returncode != 0 or not out.stdout.strip():
+    printed = out.stdout[:-1] if out.stdout.endswith("\n") else out.stdout  # a name may end in a space
+    if out.returncode != 0 or not printed:
         return None
-    top = Path(out.stdout.strip())
+    top = Path(printed)
     try:
         at_home = os.path.samefile(top, _home())  # the same folder, whatever its case or links
     except OSError:

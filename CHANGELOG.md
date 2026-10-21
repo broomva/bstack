@@ -10,21 +10,29 @@ the `.control/` fallback from the same table instead of a hand-kept list. It is 
 `scripts/broomva_paths.py`: the same tables and scopes, the migration rule on disk and in a git tree,
 the containment checks, the repo-root rules, `repo_key` (with its own sha256) and the error kinds
 (`UnknownName`, `Invalid` for ValueError, `TreeRead`, `Layout`, `Io`; absent is `Ok(None)`). It
-carries the table's sha256 and is formatted as Maestro formats (`max_width = 120`), so a vendored
-copy passes `cargo fmt --check` and `cargo clippy -D warnings`. It differs in three stated ways:
-Unix only, three C calls std already links (`getuid`, `getpwuid_r`, `access`), and non-UTF-8 paths
-are refused.
+carries the table's sha256, is `#![forbid(unsafe_code)]` (Maestro's workspace lints forbid it) and is
+formatted as Maestro formats (`max_width = 120`), so a vendored copy passes `cargo fmt --check` and
+`cargo clippy -D warnings`. It differs in stated ways: Unix only; with HOME empty the home is
+`std::env::home_dir()` and the account-name rule (which only the shell reader's `eval` needs) is not
+applied; "searchable" is an lstat of `<folder>/.`; non-UTF-8 paths are refused. Its git calls are
+bounded by the 10 s timeout including the pipes, as Python's `communicate(timeout=…)` is.
+
+Two fixes to the Python reader, found while porting: the git top level keeps a trailing space in a
+folder name (it was `.strip()`ped, so `repo ` resolved to a sibling `repo`; the shell reader was
+already right), and git output is decoded as UTF-8 whatever the locale.
 
 Parity is checked, not asserted: `tests/test_broomva_paths.py` compiles the module with a small
 driver (`tests/fixtures/broomva-paths-rs/main.rs`) and runs the whole suite again with every public
 reader call replayed through it, in the same environment, folder and file state, the moment Python
-answers: 235 calls from 70 of the 95 tests agree on value or error kind (a layout error also on its
+answers: 239 calls from 73 of the 98 tests agree on value or error kind (a layout error also on its
 message), and 10 calls made under a patched table or a mocked password database are listed as
 skipped. The ported helpers (pathlib spelling, `normpath`, `abspath`, `realpath` through links and
-loops, sha256 across padding boundaries) are compared directly. Ten mutants, each removing one
-containment guard (symlinked, file or unsearchable root folder; symlinked or FIFO entry; a
-hard-linked owner file; `moved()` without its entry check; a committed symlink as root or entry;
-a repo at `$HOME`), are each killed by the replay. `--check` and doctor §30 cover the Rust reader
+loops, sha256 across padding boundaries) are compared directly. Thirteen mutants, each removing one
+guard (symlinked, file or unsearchable root folder; symlinked or FIFO entry; a hard-linked owner
+file; `moved()` without its entry check; a committed symlink as root or entry; a repo at `$HOME`;
+a dangling new entry falling back to legacy; runtime state without the root-folder check; a top
+level losing its trailing space), are each killed by the replay; three new shared cases hold the
+last three for every reader. `--check` and doctor §30 cover the Rust reader
 like the other two (a stale or missing reader is a gap; with Python < 3.11 its hash is compared).
 
 ## 0.49.0 — 2026-10-20

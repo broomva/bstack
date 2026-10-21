@@ -1179,6 +1179,35 @@ class Round5(Tmp):
 
 
 
+class Round6(Tmp):
+    """Cases the Rust reader's review found the suite did not hold (BRO-3265)."""
+
+    def test_a_dangling_new_entry_is_refused_even_beside_a_real_legacy_one(self) -> None:
+        repo = self.tmp / "r"
+        (repo / ".control").mkdir(parents=True)
+        (repo / ".control" / "policy.yaml").write_text("x\n")
+        (repo / ".broomva").mkdir()
+        (repo / ".broomva" / "policy.yaml").symlink_to("nowhere")
+        with self.assertRaises(bp.LayoutError):
+            bp.repo_path("policy", repo)
+        self.assertEqual(sh(f'broomva_repo_path policy "{repo}"').returncode, 3)
+
+    def test_runtime_state_refuses_a_symlinked_legacy_root(self) -> None:
+        repo, outside = self.tmp / "r", self.tmp / "outside"
+        (outside / "audit").mkdir(parents=True)
+        repo.mkdir()
+        (repo / ".control").symlink_to(outside)
+        with self.assertRaises(bp.LayoutError):
+            bp.repo_path("audit", repo)
+        self.assertEqual(sh(f'broomva_repo_path audit "{repo}"').returncode, 3)
+
+    def test_a_top_level_whose_name_ends_in_a_space_is_itself(self) -> None:
+        spaced, plain = make_repo(self.tmp / "repo "), make_repo(self.tmp / "repo")
+        self.assertEqual(bp.repo_root(spaced), spaced)
+        self.assertEqual(bp.repo_root(plain), plain)
+        self.assertEqual(sh(f'broomva_repo_root "{spaced}"').stdout, f"{spaced}\n")
+
+
 # ── The Rust reader (BRO-3265) ───────────────────────────────────────────────
 # scripts/lib/broomva_paths.rs is compiled with a small driver (one reader call per
 # process) and every public reader call the suite above makes is replayed through it,
@@ -1203,7 +1232,8 @@ def build_rust_reader(source: str, out: Path, strict: bool = True) -> Path:
     shutil.copy(RS_DRIVER, out / "main.rs")
     binary = out / "reader"
     # Maestro builds with edition 2024 and -D warnings; so does this.
-    flags = ["-D", "warnings"] if strict else []
+    # -F unsafe_code: Maestro's workspace lints forbid it, so a vendored copy must not need it.
+    flags = ["-D", "warnings", "-F", "unsafe_code"] if strict else []
     done = subprocess.run([rustc, "--edition", "2024", *flags, "-o", str(binary), str(out / "main.rs")],
                           capture_output=True, text=True)
     if done.returncode != 0:
@@ -1423,7 +1453,7 @@ class RustReader(unittest.TestCase):
 
 
 class RustReaderMutants(unittest.TestCase):
-    """Each containment guard of the Rust reader, removed, turns the parity run red."""
+    """Each guard of the Rust reader (containment, the repo-root rules), removed, turns the parity run red."""
 
     rust_reader = True
 
@@ -1441,6 +1471,13 @@ class RustReaderMutants(unittest.TestCase):
         ("tree root may be a symlink", '&& !meta.starts_with("040000 ")', "&& false"),
         ("tree entry may be a symlink", 'if !["040000", "100644", "100755"].contains(&mode) {', "if false {"),
         ("a repo at $HOME is a root", "if samefile(&top, &home()?) {", "if false {"),
+        ("a dangling new entry falls back to legacy", "if !legacy || exists(&new)? || lstat(&new)?.is_some() {",
+         "if !legacy || exists(&new)? {"),
+        ("runtime state skips the root-folder check",
+         "        let root = require_root(root)?;\n        contained(&root)?;\n        let new = join(&state_dir_str",
+         "        let root = require_root(root)?;\n        let new = join(&state_dir_str"),
+        ("the top level loses a trailing space", "out.stdout.strip_suffix('\\n').unwrap_or(&out.stdout)",
+         "out.stdout.trim()"),
     )
 
     def test_every_containment_mutant_is_killed(self) -> None:

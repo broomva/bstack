@@ -18,24 +18,27 @@
 //! | any other `OSError`        | `Error::Io`             |
 //! | `None` (absent)            | `Ok(None)`              |
 //!
-//! Where it differs: Unix only (the Python reader imports `pwd`); std only, plus
-//! three C calls std already links (`getuid`, `getpwuid_r`, `access`); and every
-//! path and environment value must be UTF-8 (anything else is `Error::Invalid`,
-//! where Python would carry it as surrogates). Paths come back spelled as pathlib
-//! spells them, so `display()` prints what `str(path)` prints in Python.
+//! Where it differs: Unix only (the Python reader imports `pwd`); std only and no
+//! `unsafe` (Maestro forbids it), so with HOME empty the home is
+//! `std::env::home_dir()` (the password database) and the account-name rule the
+//! shell reader needs for its `eval` is not applied; "searchable" is an lstat of
+//! `<folder>/.` where Python calls `access(X_OK)`; and every path and environment
+//! value must be UTF-8 (anything else is `Error::Invalid`, where Python would carry
+//! it as surrogates). Paths come back spelled as pathlib spells them, so `display()`
+//! prints what `str(path)` prints in Python.
 
 #![cfg(unix)]
+#![forbid(unsafe_code)]
 #![allow(dead_code)]
 
 use std::collections::{HashMap, HashSet};
-use std::ffi::{CStr, CString};
 use std::fmt;
 use std::fs::{self, Metadata};
 use std::io::{self, Read};
-use std::os::raw::{c_char, c_int};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 pub const REGISTRY_SHA256: &str = "13283b88b8ead3a05ae11b8467405c2d428c9ba15cc7e3952773414ebd11ffb8";
@@ -412,74 +415,9 @@ fn same(a: &str, b: &str) -> bool {
     normpath(a) == normpath(b) || samefile(a, b)
 }
 
-unsafe extern "C" {
-    fn access(path: *const c_char, mode: c_int) -> c_int;
-    fn getuid() -> u32;
-    fn getpwuid_r(uid: u32, pwd: *mut Passwd, buf: *mut c_char, buflen: usize, result: *mut *mut Passwd) -> c_int;
-}
-
-/// `os.access(p, os.X_OK)`.
+/// `os.access(p, os.X_OK)` for a folder: whether a name inside it can be looked up.
 fn searchable(p: &str) -> bool {
-    match CString::new(p) {
-        Ok(c) => unsafe { access(c.as_ptr(), 1) == 0 },
-        Err(_) => false,
-    }
-}
-
-// struct passwd, as the platform's <pwd.h> lays it out.
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-#[repr(C)]
-struct Passwd {
-    pw_name: *mut c_char,
-    pw_passwd: *mut c_char,
-    pw_uid: u32,
-    pw_gid: u32,
-    pw_change: i64,
-    pw_class: *mut c_char,
-    pw_gecos: *mut c_char,
-    pw_dir: *mut c_char,
-    pw_shell: *mut c_char,
-    pw_expire: i64,
-}
-#[cfg(any(target_os = "linux", target_os = "android"))]
-#[repr(C)]
-struct Passwd {
-    pw_name: *mut c_char,
-    pw_passwd: *mut c_char,
-    pw_uid: u32,
-    pw_gid: u32,
-    pw_gecos: *mut c_char,
-    pw_dir: *mut c_char,
-    pw_shell: *mut c_char,
-}
-#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux", target_os = "android")))]
-compile_error!("broomva_paths.rs knows struct passwd on macOS, iOS, Linux and Android only");
-
-/// The account's (name, home) from the password database, or None.
-fn account() -> Option<(String, String)> {
-    let mut size = 1024usize;
-    loop {
-        let mut buf = vec![0 as c_char; size];
-        let mut pwd = std::mem::MaybeUninit::<Passwd>::zeroed();
-        let mut result: *mut Passwd = std::ptr::null_mut();
-        // SAFETY: buf outlives every pointer getpwuid_r stores into pwd.
-        let rc = unsafe { getpwuid_r(getuid(), pwd.as_mut_ptr(), buf.as_mut_ptr(), size, &mut result) };
-        if rc == 34 /* ERANGE */ && size < 1 << 20 {
-            size *= 4;
-            continue;
-        }
-        if rc != 0 || result.is_null() {
-            return None;
-        }
-        // SAFETY: result points at pwd, filled in; its strings live in buf.
-        let pwd = unsafe { pwd.assume_init() };
-        if pwd.pw_name.is_null() || pwd.pw_dir.is_null() {
-            return None;
-        }
-        let name = unsafe { CStr::from_ptr(pwd.pw_name) }.to_str().ok()?.to_string();
-        let dir = unsafe { CStr::from_ptr(pwd.pw_dir) }.to_str().ok()?.to_string();
-        return Some((name, dir));
-    }
+    fs::symlink_metadata(format!("{p}/.")).is_ok()
 }
 
 // ── Roots ────────────────────────────────────────────────────────────────────
@@ -490,18 +428,11 @@ fn home() -> Result<String> {
     let home = match value.as_deref() {
         Some(v) if !v.is_empty() => pl(v),
         _ => {
-            let (name, dir) = account().ok_or_else(|| {
+            // HOME is unset or empty, so home_dir() reads the password database.
+            let dir = std::env::home_dir().ok_or_else(|| {
                 Error::Invalid("HOME is empty and this account has no home in the password database".into())
             })?;
-            let first = name.chars().next();
-            let ok = matches!(first, Some(c) if c.is_ascii_alphabetic() || c == '_')
-                && name.chars().all(|c| c.is_ascii_alphanumeric() || "._@-".contains(c));
-            if !ok {
-                return Err(Error::Invalid(format!(
-                    "HOME is empty and the account name {name:?} cannot be used to find a home"
-                )));
-            }
-            pl(&dir)
+            pl(&path_str(&dir)?)
         }
     };
     if !home.starts_with('/') {
@@ -601,19 +532,22 @@ fn git(args: &[&str]) -> std::result::Result<GitOut, GitError> {
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| GitError::Run(e.to_string()))?;
-    let mut out_pipe = child.stdout.take().expect("piped");
-    let mut err_pipe = child.stderr.take().expect("piped");
-    let out_reader = std::thread::spawn(move || {
-        let mut v = Vec::new();
-        let _ = out_pipe.read_to_end(&mut v);
-        v
-    });
-    let err_reader = std::thread::spawn(move || {
-        let mut v = Vec::new();
-        let _ = err_pipe.read_to_end(&mut v);
-        v
-    });
+    // The deadline covers the pipes too, as Python's communicate(timeout) does: a
+    // process git leaves behind can hold them open after git itself exits.
     let deadline = Instant::now() + GIT_TIMEOUT;
+    let timed_out = || GitError::Run(format!("git timed out after {} s", GIT_TIMEOUT.as_secs()));
+    let (out_tx, out_rx) = mpsc::channel();
+    let (err_tx, err_rx) = mpsc::channel();
+    for (mut pipe, tx) in [
+        (Box::new(child.stdout.take().expect("piped")) as Box<dyn Read + Send>, out_tx),
+        (Box::new(child.stderr.take().expect("piped")), err_tx),
+    ] {
+        std::thread::spawn(move || {
+            let mut v = Vec::new();
+            let _ = pipe.read_to_end(&mut v);
+            let _ = tx.send(v);
+        });
+    }
     let status = loop {
         match child.try_wait() {
             Ok(Some(s)) => break s,
@@ -621,13 +555,14 @@ fn git(args: &[&str]) -> std::result::Result<GitOut, GitError> {
             Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(GitError::Run(format!("git timed out after {} s", GIT_TIMEOUT.as_secs())));
+                return Err(timed_out());
             }
             Err(e) => return Err(GitError::Run(e.to_string())),
         }
     };
-    let stdout = out_reader.join().unwrap_or_default();
-    let stderr = err_reader.join().unwrap_or_default();
+    let left = || deadline.saturating_duration_since(Instant::now());
+    let stdout = out_rx.recv_timeout(left()).map_err(|_| timed_out())?;
+    let stderr = err_rx.recv_timeout(left()).map_err(|_| timed_out())?;
     Ok(GitOut { code: status.code(), stdout: text(stdout)?, stderr: text(stderr)? })
 }
 
@@ -763,11 +698,12 @@ fn toplevel(target: &str) -> Result<Option<String>> {
         Err(GitError::Run(m)) => return Err(Error::TreeRead(format!("git could not run: {m}"))),
         Err(GitError::Decode) => return Err(Error::Invalid("git output is not UTF-8".into())),
     };
-    let trimmed = out.stdout.trim();
-    if out.code != Some(0) || trimmed.is_empty() {
+    // Only git's newline is dropped: a folder name may end in a space.
+    let printed = out.stdout.strip_suffix('\n').unwrap_or(&out.stdout);
+    if out.code != Some(0) || printed.is_empty() {
         return Ok(None);
     }
-    let top = pl(trimmed);
+    let top = pl(printed);
     if samefile(&top, &home()?) {
         return Ok(None); // a git repo at $HOME would make the repo and machine scopes coincide
     }
