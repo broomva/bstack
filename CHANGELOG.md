@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.50.1 — 2026-10-23
+## 0.51.0 — 2026-10-23
 
 ### fix(ask_ledger): sync the vendored `scripts/ask_ledger.py` to broomva/workspace@1e4de23a6 (BRO-3410)
 
@@ -13,7 +13,17 @@ ran the hook. The file is now the workspace's, byte for byte, plus marked `BSTAC
 the workspace's `file` and `archive` verbs, the decision-layer, rich-ask and ideas validation, and exit
 code 75 for a busy lock. `bstack asks` still exposes validate, lanes, open and decisions only.
 
-- `tests/test_ask_ledger.py`: the old pin hashed one vendored block; the new one strips the
+### Migration
+
+- `validate` is stricter (hence a minor version): an open ask raised on or after 2026-09-21 must carry the
+  decision layer (headline, stakes, why_you, options), as the workspace already required. A ledger that
+  passed 0.50.0 can fail now; `validate` names each ask and the missing field.
+- `archive` (reachable as `python3 scripts/ask_ledger.py archive`, not through `bstack asks`) keeps the
+  workspace's defaults: a bare `#N` liveness ref means broomva/workspace#N, and the log is
+  `~/.config/broomva/ask-archive.jsonl`. Outside broomva/workspace write refs as `owner/repo#N`.
+
+- `tests/test_ask_ledger.py`: every test takes the §5.5 lock under a scratch `MAESTRO_PASEO_ASK_LOCKS`
+  (an autouse fixture), never the live lock root. The old pin hashed one vendored block; the new one strips the
   `BSTACK-ONLY` text and requires the workspace file's sha256, so an unmarked edit or a resync that
   forgets the pin goes red offline (with a positive control). Two hook-path tests run the script as
   the hook does (`python3 -I … stamp`): a stamp, with or without `--force` or `--ask`, leaves a Maestro

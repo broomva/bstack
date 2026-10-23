@@ -29,6 +29,14 @@ from ask_ledger import (  # noqa: E402
 )
 
 
+
+@pytest.fixture(autouse=True)
+def _scratch_lock_root(tmp_path, monkeypatch):
+    """Every writer takes the §5.5 lock under MAESTRO_PASEO_ASK_LOCKS, else the live
+    ~/.local/state/control-asks/locks Maestro uses: keep the suite out of it."""
+    monkeypatch.setenv("MAESTRO_PASEO_ASK_LOCKS", str(tmp_path / "locks"))
+
+
 def ledger(**overrides):
     base = {
         "arc": "demo",
@@ -1305,7 +1313,6 @@ def _run(*argv, **kw):
 
 
 def test_a_hook_stamp_leaves_a_maestro_origin_alone(tmp_path, monkeypatch):
-    monkeypatch.setenv("MAESTRO_PASEO_ASK_LOCKS", str(tmp_path / "locks"))
     f = tmp_path / "l.yaml"
     f.write_text(_MAESTRO_LEDGER)
     maestro = {"via": "maestro", "session": "s-1", "verified": False}
@@ -1322,7 +1329,6 @@ def test_a_hook_stamp_leaves_a_maestro_origin_alone(tmp_path, monkeypatch):
 
 def test_a_hook_stamp_waits_on_the_spec_lock_and_exits_75(tmp_path, monkeypatch):
     import ask_ledger as _al
-    monkeypatch.setenv("MAESTRO_PASEO_ASK_LOCKS", str(tmp_path / "locks"))
     f = tmp_path / "l.yaml"
     f.write_text(_MAESTRO_LEDGER.replace("    origin:\n      via: maestro\n      session: s-1\n      verified: false\n", ""))
     before = f.read_text()
