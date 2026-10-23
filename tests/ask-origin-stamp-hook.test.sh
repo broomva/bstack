@@ -24,6 +24,8 @@ echo "── ask-origin-stamp-hook (BRO-2918) ───────────�
 command -v python3 >/dev/null 2>&1 || { echo "  [FAIL] python3 not available"; exit 1; }
 
 TW=$(mktemp -d)
+# Every stamp takes the §5.5 lock: under the scratch tree, never the live lock root.
+export MAESTRO_PASEO_ASK_LOCKS="$TW/locks"
 trap 'rm -rf "$TW"' EXIT
 mkdir -p "$TW/.control/asks"
 (cd "$TW" && git init -q)

@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.51.0 — 2026-10-23
+
+### fix(ask_ledger): sync the vendored `scripts/ask_ledger.py` to broomva/workspace@1e4de23a6 (BRO-3410)
+
+The PostToolUse hook `ask-origin-stamp-hook.sh` runs this copy, which predated workspace#1114
+(BRO-3406). Its `stamp` took only the flock, so it could race an owner's answer (the Paseo plugin and
+Maestro take the control-interface spec's §5.5 mkdir lock). It also overwrote an unverified Maestro
+origin (`{via: maestro, session, verified: false}`), routing the owner's answer to whichever session
+ran the hook.
+
+The file is now the workspace's, byte for byte, plus marked `BSTACK-ONLY` blocks and lines:
+
+- the `python3 -I` import shim;
+- the directory sweep (`validate --all`, `open --all`);
+- `archive` refused (exit 2);
+- a ledger under `.broomva/asks` resolving its repo (upstream: BRO-3413).
+
+So bstack also gains the workspace's `file` verb, the decision-layer, rich-ask and ideas validation, and
+exit code 75 for a busy lock. `bstack asks` still exposes validate, lanes, open and decisions only.
+
+- `tests/test_ask_ledger.py`:
+  - Every test takes the §5.5 lock under a scratch `MAESTRO_PASEO_ASK_LOCKS` (an autouse fixture), never
+    the live lock root.
+  - The old pin hashed one vendored block. The new one strips the `BSTACK-ONLY` text and requires the
+    workspace file's sha256, so an unmarked edit, or a resync that forgets the pin, goes red offline (with
+    a positive control).
+  - Hook-path tests run the script as the hook does (`python3 -I … stamp`). A stamp, with or without
+    `--force` or `--ask`, leaves a Maestro origin alone; only `--ask A --force` replaces it. A stamp under
+    a held §5.5 lock exits 75 and writes nothing. `archive` is refused and writes nothing. Both asks homes
+    resolve their repo.
+- Checked once by hand, not in CI: the workspace's own suite (`scripts/test_ask_ledger.py` at 1e4de23a6)
+  passes against this file, except its tests that read the workspace's shipped
+  `.control/` ledgers and `test_stamp_and_archive_exit_75_on_a_busy_lock`, whose `archive` half bstack
+  now refuses.
+- `.broomva/asks` support is the ledger's own repo resolution only: the stamp hook's filter and the
+  `--preauth` default still name `.control/` (the migration, BRO-3216/BRO-3413).
+
+### Migration
+
+- `validate` is stricter, hence a minor version. An open ask raised on or after 2026-09-21 must carry the
+  decision layer (headline, stakes, why_you, options), as the workspace already required. A ledger that
+  passed 0.50.0 can fail now; `validate` names each ask and the missing field.
+- `archive` exits 2 in bstack. The workspace's copy reads a bare `#N` as broomva/workspace#N, so in any
+  other repo a merged workspace PR could retire a live ask. Run it from broomva/workspace.
+
 ## 0.50.0 — 2026-10-21
 
 ### feat(references): the path registry in Rust — `scripts/lib/broomva_paths.rs` (BRO-3265)
