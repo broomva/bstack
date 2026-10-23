@@ -604,6 +604,7 @@ def repo_of(path: Path | None) -> Path | None:
     if path is None:
         return None
     parent = path.resolve().parent
+    if parent.name == "asks" and parent.parent.name == ".broomva": return parent.parent.parent  # BSTACK-ONLY  # noqa: E701
     if parent.name == "asks" and parent.parent.name == ".control":
         return parent.parent.parent
     return _UNKNOWN_REPO
@@ -2463,6 +2464,14 @@ def _log_archive(path: Path, doomed: list[tuple[str, str]], stamp: str) -> None:
 
 
 # --- BSTACK-ONLY: `validate --all` / `open --all` -----------------------------
+def _archive_refused() -> int:
+    """`archive` is broomva/workspace's: it reads a bare `#N` as broomva/workspace#N and logs under
+    ~/.config/broomva. Outside that repo it could retire a live ask, so bstack does not run it."""
+    print("error: archive runs from broomva/workspace's scripts/ask_ledger.py, not bstack's "
+          "(a bare #N there means broomva/workspace#N)", file=sys.stderr)
+    return 2
+
+
 def _add_sweep_flags(v, o) -> None:
     v.add_argument("--all", action="store_true",
                    help="treat the path as a directory and validate every ledger in it")
@@ -2577,6 +2586,7 @@ def main(argv: list[str] | None = None) -> int:
 
     args = ap.parse_args(argv)
     if getattr(args, "all", False): return _sweep_cmd(args)  # BSTACK-ONLY  # noqa: E701
+    if args.cmd == "archive": return _archive_refused()  # BSTACK-ONLY  # noqa: E701
     try:
         ledger = load(args.ledger)
     except LedgerError as e:

@@ -1340,6 +1340,28 @@ def test_a_hook_stamp_waits_on_the_spec_lock_and_exits_75(tmp_path, monkeypatch)
     assert r.returncode == 0 and yaml.safe_load(f.read_text())["asks"][0]["origin"]["agent_id"] == "hook"
 
 
+def test_archive_is_refused_in_bstack(tmp_path):
+    """archive resolves a bare #N against broomva/workspace: in any other repo a merged workspace PR
+    would retire a live ask (P20 r1 Stratum A on bstack#145). bstack refuses it and writes nothing."""
+    f = tmp_path / "l.yaml"
+    f.write_text(_MAESTRO_LEDGER.replace("    ask: Merge PR 402\n", "    ask: Merge PR 402\n    archived_reason: x\n"))
+    before = f.read_text()
+    r = _run("archive", str(f), "--apply")
+    assert (r.returncode, "runs from broomva/workspace" in r.stderr) == (2, True), r.stderr
+    assert f.read_text() == before
+    # The control: the other writers still run.
+    assert _run("validate", str(f)).returncode in (0, 1)
+
+
+@pytest.mark.parametrize("home", [".broomva", ".control"])
+def test_a_ledger_under_either_home_resolves_its_repo(tmp_path, home):
+    """The path registry's home is .broomva/ with .control/ as legacy: both name the repo."""
+    import ask_ledger as _al
+    ledger_path = tmp_path / "repo" / home / "asks" / "arc.yaml"
+    assert _al.repo_of(ledger_path) == (tmp_path / "repo").resolve()
+    assert _al.repo_of(tmp_path / "elsewhere" / "arc.yaml") == _al._UNKNOWN_REPO
+
+
 # ── a duplicate key is an error, not a silent "last one wins" (BRO-3109) ──────
 # Two SRI ledgers carried two `status:` lines, left by answer inserts. PyYAML's safe_load keeps the last one without
 # a word, so `validate` passed them while Maestro refused to read them and their asks vanished from Decisions.
