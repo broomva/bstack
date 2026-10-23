@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.50.1 — 2026-10-23
+
+### fix(ask_ledger): sync the vendored `scripts/ask_ledger.py` to broomva/workspace@1e4de23a6 (BRO-3410)
+
+The PostToolUse hook `ask-origin-stamp-hook.sh` runs this copy, which predated workspace#1114
+(BRO-3406). Its `stamp` took only the flock, so it could race an owner's answer (the Paseo plugin and
+Maestro take the control-interface spec's §5.5 mkdir lock), and it overwrote an unverified Maestro
+origin (`{via: maestro, session, verified: false}`), routing the owner's answer to whichever session
+ran the hook. The file is now the workspace's, byte for byte, plus marked `BSTACK-ONLY` blocks: the
+`python3 -I` import shim and the directory sweep (`validate --all`, `open --all`). So bstack also gains
+the workspace's `file` and `archive` verbs, the decision-layer, rich-ask and ideas validation, and exit
+code 75 for a busy lock. `bstack asks` still exposes validate, lanes, open and decisions only.
+
+- `tests/test_ask_ledger.py`: the old pin hashed one vendored block; the new one strips the
+  `BSTACK-ONLY` text and requires the workspace file's sha256, so an unmarked edit or a resync that
+  forgets the pin goes red offline (with a positive control). Two hook-path tests run the script as
+  the hook does (`python3 -I … stamp`): a stamp, with or without `--force` or `--ask`, leaves a Maestro
+  origin alone (only `--ask A --force` replaces it); a stamp under a held §5.5 lock exits 75 and writes
+  nothing.
+- The workspace's own suite (447 tests) passes against this file except its 3 tests that read the
+  workspace's shipped `.control/` ledgers.
+
 ## 0.50.0 — 2026-10-21
 
 ### feat(references): the path registry in Rust — `scripts/lib/broomva_paths.rs` (BRO-3265)

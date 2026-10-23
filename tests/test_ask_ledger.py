@@ -1226,30 +1226,112 @@ def test_a_partial_miss_is_refused_with_nothing_written(tmp_path):
     assert f.read_text() == text
 
 
-# ── the vendored block must not drift unnoticed (BRO-2918) ──────────────────
+# ── this file is the workspace's, plus marked local changes (BRO-3410) ─────────
 #
-# scripts/ask_ledger.py carries a cross-repo vendored copy of
-# broomva/workspace's _routable/_strip_origin_blocks/stamp_origin/
-# _StrictLoader/_no_dupes/_check_stamp (pinned to a source SHA in the comment
-# above `_routable`). A network fetch of the other repo at test time is the
-# wrong trade for CI (per rustic-rat-f6's review of bstack#130) — this is the
-# offline half instead: hash the block, and an edit to it without updating
-# this constant goes red here, with no network and no auth. An upstream
-# change is still only caught at a deliberate resync, not automatically.
-_VENDORED_BLOCK_SHA256 = "a6a2e3b83367c02c083b553c38283e4334ba1af708a743d0dade2760847103fe"
+# scripts/ask_ledger.py is broomva/workspace's scripts/ask_ledger.py at the commit
+# its provenance block names, plus BSTACK-ONLY blocks and lines (the `python3 -I`
+# import shim and the directory sweep). Stripping them must give that commit's file
+# byte for byte, so any other edit here, or a resync that forgets to move the pin,
+# goes red offline. Pin = `git show <sha>:scripts/ask_ledger.py | shasum -a 256` in
+# broomva/workspace. A newer upstream is still only caught at a deliberate resync.
+_UPSTREAM_SHA = "1e4de23a6000712571d2640e983ea70d4a832af1"
+_UPSTREAM_SHA256 = "20ebf9ac90b1585075a5bb2478e69667053e302900861f316291d1f6f332e6e5"
+_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "ask_ledger.py"
 
 
-def test_the_vendored_stamp_block_has_not_drifted_from_its_pinned_hash():
+def _upstream_of(text: str) -> str:
+    out, skip, shim = [], False, False
+    for line in text.splitlines(keepends=True):
+        if line.startswith("# --- BSTACK-ONLY"):
+            skip, shim = True, "import shim" in line
+            continue
+        if line.startswith("# --- END BSTACK-ONLY"):
+            skip = False
+            if shim:
+                out.append("import yaml\n")
+            continue
+        if skip or "# BSTACK-ONLY" in line:
+            continue
+        out.append(line)
+    return "".join(out)
+
+
+def test_the_script_is_the_pinned_workspace_file_plus_marked_local_changes():
     import hashlib
-    text = (Path(__file__).resolve().parent.parent / "scripts" / "ask_ledger.py").read_text(encoding="utf-8")
-    start = text.index("# VENDORED from broomva/workspace@")
-    end = text.index("# END VENDORED") + len("# END VENDORED")
-    digest = hashlib.sha256(text[start:end].encode("utf-8")).hexdigest()
-    assert digest == _VENDORED_BLOCK_SHA256, (
-        "the vendored stamp block changed without updating _VENDORED_BLOCK_SHA256 "
-        "(and the VENDORED-from comment's source SHA, if this was a deliberate resync "
-        f"from a newer broomva/workspace commit) — got {digest}"
+    text = _SCRIPT.read_text(encoding="utf-8")
+    assert f"broomva/workspace@{_UPSTREAM_SHA[:9]}" in text
+    digest = hashlib.sha256(_upstream_of(text).encode("utf-8")).hexdigest()
+    assert digest == _UPSTREAM_SHA256, (
+        "scripts/ask_ledger.py minus its BSTACK-ONLY blocks is no longer broomva/workspace@"
+        f"{_UPSTREAM_SHA[:9]}: mark a local change BSTACK-ONLY, or move both pins on a resync — got {digest}"
     )
+
+
+def test_the_strip_removes_only_marked_text():
+    """Positive control for the pin: an unmarked edit survives the strip."""
+    text = _SCRIPT.read_text(encoding="utf-8")
+    edited = text.replace("LOCK_STALE_S = 120\n", "LOCK_STALE_S = 121\n", 1)
+    assert edited != text and _upstream_of(edited) != _upstream_of(text)
+    assert "_sweep_cmd" not in _upstream_of(text) and "import site" not in _upstream_of(text)
+
+
+# ── the stamp hook's writer keeps Maestro's origin and takes the §5.5 lock (BRO-3410) ──
+# hooks/ask-origin-stamp-hook.sh runs THIS copy. Before the resync its stamp took only
+# the flock (racing an owner's answer, which takes the mkdir lock) and overwrote an
+# unverified Maestro origin, routing the owner's answer to whichever session ran the hook.
+
+_MAESTRO_LEDGER = """\
+arc: demo
+opened: "2026-10-20T00:00Z"
+tz: America/Bogota
+lanes: [gate]
+asks:
+  - id: A1
+    ask: Merge PR 402
+    class: authority
+    gates: [gate]
+    exhausted: ["read: no prior decision on disk", "preauth: no standing grant covers this"]
+    blocking: false
+    origin:
+      via: maestro
+      session: s-1
+      verified: false
+"""
+
+
+def _run(*argv, **kw):
+    import subprocess
+    return subprocess.run([sys.executable, "-I", str(_SCRIPT), *argv], capture_output=True, text=True, **kw)
+
+
+def test_a_hook_stamp_leaves_a_maestro_origin_alone(tmp_path, monkeypatch):
+    monkeypatch.setenv("MAESTRO_PASEO_ASK_LOCKS", str(tmp_path / "locks"))
+    f = tmp_path / "l.yaml"
+    f.write_text(_MAESTRO_LEDGER)
+    maestro = {"via": "maestro", "session": "s-1", "verified": False}
+    for extra in ([], ["--force"], ["--ask", "A1"]):
+        r = _run("stamp", str(f), "--agent-id", "hook", *extra)
+        assert r.returncode == 0, r.stderr
+        assert yaml.safe_load(f.read_text())["asks"][0]["origin"] == maestro, extra
+    assert f.read_text() == _MAESTRO_LEDGER
+    # Only a forced stamp naming the ask replaces it (the control).
+    r = _run("stamp", str(f), "--agent-id", "owner", "--ask", "A1", "--force")
+    assert r.returncode == 0, r.stderr
+    assert yaml.safe_load(f.read_text())["asks"][0]["origin"]["agent_id"] == "owner"
+
+
+def test_a_hook_stamp_waits_on_the_spec_lock_and_exits_75(tmp_path, monkeypatch):
+    import ask_ledger as _al
+    monkeypatch.setenv("MAESTRO_PASEO_ASK_LOCKS", str(tmp_path / "locks"))
+    f = tmp_path / "l.yaml"
+    f.write_text(_MAESTRO_LEDGER.replace("    origin:\n      via: maestro\n      session: s-1\n      verified: false\n", ""))
+    before = f.read_text()
+    with _al.spec_lock(f):
+        r = _run("stamp", str(f), "--agent-id", "hook")
+        assert (r.returncode, "holds the lock" in r.stderr) == (75, True), r.stderr
+    assert f.read_text() == before
+    r = _run("stamp", str(f), "--agent-id", "hook")
+    assert r.returncode == 0 and yaml.safe_load(f.read_text())["asks"][0]["origin"]["agent_id"] == "hook"
 
 
 # ── a duplicate key is an error, not a silent "last one wins" (BRO-3109) ──────
