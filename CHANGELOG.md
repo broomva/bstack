@@ -30,8 +30,12 @@ exit code 75 for a busy lock. `bstack asks` still exposes validate, lanes, open 
     `--force` or `--ask`, leaves a Maestro origin alone; only `--ask A --force` replaces it. A stamp under
     a held §5.5 lock exits 75 and writes nothing. `archive` is refused and writes nothing. Both asks homes
     resolve their repo.
-- The workspace's own suite passes against this file, except its tests that read the workspace's shipped
-  `.control/` ledgers.
+- Checked once by hand, not in CI: the workspace's own suite (`scripts/test_ask_ledger.py` at 1e4de23a6)
+  passes against this file, except its tests that read the workspace's shipped
+  `.control/` ledgers and `test_stamp_and_archive_exit_75_on_a_busy_lock`, whose `archive` half bstack
+  now refuses.
+- `.broomva/asks` support is the ledger's own repo resolution only: the stamp hook's filter and the
+  `--preauth` default still name `.control/` (the migration, BRO-3216/BRO-3413).
 
 ### Migration
 

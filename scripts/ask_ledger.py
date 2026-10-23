@@ -19,10 +19,11 @@ Spec: docs/specs/2026-08-18-agent-handback-contract.html
 
 # --- BSTACK-ONLY: provenance ------------------------------------------------
 # Synced from broomva/workspace@1e4de23a6 scripts/ask_ledger.py (BRO-3410). Every
-# local change is a BSTACK-ONLY block or line: the `python3 -I` import shim, and
-# the directory sweep (`validate --all`, `open --all`). Resync: copy the workspace
-# file, re-apply them, and move the pin in tests/test_ask_ledger.py, which checks
-# that this file minus them is that commit byte for byte.
+# local change is a BSTACK-ONLY block or line: the `python3 -I` import shim, the
+# directory sweep (`validate --all`, `open --all`), `archive` refused, and repo_of
+# reading `.broomva/asks` (BRO-3413). Resync: copy the workspace file, re-apply
+# them, and move the pin in tests/test_ask_ledger.py, which checks that this file
+# minus them is that commit byte for byte.
 # --- END BSTACK-ONLY ---------------------------------------------------------
 from __future__ import annotations
 
@@ -2463,7 +2464,7 @@ def _log_archive(path: Path, doomed: list[tuple[str, str]], stamp: str) -> None:
         pass  # the stamp in the ledger is the record of note; the log is a convenience
 
 
-# --- BSTACK-ONLY: `validate --all` / `open --all` -----------------------------
+# --- BSTACK-ONLY: `validate --all` / `open --all`, `archive` refused -----------
 def _archive_refused() -> int:
     """`archive` is broomva/workspace's: it reads a bare `#N` as broomva/workspace#N and logs under
     ~/.config/broomva. Outside that repo it could retire a live ask, so bstack does not run it."""

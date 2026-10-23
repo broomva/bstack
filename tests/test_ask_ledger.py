@@ -1238,7 +1238,7 @@ def test_a_partial_miss_is_refused_with_nothing_written(tmp_path):
 #
 # scripts/ask_ledger.py is broomva/workspace's scripts/ask_ledger.py at the commit
 # its provenance block names, plus BSTACK-ONLY blocks and lines (the `python3 -I`
-# import shim and the directory sweep). Stripping them must give that commit's file
+# import shim, the directory sweep, `archive` refused, `.broomva/asks` in repo_of). Stripping them must give that commit's file
 # byte for byte, so any other edit here, or a resync that forgets to move the pin,
 # goes red offline. Pin = `git show <sha>:scripts/ask_ledger.py | shasum -a 256` in
 # broomva/workspace. A newer upstream is still only caught at a deliberate resync.
