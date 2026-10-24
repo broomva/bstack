@@ -1242,8 +1242,8 @@ def test_a_partial_miss_is_refused_with_nothing_written(tmp_path):
 # byte for byte, so any other edit here, or a resync that forgets to move the pin,
 # goes red offline. Pin = `git show <sha>:scripts/ask_ledger.py | shasum -a 256` in
 # broomva/workspace. A newer upstream is still only caught at a deliberate resync.
-_UPSTREAM_SHA = "1e4de23a6000712571d2640e983ea70d4a832af1"
-_UPSTREAM_SHA256 = "20ebf9ac90b1585075a5bb2478e69667053e302900861f316291d1f6f332e6e5"
+_UPSTREAM_SHA = "3e1e37575bbc00dd9dd4c3d4d0876c42aeafe587"
+_UPSTREAM_SHA256 = "943f984c2e14d353d16416e3a5149491fafeaae0629925ce772657b15a9d2241"
 _SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "ask_ledger.py"
 
 
