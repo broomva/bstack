@@ -18,7 +18,7 @@ Spec: docs/specs/2026-08-18-agent-handback-contract.html
 """
 
 # --- BSTACK-ONLY: provenance ------------------------------------------------
-# Synced from broomva/workspace@1e4de23a6 scripts/ask_ledger.py (BRO-3410). Every
+# Synced from broomva/workspace@3e1e37575 scripts/ask_ledger.py (BRO-3410, BRO-3421). Every
 # local change is a BSTACK-ONLY block or line: the `python3 -I` import shim, the
 # directory sweep (`validate --all`, `open --all`), `archive` refused, and repo_of
 # reading `.broomva/asks` (BRO-3413). Resync: copy the workspace file, re-apply
@@ -36,6 +36,7 @@ import os
 import subprocess
 import re
 import secrets
+import stat as stat_mod
 import sys
 import time
 from pathlib import Path
@@ -938,10 +939,32 @@ def _parse_ledger_text(path: Path, text: str) -> dict:
 
 
 def load(path: Path) -> dict:
+    # Opened without blocking and judged by the open fd, so a FIFO (even one swapped in
+    # after a check by name) is refused rather than read with no deadline.
+    # The one boundary: every way the read can fail leaves as a LedgerError, which each
+    # command reports as `error: …` with exit 2, never a traceback (P20 continuation,
+    # workspace#1132: an unreadable or non-UTF-8 ledger traced back).
     try:
-        text = path.read_text(encoding="utf-8")
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
     except FileNotFoundError:
         raise LedgerError(f"no ledger at {path}")
+    except OSError as exc:  # a socket cannot be opened at all; a mode-000 file cannot be read
+        if os.path.exists(path) and not os.path.isfile(path):
+            raise LedgerError(f"{path} is not a regular file")
+        raise LedgerError(f"{path} cannot be read: {exc.strerror or exc}")
+    try:
+        if not stat_mod.S_ISREG(os.fstat(fd).st_mode):  # judged before wrapping: a folder fails to wrap
+            raise LedgerError(f"{path} is not a regular file")
+        with os.fdopen(fd, encoding="utf-8") as fh:
+            fd = -1  # the file object owns it now
+            text = fh.read()
+    except UnicodeDecodeError as exc:
+        raise LedgerError(f"{path} is not UTF-8 text (byte {exc.start})")
+    except OSError as exc:
+        raise LedgerError(f"{path} cannot be read: {exc.strerror or exc}")
+    finally:
+        if fd >= 0:
+            os.close(fd)
     return _parse_ledger_text(path, text)
 
 
@@ -1083,6 +1106,8 @@ def validate(ledger: dict, preauth: dict | None = None,
         for f in REQUIRED_ASK_FIELDS:
             if f not in ask and not (is_idea and f in IDEA_EXEMPT):
                 errs.append(f"{where}: missing field '{f}'")
+        if "ask" in ask and not (isinstance(ask["ask"], str) and ask["ask"].strip()):
+            errs.append(f"{where}: 'ask' must be the question as non-empty text, got {ask['ask']!r}")
         errs.extend(_ask_layer_errors(ask, where, ledger, require_all=require_decision or is_idea))
         errs.extend(validate_answer_words(ask, where))
         errs.extend(validate_rich(ask, where, ledger, repo))
@@ -1716,7 +1741,7 @@ def _lock_stale(d: Path) -> bool:
         return False
     try:
         return not _lock_alive((d / "pid").read_text())
-    except OSError:
+    except (OSError, UnicodeDecodeError):  # an old lock whose pid cannot be read is no holder's
         return True
 
 
@@ -1809,7 +1834,12 @@ class _LockedLedger:
         self.fh, self.still_ours = fh, still_ours
 
     def read(self) -> str:
-        return self.fh.read()
+        try:
+            return self.fh.read()
+        except UnicodeDecodeError as exc:  # the same boundary as load(), for the locked reopen
+            raise LedgerError(f"the ledger is not UTF-8 text (byte {exc.start})")
+        except OSError as exc:
+            raise LedgerError(f"the ledger cannot be read: {exc.strerror or exc}")
 
     def write_all(self, text: str) -> None:
         """Rewrite the ledger in place, if the §5.5 lock is still ours. In place, not by
@@ -1824,6 +1854,48 @@ class _LockedLedger:
         os.fsync(self.fh.fileno())
 
 
+def _open_ledger(path: Path, flags: int) -> int:
+    """An fd on `path`, which must be a regular file with one link (not a symlink, a hard link, a FIFO)."""
+    try:
+        fd = os.open(path, flags | getattr(os, "O_NOFOLLOW", 0))
+    except FileNotFoundError:
+        raise LedgerError(f"no ledger at {path}")
+    except OSError as exc:
+        if path.is_symlink():
+            raise LedgerError(f"{path} is a symlink; write the ledger by its own path. Nothing was written")
+        raise LedgerError(f"could not open {path}: {exc}; nothing was written")
+    st = os.fstat(fd)
+    if not stat_mod.S_ISREG(st.st_mode) or st.st_nlink != 1:
+        os.close(fd)
+        raise LedgerError(f"{path} is not a regular file with one name (links: {st.st_nlink}), so its "
+                          "lock would not be every writer's; nothing was written")
+    return fd
+
+
+def stored_path(path: Path) -> Path:
+    """`path` as the file system stores it: every folder and the name in their stored spelling, links
+    resolved. That is the path the plugin's lockKey sees (Node's realpath returns stored spellings), so
+    a case or Unicode alias of a folder or of the name (`~/Broomva`, `L.yaml`, an NFD `café` on APFS)
+    takes the same §5.5 lock as the path Maestro discovered (P20 rounds 1-2, #1132). macOS gives it for
+    the open file (F_GETPATH); elsewhere `realpath`, which a case-sensitive volume needs no more than."""
+    fd = _open_ledger(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))  # a FIFO must not wait for a writer
+    try:
+        return _fd_path(fd) or Path(os.path.realpath(path))
+    finally:
+        os.close(fd)
+
+
+def _fd_path(fd: int) -> Path | None:
+    """The stored path of an open file (macOS F_GETPATH), or None where the platform has no such call."""
+    try:
+        import fcntl
+        if hasattr(fcntl, "F_GETPATH"):
+            return Path(os.fsdecode(fcntl.fcntl(fd, fcntl.F_GETPATH, bytes(1024)).rstrip(b"\0")))
+    except (ImportError, OSError):
+        pass
+    return None
+
+
 @contextlib.contextmanager
 def _locked_rw(path: Path, wait: float = LOCK_WAIT_S):
     """The ledger opened for read and write under BOTH locks, held until the block
@@ -1833,19 +1905,44 @@ def _locked_rw(path: Path, wait: float = LOCK_WAIT_S):
     place. The file is opened only once the §5.5 lock is held, so the bytes read are
     never an inode the plugin's answer has since renamed over. `fcntl` is
     POSIX-only; without it the flock is skipped rather than raising (a Windows
-    import must not crash a hook)."""
+    import must not crash a hook).
+
+    The §5.5 key names the file by its folder's real path and its own name, so a
+    second name for one file would be a second lock on it: a writer through the
+    alias would not wait for one through the target, and the later rename would
+    drop its ask (Stratum A, BRO-3421). So the lock and the write use the stored
+    path, and a symlink, a hard link or a non-regular file is refused, as the
+    plugin's answer reads only a regular file. The flock is waited for within the
+    same `wait` (a held flock exits 75 too)."""
     try:
         import fcntl
     except ImportError:
         fcntl = None
+    if not (0 <= wait < float("inf")):
+        raise LedgerError(f"the wait must be a finite number of seconds >= 0, got {wait!r}")
+    deadline = time.time() + wait
+    path = stored_path(path)
     with spec_lock(path, wait) as still_ours:
-        try:
-            fh = path.open("r+", encoding="utf-8")
-        except FileNotFoundError:
-            raise LedgerError(f"no ledger at {path}")
+        fh = os.fdopen(_open_ledger(path, os.O_RDWR), "r+", encoding="utf-8")
         with fh:
-            if fcntl is not None:
-                fcntl.flock(fh, fcntl.LOCK_EX)
+            if _fd_path(fh.fileno()) not in (None, path):  # renamed (a case, a folder) since it was keyed
+                raise LockBusy(f"{path} was renamed while its lock was taken; nothing was written")
+            while fcntl is not None:
+                try:
+                    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.time() >= deadline:
+                        raise LockBusy(f"another writer holds the flock on {path}; nothing was written")
+                    time.sleep(0.05)
+            # A flock-only writer may have renamed a new file over the path while this one waited.
+            try:
+                now = os.stat(path, follow_symlinks=False)
+            except FileNotFoundError:
+                now = None
+            held = os.fstat(fh.fileno())
+            if now is None or (now.st_dev, now.st_ino) != (held.st_dev, held.st_ino):
+                raise LockBusy(f"{path} was replaced or removed while its flock was awaited; nothing was written")
             yield _LockedLedger(fh, still_ours)
 
 
@@ -2531,6 +2628,17 @@ def _sweep_cmd(args) -> int:
 
 
 # --- END BSTACK-ONLY ---------------------------------------------------------
+def _seconds(raw: str) -> float:
+    """A finite, non-negative --wait: `nan` never reaches a deadline and `inf` is no bound (P20 r2, #1132)."""
+    try:
+        value = float(raw)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a number of seconds: {raw!r}")
+    if not (0 <= value < float("inf")):
+        raise argparse.ArgumentTypeError(f"must be a finite number of seconds >= 0, got {raw!r}")
+    return value
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -2577,7 +2685,7 @@ def main(argv: list[str] | None = None) -> int:
     fi.add_argument("--json", required=True, help="a file holding the ask as JSON, or - for stdin")
     fi.add_argument("--maestro-session", default=None,
                     help="record Maestro's unverified origin {via: maestro, session, verified: false}")
-    fi.add_argument("--wait", type=float, default=FILE_WAIT_S, help="seconds to wait for the ledger's lock")
+    fi.add_argument("--wait", type=_seconds, default=FILE_WAIT_S, help="seconds to wait for the ledger's lock")
 
     ar = sub.add_parser("archive", help="retire asks that reality already answered")
     ar.add_argument("ledger", type=Path)
@@ -2718,7 +2826,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "open":
         for a in open_asks(ledger):
-            print(f"{a.get('id')}\t{a.get('class')}\t{a.get('unblocks','?')}\t{a.get('ask','')[:100]}")
+            print(f"{a.get('id')}\t{a.get('class')}\t{a.get('unblocks','?')}\t{str(a.get('ask') or '')[:100]}")
         return 0
     return 0
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.51.1 — 2026-10-24
+
+### Fix: resync the vendored ask_ledger.py to broomva/workspace@3e1e37575 (BRO-3421)
+
+- The live stamp hook's copy gains the workspace hardening from https://github.com/broomva/workspace/pull/1132: writers open with `O_NOFOLLOW` and refuse symlinks, hard links and non-regular files; the §5.5 lock and write key on the open fd's stored path (matching the Maestro plugin's realpath key); the legacy flock is taken within a finite `--wait`; a ledger replaced during the flock wait exits 75; `load()` is the one read boundary (a FIFO, folder, socket, mode-000 or non-UTF-8 ledger exits 2, never a traceback); a non-text `ask` is a validate error.
+- Local BSTACK-ONLY blocks are unchanged. `tests/test_ask_ledger.py` pins the new upstream sha and sha256.
+
 ## 0.51.0 — 2026-10-23
 
 ### fix(ask_ledger): sync the vendored `scripts/ask_ledger.py` to broomva/workspace@1e4de23a6 (BRO-3410)
