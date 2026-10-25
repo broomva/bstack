@@ -14,6 +14,24 @@ cd bstack
 
 > Want just the primitives primer for an agent (no CLI)? `npx skills add broomva/skills --skill bstack`.
 
+## Three wrappers
+
+Same disciplines, three install paths. Full steps, including where the Cursor skills live, are in [docs/cursor-plugin.md](docs/cursor-plugin.md).
+
+| Host | Manifest | Install |
+|---|---|---|
+| **Cursor** | `.cursor-plugin/plugin.json` | Copy this repo to `~/.cursor/plugins/local/bstack` (local install until a marketplace listing exists). Skills and an opt-in hard-gate rule. Claude hooks stay in `hooks/hooks.json`. |
+| **Claude Code** | `.claude-plugin/plugin.json` | Install this repo as a Claude Code plugin. Hooks in `hooks/hooks.json` use `${CLAUDE_PLUGIN_ROOT}`. |
+| **Skills CLI** (Codex and the other agents that CLI supports) | companions live in **broomva/skills** | `npx skills add broomva/skills --skill <name>`. The companions are the script-bearing copies; this repo's root `SKILL.md` is only the partial-install warning. |
+
+```bash
+# Cursor, local (then reload the window)
+git clone https://github.com/broomva/bstack.git
+mkdir -p ~/.cursor/plugins/local
+rm -rf ~/.cursor/plugins/local/bstack
+cp -a bstack ~/.cursor/plugins/local/bstack
+```
+
 ## The twenty primitives
 
 Each primitive closes one specific failure mode that drifts into entropy in unsupervised agent sessions.

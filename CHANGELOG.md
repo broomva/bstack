@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.51.2 — 2026-10-25
+
+### feat(cursor): an opt-in Cursor plugin beside the Claude plugin
+
+bstack can be installed in Cursor the way a local Cursor plugin is installed. Existing Claude Code installs are unchanged: this is an additive, non-default surface, so the bump is a patch.
+
+- `.cursor-plugin/plugin.json` names the plugin `bstack` (version matches `VERSION`). Skills and rules are explicit paths under `cursor-plugin/`, not a top-level `skills/` directory, so `npx skills add broomva/bstack` does not start offering them. The script-bearing companions stay `npx skills add broomva/skills --skill <name>`.
+- `"hooks"` points at `cursor-plugin/hooks.json`, an empty Cursor hooks document. That replaces discovery of `hooks/hooks.json`, which remains the Claude Code map (`${CLAUDE_PLUGIN_ROOT}`). Those hooks are not reformatted and are not loaded into Cursor.
+- Portable Agent Skills: `broomva-workspace`, `kg`, `bookkeeping`, `dogfood`, `cross-review`, `autonomous`, and `setup-bstack`. Host-specific link syntax is gone. Mac checkout notes (`BROOMVA_ROOT=/Volumes/Broomva/home/broomva`, `git --no-optional-locks`) stay.
+- `cursor-plugin/rules/bstack-hard-gates.mdc` ships with `alwaysApply: false`. `/setup-bstack` writes `~/.cursor/rules/bstack.mdc` with `alwaysApply: true` (no force-push to main or master, no `git reset --hard`, human-only merges stay human). It does not set model budgets.
+- Install matrix: [docs/cursor-plugin.md](docs/cursor-plugin.md). Codex uses the skills CLI. Marketplace publish is out of scope.
+- `bstack release tag` and `tests/upgrade-trap-cleanup.test.sh` require `.cursor-plugin/plugin.json` to match `VERSION`, same rule as the Claude manifests (BRO-3200).
+
+`.claude-plugin/plugin.json` and `marketplace.json` move to 0.51.2 with `VERSION`. Their hook wiring is untouched.
+
 ## 0.51.1 — 2026-10-24
 
 ### Fix: resync the vendored ask_ledger.py to broomva/workspace@3e1e37575 (BRO-3421)
