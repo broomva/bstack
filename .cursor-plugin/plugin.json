@@ -1,0 +1,22 @@
+{
+  "name": "bstack",
+  "displayName": "bstack",
+  "version": "0.51.2",
+  "description": "Broomva Stack governance reflexes for Cursor: workspace route, knowledge graph, bookkeeping, dogfood, cross-review, and autonomous delivery. Claude Code hooks stay on the Claude plugin.",
+  "author": {
+    "name": "Broomva"
+  },
+  "homepage": "https://github.com/broomva/bstack",
+  "repository": "https://github.com/broomva/bstack",
+  "license": "MIT",
+  "keywords": [
+    "bstack",
+    "governance",
+    "broomva",
+    "primitives",
+    "skills"
+  ],
+  "skills": "./cursor-plugin/skills/",
+  "rules": "./cursor-plugin/rules/",
+  "hooks": "./cursor-plugin/hooks.json"
+}

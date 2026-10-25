@@ -319,8 +319,9 @@ bstack_release_tag() {
     tag="v${version}"
     # Every manifest that states a version must agree with VERSION (BRO-3200).
     # plugin.json and marketplace.json both sat at 0.41.2 while VERSION moved on.
+    # The Cursor manifest is held to the same rule.
     local manifest manifest_version
-    for manifest in .claude-plugin/plugin.json .claude-plugin/marketplace.json; do
+    for manifest in .claude-plugin/plugin.json .claude-plugin/marketplace.json .cursor-plugin/plugin.json; do
         [ -f "$manifest" ] || continue
         manifest_version="$(python3 -I -c 'import json,sys
 d=json.load(open(sys.argv[1]))

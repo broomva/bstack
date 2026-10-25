@@ -1,0 +1,18 @@
+---
+description: bstack hard gates — no force-push to main or master, no git reset --hard, and human-only merges stay human. On-demand until /setup-bstack copies this to ~/.cursor/rules/bstack.mdc.
+alwaysApply: false
+---
+
+# bstack hard gates
+
+The Claude Code plugin enforces these in PreToolUse. This rule is the reminder on hosts that did not load those hooks. It stays on-demand until `/setup-bstack` writes `~/.cursor/rules/bstack.mdc` with `alwaysApply: true`.
+
+- Do not force-push `main` or `master` (`git push --force`, `git push -f`, and `--force-with-lease`).
+- Do not run `git reset --hard`.
+- Do not merge human-only paths. Leave the merge for a human when the diff touches any of:
+  - `.control/policy.yaml`
+  - settings (`.claude/settings.json`, `.cursor/mcp.json`, `.vscode/settings.json`)
+  - merge-gate or L3 workflows
+  - control hooks (`hooks/`, `scripts/*-hook.sh`)
+  - nested `CLAUDE.md` or `AGENTS.md`
+  - RCS parameters (`.control/rcs-parameters.toml`)

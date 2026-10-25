@@ -56,14 +56,21 @@ LEFT="$(find "$H/tmp" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')"
 
 echo "== every manifest version matches VERSION =="
 V="$(tr -d '[:space:]' < "$BSTACK_REPO/VERSION")"
-for M in plugin.json marketplace.json; do
-  F="$BSTACK_REPO/.claude-plugin/$M"
-  [ -f "$F" ] || continue
+for F in \
+  "$BSTACK_REPO/.claude-plugin/plugin.json" \
+  "$BSTACK_REPO/.claude-plugin/marketplace.json" \
+  "$BSTACK_REPO/.cursor-plugin/plugin.json"
+do
+  REL="${F#"$BSTACK_REPO"/}"
+  if [ ! -f "$F" ]; then
+    bad "missing manifest $REL"
+    continue
+  fi
   MV="$(python3 -I -c 'import json,sys
 d=json.load(open(sys.argv[1]))
 v=d.get("version") or next((p.get("version") for p in d.get("plugins",[]) if isinstance(p,dict) and p.get("version")),"")
 print(v)' "$F")"
-  [ "$MV" = "$V" ] && ok "$M $MV == VERSION $V" || bad "$M $MV != VERSION $V"
+  [ "$MV" = "$V" ] && ok "$REL $MV == VERSION $V" || bad "$REL $MV != VERSION $V"
 done
 
 echo
