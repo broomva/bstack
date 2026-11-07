@@ -31,7 +31,9 @@ codex plugin marketplace add broomva/bstack
 codex plugin add bstack-skills@bstack
 ```
 
-`bstack-skills` follows broomva/skills `main`. For the rest of the monorepo, add its own marketplace: `/plugin marketplace add broomva/skills` (or `codex plugin marketplace add broomva/skills`) (one plugin per category, plus `broomva-skills` with every skill). The plugins do not run `bstack bootstrap`; workspace governance still comes from the clone.
+`bstack-skills` follows broomva/skills `main`. For the rest of the monorepo, add its own marketplace with `/plugin marketplace add broomva/skills` or `codex plugin marketplace add broomva/skills` (one plugin per category, plus `broomva-skills` with every skill). The plugins do not run `bstack bootstrap`; workspace governance still comes from the clone.
+
+If you already ran `bstack bootstrap`, you have these skills under `~/.claude/skills`, so `bstack-skills` would load them a second time. Bootstrap also hand-wires the hooks unless it finds the plugin as `bstack@skills-dir`. Enabling `bstack@bstack` on top of a bootstrapped workspace fires those hooks twice (BRO-1929), so pick one install path.
 
 ## The twenty primitives
 
