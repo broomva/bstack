@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.51.2 — 2026-11-07
+
+### feat(marketplace): `bstack-skills` plugin — the required companion skills as one install (BRO-3627)
+
+- `.claude-plugin/marketplace.json` gains a second plugin, `bstack-skills`. It installs the bstack primer plus every `required: true` entry in `references/companion-skills.yaml` (14 skills) straight from the broomva/skills monorepo (`source: github broomva/skills`, `strict: false`, explicit skill paths). It has no `version`, so it follows broomva/skills `main`.
+- Install: `/plugin marketplace add broomva/bstack`, then `/plugin install bstack-skills@bstack`. For every other skill, broomva/skills is now its own marketplace (`/plugin marketplace add broomva/skills`, broomva/skills#308).
+- `tests/plugin-marketplace.test.sh` keeps the plugin equal to primer ∪ required roster, keeps the `bstack` entry the first versioned plugin at `VERSION` (the one `bstack release tag` reads), proves its own red path, and, when `gh` is authed, resolves every path on broomva/skills `main`.
+
 ## 0.51.1 — 2026-10-24
 
 ### Fix: resync the vendored ask_ledger.py to broomva/workspace@3e1e37575 (BRO-3421)

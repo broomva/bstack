@@ -14,6 +14,18 @@ cd bstack
 
 > Want just the primitives primer for an agent (no CLI)? `npx skills add broomva/skills --skill bstack`.
 
+### Claude Code plugins
+
+The repo is also a Claude Code plugin marketplace (`bstack`) with two plugins:
+
+```bash
+/plugin marketplace add broomva/bstack
+/plugin install bstack@bstack          # P1–P20 hooks + CLI (installed disabled; `claude plugin enable bstack@bstack`)
+/plugin install bstack-skills@bstack   # the primer + every required roster skill, from broomva/skills
+```
+
+`bstack-skills` follows broomva/skills `main`. For the rest of the monorepo, add its own marketplace: `/plugin marketplace add broomva/skills` (one plugin per category, plus `broomva-skills` with every skill). The plugins do not run `bstack bootstrap`; workspace governance still comes from the clone.
+
 ## The twenty primitives
 
 Each primitive closes one specific failure mode that drifts into entropy in unsupervised agent sessions.
