@@ -14,6 +14,27 @@ cd bstack
 
 > Want just the primitives primer for an agent (no CLI)? `npx skills add broomva/skills --skill bstack`.
 
+### Claude Code and Codex plugins
+
+The repo is also a Claude Code plugin marketplace (`bstack`) with two plugins:
+
+```bash
+/plugin marketplace add broomva/bstack
+/plugin install bstack@bstack          # P1–P20 hooks + CLI (installed disabled; `claude plugin enable bstack@bstack`)
+/plugin install bstack-skills@bstack   # the primer + every required roster skill, from broomva/skills
+```
+
+Codex reads `.agents/plugins/marketplace.json`, which offers `bstack-skills` only (the hooks plugin is Claude Code specific):
+
+```bash
+codex plugin marketplace add broomva/bstack
+codex plugin add bstack-skills@bstack
+```
+
+`bstack-skills` follows broomva/skills `main`. For the rest of the monorepo, add its own marketplace with `/plugin marketplace add broomva/skills` or `codex plugin marketplace add broomva/skills` (one plugin per category, plus `broomva-skills` with every skill). The plugins do not run `bstack bootstrap`; workspace governance still comes from the clone.
+
+If you already ran `bstack bootstrap`, you have these skills under `~/.claude/skills`, so `bstack-skills` would load them a second time. Bootstrap also hand-wires the hooks unless it finds the plugin as `bstack@skills-dir`. Enabling `bstack@bstack` on top of a bootstrapped workspace fires those hooks twice (BRO-1929), so pick one install path.
+
 ## The twenty primitives
 
 Each primitive closes one specific failure mode that drifts into entropy in unsupervised agent sessions.
