@@ -131,20 +131,27 @@ else:
 PY
 )
 
-# Remote: every path is a SKILL.md on broomva/skills main.
+# Remote: every path is a SKILL.md on broomva/skills main. One contents lookup
+# per path, not a recursive tree listing: that listing is truncated past
+# GitHub's size limit and would then report present skills as missing.
 REMOTE="${BSTACK_ROSTER_CHECK_REMOTE:-auto}"
 if [ "$REMOTE" != "0" ] && command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-  TREE="$(gh api 'repos/broomva/skills/git/trees/main?recursive=1' --jq '.tree[].path' 2>/dev/null | grep -E '/SKILL\.md$')"
-  if [ -n "$TREE" ]; then
-    MISSING=""
-    for p in $(python3 -I -c 'import json,sys;print(" ".join(next(x for x in json.load(open(sys.argv[1]))["plugins"] if x["name"]=="bstack-skills")["skills"]))' "$MARKET"); do
-      grep -qxF "${p#./}/SKILL.md" <<<"$TREE" || MISSING="$MISSING $p"
-    done
-    if [ -z "$MISSING" ]; then ok "every bstack-skills path resolves on broomva/skills main"; else fail "paths missing on broomva/skills main:$MISSING"; fi
+  MISSING=""; UNREACHABLE=""
+  for p in $(python3 -I -c 'import json,sys;print(" ".join(next(x for x in json.load(open(sys.argv[1]))["plugins"] if x["name"]=="bstack-skills")["skills"]))' "$MARKET"); do
+    out="$(gh api "repos/broomva/skills/contents/${p#./}/SKILL.md?ref=main" --jq .type 2>&1)"
+    if [ "$out" = file ]; then :
+    elif grep -q 'HTTP 404' <<<"$out"; then MISSING="$MISSING $p"
+    else UNREACHABLE="$UNREACHABLE $p"
+    fi
+  done
+  if [ -n "$MISSING" ]; then
+    fail "paths missing on broomva/skills main:$MISSING"
+  elif [ -z "$UNREACHABLE" ]; then
+    ok "every bstack-skills path resolves on broomva/skills main"
   elif [ "$REMOTE" = "1" ]; then
-    fail "remote check required but could not list the broomva/skills tree"
+    fail "remote check required but these paths could not be looked up:$UNREACHABLE"
   else
-    echo "  [skip] remote check: could not list broomva/skills tree"
+    echo "  [skip] remote check incomplete, could not look up:$UNREACHABLE"
   fi
 elif [ "$REMOTE" = "1" ]; then
   fail "remote check required (BSTACK_ROSTER_CHECK_REMOTE=1) but gh is unavailable/unauthed"
