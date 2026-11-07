@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# plugin-marketplace.test.sh — drift-guard for .claude-plugin/marketplace.json (BRO-3627).
+# plugin-marketplace.test.sh — drift-guard for the plugin marketplaces (BRO-3627).
 #
-# The marketplace lists two plugins:
+# .claude-plugin/marketplace.json (Claude Code) lists two plugins:
 #   bstack         — the hooks + CLI plugin; its version must equal VERSION
 #                    (and it must stay the first versioned entry, which is the
 #                    one `bstack release tag` reads — BRO-3200).
@@ -9,6 +9,10 @@
 #                    broomva/skills monorepo by path. Its skill set must equal
 #                    {bstack primer} ∪ {roster entries with required: true}, so a
 #                    roster change that forgets the plugin goes red here.
+#
+# .agents/plugins/marketplace.json (Codex) lists only bstack-skills — the hooks
+# plugin is Claude-specific — and must carry the same skill paths, sourced by
+# git URL from broomva/skills.
 #
 # Offline by default. The remote check (every listed path is a SKILL.md on
 # broomva/skills main) follows roster-monorepo-sync.test.sh: auto when gh is
@@ -18,6 +22,7 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ROSTER="${BSTACK_SKILLS_YAML:-$HERE/references/companion-skills.yaml}"
 MARKET="${BSTACK_MARKETPLACE_JSON:-$HERE/.claude-plugin/marketplace.json}"
+CODEX_MARKET="${BSTACK_CODEX_MARKETPLACE_JSON:-$HERE/.agents/plugins/marketplace.json}"
 
 PASS=0; FAIL=0; FAILED=()
 ok()   { PASS=$((PASS + 1)); echo "  [pass] $1"; }
@@ -95,6 +100,36 @@ if check "$TMP/roster.yaml" "$MARKET" | grep -q $'^fail\tbstack-skills drifted.*
 else
   fail "red path: a new required roster skill was not reported"
 fi
+
+# Codex: same bstack-skills paths, git-URL source, no hooks plugin.
+while IFS=$'\t' read -r verdict msg; do
+  [ -n "$verdict" ] || continue
+  if [ "$verdict" = ok ]; then ok "$msg"; else fail "$msg"; fi
+done < <(python3 -I - "$MARKET" "$CODEX_MARKET" <<'PY'
+import json, sys
+try:
+    claude = json.load(open(sys.argv[1]))
+    codex = json.load(open(sys.argv[2]))
+except Exception as e:
+    print(f"fail\tcodex marketplace does not parse: {e}"); sys.exit()
+names = [p.get("name") for p in codex.get("plugins", [])]
+if names == ["bstack-skills"]:
+    print("ok\tcodex marketplace lists only bstack-skills")
+else:
+    print(f"fail\tcodex marketplace must list only bstack-skills, got {names}")
+    sys.exit()
+c = codex["plugins"][0]
+want = next(p for p in claude["plugins"] if p["name"] == "bstack-skills")["skills"]
+if c.get("skills") == want:
+    print(f"ok\tcodex bstack-skills carries the same {len(want)} paths as the Claude entry")
+else:
+    print("fail\tcodex bstack-skills paths differ from the Claude entry")
+if c.get("source") == {"source": "url", "url": "https://github.com/broomva/skills.git"}:
+    print("ok\tcodex bstack-skills sources broomva/skills by git URL")
+else:
+    print(f"fail\tcodex bstack-skills source must be the broomva/skills git URL, got {c.get('source')}")
+PY
+)
 
 # Remote: every path is a SKILL.md on broomva/skills main.
 REMOTE="${BSTACK_ROSTER_CHECK_REMOTE:-auto}"
