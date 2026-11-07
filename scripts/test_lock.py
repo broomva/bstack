@@ -265,6 +265,30 @@ def _commit_sha(root: str, ref: str) -> str | None:
     return None
 
 
+#: Typed core keys git >= 2.56 reads only when a ref store opens for writing
+#: (refs/files-backend.c files_ref_store_config). Older git parsed them on every
+#: command, so a bad value broke every read and `verify` failed closed for free;
+#: now reads succeed past it and scan() must ask git to type-check them itself.
+_LAZY_CORE_BOOLS = ("core.preferSymlinkRefs", "core.logAllRefUpdates")
+
+
+def _check_lazy_core_config(root: str) -> None:
+    """Raise GitError when a key in _LAZY_CORE_BOOLS holds a value git would
+    reject on its next ref write (BRO-3629). `always` is a valid
+    logAllRefUpdates value that a boolean type check would refuse."""
+    for key in _LAZY_CORE_BOOLS:
+        raw = _git(["config", "--get", key], root)
+        if raw.returncode == 1:  # unset
+            continue
+        if raw.returncode == 0 and key == "core.logAllRefUpdates" \
+                and _text(raw).strip().lower() == "always":
+            continue
+        p = _git(["config", "--type=bool", "--get", key], root)
+        if p.returncode != 0:
+            err = (p.stderr or raw.stderr).decode("utf-8", "replace").strip()
+            raise GitError(f"git config {key} is unreadable: {err or 'exit %d' % p.returncode}")
+
+
 @functools.lru_cache(maxsize=None)
 def _ignorecase(root: str) -> bool:
     p = _git(["config", "--bool", "--get", "core.ignorecase"], root)
@@ -485,6 +509,7 @@ def scan(root: str, base_arg: str | None = None, max_commits: int | None = None,
     """Every in-range commit with its trailers (and, for verify, its changes).
     Any git failure raises GitError: a scan never reports "no locks" because
     git could not answer."""
+    _check_lazy_core_config(root)
     base, source = resolve_base(root, base_arg)
     warnings: list[str] = []
     if _commit_sha(root, "HEAD") is None:  # unborn branch: no history, no locks

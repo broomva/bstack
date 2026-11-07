@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.51.2 — 2026-11-07
+
+### Fix: test-lock `verify` fails closed on a broken ref-write config under git ≥ 2.56 (BRO-3629)
+
+- git 2.56 moved `core.logAllRefUpdates` and `core.preferSymlinkRefs` out of the core config that every command parses. The files and reftable ref backends now read them only when a ref store opens for writing. A bogus value no longer breaks `rev-parse`, `rev-list`, `cat-file` or `diff-tree`, so `verify` and `list` reported `clean` on a repository whose next ref write would fail. That made `ConfigBlindingTests.test_a_broken_config_fails_verify_closed`, and the required `tests/*.test.sh` check, fail on every PR once GitHub's runner image moved to git 2.56.0.
+- `scan()` now type-checks both keys before walking history (`_check_lazy_core_config`) and raises `GitError` (exit 2) on a value git would reject. `always` stays valid for `logAllRefUpdates`.
+- New tests: both keys fail `verify` and `list` closed, and valid values (`always`, `false`, `true`) still verify clean. Verified on git 2.43.0 and on a source-built git 2.56.0. Removing the call makes three cases fail on 2.56.
+
 ## 0.51.1 — 2026-10-24
 
 ### Fix: resync the vendored ask_ledger.py to broomva/workspace@3e1e37575 (BRO-3421)

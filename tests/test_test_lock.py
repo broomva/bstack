@@ -916,6 +916,34 @@ class ConfigBlindingTests(Base):
         self.assertExit(hook, 0)  # the hook fails OPEN, by design; verify is the gate
         self.assertIn("hook error, allowing", hook.stderr)
 
+    def test_lazily_read_core_bools_fail_verify_closed(self):
+        # BRO-3629: git >= 2.56 parses these only on a ref write, so reads
+        # succeed past a bad value; verify must still refuse to say "clean".
+        for key in ("core.logAllRefUpdates", "core.preferSymlinkRefs"):
+            with self.subTest(key=key):
+                self.r.git("config", key, "bogus")
+                try:
+                    for sub in ("verify", "list"):
+                        p = self.r.run(sub)
+                        self.assertExit(p, 2)
+                        self.assertNotIn("clean", p.stdout)
+                        # git < 2.56 fails first, in its own (lowercased) words
+                        self.assertIn(key.lower(), p.stderr.lower())
+                finally:
+                    subprocess.run(["git", "config", "--unset", key], cwd=self.r.root, env=self.r.env())
+
+    def test_valid_lazily_read_core_values_do_not_fail_verify(self):
+        for key, value in (("core.logAllRefUpdates", "always"), ("core.logAllRefUpdates", "false"),
+                           ("core.preferSymlinkRefs", "true")):
+            with self.subTest(key=key, value=value):
+                self.r.git("config", key, value)
+                try:
+                    p = self.r.run("verify")
+                    self.assertExit(p, 0)
+                    self.assertIn("clean", p.stdout)
+                finally:
+                    subprocess.run(["git", "config", "--unset", key], cwd=self.r.root, env=self.r.env())
+
     def test_a_config_git_cannot_read_warns_instead_of_failing_open_silently(self):
         for key in ("core.abbrev", "core.quotepath"):
             with self.subTest(key=key):
