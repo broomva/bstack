@@ -265,6 +265,36 @@ def _commit_sha(root: str, ref: str) -> str | None:
     return None
 
 
+#: Typed core keys git >= 2.56 no longer parses on every command: the ref
+#: backends read logAllRefUpdates/preferSymlinkRefs only when a ref store opens
+#: for writing (refs/files-backend.c files_ref_store_config), and repo-settings.c
+#: reads bigFileThreshold lazily. Older git parsed them eagerly, so a bad value
+#: broke every read and `verify` failed closed for free; now reads succeed past
+#: it and scan() must ask git to type-check them itself (BRO-3629).
+#: (key, git config --type, value-pattern of valid non-typed values to skip)
+_LAZY_CORE_KEYS = (
+    # refs_parse_log_all_ref_updates_config: strcasecmp "always", else a bool
+    ("core.logAllRefUpdates", "bool", "!^[aA][lL][wW][aA][yY][sS]$"),
+    ("core.preferSymlinkRefs", "bool", None),
+    ("core.bigFileThreshold", "int", None),
+)
+
+
+def _check_lazy_core_config(root: str) -> None:
+    """Raise GitError when any occurrence of a _LAZY_CORE_KEYS key, in any
+    config file, holds a value git would reject. Every occurrence, not just
+    the winning one: git's own parsers see each value in turn."""
+    for key, kind, skip in _LAZY_CORE_KEYS:
+        args = ["config", f"--type={kind}", "--get-all", key]
+        if skip:
+            args.append(skip)
+        p = _git(args, root)
+        if p.returncode not in (0, 1):  # 1 = unset, or every value skipped
+            err = p.stderr.decode("utf-8", "replace").strip()
+            raise GitError(f"git config {key} holds a value git rejects: "
+                           f"{err.splitlines()[-1] if err else 'exit %d' % p.returncode}")
+
+
 @functools.lru_cache(maxsize=None)
 def _ignorecase(root: str) -> bool:
     p = _git(["config", "--bool", "--get", "core.ignorecase"], root)
@@ -485,6 +515,7 @@ def scan(root: str, base_arg: str | None = None, max_commits: int | None = None,
     """Every in-range commit with its trailers (and, for verify, its changes).
     Any git failure raises GitError: a scan never reports "no locks" because
     git could not answer."""
+    _check_lazy_core_config(root)
     base, source = resolve_base(root, base_arg)
     warnings: list[str] = []
     if _commit_sha(root, "HEAD") is None:  # unborn branch: no history, no locks
