@@ -5,8 +5,9 @@
 ### Fix: test-lock `verify` fails closed on a broken ref-write config under git ≥ 2.56 (BRO-3629)
 
 - git 2.56 moved `core.logAllRefUpdates` and `core.preferSymlinkRefs` out of the core config that every command parses. The files and reftable ref backends now read them only when a ref store opens for writing. A bogus value no longer breaks `rev-parse`, `rev-list`, `cat-file` or `diff-tree`, so `verify` and `list` reported `clean` on a repository whose next ref write would fail. That made `ConfigBlindingTests.test_a_broken_config_fails_verify_closed`, and the required `tests/*.test.sh` check, fail on every PR once GitHub's runner image moved to git 2.56.0.
-- `scan()` now type-checks both keys before walking history (`_check_lazy_core_config`) and raises `GitError` (exit 2) on a value git would reject. `always` stays valid for `logAllRefUpdates`.
-- New tests: both keys fail `verify` and `list` closed, and valid values (`always`, `false`, `true`) still verify clean. Verified on git 2.43.0 and on a source-built git 2.56.0. Removing the call makes three cases fail on 2.56.
+- `scan()` now type-checks these keys, plus `core.bigFileThreshold` (which `repo-settings.c` now reads lazily), before walking history (`_check_lazy_core_config`). It raises `GitError` (exit 2) on a value git would reject.
+- The check covers every occurrence in every config file, not just the winning one, because git's ref backend parses each value in turn. `always` (any case) stays valid for `logAllRefUpdates`. A user with `logAllRefUpdates = always` in `~/.gitconfig` and the `true` that `git init` writes into each repo still verifies clean, and the PreToolUse hook still blocks edits to locked tests. A bogus earlier value with a later `always` fails closed.
+- New tests: each key fails `verify` and `list` closed; valid values (`always`, `ALWAYS`, `false`, `true`, `512m`) and multi-occurrence sequences still verify clean; and a bad occurrence fails even when a valid one wins. Verified on git 2.43.0 and a source-built git 2.56.0. Mutants are killed: dropping the call fails 5 cases, and dropping the `always` exception fails 4.
 
 ## 0.51.1 — 2026-10-24
 

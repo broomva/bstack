@@ -14,6 +14,7 @@ Run from the repo root:  python3 -m unittest -v tests.test_test_lock
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -916,33 +917,52 @@ class ConfigBlindingTests(Base):
         self.assertExit(hook, 0)  # the hook fails OPEN, by design; verify is the gate
         self.assertIn("hook error, allowing", hook.stderr)
 
-    def test_lazily_read_core_bools_fail_verify_closed(self):
-        # BRO-3629: git >= 2.56 parses these only on a ref write, so reads
-        # succeed past a bad value; verify must still refuse to say "clean".
-        for key in ("core.logAllRefUpdates", "core.preferSymlinkRefs"):
-            with self.subTest(key=key):
-                self.r.git("config", key, "bogus")
-                try:
-                    for sub in ("verify", "list"):
-                        p = self.r.run(sub)
-                        self.assertExit(p, 2)
-                        self.assertNotIn("clean", p.stdout)
-                        # git < 2.56 fails first, in its own (lowercased) words
-                        self.assertIn(key.lower(), p.stderr.lower())
-                finally:
-                    subprocess.run(["git", "config", "--unset", key], cwd=self.r.root, env=self.r.env())
+    @contextlib.contextmanager
+    def _with_config(self, key: str, *values: str):
+        """Set `key` to each value in turn (one occurrence each), run the
+        caller's block, and always unset every occurrence afterwards."""
+        for v in values:
+            self.r.git("config", "--add", key, v)
+        try:
+            yield
+        finally:
+            subprocess.run(["git", "config", "--unset-all", key],
+                           cwd=self.r.root, env=self.r.env())
+
+    def test_lazily_read_core_keys_fail_verify_closed(self):
+        # BRO-3629: git >= 2.56 parses these only on a ref write (or lazily via
+        # repo-settings), so reads succeed past a bad value; verify must still
+        # refuse to say "clean".
+        for key in ("core.logAllRefUpdates", "core.preferSymlinkRefs", "core.bigFileThreshold"):
+            with self.subTest(key=key), self._with_config(key, "bogus"):
+                for sub in ("verify", "list"):
+                    p = self.r.run(sub)
+                    self.assertExit(p, 2)
+                    self.assertNotIn("clean", p.stdout)
+                    # git < 2.56 fails first, in its own (lowercased) words
+                    self.assertIn(key.lower(), p.stderr.lower())
 
     def test_valid_lazily_read_core_values_do_not_fail_verify(self):
-        for key, value in (("core.logAllRefUpdates", "always"), ("core.logAllRefUpdates", "false"),
-                           ("core.preferSymlinkRefs", "true")):
-            with self.subTest(key=key, value=value):
-                self.r.git("config", key, value)
-                try:
-                    p = self.r.run("verify")
-                    self.assertExit(p, 0)
-                    self.assertIn("clean", p.stdout)
-                finally:
-                    subprocess.run(["git", "config", "--unset", key], cwd=self.r.root, env=self.r.env())
+        for key, values in (("core.logAllRefUpdates", ("always",)),
+                            ("core.logAllRefUpdates", ("ALWAYS",)),
+                            ("core.logAllRefUpdates", ("false",)),
+                            ("core.preferSymlinkRefs", ("true",)),
+                            ("core.bigFileThreshold", ("512m",)),
+                            # every occurrence is valid, whichever one wins
+                            ("core.logAllRefUpdates", ("always", "false")),
+                            ("core.logAllRefUpdates", ("true", "always"))):
+            with self.subTest(key=key, values=values), self._with_config(key, *values):
+                p = self.r.run("verify")
+                self.assertExit(p, 0)
+                self.assertIn("clean", p.stdout)
+
+    def test_a_bad_occurrence_fails_verify_even_when_a_valid_one_wins(self):
+        # git's ref backend parses every occurrence, so an earlier bogus value
+        # breaks the next ref write even though the last one is `always`.
+        with self._with_config("core.logAllRefUpdates", "bogus", "always"):
+            p = self.r.run("verify")
+            self.assertExit(p, 2)
+            self.assertNotIn("clean", p.stdout)
 
     def test_a_config_git_cannot_read_warns_instead_of_failing_open_silently(self):
         for key in ("core.abbrev", "core.quotepath"):

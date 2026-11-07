@@ -265,28 +265,34 @@ def _commit_sha(root: str, ref: str) -> str | None:
     return None
 
 
-#: Typed core keys git >= 2.56 reads only when a ref store opens for writing
-#: (refs/files-backend.c files_ref_store_config). Older git parsed them on every
-#: command, so a bad value broke every read and `verify` failed closed for free;
-#: now reads succeed past it and scan() must ask git to type-check them itself.
-_LAZY_CORE_BOOLS = ("core.preferSymlinkRefs", "core.logAllRefUpdates")
+#: Typed core keys git >= 2.56 no longer parses on every command: the ref
+#: backends read logAllRefUpdates/preferSymlinkRefs only when a ref store opens
+#: for writing (refs/files-backend.c files_ref_store_config), and repo-settings.c
+#: reads bigFileThreshold lazily. Older git parsed them eagerly, so a bad value
+#: broke every read and `verify` failed closed for free; now reads succeed past
+#: it and scan() must ask git to type-check them itself (BRO-3629).
+#: (key, git config --type, value-pattern of valid non-typed values to skip)
+_LAZY_CORE_KEYS = (
+    # refs_parse_log_all_ref_updates_config: strcasecmp "always", else a bool
+    ("core.logAllRefUpdates", "bool", "!^[aA][lL][wW][aA][yY][sS]$"),
+    ("core.preferSymlinkRefs", "bool", None),
+    ("core.bigFileThreshold", "int", None),
+)
 
 
 def _check_lazy_core_config(root: str) -> None:
-    """Raise GitError when a key in _LAZY_CORE_BOOLS holds a value git would
-    reject on its next ref write (BRO-3629). `always` is a valid
-    logAllRefUpdates value that a boolean type check would refuse."""
-    for key in _LAZY_CORE_BOOLS:
-        raw = _git(["config", "--get", key], root)
-        if raw.returncode == 1:  # unset
-            continue
-        if raw.returncode == 0 and key == "core.logAllRefUpdates" \
-                and _text(raw).strip().lower() == "always":
-            continue
-        p = _git(["config", "--type=bool", "--get", key], root)
-        if p.returncode != 0:
-            err = (p.stderr or raw.stderr).decode("utf-8", "replace").strip()
-            raise GitError(f"git config {key} is unreadable: {err or 'exit %d' % p.returncode}")
+    """Raise GitError when any occurrence of a _LAZY_CORE_KEYS key, in any
+    config file, holds a value git would reject. Every occurrence, not just
+    the winning one: git's own parsers see each value in turn."""
+    for key, kind, skip in _LAZY_CORE_KEYS:
+        args = ["config", f"--type={kind}", "--get-all", key]
+        if skip:
+            args.append(skip)
+        p = _git(args, root)
+        if p.returncode not in (0, 1):  # 1 = unset, or every value skipped
+            err = p.stderr.decode("utf-8", "replace").strip()
+            raise GitError(f"git config {key} holds a value git rejects: "
+                           f"{err.splitlines()[-1] if err else 'exit %d' % p.returncode}")
 
 
 @functools.lru_cache(maxsize=None)
