@@ -8,24 +8,25 @@
       "name": "bstack-skills",
       "description": "The required bstack companion skills (references/companion-skills.yaml, required: true) plus the bstack primer, installed from the broomva/skills monorepo. Pair with the bstack plugin; for every other skill add the broomva/skills marketplace.",
       "source": {
-        "source": "url",
-        "url": "https://github.com/broomva/skills.git"
+        "source": "git-subdir",
+        "url": "https://github.com/broomva/skills.git",
+        "path": "skills"
       },
       "skills": [
-        "./skills/governance/bstack",
-        "./skills/orchestration/autonomous",
-        "./skills/governance/cross-review",
-        "./skills/governance/dogfood",
-        "./skills/orchestration/role-x",
-        "./skills/governance/agentic-control-kernel",
-        "./skills/governance/harness-engineering-playbook",
-        "./skills/knowledge/kg",
-        "./skills/knowledge/bookkeeping",
-        "./skills/tooling/prompt-library",
-        "./skills/orchestration/p9",
-        "./skills/orchestration/persist",
-        "./skills/research/deep-dive-research-orchestrator",
-        "./skills/tooling/skills-catalog"
+        "./governance/bstack",
+        "./orchestration/autonomous",
+        "./governance/cross-review",
+        "./governance/dogfood",
+        "./orchestration/role-x",
+        "./governance/agentic-control-kernel",
+        "./governance/harness-engineering-playbook",
+        "./knowledge/kg",
+        "./knowledge/bookkeeping",
+        "./tooling/prompt-library",
+        "./orchestration/p9",
+        "./orchestration/persist",
+        "./research/deep-dive-research-orchestrator",
+        "./tooling/skills-catalog"
       ],
       "policy": {
         "installation": "AVAILABLE",

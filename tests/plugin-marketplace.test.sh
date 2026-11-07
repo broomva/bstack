@@ -12,7 +12,7 @@
 #
 # .agents/plugins/marketplace.json (Codex) lists only bstack-skills — the hooks
 # plugin is Claude-specific — and must carry the same skill paths, sourced by
-# git URL from broomva/skills.
+# git-subdir from broomva/skills.
 #
 # Offline by default. The remote check (every listed path is a SKILL.md on
 # broomva/skills main) follows roster-monorepo-sync.test.sh: auto when gh is
@@ -53,21 +53,25 @@ s = plugins.get("bstack-skills")
 if not s:
     print("fail\tno bstack-skills plugin"); sys.exit()
 src = s.get("source") or {}
-if src.get("source") == "github" and src.get("repo") == "broomva/skills" and s.get("strict") is False:
-    print("ok\tbstack-skills sources broomva/skills with strict:false")
+# The source is the manifest-free skills/ subdir: broomva/skills ships its own
+# plugin.json at the repo root, and a strict:false entry over a root that has one
+# fails to load ("conflicting manifests"); Codex likewise rejects the name.
+SUBDIR = {"source": "git-subdir", "url": "https://github.com/broomva/skills.git", "path": "skills"}
+if src == SUBDIR and s.get("strict") is False:
+    print("ok\tbstack-skills sources the broomva/skills skills/ subdir with strict:false")
 else:
-    print("fail\tbstack-skills must source github broomva/skills with strict:false")
+    print(f"fail\tbstack-skills must source {SUBDIR} with strict:false, got {src}")
 if "version" in s:
     print("fail\tbstack-skills must not pin a version (it follows broomva/skills main)")
 else:
     print("ok\tbstack-skills carries no version")
 
 paths = s.get("skills") or []
-bad = [p for p in paths if not (p.startswith("./skills/") and p.count("/") == 3)]
+bad = [p for p in paths if not (p.startswith("./") and p.count("/") == 2)]
 if bad:
-    print(f"fail\tpaths not shaped ./skills/<category>/<name>: {bad}")
+    print(f"fail\tpaths not shaped ./<category>/<name> (relative to skills/): {bad}")
 else:
-    print(f"ok\tall {len(paths)} paths are ./skills/<category>/<name>")
+    print(f"ok\tall {len(paths)} paths are ./<category>/<name>")
 have = sorted(p.rstrip("/").rsplit("/", 1)[-1] for p in paths)
 want = sorted({"bstack"} | {r["name"] for r in roster if r.get("required")})
 if have == want:
@@ -124,10 +128,11 @@ if c.get("skills") == want:
     print(f"ok\tcodex bstack-skills carries the same {len(want)} paths as the Claude entry")
 else:
     print("fail\tcodex bstack-skills paths differ from the Claude entry")
-if c.get("source") == {"source": "url", "url": "https://github.com/broomva/skills.git"}:
-    print("ok\tcodex bstack-skills sources broomva/skills by git URL")
+subdir = {"source": "git-subdir", "url": "https://github.com/broomva/skills.git", "path": "skills"}
+if c.get("source") == subdir:
+    print("ok\tcodex bstack-skills sources the broomva/skills skills/ subdir")
 else:
-    print(f"fail\tcodex bstack-skills source must be the broomva/skills git URL, got {c.get('source')}")
+    print(f"fail\tcodex bstack-skills source must be {subdir}, got {c.get('source')}")
 PY
 )
 
@@ -138,7 +143,7 @@ REMOTE="${BSTACK_ROSTER_CHECK_REMOTE:-auto}"
 if [ "$REMOTE" != "0" ] && command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
   MISSING=""; UNREACHABLE=""
   for p in $(python3 -I -c 'import json,sys;print(" ".join(next(x for x in json.load(open(sys.argv[1]))["plugins"] if x["name"]=="bstack-skills")["skills"]))' "$MARKET"); do
-    out="$(gh api "repos/broomva/skills/contents/${p#./}/SKILL.md?ref=main" --jq .type 2>&1)"
+    out="$(gh api "repos/broomva/skills/contents/skills/${p#./}/SKILL.md?ref=main" --jq .type 2>&1)"
     if [ "$out" = file ]; then :
     elif grep -q 'HTTP 404' <<<"$out"; then MISSING="$MISSING $p"
     else UNREACHABLE="$UNREACHABLE $p"

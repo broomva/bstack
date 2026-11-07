@@ -4,9 +4,9 @@
 
 ### feat(marketplace): `bstack-skills` plugin — the required companion skills as one install (BRO-3627)
 
-- `.claude-plugin/marketplace.json` gains a second plugin, `bstack-skills`. It installs the bstack primer plus every `required: true` entry in `references/companion-skills.yaml` (14 skills) straight from the broomva/skills monorepo (`source: github broomva/skills`, `strict: false`, explicit skill paths). It has no `version`, so it follows broomva/skills `main`.
+- `.claude-plugin/marketplace.json` gains a second plugin, `bstack-skills`. It installs the bstack primer plus every `required: true` entry in `references/companion-skills.yaml` (14 skills) straight from the broomva/skills monorepo (`source: git-subdir` on broomva/skills' `skills/` folder, `strict: false`, explicit skill paths). It points at `skills/`, not the repo root, because broomva/skills ships its own root `plugin.json` (broomva/skills#308), and a `strict: false` entry over a root that has one fails with "conflicting manifests". It has no `version`, so it follows broomva/skills `main`.
 - Install: `/plugin marketplace add broomva/bstack`, then `/plugin install bstack-skills@bstack`.
-- Codex: `.agents/plugins/marketplace.json` offers the same `bstack-skills` plugin (git URL source, same 14 paths): `codex plugin marketplace add broomva/bstack`, then `codex plugin add bstack-skills@bstack`. The `bstack` hooks plugin stays Claude Code only. For every other skill, broomva/skills is now its own marketplace (`/plugin marketplace add broomva/skills`, broomva/skills#308).
+- Codex: `.agents/plugins/marketplace.json` offers the same `bstack-skills` plugin (same `git-subdir` source and 14 paths): `codex plugin marketplace add broomva/bstack`, then `codex plugin add bstack-skills@bstack`. The `bstack` hooks plugin stays Claude Code only. For every other skill, broomva/skills is now its own marketplace (`/plugin marketplace add broomva/skills`, broomva/skills#308).
 - `tests/plugin-marketplace.test.sh` keeps the plugin equal to primer ∪ required roster, keeps the Codex entry's paths equal to the Claude entry's, keeps the `bstack` entry the first versioned plugin at `VERSION` (the one `bstack release tag` reads), proves its own red path, and, when `gh` is authed, resolves every path on broomva/skills `main`.
 
 ## 0.51.1 — 2026-10-24
