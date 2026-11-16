@@ -2114,7 +2114,8 @@ if [ "$_machine_status" = "127" ]; then
     fi
 fi
 case "$_machine_status" in
-    0) [ -n "$_machine_folders" ] && printf '%s\n' "$_machine_folders" ;;
+    # A passing check has only [info] lines; --quiet hides them like other info.
+    0) [ "$QUIET" = "0" ] && [ -n "$_machine_folders" ] && printf '%s\n' "$_machine_folders" ;;
     # Opt-in: a machine without a baseline is informational, never a gap, so the
     # totals and --strict are the same as before this section existed.
     42) [ "$QUIET" = "0" ] && echo "  [info] machine folder ratchet is not enabled on this machine (opt-in; not a gap): bstack doctor --baseline-roots" ;;

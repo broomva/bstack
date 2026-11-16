@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.51.5 — 2026-11-15
+
+### fix(doctor): a passing machine folder ratchet is silent under `--quiet` (BRO-3769)
+
+With a baseline recorded, `doctor --quiet` printed one `[info] grandfathered folder`
+line per baselined folder on every run. Those lines now appear only without `--quiet`.
+A new folder or a broken baseline still prints its failure and fails doctor in both modes.
+
 ## 0.51.4 — 2026-11-15
 
 ### feat(doctor): ratchet machine folders into the unified home (BRO-3769)

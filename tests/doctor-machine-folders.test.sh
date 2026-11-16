@@ -35,8 +35,12 @@ run_doctor_verbose --strict || true
 assert_not_enabled 'strict'
 bash "$DOCTOR" --baseline-roots >"$TMP/out"
 grep -q '.config/broomva/existing' "$TMP/out"
-run_doctor
+run_doctor_verbose
 grep -q 'grandfathered folder: ~/.config/broomva/existing' "$TMP/out"
+# A passing ratchet prints nothing under --quiet: a real machine has dozens of
+# grandfathered folders, and they are information, not findings.
+run_doctor
+if grep -q 'grandfathered\|machine folder' "$TMP/out"; then echo 'quiet mode listed grandfathered folders' >&2; exit 1; fi
 if PATH="$TMP/no-python:$PATH" run_doctor; then echo 'enabled ratchet without python passed' >&2; exit 1; fi
 mkdir -p "$HOME_FIXTURE/.local/share/broomva/new-folder"
 if run_doctor; then echo 'new folder passed' >&2; exit 1; fi
