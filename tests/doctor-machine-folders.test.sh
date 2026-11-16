@@ -8,18 +8,31 @@ mkdir -p "$HOME_FIXTURE" "$TMP/workspace/.control"
 export BSTACK_DOCTOR_HOME="$HOME_FIXTURE" BROOMVA_WORKSPACE="$TMP/workspace"
 DOCTOR="$REPO/scripts/doctor.sh"
 run_doctor() { bash "$DOCTOR" --quiet >"$TMP/out" 2>&1; }
+run_doctor_verbose() { bash "$DOCTOR" "$@" >"$TMP/out" 2>&1; }
+# Without a baseline the ratchet is off: one [info] line, never a gap, so the gap
+# total and --strict are what they were before this section existed.
+assert_not_enabled() {
+    grep -Fq '[info] machine folder ratchet is not enabled on this machine' "$TMP/out"
+    if grep -Fq '[gap] machine folder' "$TMP/out"; then echo "missing baseline counted as a gap ($1)" >&2; exit 1; fi
+    if grep -Fq '[failure]' "$TMP/out"; then echo "missing baseline reported a failure ($1)" >&2; exit 1; fi
+    listed="$(grep -c '^  \[gap\]' "$TMP/out" || true)"
+    total="$(sed -n 's/.* \([0-9][0-9]*\) gap(s).*/\1/p' "$TMP/out")"
+    [ "${total:-0}" = "$listed" ] || { echo "gap total $total differs from $listed listed gaps ($1)" >&2; exit 1; }
+}
+run_doctor_verbose
+assert_not_enabled 'empty home'
 run_doctor
-grep -Fq '[gap] machine folder ratchet is not enabled on this machine; run: bstack doctor --baseline-roots' "$TMP/out"
+if grep -q 'machine folder' "$TMP/out"; then echo 'quiet mode mentioned a ratchet that is off' >&2; exit 1; fi
 mkdir -p "$TMP/no-python"
 printf '#!/bin/sh\nexit 127\n' > "$TMP/no-python/python3"
 chmod +x "$TMP/no-python/python3"
-PATH="$TMP/no-python:$PATH" run_doctor
-grep -Fq '[gap] machine folder ratchet is not enabled' "$TMP/out"
+PATH="$TMP/no-python:$PATH" run_doctor_verbose
+assert_not_enabled 'no python'
 mkdir -p "$HOME_FIXTURE/.config/broomva/existing"
-run_doctor
-grep -Fq '[gap] machine folder ratchet is not enabled on this machine; run: bstack doctor --baseline-roots' "$TMP/out"
-if bash "$DOCTOR" --quiet --strict >"$TMP/out" 2>&1; then echo 'missing baseline passed strict mode' >&2; exit 1; fi
-grep -Fq '[gap] machine folder ratchet is not enabled' "$TMP/out"
+run_doctor_verbose
+assert_not_enabled 'folders present'
+run_doctor_verbose --strict || true
+assert_not_enabled 'strict'
 bash "$DOCTOR" --baseline-roots >"$TMP/out"
 grep -q '.config/broomva/existing' "$TMP/out"
 run_doctor

@@ -2095,7 +2095,8 @@ fi
 
 # ── Machine folder ratchet (BRO-3769) ───────────────────────────────────────
 # Legacy machine paths and the explicit machine-local baseline are recognized.
-# This is a hard failure even without --strict; existing gaps retain their behavior.
+# Once a baseline exists, a new folder or a broken baseline is a hard failure even
+# without --strict. Without a baseline the section reports one [info] line only.
 section "31. Machine folder ratchet"
 _MACHINE_FOLDER_FAILURE=0
 _machine_folders="$(python3 -I "$BSTACK_REPO/scripts/doctor-machine-folders.py" 2>&1)"
@@ -2114,7 +2115,9 @@ if [ "$_machine_status" = "127" ]; then
 fi
 case "$_machine_status" in
     0) [ -n "$_machine_folders" ] && printf '%s\n' "$_machine_folders" ;;
-    42) gap "machine folder ratchet is not enabled on this machine; run: bstack doctor --baseline-roots" ;;
+    # Opt-in: a machine without a baseline is informational, never a gap, so the
+    # totals and --strict are the same as before this section existed.
+    42) [ "$QUIET" = "0" ] && echo "  [info] machine folder ratchet is not enabled on this machine (opt-in; not a gap): bstack doctor --baseline-roots" ;;
     *) printf '%s\n' "$_machine_folders"
        _MACHINE_FOLDER_FAILURE=1
        gap "machine folder ratchet failed" "see the failure above" ;;

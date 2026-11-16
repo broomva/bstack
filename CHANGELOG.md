@@ -13,9 +13,10 @@ are also recognized. No machine inventory is shipped with bstack.
 
 To enable it, run `bstack doctor --baseline-roots` on the machine to record its existing
 folders. Doctor never changes this baseline. The command refuses to overwrite it;
-`--force` explicitly replaces it after review. A missing baseline is an ordinary gap
-(and fails only with `--strict`); a new folder or broken baseline fails doctor even
-without `--strict`. Other gaps retain their existing exit behavior.
+`--force` explicitly replaces it after review. A machine without a baseline gets one
+`[info]` line and no gap, so its totals and `--strict` result do not change; once a
+baseline exists, a new folder or a broken baseline fails doctor even without
+`--strict`. Other gaps retain their existing exit behavior.
 Set `BSTACK_DOCTOR_HOME` to use an isolated home for this scan and baseline.
 
 ## 0.51.3 — 2026-11-07
