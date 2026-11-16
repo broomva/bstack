@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.52.0 — 2026-11-15
+## 0.51.4 — 2026-11-15
 
 ### feat(doctor): ratchet machine folders into the unified home (BRO-3769)
 
