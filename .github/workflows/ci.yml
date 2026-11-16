@@ -68,8 +68,6 @@ jobs:
           cp assets/templates/CLAUDE.md.template ./CLAUDE.md 2>/dev/null || true
           cp assets/templates/AGENTS.md.template ./AGENTS.md 2>/dev/null || true
           cp assets/templates/policy.yaml.template .control/policy.yaml 2>/dev/null || true
-          export BSTACK_DOCTOR_HOME="$(mktemp -d)"
-          bash scripts/doctor.sh --baseline-roots
           bash scripts/doctor.sh --quiet
 
   tests:

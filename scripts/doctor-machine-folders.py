@@ -36,8 +36,8 @@ def main():
         os.environ['HOME'] = str(home)
         os.environ['BROOMVA_HOME'] = str(home / '.broomva')
     baseline = paths.machine_path('state') / 'doctor-machine-folders.json'
-    folders = scan(home)
     if '--baseline-roots' in sys.argv:
+        folders = scan(home)
         os.umask(0o077)
         baseline.parent.mkdir(parents=True, exist_ok=True)
         mode = 'w' if '--force' in sys.argv else 'x'
@@ -58,8 +58,11 @@ def main():
             raise ValueError('invalid baseline format')
         saved = set(data['folders'])
     except FileNotFoundError:
-        print('[failure] machine folder baseline missing; run: bstack doctor --baseline-roots')
-        return 1
+        # A dangling baseline symlink is a broken opt-in, not an absent one.
+        if os.path.lexists(baseline):
+            raise
+        return 42  # No baseline: report an ordinary doctor gap.
+    folders = scan(home)
     known = set()
     for _, old in paths.MACHINE.values():
         if old and old.startswith('~/'):

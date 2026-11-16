@@ -4,12 +4,17 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 HOME_FIXTURE="$TMP/home"
-mkdir -p "$HOME_FIXTURE/.config/broomva/existing" "$TMP/workspace/.control"
+mkdir -p "$HOME_FIXTURE" "$TMP/workspace/.control"
 export BSTACK_DOCTOR_HOME="$HOME_FIXTURE" BROOMVA_WORKSPACE="$TMP/workspace"
 DOCTOR="$REPO/scripts/doctor.sh"
 run_doctor() { bash "$DOCTOR" --quiet >"$TMP/out" 2>&1; }
-if run_doctor; then echo 'missing baseline passed' >&2; exit 1; fi
-grep -q 'bstack doctor --baseline-roots' "$TMP/out"
+run_doctor
+grep -Fq '[gap] machine folder ratchet is not enabled on this machine; run: bstack doctor --baseline-roots' "$TMP/out"
+mkdir -p "$HOME_FIXTURE/.config/broomva/existing"
+run_doctor
+grep -Fq '[gap] machine folder ratchet is not enabled on this machine; run: bstack doctor --baseline-roots' "$TMP/out"
+if bash "$DOCTOR" --quiet --strict >"$TMP/out" 2>&1; then echo 'missing baseline passed strict mode' >&2; exit 1; fi
+grep -Fq '[gap] machine folder ratchet is not enabled' "$TMP/out"
 bash "$DOCTOR" --baseline-roots >"$TMP/out"
 grep -q '.config/broomva/existing' "$TMP/out"
 run_doctor
@@ -53,4 +58,12 @@ for root in .config/broomva .local/share/broomva .local/state/broomva .cache/bro
     rmdir "$HOME_FIXTURE/$root/probe"
 done
 run_doctor
+BASELINE="$HOME_FIXTURE/.broomva/state/doctor-machine-folders.json"
+printf '{bad json' > "$BASELINE"
+if run_doctor; then echo 'malformed baseline passed' >&2; exit 1; fi
+grep -q 'machine folder check' "$TMP/out"
+rm "$BASELINE"
+ln -s "$TMP/missing-baseline" "$BASELINE"
+if run_doctor; then echo 'dangling baseline passed' >&2; exit 1; fi
+grep -q 'machine folder check' "$TMP/out"
 echo 'machine folder ratchet: passed' 

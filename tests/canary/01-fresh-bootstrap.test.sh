@@ -123,8 +123,6 @@ fi
 # job of canary/06 once skills auto-install ships (Phase 4 deliverable).
 echo ""
 echo "Step 4: bstack doctor --quiet runs without crashing"
-export BSTACK_DOCTOR_HOME="$TH"
-bash "$REPO/scripts/doctor.sh" --baseline-roots >/dev/null
 out=$(BROOMVA_WORKSPACE="$TW" bash "$REPO/scripts/doctor.sh" --quiet 2>&1 || true)
 if echo "$out" | grep -qE "\[bstack doctor\] [0-9]+/[0-9]+"; then
     pass "doctor produced summary line (gaps OK on minimal fixture)"
@@ -132,9 +130,9 @@ else
     echo "$out" | tail -10 | sed 's/^/    /'
     fail "doctor did not produce expected summary line"
 fi
-# Other gaps remain advisory once the machine baseline exists.
+# Sanity: doctor exits 0 (never blocks a session per HC-1 invariant).
 if BROOMVA_WORKSPACE="$TW" bash "$REPO/scripts/doctor.sh" --quiet >/dev/null 2>&1; then
-    pass "doctor exit 0 with baseline"
+    pass "doctor exit 0 (HC-1: never block)"
 else
     fail "doctor exited non-zero on minimal fixture"
 fi

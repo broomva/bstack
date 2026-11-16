@@ -44,7 +44,6 @@ TH=$(mktemp -d)   # isolated HOME — global skills / config never touch the rea
 # so they are wired regardless of BSTACK_SKIP_RCS.
 HOME="$TH" BROOMVA_WORKSPACE="$TW" BSTACK_SKIP_SKILLS=1 BSTACK_SKIP_RCS=1 \
   bash "$REPO/scripts/bootstrap.sh" >/dev/null 2>&1
-BSTACK_DOCTOR_HOME="$TH" bash "$REPO/scripts/doctor.sh" --baseline-roots >/dev/null
 SETTINGS="$TW/.claude/settings.json"
 
 # ── Assertion 1 (Bug 1): every bstack-SHIPPED hook command resolves ──────────
@@ -103,7 +102,7 @@ mkdir -p "$TH/.claude/skills/bookkeeping/scripts" \
 : > "$TH/.claude/skills/bookkeeping/scripts/bookkeeping.py"
 : > "$TH/.claude/skills/p9/scripts/p9.py"
 : > "$TH/.claude/skills/persist/scripts/persist.py"
-DOC_OUT=$(HOME="$TH" BSTACK_DOCTOR_HOME="$TH" BROOMVA_WORKSPACE="$TW" bash "$REPO/scripts/doctor.sh" 2>&1)
+DOC_OUT=$(HOME="$TH" BROOMVA_WORKSPACE="$TW" bash "$REPO/scripts/doctor.sh" 2>&1)
 if echo "$DOC_OUT" | grep -qE 'P(6|9|12) mechanism missing'; then
   fail "Bug 3: doctor false-RED — P6/P9/P12 GAP despite the skills being installed globally"
 else
@@ -141,7 +140,7 @@ ss.append({"hooks": [{"type": "command", "command": "sh -c 'echo hi'", "_bstack_
 ss.append({"hooks": [{"type": "command", "command": "python3 %s --flag" % real, "_bstack_primitive": "t2"}]})
 json.dump(d, open(p, "w"), indent=2)
 PY
-D6_OUT=$(HOME="$TH" BSTACK_DOCTOR_HOME="$TH" BROOMVA_WORKSPACE="$TW" bash "$REPO/scripts/doctor.sh" 2>&1)
+D6_OUT=$(HOME="$TH" BROOMVA_WORKSPACE="$TW" bash "$REPO/scripts/doctor.sh" 2>&1)
 if echo "$D6_OUT" | grep -qE 'dangles.*(echo hi|real-hook)'; then
   fail "§25 false-positive: sh -c composite or interpreter-prefixed resolvable hook wrongly flagged"
 else
@@ -162,7 +161,7 @@ d.setdefault("hooks", {}).setdefault("SessionStart", []).append(
                 "_bstack_primitive": "test"}]})
 json.dump(d, open(p, "w"), indent=2)
 PY
-D5_OUT=$(HOME="$TH" BSTACK_DOCTOR_HOME="$TH" BROOMVA_WORKSPACE="$TW" bash "$REPO/scripts/doctor.sh" 2>&1)
+D5_OUT=$(HOME="$TH" BROOMVA_WORKSPACE="$TW" bash "$REPO/scripts/doctor.sh" 2>&1)
 if echo "$D5_OUT" | grep -q "wired hook command dangles: /nonexistent/bstack/scripts/ghost-hook.sh"; then
   pass "Bug 1 (doctor §25): a dangling wired hook is hard-gapped, not silently green"
 else

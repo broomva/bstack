@@ -3,7 +3,9 @@
 # compliance with the bstack primitive contract.
 #
 # Runs at SessionStart (via hook) AND on demand (`bstack doctor`).
-# Reports gaps as actionable nudges; unregistered machine folders fail the run.
+# Normally never blocks a session: gaps are actionable nudges. An enabled machine
+# folder ratchet fails on new unregistered folders or a broken baseline; --strict
+# fails on any gap. A missing workspace retains its existing exit 3.
 #
 # What it checks:
 #   1. CLAUDE.md primitives table has all P1-P20 rows + correct count
@@ -2096,13 +2098,15 @@ fi
 # This is a hard failure even without --strict; existing gaps retain their behavior.
 section "31. Machine folder ratchet"
 _MACHINE_FOLDER_FAILURE=0
-if _machine_folders="$(python3 -I "$BSTACK_REPO/scripts/doctor-machine-folders.py" 2>&1)"; then
-    [ -n "$_machine_folders" ] && printf '%s\n' "$_machine_folders"
-else
-    printf '%s\n' "$_machine_folders"
-    _MACHINE_FOLDER_FAILURE=1
-    gap "machine folder ratchet failed" "see the failure above"
-fi
+_machine_folders="$(python3 -I "$BSTACK_REPO/scripts/doctor-machine-folders.py" 2>&1)"
+_machine_status=$?
+case "$_machine_status" in
+    0) [ -n "$_machine_folders" ] && printf '%s\n' "$_machine_folders" ;;
+    42) gap "machine folder ratchet is not enabled on this machine; run: bstack doctor --baseline-roots" ;;
+    *) printf '%s\n' "$_machine_folders"
+       _MACHINE_FOLDER_FAILURE=1
+       gap "machine folder ratchet failed" "see the failure above" ;;
+esac
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""

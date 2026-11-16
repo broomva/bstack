@@ -4,16 +4,18 @@
 
 ### feat(doctor): ratchet machine folders into the unified home (BRO-3769)
 
-Doctor fails when a new folder appears under the legacy machine roots. The machine-local
+The machine folder ratchet is opt-in: after a baseline is created, doctor fails when a
+new folder appears under the legacy machine roots. The machine-local
 baseline is stored under the registry's `machine.state` path; registry legacy entries
 are also recognized. No machine inventory is shipped with bstack.
 
 ### Migration
 
-Run `bstack doctor --baseline-roots` once on each machine to record its existing
+To enable it, run `bstack doctor --baseline-roots` on the machine to record its existing
 folders. Doctor never changes this baseline. The command refuses to overwrite it;
-`--force` explicitly replaces it after review. Missing baselines and new folders fail
-doctor even without `--strict`; other gaps retain their existing exit behavior.
+`--force` explicitly replaces it after review. A missing baseline is an ordinary gap
+(and fails only with `--strict`); a new folder or broken baseline fails doctor even
+without `--strict`. Other gaps retain their existing exit behavior.
 Set `BSTACK_DOCTOR_HOME` to use an isolated home for this scan and baseline.
 
 ## 0.51.3 — 2026-11-07
