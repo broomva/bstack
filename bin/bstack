@@ -20,7 +20,8 @@ usage() {
 bstack — Broomva Stack CLI
 
 Validation:
-  doctor [--quiet]                Lint primitive-contract compliance.
+  doctor [--quiet|--strict]       Lint primitive-contract compliance.
+  doctor --baseline-roots [--force]  Record legacy machine folders.
   validate                        Validate skill frontmatter health.
   repair [--apply-all|--dry-run]  Apply fixes for gaps surfaced by doctor.
 

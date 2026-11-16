@@ -3,7 +3,9 @@
 # compliance with the bstack primitive contract.
 #
 # Runs at SessionStart (via hook) AND on demand (`bstack doctor`).
-# Always exits 0 — never blocks a session. Reports gaps as actionable nudges.
+# Normally never blocks a session: gaps are actionable nudges. An enabled machine
+# folder ratchet fails on new unregistered folders or a broken baseline; --strict
+# fails on any gap. A missing workspace retains its existing exit 3.
 #
 # What it checks:
 #   1. CLAUDE.md primitives table has all P1-P20 rows + correct count
@@ -49,8 +51,10 @@
 #   bash scripts/doctor.sh               # full report
 #   bash scripts/doctor.sh --quiet       # only warnings
 #   bash scripts/doctor.sh --strict      # exit 1 if any gap found (CI mode)
+#   bstack doctor --baseline-roots [--force] # record machine folders once
 #
 # Env:
+#   BSTACK_DOCTOR_HOME    override the home used by the machine folder scan
 #   BSTACK_DOCTOR_USER_SETTINGS
 #                          §26 only — path to the PERSONAL settings.json read as
 #                          hook registration surface 2. Defaults to
@@ -67,16 +71,28 @@ set -uo pipefail
 # ── arg parsing ─────────────────────────────────────────────────────────────
 QUIET=0
 STRICT=0
+BASELINE_ROOTS=0
+BASELINE_FORCE=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --quiet|-q) QUIET=1; shift ;;
         --strict)   STRICT=1; shift ;;
+        --baseline-roots) BASELINE_ROOTS=1; shift ;;
+        --force) BASELINE_FORCE=1; shift ;;
         --help|-h)
             grep -E '^#( |$)' "$0" | sed 's/^# \?//' | head -30
             exit 0 ;;
         *) shift ;;
     esac
 done
+
+if [ "$BASELINE_ROOTS" = "1" ]; then
+    _baseline_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/doctor-machine-folders.py"
+    if [ "$BASELINE_FORCE" = "1" ]; then
+        exec python3 -I "$_baseline_script" --baseline-roots --force
+    fi
+    exec python3 -I "$_baseline_script" --baseline-roots
+fi
 
 # ── locate workspace ────────────────────────────────────────────────────────
 # Resolve via the shared resolver (env → cwd-is-workspace → ~/.bstack config →
@@ -2077,6 +2093,36 @@ EOF_ROOTS
     fi
 fi
 
+# ── Machine folder ratchet (BRO-3769) ───────────────────────────────────────
+# Legacy machine paths and the explicit machine-local baseline are recognized.
+# Once a baseline exists, a new folder or a broken baseline is a hard failure even
+# without --strict. Without a baseline the section reports one [info] line only.
+section "31. Machine folder ratchet"
+_MACHINE_FOLDER_FAILURE=0
+_machine_folders="$(python3 -I "$BSTACK_REPO/scripts/doctor-machine-folders.py" 2>&1)"
+_machine_status=$?
+# Python is already optional for other doctor checks. Preserve their advisory
+# behavior on a machine that has not opted in, even when it is unavailable.
+if [ "$_machine_status" = "127" ]; then
+    _machine_state="$(
+        [ -n "${BSTACK_DOCTOR_HOME:-}" ] && export HOME="$BSTACK_DOCTOR_HOME" BROOMVA_HOME="$BSTACK_DOCTOR_HOME/.broomva"
+        # shellcheck source=scripts/lib/broomva-paths.sh
+        . "$BSTACK_REPO/scripts/lib/broomva-paths.sh" && broomva_machine_path state
+    )"
+    if [ -n "$_machine_state" ] && [ ! -e "$_machine_state/doctor-machine-folders.json" ] && [ ! -L "$_machine_state/doctor-machine-folders.json" ]; then
+        _machine_status=42
+    fi
+fi
+case "$_machine_status" in
+    0) [ -n "$_machine_folders" ] && printf '%s\n' "$_machine_folders" ;;
+    # Opt-in: a machine without a baseline is informational, never a gap, so the
+    # totals and --strict are the same as before this section existed.
+    42) [ "$QUIET" = "0" ] && echo "  [info] machine folder ratchet is not enabled on this machine (opt-in; not a gap): bstack doctor --baseline-roots" ;;
+    *) printf '%s\n' "$_machine_folders"
+       _MACHINE_FOLDER_FAILURE=1
+       gap "machine folder ratchet failed" "see the failure above" ;;
+esac
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 TOTAL=$((PASSES + GAPS))
@@ -2089,10 +2135,14 @@ else
     fi
 fi
 
+if [ "$_MACHINE_FOLDER_FAILURE" = "1" ]; then
+    exit 1
+fi
+
 # Strict mode: exit non-zero if any gap (CI usage)
 if [ "$STRICT" = "1" ] && [ "$GAPS" != "0" ]; then
     exit 1
 fi
 
-# Default: never block a session
+# Default: other gaps do not block a session
 exit 0
