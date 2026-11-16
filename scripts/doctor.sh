@@ -2100,6 +2100,18 @@ section "31. Machine folder ratchet"
 _MACHINE_FOLDER_FAILURE=0
 _machine_folders="$(python3 -I "$BSTACK_REPO/scripts/doctor-machine-folders.py" 2>&1)"
 _machine_status=$?
+# Python is already optional for other doctor checks. Preserve their advisory
+# behavior on a machine that has not opted in, even when it is unavailable.
+if [ "$_machine_status" = "127" ]; then
+    _machine_state="$(
+        [ -n "${BSTACK_DOCTOR_HOME:-}" ] && export HOME="$BSTACK_DOCTOR_HOME" BROOMVA_HOME="$BSTACK_DOCTOR_HOME/.broomva"
+        # shellcheck source=scripts/lib/broomva-paths.sh
+        . "$BSTACK_REPO/scripts/lib/broomva-paths.sh" && broomva_machine_path state
+    )"
+    if [ -n "$_machine_state" ] && [ ! -e "$_machine_state/doctor-machine-folders.json" ] && [ ! -L "$_machine_state/doctor-machine-folders.json" ]; then
+        _machine_status=42
+    fi
+fi
 case "$_machine_status" in
     0) [ -n "$_machine_folders" ] && printf '%s\n' "$_machine_folders" ;;
     42) gap "machine folder ratchet is not enabled on this machine; run: bstack doctor --baseline-roots" ;;

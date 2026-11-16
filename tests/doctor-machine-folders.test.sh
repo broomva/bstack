@@ -10,6 +10,11 @@ DOCTOR="$REPO/scripts/doctor.sh"
 run_doctor() { bash "$DOCTOR" --quiet >"$TMP/out" 2>&1; }
 run_doctor
 grep -Fq '[gap] machine folder ratchet is not enabled on this machine; run: bstack doctor --baseline-roots' "$TMP/out"
+mkdir -p "$TMP/no-python"
+printf '#!/bin/sh\nexit 127\n' > "$TMP/no-python/python3"
+chmod +x "$TMP/no-python/python3"
+PATH="$TMP/no-python:$PATH" run_doctor
+grep -Fq '[gap] machine folder ratchet is not enabled' "$TMP/out"
 mkdir -p "$HOME_FIXTURE/.config/broomva/existing"
 run_doctor
 grep -Fq '[gap] machine folder ratchet is not enabled on this machine; run: bstack doctor --baseline-roots' "$TMP/out"
@@ -19,6 +24,7 @@ bash "$DOCTOR" --baseline-roots >"$TMP/out"
 grep -q '.config/broomva/existing' "$TMP/out"
 run_doctor
 grep -q 'grandfathered folder: ~/.config/broomva/existing' "$TMP/out"
+if PATH="$TMP/no-python:$PATH" run_doctor; then echo 'enabled ratchet without python passed' >&2; exit 1; fi
 mkdir -p "$HOME_FIXTURE/.local/share/broomva/new-folder"
 if run_doctor; then echo 'new folder passed' >&2; exit 1; fi
 grep -q 'new-folder' "$TMP/out"
