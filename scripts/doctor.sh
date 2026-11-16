@@ -3,7 +3,7 @@
 # compliance with the bstack primitive contract.
 #
 # Runs at SessionStart (via hook) AND on demand (`bstack doctor`).
-# Always exits 0 — never blocks a session. Reports gaps as actionable nudges.
+# Reports gaps as actionable nudges; unregistered machine folders fail the run.
 #
 # What it checks:
 #   1. CLAUDE.md primitives table has all P1-P20 rows + correct count
@@ -49,8 +49,10 @@
 #   bash scripts/doctor.sh               # full report
 #   bash scripts/doctor.sh --quiet       # only warnings
 #   bash scripts/doctor.sh --strict      # exit 1 if any gap found (CI mode)
+#   bstack doctor --baseline-roots [--force] # record machine folders once
 #
 # Env:
+#   BSTACK_DOCTOR_HOME    override the home used by the machine folder scan
 #   BSTACK_DOCTOR_USER_SETTINGS
 #                          §26 only — path to the PERSONAL settings.json read as
 #                          hook registration surface 2. Defaults to
@@ -67,16 +69,28 @@ set -uo pipefail
 # ── arg parsing ─────────────────────────────────────────────────────────────
 QUIET=0
 STRICT=0
+BASELINE_ROOTS=0
+BASELINE_FORCE=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --quiet|-q) QUIET=1; shift ;;
         --strict)   STRICT=1; shift ;;
+        --baseline-roots) BASELINE_ROOTS=1; shift ;;
+        --force) BASELINE_FORCE=1; shift ;;
         --help|-h)
             grep -E '^#( |$)' "$0" | sed 's/^# \?//' | head -30
             exit 0 ;;
         *) shift ;;
     esac
 done
+
+if [ "$BASELINE_ROOTS" = "1" ]; then
+    _baseline_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/doctor-machine-folders.py"
+    if [ "$BASELINE_FORCE" = "1" ]; then
+        exec python3 -I "$_baseline_script" --baseline-roots --force
+    fi
+    exec python3 -I "$_baseline_script" --baseline-roots
+fi
 
 # ── locate workspace ────────────────────────────────────────────────────────
 # Resolve via the shared resolver (env → cwd-is-workspace → ~/.bstack config →
@@ -2077,6 +2091,19 @@ EOF_ROOTS
     fi
 fi
 
+# ── Machine folder ratchet (BRO-3769) ───────────────────────────────────────
+# Legacy machine paths and the explicit machine-local baseline are recognized.
+# This is a hard failure even without --strict; existing gaps retain their behavior.
+section "31. Machine folder ratchet"
+_MACHINE_FOLDER_FAILURE=0
+if _machine_folders="$(python3 -I "$BSTACK_REPO/scripts/doctor-machine-folders.py" 2>&1)"; then
+    [ -n "$_machine_folders" ] && printf '%s\n' "$_machine_folders"
+else
+    printf '%s\n' "$_machine_folders"
+    _MACHINE_FOLDER_FAILURE=1
+    gap "machine folder ratchet failed" "see the failure above"
+fi
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 TOTAL=$((PASSES + GAPS))
@@ -2089,10 +2116,14 @@ else
     fi
 fi
 
+if [ "$_MACHINE_FOLDER_FAILURE" = "1" ]; then
+    exit 1
+fi
+
 # Strict mode: exit non-zero if any gap (CI usage)
 if [ "$STRICT" = "1" ] && [ "$GAPS" != "0" ]; then
     exit 1
 fi
 
-# Default: never block a session
+# Default: other gaps do not block a session
 exit 0
