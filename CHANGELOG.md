@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.52.0 — 2026-11-18
+
+### feat(verification): checked review results and versioned evidence contracts
+
+- `bstack cross-review` validates model output before writing a passing receipt.
+  Score must equal five 0–2 axes, a pass needs ≥7 and no zero axis, and every
+  finding needs evidence plus a falsifiable `settling_observation`. Invalid JSON,
+  duplicate keys, missing fields and contradictory passes exit 30 as skipped.
+- `bstack verify <review-result|claim-review|measurement|capability-plan> <file|->`
+  checks a versioned record. Measurement records distinguish controlled refutation
+  from not-detected and inconclusive results. Capability plans retain executable,
+  prerequisite-dependent and external proposals; only catalog IDs are returned
+  as executable. Structure does not establish truth, isolation or authority.
+- Bootstrap installs four canonical `schemas/*.v1.json` contracts, preserving
+  existing workspace files. Doctor reports contract drift, companion-checker
+  presence and validator fixture results as advisory; gap counts and strict
+  status are unchanged. Its validator probe needs both a valid positive control
+  and a rejected invalid record.
+
+### Migration
+
+Old model responses without axes or settling observations are no longer accepted
+as completed reviews; rerun with the updated prompt. Existing pass/concerns/fail
+exit codes remain 0/10/20; invalid responses use the existing skipped code 30.
+Review validation uses only Python's standard library. Other `bstack verify`
+contracts require optional `jsonschema`; absence exits 2 as inconclusive rather
+than claiming validation. Bootstrap does not install dependencies or overwrite
+existing versioned contracts. See `references/verification-contracts.md`.
+
 ## 0.51.5 — 2026-11-15
 
 ### fix(doctor): a passing machine folder ratchet is silent under `--quiet` (BRO-3769)

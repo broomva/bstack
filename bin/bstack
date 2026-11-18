@@ -23,6 +23,9 @@ Validation:
   doctor [--quiet|--strict]       Lint primitive-contract compliance.
   doctor --baseline-roots [--force]  Record legacy machine folders.
   validate                        Validate skill frontmatter health.
+  verify <contract> <record.json>  Check a versioned verification record.
+                                  Contracts: review-result, claim-review,
+                                  measurement, capability-plan. Structure only.
   repair [--apply-all|--dry-run]  Apply fixes for gaps surfaced by doctor.
 
 Lifecycle:
@@ -395,6 +398,7 @@ case "$cmd" in
     bench)                  exec "$BIN_DIR/bstack-bench" "$@" ;;
     workspace)              exec "$BIN_DIR/bstack-workspace" "$@" ;;
     cross-review)           exec "$BIN_DIR/bstack-cross-review" "$@" ;;
+    verify)                 exec python3 -I "$SCRIPTS_DIR/verification_contracts.py" "$@" ;;
     asks)                   exec "$BIN_DIR/bstack-asks" "$@" ;;
     intent)                 exec "$BIN_DIR/bstack-intent" "$@" ;;
     plan-drift)             exec "$BIN_DIR/bstack-plan-drift" "$@" ;;

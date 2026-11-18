@@ -80,7 +80,7 @@ jobs:
         # PyYAML is the primary parser path for validate-skill-frontmatter.py
         # (the dependency-free hand-parser is a best-effort fallback). The
         # frontmatter test exercises both paths via SKILL_FM_NO_YAML.
-        run: python3 -m pip install --quiet PyYAML
+        run: python3 -m pip install --quiet PyYAML jsonschema
 
       - name: Run all tests/*.test.sh
         env:

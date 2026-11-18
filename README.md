@@ -127,3 +127,10 @@ The narrative on what bstack is, why it exists, and what the twenty primitives b
 ## License
 
 [MIT](LICENSE)
+
+## Verification records
+
+`bstack verify <contract> <file|->` checks review-result, claim-review, measurement
+and capability-plan records. Bootstrap installs the versioned schemas; doctor
+reports their readiness as advisory. See [verification contracts](references/verification-contracts.md)
+for exit semantics, optional dependencies and limits.

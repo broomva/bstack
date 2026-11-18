@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/broomva/bstack/blob/main/schemas/capability-plan.v1.json",
+  "title": "capability-plan v1",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "id": {
+        "type": "string",
+        "pattern": "\\S"
+      },
+      "operation": {
+        "type": "string",
+        "pattern": "\\S"
+      },
+      "owner": {
+        "type": "string",
+        "pattern": "\\S"
+      },
+      "settling_observation": {
+        "type": "string",
+        "pattern": "\\S"
+      },
+      "catalog_ref": {
+        "type": "string",
+        "pattern": "\\S"
+      },
+      "input_schema_ref": {
+        "type": "string",
+        "pattern": "\\S"
+      },
+      "output_schema_ref": {
+        "type": "string",
+        "pattern": "\\S"
+      },
+      "readiness_evidence": {
+        "type": "string",
+        "pattern": "\\S"
+      },
+      "substrate_ref": {
+        "type": "string",
+        "pattern": "\\S"
+      },
+      "missing_prerequisite": {
+        "type": "string",
+        "pattern": "\\S"
+      },
+      "promotion_check": {
+        "type": "string",
+        "pattern": "\\S"
+      },
+      "external_executor": {
+        "type": "string",
+        "pattern": "\\S"
+      },
+      "handoff_artifact": {
+        "type": "string",
+        "pattern": "\\S"
+      },
+      "return_evidence": {
+        "type": "string",
+        "pattern": "\\S"
+      },
+      "tier": {
+        "enum": [
+          "executable_now",
+          "request_quote",
+          "send_out"
+        ]
+      },
+      "authorized": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "id",
+      "operation",
+      "owner",
+      "settling_observation",
+      "tier"
+    ],
+    "allOf": [
+      {
+        "if": {
+          "properties": {
+            "tier": {
+              "const": "executable_now"
+            }
+          }
+        },
+        "then": {
+          "required": [
+            "catalog_ref",
+            "input_schema_ref",
+            "output_schema_ref",
+            "readiness_evidence",
+            "authorized"
+          ],
+          "properties": {
+            "authorized": {
+              "const": true
+            }
+          }
+        }
+      },
+      {
+        "if": {
+          "properties": {
+            "tier": {
+              "const": "request_quote"
+            }
+          }
+        },
+        "then": {
+          "required": [
+            "substrate_ref",
+            "missing_prerequisite",
+            "promotion_check"
+          ]
+        }
+      },
+      {
+        "if": {
+          "properties": {
+            "tier": {
+              "const": "send_out"
+            }
+          }
+        },
+        "then": {
+          "required": [
+            "external_executor",
+            "handoff_artifact",
+            "return_evidence"
+          ]
+        }
+      }
+    ]
+  },
+  "minItems": 1
+}

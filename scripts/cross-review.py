@@ -30,7 +30,7 @@ Exit codes:
   0   review completed, verdict pass
   10  review completed, verdict concerns (NOT a script failure; CI may gate)
   20  review completed, verdict fail
-  30  codex unavailable / skipped (treated as Rule 2a skipped)
+  30  codex unavailable / skipped / invalid reviewer result (never a pass)
   2   bad invocation / gh failure
 """
 
@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import importlib.util
 import json
 import os
 import shutil
@@ -46,6 +47,15 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
+
+
+# Load by the installed sibling path, independent of cwd/PYTHONPATH and compatible
+# with consumers that import this hyphenated script using importlib.
+_contract_spec = importlib.util.spec_from_file_location(
+    "bstack_verification_contracts", Path(__file__).with_name("verification_contracts.py")
+)
+_contracts = importlib.util.module_from_spec(_contract_spec)
+_contract_spec.loader.exec_module(_contracts)
 
 
 def log(msg: str, quiet: bool = False) -> None:
@@ -205,6 +215,7 @@ changed file. Then emit a single JSON object on stdout with this schema:
 {
   "verdict": "pass" | "concerns" | "fail",
   "anti_slop_score": 0-10,
+  "axes": [0-2, 0-2, 0-2, 0-2, 0-2],
   "criticality": "high" | "medium" | "low",
   "findings": [
     {
@@ -214,7 +225,8 @@ changed file. Then emit a single JSON object on stdout with this schema:
       "line": "<int or null>",
       "issue": "one-sentence description",
       "evidence": "what in the code supports this",
-      "fix_hint": "concrete suggestion or null"
+      "fix_hint": "concrete suggestion or null",
+      "settling_observation": "one concrete test/observation and result that would falsify this finding"
     }
   ],
   "blind_spots_surfaced": ["..."],
@@ -227,7 +239,12 @@ Scoring rules (anti_slop_score, 0-10):
   -  4 = ship-blocking issues present (verdict must be "fail" or "concerns")
   -  0 = unsafe / broken
 
-A verdict of "pass" requires score >= 7.
+Axes, in order: simplicity, adapted design, boundary contracts, explicit failure
+modes, tests. Score each 0-2 and make anti_slop_score equal their sum.
+A verdict of "pass" requires score >= 7 AND no axis at zero.
+Every objection or defense needs a settling_observation that would falsify its
+own reading. A proposed test is not evidence that it already ran.
+Use null (not a string) for absent file, line and fix_hint.
 Be specific about file:line where possible. Do not invent issues.
 Output ONLY the JSON object. No prose, no markdown fence.
 """
@@ -327,6 +344,10 @@ def invoke_codex(prompt: str, model: str, timeout: int, quiet: bool = False) -> 
             "reason": "codex output was not valid JSON",
             "stdout_tail": out[-1000:],
         }
+    try:
+        _contracts.validate_review_result(parsed)
+    except _contracts.ContractError as exc:
+        return {"verdict": "skipped", "reason": f"invalid reviewer result: {exc}"}
     parsed["model_used"] = model
     parsed["codex_elapsed_sec"] = round(elapsed, 1)
     return parsed
@@ -337,9 +358,12 @@ def try_parse_json(text: str) -> dict[str, Any] | None:
     if not text:
         return None
     try:
-        return json.loads(text)
+        candidate = _contracts.loads(text)
+        return candidate if isinstance(candidate, dict) else None
     except json.JSONDecodeError:
         pass
+    except ValueError:
+        return None
     # Fall back: extract first balanced { ... } object
     depth = 0
     start = -1
@@ -365,9 +389,10 @@ def try_parse_json(text: str) -> dict[str, Any] | None:
             depth -= 1
             if depth == 0 and start != -1:
                 try:
-                    return json.loads(text[start : i + 1])
-                except json.JSONDecodeError:
-                    start = -1
+                    candidate = _contracts.loads(text[start : i + 1])
+                    return candidate if isinstance(candidate, dict) else None
+                except ValueError:
+                    return None
     return None
 
 
@@ -403,6 +428,8 @@ def format_verdict_md(result: dict[str, Any], bundle: dict[str, Any]) -> str:
                 parts.append(f"   - evidence: {f['evidence']}")
             if f.get("fix_hint"):
                 parts.append(f"   - fix: {f['fix_hint']}")
+            if f.get("settling_observation"):
+                parts.append(f"   - settling observation: {f['settling_observation']}")
             parts.append("")
     if result.get("blind_spots_surfaced"):
         parts.append("### Anthropic-family blind spots surfaced")

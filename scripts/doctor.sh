@@ -2124,6 +2124,15 @@ case "$_machine_status" in
        gap "machine folder ratchet failed" "see the failure above" ;;
 esac
 
+# Verification diagnostics are observe-only: no gap/passes increment and no
+# changed --strict status. Missing dependencies/receipts are explicitly unknown.
+section "32. Verification contracts (advisory)"
+if [ "$QUIET" = "0" ]; then
+    if ! python3 -I "$BSTACK_REPO/scripts/verification_contracts.py" doctor --workspace "$WORKSPACE"; then
+        echo "  [info] verification contracts: inconclusive (checker unavailable)"
+    fi
+fi
+
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 TOTAL=$((PASSES + GAPS))
