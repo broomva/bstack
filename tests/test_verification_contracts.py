@@ -479,6 +479,42 @@ class LiveReviewCliTests(unittest.TestCase):
             self.assertEqual(receipt["head_sha"], "abc")
             self.assertEqual(receipt["result"]["verdict"], "skipped")
 
+    def test_syntax_error_log_candidate_does_not_hide_valid_review(self):
+        result = good_review()
+        raw = "progress {pending}\n" + json.dumps(result)
+        self.assertEqual(review.try_parse_json(raw), result)
+        run = self.invoke(raw)
+        self.assertEqual(run.returncode, 0, run.stderr + run.stdout)
+        self.assertEqual(json.loads(run.stdout)["verdict"], "pass")
+        # A structurally ambiguous object still refuses, even with a good one later.
+        for rejected in ('{"x": 1, "x": 2}', '{"x": NaN}'):
+            run = self.invoke(rejected + "\n" + json.dumps(result))
+            self.assertEqual(run.returncode, 30, run.stderr + run.stdout)
+
+    def test_large_integer_duration_does_not_overflow_review_boundary(self):
+        result = {**good_review(), "codex_elapsed_sec": 10**400}
+        contracts.validate_review_result(result)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "review.json"
+            path.write_text(json.dumps(result))
+            verify = subprocess.run(
+                [str(ROOT / "bin/bstack"), "verify", "review-result", str(path)],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(verify.returncode, 0, verify.stderr + verify.stdout)
+        run = self.invoke(json.dumps(result))
+        self.assertEqual(run.returncode, 0, run.stderr + run.stdout)
+        elapsed = json.loads(run.stdout)["codex_elapsed_sec"]
+        self.assertIsInstance(elapsed, (int, float))
+        self.assertGreaterEqual(elapsed, 0)
+        self.assertLess(elapsed, 10**400)  # host measurement replaces model metadata
+        for invalid in (-1, float("inf"), float("-inf"), True, "0"):
+            with self.assertRaises(contracts.ContractError):
+                contracts.validate_review_result(
+                    {**good_review(), "codex_elapsed_sec": invalid}
+                )
+
     def test_valid_pass_concerns_and_failure_keep_existing_exit_codes(self):
         for verdict, code in (("pass", 0), ("concerns", 10), ("fail", 20)):
             result = {**good_review(), "verdict": verdict}
