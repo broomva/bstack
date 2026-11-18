@@ -470,3 +470,12 @@ This is the f₃ dynamics function at L3 of the RCS hierarchy. See [references/p
 - [references/stack-architecture.md](references/stack-architecture.md) — layer dependency diagram
 - [references/quickstart.md](references/quickstart.md) — 5-minute install walkthrough
 - [bstack-upgrade/SKILL.md](bstack-upgrade/SKILL.md) — version-upgrade flow
+
+## Verification contracts
+
+`bstack verify <review-result|claim-review|measurement|capability-plan> <file|->`
+checks a versioned record. Read [references/verification-contracts.md](references/verification-contracts.md)
+before integrating it into an evaluator or planner: schema success is not a
+subject verdict, proof of agent isolation or execution authority. Bootstrap
+preserves existing schema copies; doctor diagnostics are advisory. The review
+CLI checks findings, settling observations and score consistency before exit 0.

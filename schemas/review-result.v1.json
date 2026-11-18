@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/broomva/bstack/blob/main/schemas/review-result.v1.json",
+  "title": "review-result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "verdict": {
+      "enum": [
+        "pass",
+        "concerns",
+        "fail"
+      ]
+    },
+    "anti_slop_score": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10
+    },
+    "axes": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "items": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 2
+      }
+    },
+    "criticality": {
+      "enum": [
+        "high",
+        "medium",
+        "low"
+      ]
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "severity": {
+            "enum": [
+              "critical",
+              "warning",
+              "info"
+            ]
+          },
+          "category": {
+            "enum": [
+              "security",
+              "correctness",
+              "design",
+              "perf",
+              "style",
+              "tests"
+            ]
+          },
+          "file": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "issue": {
+            "type": "string",
+            "pattern": "\\S"
+          },
+          "evidence": {
+            "type": "string",
+            "pattern": "\\S"
+          },
+          "fix_hint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "settling_observation": {
+            "type": "string",
+            "pattern": "\\S"
+          }
+        },
+        "required": [
+          "severity",
+          "category",
+          "file",
+          "line",
+          "issue",
+          "evidence",
+          "fix_hint",
+          "settling_observation"
+        ]
+      },
+      "minItems": 0
+    },
+    "blind_spots_surfaced": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "\\S"
+      },
+      "minItems": 0
+    },
+    "summary": {
+      "type": "string",
+      "pattern": "\\S"
+    },
+    "model_used": {
+      "type": "string",
+      "pattern": "\\S"
+    },
+    "codex_elapsed_sec": {
+      "type": "number",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "verdict",
+    "anti_slop_score",
+    "axes",
+    "criticality",
+    "findings",
+    "blind_spots_surfaced",
+    "summary"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "verdict": {
+            "const": "pass"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "anti_slop_score": {
+            "minimum": 7
+          },
+          "axes": {
+            "items": {
+              "minimum": 1
+            }
+          }
+        }
+      }
+    }
+  ],
+  "description": "Runtime also checks that anti_slop_score is the sum of the five axes. This is a review record, not a proof of truth."
+}

@@ -106,6 +106,14 @@ for _schema in state action trace evaluator egri-event; do
     scaffold_governance_file "schemas/${_schema}.schema.json" "schemas/${_schema}.schema.json"
 done
 
+# Versioned verification schemas have one canonical source (schemas/), separate
+# from templated workspace policy. Existing files are preserved on every rerun.
+if command -v python3 >/dev/null 2>&1; then
+    python3 -I "$BOOTSTRAP_SCRIPT_DIR/verification_contracts.py" install --workspace "$WORKSPACE_DIR"
+else
+    echo "  [skip] verification contracts: python3 unavailable (not installed)"
+fi
+
 echo "  scaffolded: $scaffolded | preserved: $preserved"
 
 # ─── Phase 2.6: gitignore reconciliation + public-repo advisory ────────────

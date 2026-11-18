@@ -1,0 +1,303 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/broomva/bstack/blob/main/schemas/claim-review.v1.json",
+  "title": "claim-review v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "artifact_hash": {
+      "type": "string",
+      "pattern": "\\S"
+    },
+    "primary_sources": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "\\S"
+      },
+      "minItems": 1
+    },
+    "claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "\\S"
+          },
+          "claim": {
+            "type": "string",
+            "pattern": "\\S"
+          },
+          "what_supports_it": {
+            "type": "string",
+            "pattern": "\\S"
+          },
+          "whats_missing": {
+            "type": "string",
+            "pattern": "\\S"
+          },
+          "status": {
+            "enum": [
+              "established",
+              "contested",
+              "untested"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "claim",
+          "what_supports_it",
+          "whats_missing",
+          "status"
+        ]
+      },
+      "minItems": 1
+    },
+    "skeptic": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "dispatch_id": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "fresh_context": {
+          "const": true
+        },
+        "artifact_hash": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "reviewed_claim_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "\\S"
+          },
+          "minItems": 1
+        },
+        "raw_sources_read": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "\\S"
+          },
+          "minItems": 1
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "claim_id": {
+                "type": "string",
+                "pattern": "\\S"
+              },
+              "reading": {
+                "type": "string",
+                "pattern": "\\S"
+              },
+              "evidence": {
+                "type": "string",
+                "pattern": "\\S"
+              },
+              "settling_observation": {
+                "type": "string",
+                "pattern": "\\S"
+              },
+              "disposition": {
+                "type": "string",
+                "pattern": "\\S"
+              }
+            },
+            "required": [
+              "claim_id",
+              "reading",
+              "evidence",
+              "settling_observation",
+              "disposition"
+            ]
+          },
+          "minItems": 0
+        }
+      },
+      "required": [
+        "dispatch_id",
+        "fresh_context",
+        "artifact_hash",
+        "reviewed_claim_ids",
+        "raw_sources_read",
+        "findings"
+      ]
+    },
+    "believer": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "dispatch_id": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "fresh_context": {
+          "const": true
+        },
+        "artifact_hash": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "reviewed_claim_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "\\S"
+          },
+          "minItems": 1
+        },
+        "raw_sources_read": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "\\S"
+          },
+          "minItems": 1
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "claim_id": {
+                "type": "string",
+                "pattern": "\\S"
+              },
+              "reading": {
+                "type": "string",
+                "pattern": "\\S"
+              },
+              "evidence": {
+                "type": "string",
+                "pattern": "\\S"
+              },
+              "settling_observation": {
+                "type": "string",
+                "pattern": "\\S"
+              },
+              "disposition": {
+                "type": "string",
+                "pattern": "\\S"
+              }
+            },
+            "required": [
+              "claim_id",
+              "reading",
+              "evidence",
+              "settling_observation",
+              "disposition"
+            ]
+          },
+          "minItems": 0
+        }
+      },
+      "required": [
+        "dispatch_id",
+        "fresh_context",
+        "artifact_hash",
+        "reviewed_claim_ids",
+        "raw_sources_read",
+        "findings"
+      ]
+    },
+    "refuter": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "dispatch_id": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "fresh_context": {
+          "const": true
+        },
+        "artifact_hash": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "reviewed_claim_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "\\S"
+          },
+          "minItems": 1
+        },
+        "raw_sources_read": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "\\S"
+          },
+          "minItems": 1
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "claim_id": {
+                "type": "string",
+                "pattern": "\\S"
+              },
+              "reading": {
+                "type": "string",
+                "pattern": "\\S"
+              },
+              "evidence": {
+                "type": "string",
+                "pattern": "\\S"
+              },
+              "settling_observation": {
+                "type": "string",
+                "pattern": "\\S"
+              },
+              "disposition": {
+                "type": "string",
+                "pattern": "\\S"
+              }
+            },
+            "required": [
+              "claim_id",
+              "reading",
+              "evidence",
+              "settling_observation",
+              "disposition"
+            ]
+          },
+          "minItems": 0
+        }
+      },
+      "required": [
+        "dispatch_id",
+        "fresh_context",
+        "artifact_hash",
+        "reviewed_claim_ids",
+        "raw_sources_read",
+        "findings"
+      ]
+    }
+  },
+  "required": [
+    "artifact_hash",
+    "primary_sources",
+    "claims",
+    "skeptic",
+    "believer",
+    "refuter"
+  ]
+}
