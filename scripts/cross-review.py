@@ -391,7 +391,11 @@ def try_parse_json(text: str) -> dict[str, Any] | None:
                 try:
                     candidate = _contracts.loads(text[start : i + 1])
                     return candidate if isinstance(candidate, dict) else None
+                except json.JSONDecodeError:
+                    # A brace-containing log fragment may precede the result.
+                    start = -1
                 except ValueError:
+                    # Ambiguous JSON (duplicate keys/non-finite constants) refuses.
                     return None
     return None
 

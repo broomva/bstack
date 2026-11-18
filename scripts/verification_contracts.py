@@ -84,7 +84,7 @@ def validate_review_result(result: object) -> None:
         elapsed = result["codex_elapsed_sec"]
         if (
             type(elapsed) not in (int, float)
-            or not math.isfinite(elapsed)
+            or (type(elapsed) is float and not math.isfinite(elapsed))
             or elapsed < 0
         ):
             raise ContractError("codex_elapsed_sec must be finite and nonnegative")
