@@ -65,7 +65,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
-REGISTRY_SHA256 = "13283b88b8ead3a05ae11b8467405c2d428c9ba15cc7e3952773414ebd11ffb8"
+REGISTRY_SHA256 = "e808faf8ff5fced184e0118d278ddd35ba7ab3ba7c91eb85279fad9e33329981"
 
 REPO_DIR = ".broomva"
 REPO_LEGACY_DIR = ".control"
@@ -115,6 +115,7 @@ REPO_STATE: Dict[str, str] = {
     'leverage_metrics': 'leverage-metrics.jsonl',
     'leverage_state': 'leverage-state.json',
     'leverage_ship_state': 'leverage-ship-state.json',
+    'leverage_fleet_state': 'leverage-fleet-state.json',
 }
 
 # name -> (path, legacy location or None)

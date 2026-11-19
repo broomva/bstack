@@ -50,6 +50,9 @@ L3_PATHS=(
     ".control/leverage-setpoints.yaml"
     "scripts/leverage-sensor.py"
     "scripts/leverage-ship-sensor.py"
+    # BRO-3955: the fleet scan supplies m6 and the wait-time rows, so it is part of
+    # the metric that watches the agent too.
+    "scripts/leverage-fleet-sensor.py"
     # The context ledger runs inside the sensor's process and its headline joins the
     # sensor's `metrics`, so it is part of the metric that watches the agent.
     "scripts/context_ledger.py"

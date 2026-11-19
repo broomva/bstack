@@ -27,11 +27,25 @@ if [ -f "$SENSOR" ] && command -v python3 >/dev/null 2>&1; then
 fi
 
 # BRO-1707: refresh the exogenous ship-signal (shadow) in the BACKGROUND — never blocks
-# session start; throttled to once/24h; fails silent (gh may be offline/unauth). The main
+# session start; throttled to once/5h (BRO-3955: it also carries m7, and an
+# outward-empty m7 is only acted on while younger than 6 h, so the refresh must
+# come round first); fails silent (gh may be offline/unauth). The main
 # sensor merges the resulting .control/leverage-ship-state.json as a NON-actuating shadow
 # metric (m6s) for calibration until BRO-1709 (enforced CICD gates) promotes it.
 SHIP_SENSOR="$SELF_DIR/leverage-ship-sensor.py"
-if [ -f "$SHIP_SENSOR" ] && command -v python3 >/dev/null 2>&1 && command -v gh >/dev/null 2>&1; then
-    ( python3 -I "$SHIP_SENSOR" --workspace "$WORKSPACE" --throttle 86400 >/dev/null 2>&1 & ) || true
+# No `gh` requirement: without it every repo reads as unreachable, but door
+# receipts can still prove m7 = 1.0, and an empty window is never certified from
+# a partial read (BRO-3955).
+if [ -f "$SHIP_SENSOR" ] && command -v python3 >/dev/null 2>&1; then
+    ( python3 -I "$SHIP_SENSOR" --workspace "$WORKSPACE" --throttle 18000 >/dev/null 2>&1 & ) || true
+fi
+
+# BRO-3955: refresh the host-wide fleet scan in the BACKGROUND — every Claude and
+# Codex transcript on the machine (m6 by repo, agent wait time w1-w3). ~1 s per
+# 7-day window, so it never runs on the Stop path; throttled to once/6h; fails
+# silent. The main sensor merges .control/leverage-fleet-state.json when fresh.
+FLEET_SENSOR="$SELF_DIR/leverage-fleet-sensor.py"
+if [ -f "$FLEET_SENSOR" ] && command -v python3 >/dev/null 2>&1; then
+    ( python3 -I "$FLEET_SENSOR" --workspace "$WORKSPACE" --throttle 21600 >/dev/null 2>&1 & ) || true
 fi
 exit 0

@@ -401,7 +401,9 @@ sp = {"id":"m6","name":"m6","level":"L3","direction":"lower_is_better","target":
 bad = []
 for v in (False, True, float("nan"), float("inf"), float("-inf"), "0.4", None, [], {}):
     r,_ = m.evaluate({"m6_x": v}, {"metrics":[sp]})
-    if r[0]["status"] != "no_setpoint": bad.append((v, r[0]["status"]))
+    # Never graded. On a LIVE graded setpoint the row says unmeasured (BRO-3955):
+    # a shield that went unread is reported, and certifies nothing.
+    if r[0]["status"] != "unmeasured": bad.append((v, r[0]["status"]))
 # polarity: a real number MUST still grade, or this passes by refusing everything
 r,_ = m.evaluate({"m6_x": 0.9}, {"metrics":[sp]})
 if r[0]["status"] != "alert": bad.append((0.9, r[0]["status"]))

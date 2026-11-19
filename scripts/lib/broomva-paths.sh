@@ -18,7 +18,7 @@
 # Unlike the Python reader, git calls here have no timeout: macOS ships no
 # portable `timeout`.
 
-BROOMVA_REGISTRY_SHA256="13283b88b8ead3a05ae11b8467405c2d428c9ba15cc7e3952773414ebd11ffb8"
+BROOMVA_REGISTRY_SHA256="e808faf8ff5fced184e0118d278ddd35ba7ab3ba7c91eb85279fad9e33329981"
 BROOMVA_REPO_DIR=".broomva"
 BROOMVA_REPO_LEGACY_DIR=".control"
 # Owner-written governance under both spellings: the literal list gates hold. An
@@ -73,6 +73,7 @@ _broomva_state_entry() {
         'leverage_metrics') printf '%s\n' 'leverage-metrics.jsonl' ;;
         'leverage_state') printf '%s\n' 'leverage-state.json' ;;
         'leverage_ship_state') printf '%s\n' 'leverage-ship-state.json' ;;
+        'leverage_fleet_state') printf '%s\n' 'leverage-fleet-state.json' ;;
         *) return 2 ;;
     esac
 }
