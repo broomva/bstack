@@ -221,6 +221,14 @@ h = lambda t, u: {"type": "user", "uuid": u, "timestamp": iso(t), "cwd": meta, "
 a = lambda t, u, fp: {"type": "assistant", "uuid": u, "timestamp": iso(t), "cwd": meta,
      "message": {"content": [{"type": "tool_use", "name": "Edit", "input": {"file_path": fp}}]}}
 W(f"{T}/rv-mixed/-p/s.jsonl", [h(c0, "x1"), a(c0 + 10, "x2", f"{meta}/docs/a.md"), a(c0 + 20, "x3", f"{prod}/src/b.ts")], now - 60)
+# E4 — Codex with NO working directory anywhere: an absolute META patch plus a
+# relative patch that nothing can anchor.
+c1 = now - 1800
+W(f"{T}/rv-nocwd/s.jsonl", [{"timestamp": iso(c1), "type": "session_meta", "payload": {"source": "vscode"}},
+  ev(c1, "task_started", turn_id="N1", started_at=str(int(c1))),
+  {"timestamp": iso(c1 + 5), "type": "response_item", "payload": {"type": "custom_tool_call",
+   "input": f"*** Begin Patch\n*** Update File: {meta}/docs/a.md\n@@\n-a\n+b\n*** Update File: src/x.ts\n@@\n-a\n+b\n*** End Patch"}},
+  ev(c1 + 60, "task_complete", turn_id="N1", completed_at=str(int(c1 + 60)))], now - 60)
 # E3 — META plus an edit into a clone that no longer exists (no repo resolvable).
 W(f"{T}/rv-gone/-p/s.jsonl", [h(c0, "g1"), a(c0 + 10, "g2", f"{meta}/docs/a.md"), a(c0 + 20, "g3", f"{T}/gone-clone/src/x.ts")], now - 60)
 PY
@@ -325,6 +333,9 @@ eq "meta + an edit in a vanished clone is not meta-only" "$(get "['raw']['meta_s
 eq "it is unclassified as <unresolved>" "$(get "['raw']['unclassified_repos'].get('<unresolved>')")" "1"
 J="$(run "$TMP/rv-gone" "$EMPTY" "{\"product_repos\":[\"acme/prod\"],\"meta_repos\":[\"acme/meta\"],\"scratch_prefixes\":[\"$TMP/gone-clone\"]}")"
 eq "the same edit under a scratch prefix is ignored -> meta" "$(get "['raw']['meta_sessions']")" "1"
+J="$(run "$EMPTY" "$TMP/rv-nocwd" "$CFG")"
+eq "a relative patch with no working directory is unresolved, not dropped" "$(get "['raw']['meta_sessions']")" "0"
+eq "so the session is unclassified" "$(get "['raw']['unclassified_sessions']")" "1"
 
 echo "== state file: written atomically, no transcript content =="
 python3 -I "$FLEET" --workspace "$TMP" --claude-root "$CR" --codex-root "$XR" --config-json "$CFG" >/dev/null

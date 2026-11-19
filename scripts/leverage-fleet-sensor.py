@@ -186,7 +186,9 @@ def edit_repo(p, cwd=None):
     p = os.path.expanduser(str(p).strip())
     if not os.path.isabs(p):
         if not cwd:
-            return None
+            # A relative path with no working directory to anchor it: where it
+            # landed is unknown, which is exactly an unresolved edit.
+            return "?" + p
         p = os.path.join(cwd, p)
     return "?" + os.path.normpath(p)
 
