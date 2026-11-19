@@ -173,6 +173,24 @@ def repo_of_path(p, cwd=None):
     return repo_of_dir(os.path.dirname(os.path.normpath(p)))
 
 
+def edit_repo(p, cwd=None):
+    """The repo a TOOL edit landed in, or "?<abs path>" when it cannot be resolved.
+    An unresolved edit is kept, not dropped: it may be product work in a clone or
+    worktree that no longer exists, so it must not let a session read as meta-only.
+    measure() discards the ones under scratch or harness folders."""
+    r = repo_of_path(p, cwd)
+    if r:
+        return r
+    if not p:
+        return None
+    p = os.path.expanduser(str(p).strip())
+    if not os.path.isabs(p):
+        if not cwd:
+            return None
+        p = os.path.join(cwd, p)
+    return "?" + os.path.normpath(p)
+
+
 def shell_write_repos(cmd, cwd):
     """Repos a shell command writes into: the targets of redirects, `tee` and
     `sed -i`, resolved as paths. A target that starts with `$` cannot be resolved
@@ -249,7 +267,7 @@ def read_claude(path, seen_uuids):
                     inp = it.get("input") if isinstance(it.get("input"), dict) else {}
                     name = it.get("name")
                     if name in EDIT_TOOLS:
-                        edits.append((t, "tool", repo_of_path(inp.get("file_path") or inp.get("notebook_path"), cwd)))
+                        edits.append((t, "tool", edit_repo(inp.get("file_path") or inp.get("notebook_path"), cwd)))
                     elif name == "Bash":
                         edits += [(t, "shell", r) for r in shell_write_repos(str(inp.get("command", "")), cwd)]
     return {"events": ev, "edits": edits, "cwd": cwd, "entry": entry}
@@ -323,7 +341,7 @@ def read_codex(path, seen_turns):
                 except Exception:
                     pass
                 if files:
-                    bucket += [(lt, "tool", repo_of_path(f, wd)) for f in files]
+                    bucket += [(lt, "tool", edit_repo(f, wd)) for f in files]
                 else:
                     bucket += [(lt, "shell", r) for r in shell_write_repos(cmd, wd)]
     ev, edits = [], []
@@ -383,6 +401,12 @@ def measure(cfg, window_days, claude_root, codex_root, now=None):
     # Sessions started in a scratch directory are throwaway runs (scripted evals,
     # dogfood fixtures), not work: excluded from both m6 and the wait metrics.
     scratch_prefixes = tuple(str(x).rstrip("/") for x in (cfg.get("scratch_prefixes", ["/tmp", "/private/tmp"]) or ()))
+    # Edits outside any repo that are not work toward one: scratch, and the agent
+    # harnesses' own homes (memory, settings). Anything else unresolved is kept.
+    home = os.path.expanduser("~")
+    ignored_unrepo = scratch_prefixes + tuple(
+        os.path.join(home, d) for d in (".claude", ".codex", ".agents", ".config", ".cache"))
+    under = lambda path, prefixes: any(path == x or path.startswith(x + "/") for x in prefixes)
 
     files = []
     if claude_root:
@@ -422,7 +446,10 @@ def measure(cfg, window_days, claude_root, codex_root, now=None):
         scratch = any(cwd == p or cwd.startswith(p + "/") for p in scratch_prefixes)
         # m6 — repo classification of the edits made INSIDE the window
         ed = [e for e in s["edits"] if e[0] >= since]
-        tool_repos = {r for _, k, r in ed if k == "tool" and r}
+        tool_repos = {r for _, k, r in ed if k == "tool" and r
+                      and not (r.startswith("?") and under(r[1:], ignored_unrepo))}
+        # every unresolved edit that survives the filter reads as one unknown repo
+        tool_repos = {("<unresolved>" if r.startswith("?") else r) for r in tool_repos}
         shell_repos = {r for _, k, r in ed if k == "shell" and r}
         edited = any(k == "tool" for _, k, _ in ed) or bool(shell_repos)
         if edited and not scratch:

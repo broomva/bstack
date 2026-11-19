@@ -221,6 +221,8 @@ h = lambda t, u: {"type": "user", "uuid": u, "timestamp": iso(t), "cwd": meta, "
 a = lambda t, u, fp: {"type": "assistant", "uuid": u, "timestamp": iso(t), "cwd": meta,
      "message": {"content": [{"type": "tool_use", "name": "Edit", "input": {"file_path": fp}}]}}
 W(f"{T}/rv-mixed/-p/s.jsonl", [h(c0, "x1"), a(c0 + 10, "x2", f"{meta}/docs/a.md"), a(c0 + 20, "x3", f"{prod}/src/b.ts")], now - 60)
+# E3 — META plus an edit into a clone that no longer exists (no repo resolvable).
+W(f"{T}/rv-gone/-p/s.jsonl", [h(c0, "g1"), a(c0 + 10, "g2", f"{meta}/docs/a.md"), a(c0 + 20, "g3", f"{T}/gone-clone/src/x.ts")], now - 60)
 PY
 
 CFG="{\"product_repos\":[\"acme/prod\"],\"meta_repos\":[\"acme/meta\"],\"scratch_prefixes\":[]}"
@@ -318,6 +320,11 @@ J="$(run "$TMP/rv-mixed" "$EMPTY" '{"product_repos":["acme/x"],"meta_repos":["ac
 eq "meta + external is not meta-only" "$(get "['raw']['meta_sessions']")" "0"
 eq "it is external" "$(get "['raw']['external_sessions']")" "1"
 eq "so m6 has no reading" "$(get "['metrics']['m6_meta_work_session_ratio']")" "None"
+J="$(run "$TMP/rv-gone" "$EMPTY" "$CFG")"
+eq "meta + an edit in a vanished clone is not meta-only" "$(get "['raw']['meta_sessions']")" "0"
+eq "it is unclassified as <unresolved>" "$(get "['raw']['unclassified_repos'].get('<unresolved>')")" "1"
+J="$(run "$TMP/rv-gone" "$EMPTY" "{\"product_repos\":[\"acme/prod\"],\"meta_repos\":[\"acme/meta\"],\"scratch_prefixes\":[\"$TMP/gone-clone\"]}")"
+eq "the same edit under a scratch prefix is ignored -> meta" "$(get "['raw']['meta_sessions']")" "1"
 
 echo "== state file: written atomically, no transcript content =="
 python3 -I "$FLEET" --workspace "$TMP" --claude-root "$CR" --codex-root "$XR" --config-json "$CFG" >/dev/null
