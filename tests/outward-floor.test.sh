@@ -89,7 +89,11 @@ import datetime as d, time; n=d.datetime.now(d.timezone.utc)
 print((n-d.timedelta(days=2000)).strftime("%Y-%m-%dT%H:%M:%S"), int(time.time())-2000*86400, int(time.time())-3600)')"
 REC2="$TMP/receipts2.jsonl"
 printf '{"ts":"%s"}\n{"ts":%s}\n{"ts":"garbage"}\n{"door":"no ts"}\n' "$NAIVE_OLD" "$EPOCH_OLD" > "$REC2"
-eq "old naive-ISO and old epoch receipts do not count" "$(m7 "$F" "$(cfg "$REC2")" | val "['m7_outward_artifact_floor']")" "0.0"
+eq "old naive-ISO and old epoch receipts do not count" "$(m7 "$F" "$(cfg "$REC2")" | val "['outward']['door_receipts']")" "0"
+eq "unplaceable receipt lines block certifying an empty window" "$(m7 "$F" "$(cfg "$REC2")" | val "['m7_outward_artifact_floor']")" "None"
+printf '{"ts":"%s"}\n{"ts":%s}\n' "$NAIVE_OLD" "$EPOCH_OLD" > "$REC2"
+eq "only old, placeable receipts -> 0.0" "$(m7 "$F" "$(cfg "$REC2")" | val "['m7_outward_artifact_floor']")" "0.0"
+printf '{"ts":"%s"}\n{"ts":%s}\n{"ts":"garbage"}\n{"door":"no ts"}\n' "$NAIVE_OLD" "$EPOCH_OLD" > "$REC2"
 eq "unplaceable lines are counted as unparsed" "$(m7 "$F" "$(cfg "$REC2")" | val "['outward']['door_receipts_unparsed']")" "2"
 printf '{"ts":%s}\n' "$EPOCH_NEW" > "$REC2"
 eq "a recent epoch receipt counts" "$(m7 "$F" "$(cfg "$REC2")" | val "['m7_outward_artifact_floor']")" "1.0"
@@ -98,6 +102,15 @@ if [ "$(id -u)" != 0 ]; then
   eq "unreadable receipts + no merges -> null, not 0.0" "$(m7 "$F" "$(cfg "$REC2")" | val "['m7_outward_artifact_floor']")" "None"
   chmod 600 "$REC2"
 fi
+
+echo "== a query at its cap cannot certify an empty window (review) =="
+python3 - "$TMP/capped.json" <<'PY'
+import json, sys
+json.dump({"acme/a": [{"number": i, "mergedAt": "2000-01-01T00:00:00Z", "author": {"login": "x", "is_bot": False}} for i in range(1000)],
+           "acme/b": []}, open(sys.argv[1], "w"))
+PY
+eq "1000 results, none counted -> null" "$(m7 "$TMP/capped.json" | val "['m7_outward_artifact_floor']")" "None"
+eq "the capped repo is named" "$(m7 "$TMP/capped.json" | val "['outward']['capped']")" "['acme/a']"
 
 echo "== fail closed without config =="
 eq "no product repos -> null" "$(m7 "$F" '{"author_allowlist":["broomva"]}' | val "['m7_outward_artifact_floor']")" "None"

@@ -52,7 +52,12 @@ cache(){ cat > "$WS/.control/leverage-state.json" <<J
  "closure":{"closed":true,"sensor_live":true,"reference_authored":true}}
 J
 }
-ship(){ printf '{"measured_at":"%s","m6s_meta_work_ship_ratio":null,"raw":{},"m7_outward_artifact_floor":%s,"outward":{"merged_product_prs":%s}}\n' "$1" "$2" "$3" > "$WS/.control/leverage-ship-state.json"; }
+# ship MEASURED_AT M7 MERGED — as the sensor writes it: a 1.0 carries its newest
+# artifact's time (here: the measurement time), a 0.0 none.
+ship(){ local la=null; [ "$2" = "1.0" ] && la="\"$1\""
+  printf '{"measured_at":"%s","m6s_meta_work_ship_ratio":null,"raw":{},"m7_outward_artifact_floor":%s,"outward":{"merged_product_prs":%s,"window_days":7,"latest_artifact_at":%s,"complete_negative_coverage":true}}\n' "$1" "$2" "$3" "$la" > "$WS/.control/leverage-ship-state.json"; }
+# a record written before latest_artifact_at / complete_negative_coverage existed
+ship_legacy(){ printf '{"measured_at":"%s","m6s_meta_work_ship_ratio":null,"raw":{},"m7_outward_artifact_floor":%s,"outward":{"merged_product_prs":0}}\n' "$1" "$2" > "$WS/.control/leverage-ship-state.json"; }
 brief(){ python3 -I "$SENSOR" --workspace "$WS" --brief --cached --no-store 2>/dev/null; }
 
 echo "== SessionStart: an outward-empty window steers the agent =="
@@ -153,6 +158,26 @@ has "a 0.0 from a partial scan is unmeasured" "UNMEASURED" "$B"
 cache; ship2 "$(agoiso 1)" 1.0 '"not-a-time"'
 B="$(brief)"
 has "an unparseable artifact time is unmeasured" "UNMEASURED" "$B"
+
+echo "== review: legacy records and the cached closure =="
+cache; ship_legacy "$NOW" 0.0
+B="$(brief)"
+has "a legacy 0.0 (no coverage field) is unmeasured" "UNMEASURED" "$B"
+hasnt "and fires no actuator" "Corrective actuator" "$B"
+cache; ship_legacy "$NOW" 1.0
+B="$(brief)"
+has "a legacy 1.0 still holds while fresh" "All graded setpoints within target." "$B"
+# Stop wrote a closure with L3 NOT live; the fresh ship state now carries m7.
+cat > "$WS/.control/leverage-state.json" <<J
+{"measured_at":"$NOW","sessions_analyzed":2,"window_days":7,
+ "metrics":{"m2_tool_error_rate":0.01,"m6_meta_work_session_ratio":null},
+ "raw":{"meta_sessions":0,"product_sessions":0,"tool_results":5},
+ "closure":{"closed":false,"sensor_live":true,"reference_authored":true,
+   "levels":{"L0":{"live":true},"L1":{"live":true},"L2":{"live":true},"L3":{"live":false}}}}
+J
+ship "$NOW" 1.0 4
+B="$(brief)"
+hasnt "the cached closure is recomputed after the merge (L3 now live)" "levels not all live" "$B"
 
 echo "== Stop: a fresh fleet scan replaces the one-checkout m6 =="
 ship "$NOW" 1.0 3

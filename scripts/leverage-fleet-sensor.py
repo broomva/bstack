@@ -311,18 +311,20 @@ def read_codex(path, seen_turns):
                 files = PATCH_FILE_RE.findall(s.replace("\\n", "\n"))
                 bucket = turn_edits.setdefault(cur, [])
                 lt = _ts(o.get("timestamp"))
+                # The call's own working directory, when it names one, decides where
+                # relative paths land -- for a patch header as much as a shell write.
+                wd, cmd = cwd, s
+                try:
+                    a = json.loads(s) if isinstance(s, str) and s.startswith("{") else None
+                    if isinstance(a, dict):
+                        wd = a.get("workdir") or a.get("cwd") or cwd
+                        c = a.get("cmd") if a.get("cmd") is not None else a.get("command")
+                        cmd = " ".join(c) if isinstance(c, list) else str(c or "")
+                except Exception:
+                    pass
                 if files:
-                    bucket += [(lt, "tool", repo_of_path(f, cwd)) for f in files]
+                    bucket += [(lt, "tool", repo_of_path(f, wd)) for f in files]
                 else:
-                    wd, cmd = cwd, s
-                    try:
-                        a = json.loads(s) if isinstance(s, str) and s.startswith("{") else None
-                        if isinstance(a, dict):
-                            wd = a.get("workdir") or a.get("cwd") or cwd
-                            c = a.get("cmd") if a.get("cmd") is not None else a.get("command")
-                            cmd = " ".join(c) if isinstance(c, list) else str(c or "")
-                    except Exception:
-                        pass
                     bucket += [(lt, "shell", r) for r in shell_write_repos(cmd, wd)]
     ev, edits = [], []
     for tid, st in starts.items():
@@ -428,13 +430,15 @@ def measure(cfg, window_days, claude_root, codex_root, now=None):
             repos = tool_repos | shell_repos
             if shell_repos - tool_repos:
                 shell_attributed += 1
+            # Product wins on any product edit. Meta means ONLY meta repos: a session
+            # that also edited an external or unclassified repo is not meta-only.
             if tool_repos & product:
                 tool_product += 1
-            elif tool_repos & meta:
+            elif tool_repos and tool_repos <= meta:
                 tool_meta += 1
             if repos & product:
                 product_s += 1
-            elif repos & meta:
+            elif repos and repos <= meta:
                 meta_s += 1
             elif repos & external:
                 external_s += 1

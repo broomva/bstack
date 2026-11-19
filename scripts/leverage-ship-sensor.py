@@ -290,13 +290,16 @@ DEFAULT_DOOR_RECEIPTS = "~/.config/broomva/door/receipts.jsonl"
 RECEIPT_TS_KEYS = ("ts", "timestamp", "at", "created_at", "logged_at")
 
 
+M7_QUERY_LIMIT = 1000
+
+
 def fetch_merged_light(repo, since_iso, timeout=25):
     """Merged PRs with only the fields m7 needs. The m6s query asks for files and CI
     rollups and caps at 200, which a busy product repo (200+ merges a week) exceeds.
     Returns None on any failure, never an empty list that would read as 0 merges."""
     try:
         out = subprocess.run(
-            ["gh", "pr", "list", "-R", repo, "--state", "merged", "--limit", "1000",
+            ["gh", "pr", "list", "-R", repo, "--state", "merged", "--limit", str(M7_QUERY_LIMIT),
              "--search", f"merged:>={since_iso}", "--json", "number,mergedAt,author"],
             capture_output=True, text=True, timeout=timeout)
         if out.returncode != 0:
@@ -378,7 +381,7 @@ def compute_outward(fleet_cfg, window_days, now=None, fetch=None):
     authors = {str(a).lower() for a in (cfg.get("author_allowlist") or [])}
     cutoff = now - timedelta(days=window_days)
     since_iso = cutoff.strftime("%Y-%m-%d")
-    raw = {"window_days": window_days, "repos": repos, "per_repo": {}, "errors": [],
+    raw = {"window_days": window_days, "repos": repos, "per_repo": {}, "errors": [], "capped": [],
            "merged_product_prs": 0, "door_receipts": 0, "door_receipts_status": None,
            "latest_artifact_at": None}
     latest = None
@@ -390,6 +393,10 @@ def compute_outward(fleet_cfg, window_days, now=None, fetch=None):
         if prs is None:
             raw["errors"].append(repo)
             continue
+        if len(prs) >= M7_QUERY_LIMIT:
+            # A result at the cap may have dropped the one merge that counts: it can
+            # prove a shipment but never that there was none.
+            raw["capped"].append(repo)
         n = 0
         for pr in prs:
             a = pr.get("author") or {}
@@ -411,8 +418,9 @@ def compute_outward(fleet_cfg, window_days, now=None, fetch=None):
     # Proving SOMETHING shipped needs one hit; proving NOTHING did needs every source
     # read. Recorded so a later reader can tell, when a positive ages out, whether
     # this scan could have certified an empty window at all.
-    raw["complete_negative_coverage"] = (not raw["errors"]
-                                         and raw["door_receipts_status"] != "unreadable")
+    raw["complete_negative_coverage"] = (not raw["errors"] and not raw["capped"]
+                                         and raw["door_receipts_status"] != "unreadable"
+                                         and not raw["door_receipts_unparsed"])
     shipped = raw["merged_product_prs"] + raw["door_receipts"]
     if shipped > 0:
         v = 1.0
@@ -422,6 +430,12 @@ def compute_outward(fleet_cfg, window_days, now=None, fetch=None):
     elif raw["door_receipts_status"] == "unreadable":
         v = None
         raw["note"] = "no merges counted and the receipts file is unreadable — not certified either way"
+    elif raw["capped"]:
+        v = None
+        raw["note"] = "nothing counted but a product repo's query hit its cap — not certified either way"
+    elif raw["door_receipts_unparsed"]:
+        v = None
+        raw["note"] = "nothing counted and some receipt lines could not be placed in time — not certified either way"
     else:
         v = 0.0
     return {"m7_outward_artifact_floor": v, "outward": raw}

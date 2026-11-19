@@ -196,6 +196,33 @@ W(f"{T}/r3-long/s.jsonl", [{"timestamp": iso(s0), "type": "session_meta", "paylo
   ev(y + 60, "task_complete", turn_id="R1", completed_at=str(int(y + 60)))], now - 60)
 PY
 
+# Review regressions.
+python3 - "$TMP" <<'PY'
+import json, os, sys, time
+T = sys.argv[1]; now = time.time()
+iso = lambda t: time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(t)) + ".000Z"
+def W(path, rows, mtime):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        for r in rows: f.write(json.dumps(r) + "\n")
+    os.utime(path, (mtime, mtime))
+meta, prod = f"{T}/meta", f"{T}/prod"
+c0 = now - 3600
+ev = lambda t, typ, **p: {"timestamp": iso(t), "type": "event_msg", "payload": dict(type=typ, **p)}
+# E1 — session cwd is META; a shell call carries workdir=PROD and an apply_patch
+# with a relative path: the edit lands in PROD.
+call = {"timestamp": iso(c0 + 10), "type": "response_item", "payload": {"type": "function_call", "arguments": json.dumps(
+    {"cmd": ["apply_patch", "*** Begin Patch\n*** Update File: src/app.py\n@@\n-a\n+b\n*** End Patch"], "workdir": prod})}}
+W(f"{T}/rv-workdir/s.jsonl", [{"timestamp": iso(c0), "type": "session_meta", "payload": {"cwd": meta, "source": "vscode"}},
+  ev(c0, "task_started", turn_id="W1", started_at=str(int(c0))), call,
+  ev(c0 + 60, "task_complete", turn_id="W1", completed_at=str(int(c0 + 60)))], now - 60)
+# E2 — one Claude session edits META and an EXTERNAL repo: not meta-only.
+h = lambda t, u: {"type": "user", "uuid": u, "timestamp": iso(t), "cwd": meta, "entrypoint": "sdk-ts", "message": {"content": "x"}}
+a = lambda t, u, fp: {"type": "assistant", "uuid": u, "timestamp": iso(t), "cwd": meta,
+     "message": {"content": [{"type": "tool_use", "name": "Edit", "input": {"file_path": fp}}]}}
+W(f"{T}/rv-mixed/-p/s.jsonl", [h(c0, "x1"), a(c0 + 10, "x2", f"{meta}/docs/a.md"), a(c0 + 20, "x3", f"{prod}/src/b.ts")], now - 60)
+PY
+
 CFG="{\"product_repos\":[\"acme/prod\"],\"meta_repos\":[\"acme/meta\"],\"scratch_prefixes\":[]}"
 run(){ python3 -I "$FLEET" --workspace "$TMP" --claude-root "$1" --codex-root "$2" --config-json "$3" --json --no-store; }
 J="$(run "$CR" "$XR" "$CFG")"
@@ -283,6 +310,14 @@ eq "parent modified AFTER its subagent: still one editing session" "$(get "['raw
 eq "and the parent keeps its reply" "$(get "['raw']['human_replies']")" "1"
 J="$(run "$EMPTY" "$TMP/r3-long" "$CFG")"
 eq "an in-window edit in a turn that began before the window counts" "$(get "['raw']['meta_sessions']")" "1"
+
+echo "== review: the call's workdir, and meta means only meta =="
+J="$(run "$EMPTY" "$TMP/rv-workdir" "$CFG")"
+eq "a relative patch path resolves against the call's workdir" "$(get "['raw']['product_sessions']")" "1"
+J="$(run "$TMP/rv-mixed" "$EMPTY" '{"product_repos":["acme/x"],"meta_repos":["acme/meta"],"external_repos":["acme/prod"],"scratch_prefixes":[]}')"
+eq "meta + external is not meta-only" "$(get "['raw']['meta_sessions']")" "0"
+eq "it is external" "$(get "['raw']['external_sessions']")" "1"
+eq "so m6 has no reading" "$(get "['metrics']['m6_meta_work_session_ratio']")" "None"
 
 echo "== state file: written atomically, no transcript content =="
 python3 -I "$FLEET" --workspace "$TMP" --claude-root "$CR" --codex-root "$XR" --config-json "$CFG" >/dev/null

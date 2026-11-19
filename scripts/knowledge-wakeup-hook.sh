@@ -33,7 +33,10 @@ fi
 # sensor merges the resulting .control/leverage-ship-state.json as a NON-actuating shadow
 # metric (m6s) for calibration until BRO-1709 (enforced CICD gates) promotes it.
 SHIP_SENSOR="$SELF_DIR/leverage-ship-sensor.py"
-if [ -f "$SHIP_SENSOR" ] && command -v python3 >/dev/null 2>&1 && command -v gh >/dev/null 2>&1; then
+# No `gh` requirement: without it every repo reads as unreachable, but door
+# receipts can still prove m7 = 1.0, and an empty window is never certified from
+# a partial read (BRO-3955).
+if [ -f "$SHIP_SENSOR" ] && command -v python3 >/dev/null 2>&1; then
     ( python3 -I "$SHIP_SENSOR" --workspace "$WORKSPACE" --throttle 18000 >/dev/null 2>&1 & ) || true
 fi
 

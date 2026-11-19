@@ -633,10 +633,9 @@ def effective_m7(sd, age, now=None):
     now = now or time.time()
     if "latest_artifact_at" not in o:
         # A record from before latest_artifact_at existed: it cannot be aged, so its
-        # 1.0 stands while the file is fresh and its 0.0 only while it is recent.
-        if float(m7) >= 1.0:
-            return 1.0
-        return 0.0 if age <= M7_ALARM_MAX_AGE_SEC else None
+        # 1.0 stands while the file is fresh. It also predates
+        # complete_negative_coverage, so its 0.0 cannot show it read every source.
+        return 1.0 if float(m7) >= 1.0 else None
     latest = None
     if o.get("latest_artifact_at") is not None:
         try:
@@ -1445,6 +1444,13 @@ def main():
                     # must not be certified either: drop the whole grading rather than
                     # render half of it.
                     st["results"], st["worst"] = [], None
+                # The merge above can make L3 live, or take its evidence away, after
+                # the Stop hook wrote this closure: recompute it from the refreshed
+                # record (BRO-3955). A record that cannot support it keeps none.
+                try:
+                    st["closure"] = closure_verdict(st, sp_now)
+                except Exception:
+                    st.pop("closure", None)
                 print(render_brief(st))
                 return
         except Exception:
