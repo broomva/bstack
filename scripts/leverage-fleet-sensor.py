@@ -310,8 +310,9 @@ def read_codex(path, seen_turns):
                 s = raw_args if isinstance(raw_args, str) else json.dumps(raw_args or "")
                 files = PATCH_FILE_RE.findall(s.replace("\\n", "\n"))
                 bucket = turn_edits.setdefault(cur, [])
+                lt = _ts(o.get("timestamp"))
                 if files:
-                    bucket += [("tool", repo_of_path(f, cwd)) for f in files]
+                    bucket += [(lt, "tool", repo_of_path(f, cwd)) for f in files]
                 else:
                     wd, cmd = cwd, s
                     try:
@@ -322,7 +323,7 @@ def read_codex(path, seen_turns):
                             cmd = " ".join(c) if isinstance(c, list) else str(c or "")
                     except Exception:
                         pass
-                    bucket += [("shell", r) for r in shell_write_repos(cmd, wd)]
+                    bucket += [(lt, "shell", r) for r in shell_write_repos(cmd, wd)]
     ev, edits = [], []
     for tid, st in starts.items():
         if tid in seen_turns:
@@ -332,7 +333,12 @@ def read_codex(path, seen_turns):
         ev.append((st, "machine" if tid in machine_turns else "human"))
         if en and en >= st:
             ev.append((en, "agent"))
-        edits += [(st, k, r) for k, r in turn_edits.get(tid, ())]
+        # An edit keeps its own line time, so a turn that began before the window and
+        # edited inside it counts. A replayed line carries the replay time, which
+        # falls outside its turn's span: clamp such a time to the turn's start.
+        for lt, k, r in turn_edits.get(tid, ()):
+            ok = lt is not None and lt >= st and (en is None or lt <= en)
+            edits.append((lt if ok else st, k, r))
     entry = src if isinstance(src, str) else ("subagent" if src else None)
     return {"events": ev, "edits": edits, "cwd": cwd, "entry": entry}
 
@@ -386,11 +392,12 @@ def measure(cfg, window_days, claude_root, codex_root, now=None):
     #   Claude newest first -- a resumed copy repeats the earlier lines and continues
     #     them, so it is the superset; oldest-first would split one session in two
     #     and lose the wait where it resumed.
-    #   Codex oldest first -- a subagent's file replays its PARENT's turns before its
-    #     own; newest-first would hand the parent's human turns to the subagent,
-    #     whose waits are then excluded as a subagent's.
+    #   Codex by CREATION time, oldest first -- a subagent's file replays its
+    #     PARENT's turns, and the parent must claim them. Modification time is the
+    #     wrong clock here: a parent records the end of its turn after the child
+    #     returns, so the parent's file is usually the NEWER one.
     files = [(h, f) for h, f in files if _mtime(f) >= since]
-    files.sort(key=lambda hf: _mtime(hf[1]) if hf[0] == "codex" else -_mtime(hf[1]))
+    files.sort(key=lambda hf: _codex_created(hf[1]) if hf[0] == "codex" else -_mtime(hf[1]))
 
     seen_uuids, seen_turns = set(), set()
     read = {"claude": 0, "codex": 0}
@@ -503,6 +510,20 @@ def measure(cfg, window_days, claude_root, codex_root, now=None):
             "notes": notes,
         },
     }
+
+
+def _codex_created(path):
+    """When a Codex session file was created: its first line's session_meta
+    timestamp, else its modification time."""
+    try:
+        with open(path, errors="ignore") as f:
+            o = json.loads(f.readline())
+        t = _ts(o.get("timestamp")) or _ts((o.get("payload") or {}).get("timestamp"))
+        if t is not None:
+            return t
+    except Exception:
+        pass
+    return _mtime(path)
 
 
 def _mtime(path):

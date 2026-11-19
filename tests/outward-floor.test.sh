@@ -34,6 +34,7 @@ J
 eq "one recent merge -> 1.0" "$(m7 "$F" | val "['m7_outward_artifact_floor']")" "1.0"
 eq "counted per repo" "$(m7 "$F" | val "['outward']['per_repo']['acme/a']")" "1"
 eq "the newest artifact time is recorded" "$(m7 "$F" | val "['outward']['latest_artifact_at'][:19]")" "${RECENT:0:19}"
+eq "a scan that read every source says so" "$(m7 "$F" | val "['outward']['complete_negative_coverage']")" "True"
 F=$(fx none <<J
 {"acme/a":[],"acme/b":[]}
 J
@@ -69,6 +70,7 @@ F=$(fx partial-shipped <<J
 J
 )
 eq "a counted merge still certifies 1.0 despite an outage" "$(m7 "$F" | val "['m7_outward_artifact_floor']")" "1.0"
+eq "but that scan cannot later certify an empty window" "$(m7 "$F" | val "['outward']['complete_negative_coverage']")" "False"
 
 echo "== door receipts =="
 REC="$TMP/receipts.jsonl"

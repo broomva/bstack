@@ -125,7 +125,8 @@ has "and names it" "tool_error_rate (L0)" "$B"
 
 echo "== an alarm is only acted on while its measurement is recent (round 2) =="
 agoiso(){ python3 -c "import datetime as d,sys;print((d.datetime.now(d.timezone.utc)-d.timedelta(hours=float(sys.argv[1]))).isoformat(timespec='seconds'))" "$1"; }
-ship2(){ printf '{"measured_at":"%s","m6s_meta_work_ship_ratio":null,"raw":{},"m7_outward_artifact_floor":%s,"outward":{"window_days":7,"latest_artifact_at":%s}}\n' "$1" "$2" "$3" > "$WS/.control/leverage-ship-state.json"; }
+# ship2 MEASURED_AT M7 LATEST_ARTIFACT_AT [COMPLETE_NEGATIVE_COVERAGE=true]
+ship2(){ printf '{"measured_at":"%s","m6s_meta_work_ship_ratio":null,"raw":{},"m7_outward_artifact_floor":%s,"outward":{"window_days":7,"latest_artifact_at":%s,"complete_negative_coverage":%s}}\n' "$1" "$2" "$3" "${4:-true}" > "$WS/.control/leverage-ship-state.json"; }
 cache; ship2 "$(agoiso 7)" 0.0 null
 B="$(brief)"
 has "a 7 h old outward-empty reading is not acted on" "UNMEASURED" "$B"
@@ -140,6 +141,18 @@ has "a 1.0 whose newest artifact aged out of the window becomes 0.0" "Worst gap 
 cache; ship2 "$(agoiso 40)" 1.0 "\"$(agoiso 48)\""
 B="$(brief)"
 has "a 40 h old 1.0 whose artifact is 2 days old still holds" "All graded setpoints within target." "$B"
+
+echo "== proving nothing shipped needs every source read (round 3) =="
+cache; ship2 "$(agoiso 1)" 1.0 "\"$(agoiso 192)\"" false
+B="$(brief)"
+has "an aged-out 1.0 from a PARTIAL scan is unmeasured, not an alarm" "UNMEASURED" "$B"
+hasnt "and fires no actuator" "Corrective actuator" "$B"
+cache; ship2 "$(agoiso 1)" 0.0 null false
+B="$(brief)"
+has "a 0.0 from a partial scan is unmeasured" "UNMEASURED" "$B"
+cache; ship2 "$(agoiso 1)" 1.0 '"not-a-time"'
+B="$(brief)"
+has "an unparseable artifact time is unmeasured" "UNMEASURED" "$B"
 
 echo "== Stop: a fresh fleet scan replaces the one-checkout m6 =="
 ship "$NOW" 1.0 3

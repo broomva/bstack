@@ -617,9 +617,12 @@ def effective_m7(sd, age, now=None):
          window as of now -- positive evidence ages by its own timestamp, so it
          needs no refresh until it falls out of the window. A record from before
          latest_artifact_at existed keeps its 1.0 while the file is fresh (<48 h).
-    0.0  the record found nothing (or its evidence has since aged out) AND the
-         record is younger than M7_ALARM_MAX_AGE_SEC.
-    None anything else: no reading, a stale record, or an alarm too old to act on."""
+    0.0  the record found nothing (or its evidence has since aged out), its scan
+         read every source (raw.complete_negative_coverage -- a scan that found a
+         hit despite an outage proved something shipped, not that nothing did),
+         AND the record is younger than M7_ALARM_MAX_AGE_SEC.
+    None anything else: no reading, a stale record, a partial scan, an unparseable
+         artifact time, or an alarm too old to act on."""
     if not isinstance(sd, dict) or age is None or age >= 172800:
         return None
     m7 = sd.get("m7_outward_artifact_floor")
@@ -628,16 +631,22 @@ def effective_m7(sd, age, now=None):
     o = sd.get("outward") if isinstance(sd.get("outward"), dict) else {}
     window_s = float(o.get("window_days") or 7) * 86400
     now = now or time.time()
+    if "latest_artifact_at" not in o:
+        # A record from before latest_artifact_at existed: it cannot be aged, so its
+        # 1.0 stands while the file is fresh and its 0.0 only while it is recent.
+        if float(m7) >= 1.0:
+            return 1.0
+        return 0.0 if age <= M7_ALARM_MAX_AGE_SEC else None
     latest = None
-    try:
-        if o.get("latest_artifact_at"):
+    if o.get("latest_artifact_at") is not None:
+        try:
             latest = datetime.fromisoformat(str(o["latest_artifact_at"]).replace("Z", "+00:00")).timestamp()
-    except (TypeError, ValueError):
-        latest = None
+        except (TypeError, ValueError):
+            return None  # an artifact time that cannot be placed proves nothing either way
     if latest is not None and now - latest <= window_s:
         return 1.0
-    if float(m7) >= 1.0 and latest is None and "latest_artifact_at" not in o:
-        return 1.0
+    if o.get("complete_negative_coverage") is not True:
+        return None
     return 0.0 if age <= M7_ALARM_MAX_AGE_SEC else None
 
 

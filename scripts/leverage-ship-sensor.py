@@ -408,6 +408,11 @@ def compute_outward(fleet_cfg, window_days, now=None, fetch=None):
     # When the newest counted artifact landed. A 1.0 stays true until this ages out
     # of the window, without any refresh; the main sensor ages it at read time.
     raw["latest_artifact_at"] = latest.isoformat(timespec="seconds") if latest else None
+    # Proving SOMETHING shipped needs one hit; proving NOTHING did needs every source
+    # read. Recorded so a later reader can tell, when a positive ages out, whether
+    # this scan could have certified an empty window at all.
+    raw["complete_negative_coverage"] = (not raw["errors"]
+                                         and raw["door_receipts_status"] != "unreadable")
     shipped = raw["merged_product_prs"] + raw["door_receipts"]
     if shipped > 0:
         v = 1.0

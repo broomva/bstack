@@ -162,6 +162,40 @@ W(f"{T}/r2-bad/good.jsonl", [{"timestamp": iso(c0), "type": "session_meta", "pay
   ev("task_complete", turn_id="G1", completed_at=str(int(c0 + 60)))], now - 120)
 PY
 
+# Round 3 regressions.
+python3 - "$TMP" <<'PY'
+import json, os, sys, time
+T = sys.argv[1]; now = time.time()
+iso = lambda t: time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(t)) + ".000Z"
+def W(path, rows, mtime):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        for r in rows: f.write(json.dumps(r) + "\n")
+    os.utime(path, (mtime, mtime))
+meta = f"{T}/meta"
+ev = lambda t, typ, **p: {"timestamp": iso(t), "type": "event_msg", "payload": dict(type=typ, **p)}
+pt = lambda t, f: {"timestamp": iso(t), "type": "response_item", "payload": {"type": "custom_tool_call",
+                   "input": f"*** Begin Patch\n*** Update File: {f}\n@@\n-a\n+b\n*** End Patch"}}
+# D1 — the REAL order: the parent is CREATED first but MODIFIED last (it records
+# the end of its turn after the child returns). The child replays P1.
+c0 = now - 3 * 3600
+p_head = [{"timestamp": iso(c0), "type": "session_meta", "payload": {"cwd": meta, "source": "vscode"}},
+          ev(c0, "task_started", turn_id="Q1", started_at=str(int(c0))), pt(c0 + 10, "docs/a.md"),
+          ev(c0 + 60, "task_complete", turn_id="Q1", completed_at=str(int(c0 + 60)))]
+W(f"{T}/r3-order/parent.jsonl", p_head + [ev(c0 + 660, "task_started", turn_id="Q2", started_at=str(int(c0 + 660))),
+  ev(c0 + 700, "task_complete", turn_id="Q2", completed_at=str(int(c0 + 700)))], now - 30)
+W(f"{T}/r3-order/child.jsonl",
+  [{"timestamp": iso(c0 + 100), "type": "session_meta", "payload": {"cwd": meta, "source": {"subagent": {}}}}]
+  + [dict(r, timestamp=iso(c0 + 100)) for r in p_head]
+  + [ev(c0 + 120, "task_started", turn_id="L1", started_at=str(int(c0 + 120))),
+     ev(c0 + 180, "task_complete", turn_id="L1", completed_at=str(int(c0 + 180)))], now - 3000)
+# D2 — a Codex turn that began 8 days ago and edited yesterday counts this week.
+s0, y = now - 8 * 86400, now - 86400
+W(f"{T}/r3-long/s.jsonl", [{"timestamp": iso(s0), "type": "session_meta", "payload": {"cwd": meta, "source": "vscode"}},
+  ev(s0, "task_started", turn_id="R1", started_at=str(int(s0))), pt(y, "docs/b.md"),
+  ev(y + 60, "task_complete", turn_id="R1", completed_at=str(int(y + 60)))], now - 60)
+PY
+
 CFG="{\"product_repos\":[\"acme/prod\"],\"meta_repos\":[\"acme/meta\"],\"scratch_prefixes\":[]}"
 run(){ python3 -I "$FLEET" --workspace "$TMP" --claude-root "$1" --codex-root "$2" --config-json "$3" --json --no-store; }
 J="$(run "$CR" "$XR" "$CFG")"
@@ -242,6 +276,13 @@ print(sorted(f.shell_write_repos("awk '$3 > 0.5' data.tsv", sys.argv[2])), sorte
 PY
 )"
 eq "'> 0.5' is a comparison, '> out.tsv' is a write" "$R" "[] ['acme/meta']"
+
+echo "== round 3: Codex creation order, edits keep their own time =="
+J="$(run "$EMPTY" "$TMP/r3-order" "$CFG")"
+eq "parent modified AFTER its subagent: still one editing session" "$(get "['raw']['editing_sessions']")" "1"
+eq "and the parent keeps its reply" "$(get "['raw']['human_replies']")" "1"
+J="$(run "$EMPTY" "$TMP/r3-long" "$CFG")"
+eq "an in-window edit in a turn that began before the window counts" "$(get "['raw']['meta_sessions']")" "1"
 
 echo "== state file: written atomically, no transcript content =="
 python3 -I "$FLEET" --workspace "$TMP" --claude-root "$CR" --codex-root "$XR" --config-json "$CFG" >/dev/null

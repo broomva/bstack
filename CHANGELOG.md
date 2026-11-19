@@ -24,7 +24,9 @@
   window unprovable. This uses a merge-count query of its own: the m6s query's
   200-PR cap is below a busy product repo's weekly merges. A 1.0 ages with its
   newest artifact; a 0.0 is acted on only while under 6 h old, and the brief
-  prints its age. The ship sensor now refreshes every 6 h (was 24 h).
+  prints its age; a 0.0 also needs a scan that read every source
+  (`complete_negative_coverage`). The ship sensor refreshes every 5 h (was 24 h).
+  `leverage-fleet-state.json` is registered in `references/paths.toml`.
 - **A declared setpoint with no reading is reported as `unmeasured`.** Before this,
   `evaluate()` iterated only measured metrics, so m7, declared on 2026-08-16, never
   appeared, and the brief said "All graded setpoints within target". The brief and
