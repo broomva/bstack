@@ -34,4 +34,13 @@ SHIP_SENSOR="$SELF_DIR/leverage-ship-sensor.py"
 if [ -f "$SHIP_SENSOR" ] && command -v python3 >/dev/null 2>&1 && command -v gh >/dev/null 2>&1; then
     ( python3 -I "$SHIP_SENSOR" --workspace "$WORKSPACE" --throttle 86400 >/dev/null 2>&1 & ) || true
 fi
+
+# BRO-3955: refresh the host-wide fleet scan in the BACKGROUND — every Claude and
+# Codex transcript on the machine (m6 by repo, agent wait time w1-w3). ~1 s per
+# 7-day window, so it never runs on the Stop path; throttled to once/6h; fails
+# silent. The main sensor merges .control/leverage-fleet-state.json when fresh.
+FLEET_SENSOR="$SELF_DIR/leverage-fleet-sensor.py"
+if [ -f "$FLEET_SENSOR" ] && command -v python3 >/dev/null 2>&1; then
+    ( python3 -I "$FLEET_SENSOR" --workspace "$WORKSPACE" --throttle 21600 >/dev/null 2>&1 & ) || true
+fi
 exit 0

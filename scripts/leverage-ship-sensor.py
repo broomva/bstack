@@ -280,6 +280,106 @@ def compute(cfg, window_days, now=None):
     return result, gh_ok
 
 
+# ── m7 outward_artifact_floor (BRO-3955) ──────────────────────────────────────
+# A FLOOR, not a ratio: did anything reach the world in the last window? One merged
+# product PR by an allowlisted author, or one door receipt, satisfies it. Meta volume
+# cannot violate it; only a window of silence toward the world fires it. Product repos
+# come from setpoints `fleet.product_repos` (the same list the fleet sensor uses to
+# classify m6), so "product" means one thing across the loop.
+DEFAULT_DOOR_RECEIPTS = "~/.config/broomva/door/receipts.jsonl"
+RECEIPT_TS_KEYS = ("ts", "timestamp", "at", "created_at", "logged_at")
+
+
+def fetch_merged_light(repo, since_iso, timeout=25):
+    """Merged PRs with only the fields m7 needs. The m6s query asks for files and CI
+    rollups and caps at 200, which a busy product repo (200+ merges a week) exceeds.
+    Returns None on any failure, never an empty list that would read as 0 merges."""
+    try:
+        out = subprocess.run(
+            ["gh", "pr", "list", "-R", repo, "--state", "merged", "--limit", "1000",
+             "--search", f"merged:>={since_iso}", "--json", "number,mergedAt,author"],
+            capture_output=True, text=True, timeout=timeout)
+        if out.returncode != 0:
+            return None
+        data = json.loads(out.stdout or "[]")
+        if not data and not _repo_exists(repo, timeout=10):
+            return None
+        return data
+    except Exception:
+        return None
+
+
+def count_receipts(path, cutoff):
+    """(count in window, status). status is 'absent' when the file does not exist on
+    this host -- a door logged on another machine is not seen, and saying so is the
+    point: an absent file is not evidence of no doors."""
+    p = os.path.expanduser(path or DEFAULT_DOOR_RECEIPTS)
+    if not os.path.exists(p):
+        return 0, "absent"
+    n = 0
+    try:
+        with open(p, errors="ignore") as f:
+            for line in f:
+                try:
+                    o = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(o, dict):
+                    continue
+                ts = next((o[k] for k in RECEIPT_TS_KEYS if o.get(k)), None)
+                if ts is not None and _in_window(ts, cutoff):
+                    n += 1
+    except OSError:
+        return 0, "unreadable"
+    return n, "read"
+
+
+def compute_outward(fleet_cfg, window_days, now=None, fetch=None):
+    """PURE given `fetch`. Returns {"m7_outward_artifact_floor": 1.0|0.0|None, "outward": raw}.
+
+    1.0  at least one counted merge or receipt in the window.
+    0.0  every product repo was reachable, none had a counted merge, no receipt.
+    None not measured: no product repos or author allowlist configured, or a repo
+         was unreachable while nothing was counted (an empty window cannot be
+         certified from a partial read -- the alarm would fire on an outage)."""
+    now = now or datetime.now(timezone.utc)
+    fetch = fetch or fetch_merged_light
+    cfg = fleet_cfg if isinstance(fleet_cfg, dict) else {}
+    repos = [str(r) for r in (cfg.get("product_repos") or [])]
+    authors = {str(a).lower() for a in (cfg.get("author_allowlist") or [])}
+    cutoff = now - timedelta(days=window_days)
+    since_iso = cutoff.strftime("%Y-%m-%d")
+    raw = {"window_days": window_days, "repos": repos, "per_repo": {}, "errors": [],
+           "merged_product_prs": 0, "door_receipts": 0, "door_receipts_status": None}
+    if not repos or not authors:
+        raw["note"] = "fleet.product_repos and fleet.author_allowlist must both be set — m7 not measured"
+        return {"m7_outward_artifact_floor": None, "outward": raw}
+    for repo in repos:
+        prs = fetch(repo, since_iso)
+        if prs is None:
+            raw["errors"].append(repo)
+            continue
+        n = 0
+        for pr in prs:
+            a = pr.get("author") or {}
+            if a.get("is_bot") or str(a.get("login", "")).lower() not in authors:
+                continue
+            if _in_window(pr.get("mergedAt"), cutoff):
+                n += 1
+        raw["per_repo"][repo] = n
+        raw["merged_product_prs"] += n
+    raw["door_receipts"], raw["door_receipts_status"] = count_receipts(cfg.get("door_receipts"), cutoff)
+    shipped = raw["merged_product_prs"] + raw["door_receipts"]
+    if shipped > 0:
+        v = 1.0
+    elif raw["errors"]:
+        v = None
+        raw["note"] = "nothing counted and some product repos were unreachable — not certified either way"
+    else:
+        v = 0.0
+    return {"m7_outward_artifact_floor": v, "outward": raw}
+
+
 def _in_window(merged_at, cutoff):
     if not merged_at:
         return False
@@ -296,6 +396,10 @@ def main():
     ap.add_argument("--window", type=int, default=None)
     ap.add_argument("--fixture", default=None, help="classify a PR-list JSON file (hermetic test)")
     ap.add_argument("--config-json", default=None, help="inline ship_signal config as JSON (hermetic test)")
+    ap.add_argument("--outward-fixture", default=None,
+                    help="m7 from a {repo: [PR, ...]} JSON file instead of gh (hermetic test)")
+    ap.add_argument("--fleet-config-json", default=None,
+                    help="inline setpoints `fleet` block as JSON (hermetic test)")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--no-store", action="store_true")
     ap.add_argument("--throttle", type=int, default=0,
@@ -311,6 +415,7 @@ def main():
                 return
         except Exception:
             pass
+    fleet_cfg = {}
     if args.config_json:
         cfg = json.loads(args.config_json)
         window = args.window if args.window is not None else 7
@@ -318,16 +423,30 @@ def main():
         setpoints_path = os.path.join(workspace, ".control", "leverage-setpoints.yaml")
         setpoints = load_setpoints(setpoints_path)
         cfg = setpoints.get("ship_signal", {}) or {}
+        fleet_cfg = setpoints.get("fleet", {}) or {}
         window = args.window if args.window is not None else setpoints.get("window_days", 7)
+    if args.fleet_config_json:
+        fleet_cfg = json.loads(args.fleet_config_json)
 
     if args.fixture:
         prs = json.load(open(args.fixture))
         result = classify_prs(prs, cfg)
         gh_ok = True
         repos = ["<fixture>"]
+    elif args.outward_fixture:
+        result, gh_ok, repos = {"m6s_meta_work_ship_ratio": None, "raw": {}}, True, []
     else:
         result, gh_ok = compute(cfg, window)
         repos = cfg.get("repos", [])
+
+    if args.outward_fixture:
+        with open(args.outward_fixture) as f:
+            fx = json.load(f)
+        outward = compute_outward(fleet_cfg, window, fetch=lambda repo, _since: fx.get(repo))
+    elif args.fixture:
+        outward = {"m7_outward_artifact_floor": None, "outward": {"note": "not computed in --fixture mode"}}
+    else:
+        outward = compute_outward(fleet_cfg, window)
 
     record = {
         "measured_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -337,9 +456,11 @@ def main():
         "repos": repos,
         "m6s_meta_work_ship_ratio": result["m6s_meta_work_ship_ratio"],
         "raw": result["raw"],
+        "m7_outward_artifact_floor": outward["m7_outward_artifact_floor"],
+        "outward": outward["outward"],
     }
 
-    if not args.no_store and not args.fixture:
+    if not args.no_store and not args.fixture and not args.outward_fixture:
         state_file = os.path.join(workspace, ".control", "leverage-ship-state.json")
         d = os.path.dirname(state_file)
         os.makedirs(d, exist_ok=True)
@@ -371,6 +492,14 @@ def main():
         if raw.get("errors"):
             print(f"  unreachable repos (degraded): {raw['errors']}")
         print("  NON-ACTUATING until BRO-1709 (branch protection) promotes it.")
+        o = record["outward"]
+        print(f"[outward] m7_outward_artifact_floor = {record['m7_outward_artifact_floor']}  "
+              f"({o.get('merged_product_prs', 0)} merged product PRs {o.get('per_repo', {})}, "
+              f"{o.get('door_receipts', 0)} door receipts [{o.get('door_receipts_status')}])")
+        if o.get("errors"):
+            print(f"  unreachable product repos: {o['errors']}")
+        if o.get("note"):
+            print(f"  note: {o['note']}")
 
 
 if __name__ == "__main__":

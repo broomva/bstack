@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.53.0 — 2026-11-19
+
+### feat(leverage): the L3 governor measures again — fleet m6, m7 outward floor, unmeasured setpoints, agent wait time
+
+- **`scripts/leverage-fleet-sensor.py` (new).** Reads every Claude Code and Codex
+  transcript on the host and writes `.control/leverage-fleet-state.json`. m6 is
+  classified by the git repo each edit lands in (`fleet.product_repos` /
+  `fleet.meta_repos`), counting tool edits, Codex `apply_patch` and shell writes.
+  Read from one checkout's Claude transcripts, m6 saturated at 1.0 by construction:
+  in the workspace that motivated this it read 1.00 at checkout scope and 0.14–0.54
+  across the host, depending on the window. The raw block
+  keeps the tool-edits-only value, so the shell heuristic's effect is visible. It
+  also measures agent wait time: w1 idle share with waits capped at 30 min, w2
+  median reply latency, w3 sessions waiting at once. The sensor runs in the
+  background at SessionStart, throttled to every 6 h.
+- **m7 `outward_artifact_floor` is measured.** `leverage-ship-sensor.py` counts
+  merged PRs by `fleet.author_allowlist` in `fleet.product_repos` over the window,
+  plus door receipts. It reports 1.0 when anything shipped, 0.0 when every product
+  repo was read and none had a merge, and null when an unreachable repo leaves the
+  window unprovable. This uses a merge-count query of its own: the m6s query's
+  200-PR cap is below a busy product repo's weekly merges.
+- **A declared setpoint with no reading is reported as `unmeasured`.** Before this,
+  `evaluate()` iterated only measured metrics, so m7, declared on 2026-08-16, never
+  appeared, and the brief said "All graded setpoints within target". The brief and
+  the human view now name every unmeasured graded setpoint and certify nothing
+  while one exists.
+- **SessionStart regrades against the latest ship and fleet state.** Both sensors
+  run in the background and finish after the Stop hook writes its cache. Without
+  this, a fresh m7 would wait for the next Stop.
+- L3 closure counts a fleet-scope m6 or a measured m7 as positive evidence. The
+  fleet sensor is an L3 path in `l3-stability-pretool-hook.sh`.
+- Tests: `fleet-sensor`, `outward-floor` and `leverage-l3-wiring`, all
+  mutation-checked. `hook-python-isolation` points the fleet sensor at empty roots
+  so it never reads the host it runs on.
+
+### Migration
+
+Add a `fleet:` block to `.control/leverage-setpoints.yaml` (see the template).
+Until `product_repos`, `meta_repos` and `author_allowlist` are set, m6 stays at
+checkout scope and a graded m7 shows as **UNMEASURED** in the SessionStart brief.
+That warning is the intended reading; it is not a regression. Workspaces that do
+not declare m7 see no change. Add `.control/leverage-fleet-state.json` to
+`.gitignore` beside the other sensor state files.
+
 ## 0.52.0 — 2026-11-18
 
 ### feat(verification): checked review results and versioned evidence contracts
