@@ -80,6 +80,22 @@ eq "a recent receipt satisfies the floor" "$(m7 "$F" "$(cfg "$REC")" | val "['m7
 eq "only the in-window receipt counts" "$(m7 "$F" "$(cfg "$REC")" | val "['outward']['door_receipts']")" "1"
 eq "absent receipts file is reported as absent" "$(m7 "$F" | val "['outward']['door_receipts_status']")" "absent"
 
+echo "== receipts are read strictly (round 1) =="
+read -r NAIVE_OLD EPOCH_OLD EPOCH_NEW <<<"$(python3 -c '
+import datetime as d, time; n=d.datetime.now(d.timezone.utc)
+print((n-d.timedelta(days=2000)).strftime("%Y-%m-%dT%H:%M:%S"), int(time.time())-2000*86400, int(time.time())-3600)')"
+REC2="$TMP/receipts2.jsonl"
+printf '{"ts":"%s"}\n{"ts":%s}\n{"ts":"garbage"}\n{"door":"no ts"}\n' "$NAIVE_OLD" "$EPOCH_OLD" > "$REC2"
+eq "old naive-ISO and old epoch receipts do not count" "$(m7 "$F" "$(cfg "$REC2")" | val "['m7_outward_artifact_floor']")" "0.0"
+eq "unplaceable lines are counted as unparsed" "$(m7 "$F" "$(cfg "$REC2")" | val "['outward']['door_receipts_unparsed']")" "2"
+printf '{"ts":%s}\n' "$EPOCH_NEW" > "$REC2"
+eq "a recent epoch receipt counts" "$(m7 "$F" "$(cfg "$REC2")" | val "['m7_outward_artifact_floor']")" "1.0"
+if [ "$(id -u)" != 0 ]; then
+  printf '{"ts":"%s"}\n' "$RECENT" > "$REC2"; chmod 000 "$REC2"
+  eq "unreadable receipts + no merges -> null, not 0.0" "$(m7 "$F" "$(cfg "$REC2")" | val "['m7_outward_artifact_floor']")" "None"
+  chmod 600 "$REC2"
+fi
+
 echo "== fail closed without config =="
 eq "no product repos -> null" "$(m7 "$F" '{"author_allowlist":["broomva"]}' | val "['m7_outward_artifact_floor']")" "None"
 eq "no author allowlist -> null" "$(m7 "$F" '{"product_repos":["acme/a"]}' | val "['m7_outward_artifact_floor']")" "None"

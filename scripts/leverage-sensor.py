@@ -603,6 +603,20 @@ def merge_ship_shadow(metrics, raw, workspace, max_age_sec=172800):
 FLEET_METRICS = ("w1_agent_idle_share", "w2_reply_latency_p50_min", "w3_waiting_sessions_mean")
 
 
+def clear_external(metrics, raw):
+    """Drop every reading a cached record took from the ship and fleet state files,
+    so the cached SessionStart path re-merges from the CURRENT files only. Without
+    this, a cached m7 = 1.0 survives its source going stale, null or missing and
+    keeps certifying the window for up to 24 h. m6 goes back to its checkout value."""
+    metrics.pop("m7_outward_artifact_floor", None)
+    for k in FLEET_METRICS:
+        metrics.pop(k, None)
+    if raw.get("m6_scope") == "fleet":
+        metrics["m6_meta_work_session_ratio"] = raw.get("m6_checkout")
+    for k in ("m6_scope", "m6_checkout", "fleet", "fleet_measured_at", "outward"):
+        raw.pop(k, None)
+
+
 def merge_fleet(metrics, raw, workspace, max_age_sec=172800):
     """BRO-3955: merge the host-wide fleet scan (leverage-fleet-sensor.py ->
     .control/leverage-fleet-state.json) if fresh (<48h).
@@ -785,8 +799,12 @@ def evaluate(metrics, setpoints):
             })
             continue
         if not is_gradeable(val):
+            # BRO-3955: a LIVE graded setpoint whose value could not be measured is a
+            # shield that went unread, the same as one with no key at all. Filing it as
+            # `no_setpoint` let the brief certify the window over it.
             row = {"key": key, "value": val, "level": _clip(level, MAX_ACTUATOR_CHARS),
-                   "status": "no_setpoint", "name": _clip(sp.get("name", mid), MAX_ACTUATOR_CHARS)}
+                   "status": "unmeasured", "target": sp.get("target"), "alert": sp.get("alert"),
+                   "name": _clip(sp.get("name", mid), MAX_ACTUATOR_CHARS)}
             if status_note:
                 row["status_note"] = status_note
             results.append(row)
@@ -1026,9 +1044,6 @@ def no_worst_line(record):
                 "setpoint(s) unmeasured — window not certified.")
     if graded:
         return "All graded setpoints within target."
-    if unmeasured:
-        return ("No setpoint graded — no metric matched a live setpoint this window "
-                "(every graded setpoint is unmeasured).")
     closure = record.get("closure")
     if isinstance(closure, dict) and closure.get("sensor_live") is False:
         if closure.get("blindness") == "no_data":
@@ -1036,6 +1051,11 @@ def no_worst_line(record):
             # glob was right. "nothing to read" would be the second claim.
             return "No setpoint graded — no session file matched this window (verify the transcript glob)."
         return "No setpoint graded — the sensor read no structural events this window."
+    if unmeasured:
+        # After the blindness checks: a blind read nulls every value, so every graded
+        # row is unmeasured, and the cause (blind / no data) is the better reason.
+        return ("No setpoint graded — no metric matched a live setpoint this window "
+                "(every graded setpoint is unmeasured).")
     return "No setpoint graded — no metric matched a live setpoint this window."
 
 
@@ -1356,6 +1376,7 @@ def main():
                 if isinstance(st.get("metrics"), dict):
                     if not isinstance(st.get("raw"), dict):
                         st["raw"] = {}
+                    clear_external(st["metrics"], st["raw"])
                     merge_ship_shadow(st["metrics"], st["raw"], workspace)
                     merge_fleet(st["metrics"], st["raw"], workspace)
                 try:

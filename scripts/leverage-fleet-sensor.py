@@ -46,7 +46,7 @@ Wait time (one main session = one transcript; subagent/exec sessions excluded):
       least one is waiting (capped waits only)
 Codex replays a resumed thread's history stamped with the replay time, so Codex turns
 come from task_started/task_complete's own epoch fields, deduplicated by turn_id.
-Claude lines are deduplicated by uuid, oldest file first.
+Claude lines are deduplicated by uuid, newest file first (a resumed copy is the superset).
 
 No transcript content is written anywhere: only timestamps, paths' repos and counts.
 
@@ -252,6 +252,7 @@ def read_claude(path, seen_uuids):
 def read_codex(path, seen_turns):
     cwd = src = None
     starts, ends, aborted = {}, {}, {}
+    machine_turns = set()
     tool_repos, shell_repos = set(), set()
     edited = False
     try:
@@ -273,6 +274,11 @@ def read_codex(path, seen_turns):
             pt, tid = p.get("type"), p.get("turn_id")
             if pt == "task_started" and tid and p.get("started_at"):
                 starts[tid] = float(p["started_at"])
+                # A turn another agent or `codex exec` started is not a human
+                # reply: its wait is not the human's latency.
+                ta = p.get("turn_attribution") if isinstance(p.get("turn_attribution"), dict) else {}
+                if ta.get("turn_trigger") or ta.get("parent_turn_id") or ta.get("initiating_agent_path"):
+                    machine_turns.add(tid)
             elif pt == "task_complete" and tid and p.get("completed_at"):
                 ends[tid] = float(p["completed_at"])
                 starts.setdefault(tid, float(p.get("started_at") or p["completed_at"]))
@@ -309,7 +315,7 @@ def read_codex(path, seen_turns):
             continue
         seen_turns.add(tid)
         en = ends.get(tid) or aborted.get(tid)
-        ev.append((st, "human"))
+        ev.append((st, "machine" if tid in machine_turns else "human"))
         if en and en >= st:
             ev.append((en, "agent"))
     entry = src if isinstance(src, str) else ("subagent" if src else None)
@@ -354,17 +360,19 @@ def measure(cfg, window_days, claude_root, codex_root, now=None):
     external = {str(r).lower() for r in (cfg.get("external_repos") or [])}
     # Sessions started in a scratch directory are throwaway runs (scripted evals,
     # dogfood fixtures), not work: excluded from both m6 and the wait metrics.
-    scratch_prefixes = tuple(cfg.get("scratch_prefixes", ["/tmp", "/private/tmp"]) or ())
+    scratch_prefixes = tuple(str(x).rstrip("/") for x in (cfg.get("scratch_prefixes", ["/tmp", "/private/tmp"]) or ()))
 
     files = []
     if claude_root:
         files += [("claude", f) for f in glob.glob(os.path.join(claude_root, "*", "*.jsonl"))]
     if codex_root:
         files += [("codex", f) for f in glob.glob(os.path.join(codex_root, "**", "*.jsonl"), recursive=True)]
-    # Oldest first: a resumed session copies earlier lines, and the original must
-    # claim them, or the copy steals the history and the original loses its gaps.
+    # Newest first: a resumed or forked session's file repeats the earlier lines and
+    # continues them, so it is the superset and claims the shared lines; the older
+    # file keeps only what the copy lacks. Oldest-first would split one session in
+    # two and lose the wait at the point where it resumed.
     files = [(h, f) for h, f in files if _mtime(f) >= since]
-    files.sort(key=lambda hf: _mtime(hf[1]))
+    files.sort(key=lambda hf: _mtime(hf[1]), reverse=True)
 
     seen_uuids, seen_turns = set(), set()
     read = {"claude": 0, "codex": 0}
@@ -378,8 +386,13 @@ def measure(cfg, window_days, claude_root, codex_root, now=None):
             continue
         read[h] += 1
         tt = [x for x in turns(s["events"]) if x[0] >= since]
-        cwd = s["cwd"] or ""
-        scratch = bool(scratch_prefixes) and cwd.startswith(scratch_prefixes)
+        if tt:
+            # The first turn in the window has no in-window predecessor: its gap
+            # would reach back to a turn before the window (days, for a resumed
+            # session), and the depth sweep would index the wrong turn.
+            tt[0] = tt[0][:3] + (None,)
+        cwd = (s["cwd"] or "").rstrip("/")
+        scratch = any(cwd == p or cwd.startswith(p + "/") for p in scratch_prefixes)
         # m6 — repo classification of edits
         if s["edited"] and tt and not scratch:
             editing += 1

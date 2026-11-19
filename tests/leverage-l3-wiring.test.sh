@@ -81,6 +81,48 @@ has "a stale (3-day) ship state is not used" "UNMEASURED" "$B"
 hasnt "and cannot fire the actuator" "Corrective actuator" "$B"
 hasnt "shadow setpoints are not reported as unmeasured" "agent_idle_share (L1)" "$B"
 
+echo "== the cached path never keeps a reading its source no longer supports (round 1) =="
+# A Stop-time cache that already carries m7 = 1.0 and fleet values.
+cache_with_external(){ cat > "$WS/.control/leverage-state.json" <<J
+{"measured_at":"$NOW","sessions_analyzed":2,"window_days":7,
+ "metrics":{"m2_tool_error_rate":0.01,"m6_meta_work_session_ratio":0.2,"m7_outward_artifact_floor":1.0,"w1_agent_idle_share":0.3},
+ "raw":{"meta_sessions":2,"product_sessions":0,"m6_scope":"fleet","m6_checkout":1.0},
+ "closure":{"closed":true,"sensor_live":true,"reference_authored":true}}
+J
+}
+for state in missing null stale; do
+  cache_with_external
+  case $state in
+    missing) rm -f "$WS/.control/leverage-ship-state.json" ;;
+    null)    ship "$NOW" null 0 ;;
+    stale)   ship "$OLD" 1.0 5 ;;
+  esac
+  B="$(brief)"
+  has "cached m7=1.0 with $state ship state -> UNMEASURED" "UNMEASURED" "$B"
+  hasnt "cached m7=1.0 with $state ship state -> no compliance claim" "All graded setpoints within target." "$B"
+done
+cache_with_external; ship "$NOW" 1.0 2; rm -f "$WS/.control/leverage-fleet-state.json"
+J="$(python3 -I - "$SENSOR" "$WS" <<'PY'
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("s", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+st = json.load(open(sys.argv[2] + "/.control/leverage-state.json"))
+m.clear_external(st["metrics"], st["raw"]); m.merge_fleet(st["metrics"], st["raw"], sys.argv[2])
+print(st["metrics"].get("m6_meta_work_session_ratio"), st["raw"].get("m6_scope"), "w1_agent_idle_share" in st["metrics"])
+PY
+)"
+[ "$J" = "1.0 None False" ] && ok "fleet state gone -> m6 back to checkout value, w1 dropped" || bad "fleet retention: $J"
+
+echo "== a graded setpoint present with a null value is unmeasured, not certified (round 1) =="
+cat > "$WS/.control/leverage-state.json" <<J
+{"measured_at":"$NOW","sessions_analyzed":2,"window_days":7,
+ "metrics":{"m2_tool_error_rate":null,"m6_meta_work_session_ratio":1.0},
+ "raw":{},"closure":{"closed":true,"sensor_live":true,"reference_authored":true}}
+J
+ship "$NOW" 1.0 3
+B="$(brief)"
+hasnt "null graded m2 blocks the compliance claim" "All graded setpoints within target." "$B"
+has "and names it" "tool_error_rate (L0)" "$B"
+
 echo "== Stop: a fresh fleet scan replaces the one-checkout m6 =="
 ship "$NOW" 1.0 3
 cat > "$WS/.control/leverage-fleet-state.json" <<J

@@ -309,29 +309,55 @@ def fetch_merged_light(repo, since_iso, timeout=25):
         return None
 
 
-def count_receipts(path, cutoff):
-    """(count in window, status). status is 'absent' when the file does not exist on
-    this host -- a door logged on another machine is not seen, and saying so is the
-    point: an absent file is not evidence of no doors."""
+def _parse_ts(v):
+    """A timestamp as an aware datetime, or None. Accepts epoch seconds (int, float
+    or numeric string) and ISO 8601; an ISO time with no zone is read as UTC.
+    Strict on purpose: m7 is a floor, and a timestamp that cannot be placed must not
+    be counted as inside the window (that would hold the floor at 1.0 forever)."""
+    if isinstance(v, bool) or v is None:
+        return None
+    try:
+        if isinstance(v, (int, float)) or (isinstance(v, str) and v.strip().replace(".", "", 1).isdigit()):
+            return datetime.fromtimestamp(float(v), tz=timezone.utc)
+        d = datetime.fromisoformat(str(v).strip().replace("Z", "+00:00"))
+        return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
+def _within(v, cutoff, now):
+    d = _parse_ts(v)
+    return d is not None and cutoff <= d <= now
+
+
+def count_receipts(path, cutoff, now=None):
+    """(count in window, unparsed lines, status). status is 'absent' when the file
+    does not exist on this host -- a door logged on another machine is not seen, and
+    saying so is the point -- and 'unreadable' when it exists but cannot be read."""
+    now = now or datetime.now(timezone.utc)
     p = os.path.expanduser(path or DEFAULT_DOOR_RECEIPTS)
     if not os.path.exists(p):
-        return 0, "absent"
-    n = 0
+        return 0, 0, "absent"
+    n = unparsed = 0
     try:
         with open(p, errors="ignore") as f:
             for line in f:
+                if not line.strip():
+                    continue
                 try:
                     o = json.loads(line)
                 except Exception:
+                    unparsed += 1
                     continue
-                if not isinstance(o, dict):
-                    continue
-                ts = next((o[k] for k in RECEIPT_TS_KEYS if o.get(k)), None)
-                if ts is not None and _in_window(ts, cutoff):
+                ts = next((o[k] for k in RECEIPT_TS_KEYS if o.get(k) is not None), None) \
+                    if isinstance(o, dict) else None
+                if _parse_ts(ts) is None:
+                    unparsed += 1
+                elif _within(ts, cutoff, now):
                     n += 1
     except OSError:
-        return 0, "unreadable"
-    return n, "read"
+        return 0, 0, "unreadable"
+    return n, unparsed, "read"
 
 
 def compute_outward(fleet_cfg, window_days, now=None, fetch=None):
@@ -364,17 +390,21 @@ def compute_outward(fleet_cfg, window_days, now=None, fetch=None):
             a = pr.get("author") or {}
             if a.get("is_bot") or str(a.get("login", "")).lower() not in authors:
                 continue
-            if _in_window(pr.get("mergedAt"), cutoff):
+            if _within(pr.get("mergedAt"), cutoff, now):
                 n += 1
         raw["per_repo"][repo] = n
         raw["merged_product_prs"] += n
-    raw["door_receipts"], raw["door_receipts_status"] = count_receipts(cfg.get("door_receipts"), cutoff)
+    (raw["door_receipts"], raw["door_receipts_unparsed"],
+     raw["door_receipts_status"]) = count_receipts(cfg.get("door_receipts"), cutoff, now)
     shipped = raw["merged_product_prs"] + raw["door_receipts"]
     if shipped > 0:
         v = 1.0
     elif raw["errors"]:
         v = None
         raw["note"] = "nothing counted and some product repos were unreachable — not certified either way"
+    elif raw["door_receipts_status"] == "unreadable":
+        v = None
+        raw["note"] = "no merges counted and the receipts file is unreadable — not certified either way"
     else:
         v = 0.0
     return {"m7_outward_artifact_floor": v, "outward": raw}

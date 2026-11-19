@@ -74,6 +74,40 @@ W(f"{T}/codex/2026/11/19/rollout-a.jsonl", cx, now - 600)
 W(f"{T}/codex/2026/11/19/rollout-fork.jsonl", cx, now - 30)
 PY
 
+# Round 1 regressions, in their own roots so the hand-computed numbers above hold.
+python3 - "$TMP" <<'PY'
+import json, os, sys, time
+T = sys.argv[1]; now = time.time()
+iso = lambda t: time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(t)) + ".000Z"
+def W(path, rows, mtime):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        for r in rows: f.write(json.dumps(r) + "\n")
+    os.utime(path, (mtime, mtime))
+meta = f"{T}/meta"
+h = lambda t, u: {"type": "user", "uuid": u, "timestamp": iso(t), "cwd": meta, "entrypoint": "sdk-ts", "message": {"content": "x"}}
+a = lambda t, u: {"type": "assistant", "uuid": u, "timestamp": iso(t), "cwd": meta, "message": {"content": []}}
+# B1 — a turn 8 days ago, then two turns yesterday with a 600 s wait.
+y = now - 86400
+W(f"{T}/r1-boundary/-p/s.jsonl", [h(now - 8 * 86400, "o1"), a(now - 8 * 86400 + 60, "o2"),
+  h(y, "o3"), a(y + 60, "o4"), h(y + 660, "o5"), a(y + 720, "o6")], now - 3600)
+# B2 — ordering: the ORIGINAL (older mtime) has 2 turns; the resumed copy (newer)
+# repeats them and adds a third. Newest-first gives the copy the whole session:
+# 2 replies, the true count. Oldest-first would leave the copy one turn and lose
+# the wait where the session resumed: 1 reply.
+o = [h(y, "p1"), a(y + 60, "p2"), h(y + 660, "p3"), a(y + 720, "p4")]
+W(f"{T}/r1-order/-p/orig.jsonl", o, now - 7200)
+W(f"{T}/r1-order/-p/copy.jsonl", o + [h(y + 1320, "p5"), a(y + 1380, "p6")], now - 60)
+# B3 — Codex: a human turn, then a turn another agent started (parent_turn_id).
+c0 = now - 5 * 3600
+ev = lambda typ, **p: {"timestamp": iso(now), "type": "event_msg", "payload": dict(type=typ, **p)}
+W(f"{T}/r1-codex/s.jsonl", [{"timestamp": iso(c0), "type": "session_meta", "payload": {"cwd": meta, "source": "vscode"}},
+  ev("task_started", turn_id="h1", started_at=str(int(c0))), ev("task_complete", turn_id="h1", completed_at=str(int(c0 + 50))),
+  ev("task_started", turn_id="h2", started_at=str(int(c0 + 650))), ev("task_complete", turn_id="h2", completed_at=str(int(c0 + 700))),
+  ev("task_started", turn_id="m1", started_at=str(int(c0 + 900)), turn_attribution={"parent_turn_id": "zz"}),
+  ev("task_complete", turn_id="m1", completed_at=str(int(c0 + 950)))], now - 60)
+PY
+
 CFG="{\"product_repos\":[\"acme/prod\"],\"meta_repos\":[\"acme/meta\"],\"scratch_prefixes\":[]}"
 run(){ python3 -I "$FLEET" --workspace "$TMP" --claude-root "$1" --codex-root "$2" --config-json "$3" --json --no-store; }
 J="$(run "$CR" "$XR" "$CFG")"
@@ -121,6 +155,18 @@ eq "m6 has no product side -> 2/2" "$(get "['metrics']['m6_meta_work_session_rat
 echo "== scratch sessions are excluded =="
 J="$(run "$CR" "$XR" "{\"product_repos\":[\"acme/prod\"],\"meta_repos\":[\"acme/meta\"],\"scratch_prefixes\":[\"$TMP/meta\"]}")"
 eq "sessions started in a scratch prefix leave m6" "$(get "['raw']['meta_sessions']")" "0"
+
+echo "== round 1: window boundary, file order, Codex machine turns, prefix match =="
+J="$(run "$TMP/r1-boundary" "$EMPTY" "$CFG")"
+eq "a turn before the window adds no reply" "$(get "['raw']['human_replies']")" "1"
+eq "w2 is the in-window wait (10 min), not 8 days" "$(get "['metrics']['w2_reply_latency_p50_min']")" "10.0"
+eq "w3 still computes" "$(get "['metrics']['w3_waiting_sessions_mean']")" "1.0"
+J="$(run "$TMP/r1-order" "$EMPTY" "$CFG")"
+eq "original + longer resumed copy -> 2 replies (newest-first)" "$(get "['raw']['human_replies']")" "2"
+J="$(run "$EMPTY" "$TMP/r1-codex" "$CFG")"
+eq "a turn another agent started is not a human reply" "$(get "['raw']['human_replies']")" "1"
+J="$(run "$CR" "$XR" "{\"product_repos\":[\"acme/prod\"],\"meta_repos\":[\"acme/meta\"],\"scratch_prefixes\":[\"$TMP/me\"]}")"
+eq "a scratch prefix matches whole path segments only" "$(get "['raw']['meta_sessions']")" "2"
 
 echo "== state file: written atomically, no transcript content =="
 python3 -I "$FLEET" --workspace "$TMP" --claude-root "$CR" --codex-root "$XR" --config-json "$CFG" >/dev/null
