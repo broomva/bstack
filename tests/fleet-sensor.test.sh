@@ -108,6 +108,60 @@ W(f"{T}/r1-codex/s.jsonl", [{"timestamp": iso(c0), "type": "session_meta", "payl
   ev("task_complete", turn_id="m1", completed_at=str(int(c0 + 950)))], now - 60)
 PY
 
+# Round 2 regressions.
+python3 - "$TMP" <<'PY'
+import json, os, sys, time
+T = sys.argv[1]; now = time.time()
+iso = lambda t: time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(t)) + ".000Z"
+def W(path, rows, mtime):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        for r in rows: f.write(json.dumps(r) + "\n")
+    os.utime(path, (mtime, mtime))
+meta, prod = f"{T}/meta", f"{T}/prod"
+h = lambda t, u, c="x": {"type": "user", "uuid": u, "timestamp": iso(t), "cwd": meta, "entrypoint": "sdk-ts", "message": {"content": c}}
+a = lambda t, u, tools=(): {"type": "assistant", "uuid": u, "timestamp": iso(t), "cwd": meta,
+     "message": {"content": [{"type": "tool_use", "name": n, "input": i} for n, i in tools]}}
+# C1 — one session: a PRODUCT edit 8 days ago, a META edit yesterday. In a 7-day
+# window it is meta; the old edit is outside the window.
+y = now - 86400
+W(f"{T}/r2-window/-p/s.jsonl", [h(now - 8 * 86400, "w1"), a(now - 8 * 86400 + 30, "w2", [("Write", {"file_path": f"{prod}/src/old.ts"})]),
+  h(y, "w3"), a(y + 30, "w4", [("Edit", {"file_path": f"{meta}/docs/new.md"})])], now - 600)
+# C2 — a task notification without turnOrigin is not a human reply.
+W(f"{T}/r2-notify/-p/s.jsonl", [h(y, "n1"), a(y + 60, "n2"),
+  h(y + 660, "n3", "<task-notification><task-id>x</task-id></task-notification>"), a(y + 720, "n4"),
+  h(y + 1320, "n5"), a(y + 1380, "n6")], now - 600)
+# C3 — Codex: a parent edits META; a subagent file starts with its OWN
+# session_meta, replays the parent's meta, turn and patch, then runs one turn of
+# its own (started by the parent, no edits).
+c0 = now - 3 * 3600
+ev = lambda typ, **p: {"timestamp": iso(now), "type": "event_msg", "payload": dict(type=typ, **p)}
+patch_ = {"timestamp": iso(now), "type": "response_item", "payload": {"type": "custom_tool_call",
+          "input": "*** Begin Patch\n*** Update File: docs/a.md\n@@\n-a\n+b\n*** End Patch"}}
+# The parent has two human turns (interactive); it spawned the child during P1.
+parent_head = [{"timestamp": iso(c0), "type": "session_meta", "payload": {"cwd": meta, "source": "vscode"}},
+          ev("task_started", turn_id="P1", started_at=str(int(c0))), patch_,
+          ev("task_complete", turn_id="P1", completed_at=str(int(c0 + 60)))]
+W(f"{T}/r2-codex/parent.jsonl", parent_head + [
+          ev("task_started", turn_id="P2", started_at=str(int(c0 + 660))),
+          ev("task_complete", turn_id="P2", completed_at=str(int(c0 + 700)))], now - 7200)
+# The child's own two turns carry no attribution (a thread a person can also
+# message): only its own session_meta marks it a subagent.
+child = ([{"timestamp": iso(c0 + 100), "type": "session_meta", "payload": {"cwd": meta, "source": {"subagent": {"thread_spawn": {}}}}}]
+         + parent_head +
+         [ev("task_started", turn_id="K1", started_at=str(int(c0 + 120))),
+          ev("task_complete", turn_id="K1", completed_at=str(int(c0 + 180))),
+          ev("task_started", turn_id="K2", started_at=str(int(c0 + 300))),
+          ev("task_complete", turn_id="K2", completed_at=str(int(c0 + 360)))])
+W(f"{T}/r2-codex/child.jsonl", child, now - 60)
+# C4 — one Codex file with a malformed started_at must not stop the scan.
+W(f"{T}/r2-bad/bad.jsonl", [{"timestamp": iso(c0), "type": "session_meta", "payload": {"cwd": meta, "source": "vscode"}},
+  ev("task_started", turn_id="B1", started_at="not-a-number"), ev("task_complete", turn_id="B1", completed_at="also-bad")], now - 60)
+W(f"{T}/r2-bad/good.jsonl", [{"timestamp": iso(c0), "type": "session_meta", "payload": {"cwd": meta, "source": "vscode"}},
+  ev("task_started", turn_id="G1", started_at=str(int(c0))), patch_,
+  ev("task_complete", turn_id="G1", completed_at=str(int(c0 + 60)))], now - 120)
+PY
+
 CFG="{\"product_repos\":[\"acme/prod\"],\"meta_repos\":[\"acme/meta\"],\"scratch_prefixes\":[]}"
 run(){ python3 -I "$FLEET" --workspace "$TMP" --claude-root "$1" --codex-root "$2" --config-json "$3" --json --no-store; }
 J="$(run "$CR" "$XR" "$CFG")"
@@ -167,6 +221,27 @@ J="$(run "$EMPTY" "$TMP/r1-codex" "$CFG")"
 eq "a turn another agent started is not a human reply" "$(get "['raw']['human_replies']")" "1"
 J="$(run "$CR" "$XR" "{\"product_repos\":[\"acme/prod\"],\"meta_repos\":[\"acme/meta\"],\"scratch_prefixes\":[\"$TMP/me\"]}")"
 eq "a scratch prefix matches whole path segments only" "$(get "['raw']['meta_sessions']")" "2"
+
+echo "== round 2: edits are windowed, subagent replays add nothing, one bad line is one bad line =="
+J="$(run "$TMP/r2-window" "$EMPTY" "$CFG")"
+eq "a product edit 8 days ago does not make this week's session product" "$(get "['raw']['product_sessions']")" "0"
+eq "the in-window meta edit classifies it" "$(get "['raw']['meta_sessions']")" "1"
+J="$(run "$TMP/r2-notify" "$EMPTY" "$CFG")"
+eq "a task notification without turnOrigin is not a human reply" "$(get "['raw']['human_replies']")" "1"
+J="$(run "$EMPTY" "$TMP/r2-codex" "$CFG")"
+eq "parent + replaying subagent = one editing session" "$(get "['raw']['editing_sessions']")" "1"
+eq "and it is meta" "$(get "['raw']['meta_sessions']")" "1"
+eq "the parent keeps its human turns; the subagent is not interactive" "$(get "['raw']['interactive_sessions']")" "1"
+eq "the parent's one reply (P1 -> P2) is counted" "$(get "['raw']['human_replies']")" "1"
+J="$(run "$EMPTY" "$TMP/r2-bad" "$CFG")"
+eq "a malformed Codex timestamp does not abort the scan" "$(get "['raw']['meta_sessions']")" "1"
+R="$(python3 -I - "$FLEET" "$TMP/meta" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("f", sys.argv[1]); f = importlib.util.module_from_spec(spec); spec.loader.exec_module(f)
+print(sorted(f.shell_write_repos("awk '$3 > 0.5' data.tsv", sys.argv[2])), sorted(f.shell_write_repos("cut -f1 a > out.tsv", sys.argv[2])))
+PY
+)"
+eq "'> 0.5' is a comparison, '> out.tsv' is a write" "$R" "[] ['acme/meta']"
 
 echo "== state file: written atomically, no transcript content =="
 python3 -I "$FLEET" --workspace "$TMP" --claude-root "$CR" --codex-root "$XR" --config-json "$CFG" >/dev/null

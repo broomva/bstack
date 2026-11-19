@@ -9,8 +9,10 @@
   classified by the git repo each edit lands in (`fleet.product_repos` /
   `fleet.meta_repos`), counting tool edits, Codex `apply_patch` and shell writes.
   Read from one checkout's Claude transcripts, m6 saturated at 1.0 by construction:
-  in the workspace that motivated this it read 1.00 at checkout scope and 0.14–0.54
-  across the host, depending on the window. The raw block
+  in the workspace that motivated this it read 1.00 at checkout scope and 0.17
+  (7 days) / 0.44 (30 days) across the host. Edits are windowed by their own
+  time, and a Codex edit belongs to the turn that made it, so a resumed or
+  subagent file that replays its parent adds nothing. The raw block
   keeps the tool-edits-only value, so the shell heuristic's effect is visible. It
   also measures agent wait time: w1 idle share with waits capped at 30 min, w2
   median reply latency, w3 sessions waiting at once. The sensor runs in the
@@ -20,7 +22,9 @@
   plus door receipts. It reports 1.0 when anything shipped, 0.0 when every product
   repo was read and none had a merge, and null when an unreachable repo leaves the
   window unprovable. This uses a merge-count query of its own: the m6s query's
-  200-PR cap is below a busy product repo's weekly merges.
+  200-PR cap is below a busy product repo's weekly merges. A 1.0 ages with its
+  newest artifact; a 0.0 is acted on only while under 6 h old, and the brief
+  prints its age. The ship sensor now refreshes every 6 h (was 24 h).
 - **A declared setpoint with no reading is reported as `unmeasured`.** Before this,
   `evaluate()` iterated only measured metrics, so m7, declared on 2026-08-16, never
   appeared, and the brief said "All graded setpoints within target". The brief and

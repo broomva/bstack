@@ -331,14 +331,15 @@ def _within(v, cutoff, now):
 
 
 def count_receipts(path, cutoff, now=None):
-    """(count in window, unparsed lines, status). status is 'absent' when the file
+    """(count in window, unparsed lines, status, latest in-window time). status is 'absent' when the file
     does not exist on this host -- a door logged on another machine is not seen, and
     saying so is the point -- and 'unreadable' when it exists but cannot be read."""
     now = now or datetime.now(timezone.utc)
     p = os.path.expanduser(path or DEFAULT_DOOR_RECEIPTS)
     if not os.path.exists(p):
-        return 0, 0, "absent"
+        return 0, 0, "absent", None
     n = unparsed = 0
+    latest = None
     try:
         with open(p, errors="ignore") as f:
             for line in f:
@@ -355,9 +356,11 @@ def count_receipts(path, cutoff, now=None):
                     unparsed += 1
                 elif _within(ts, cutoff, now):
                     n += 1
+                    d = _parse_ts(ts)
+                    latest = d if latest is None or d > latest else latest
     except OSError:
-        return 0, 0, "unreadable"
-    return n, unparsed, "read"
+        return 0, 0, "unreadable", None
+    return n, unparsed, "read", latest
 
 
 def compute_outward(fleet_cfg, window_days, now=None, fetch=None):
@@ -376,7 +379,9 @@ def compute_outward(fleet_cfg, window_days, now=None, fetch=None):
     cutoff = now - timedelta(days=window_days)
     since_iso = cutoff.strftime("%Y-%m-%d")
     raw = {"window_days": window_days, "repos": repos, "per_repo": {}, "errors": [],
-           "merged_product_prs": 0, "door_receipts": 0, "door_receipts_status": None}
+           "merged_product_prs": 0, "door_receipts": 0, "door_receipts_status": None,
+           "latest_artifact_at": None}
+    latest = None
     if not repos or not authors:
         raw["note"] = "fleet.product_repos and fleet.author_allowlist must both be set — m7 not measured"
         return {"m7_outward_artifact_floor": None, "outward": raw}
@@ -392,10 +397,17 @@ def compute_outward(fleet_cfg, window_days, now=None, fetch=None):
                 continue
             if _within(pr.get("mergedAt"), cutoff, now):
                 n += 1
+                d = _parse_ts(pr.get("mergedAt"))
+                latest = d if latest is None or d > latest else latest
         raw["per_repo"][repo] = n
         raw["merged_product_prs"] += n
     (raw["door_receipts"], raw["door_receipts_unparsed"],
-     raw["door_receipts_status"]) = count_receipts(cfg.get("door_receipts"), cutoff, now)
+     raw["door_receipts_status"], r_latest) = count_receipts(cfg.get("door_receipts"), cutoff, now)
+    if r_latest is not None and (latest is None or r_latest > latest):
+        latest = r_latest
+    # When the newest counted artifact landed. A 1.0 stays true until this ages out
+    # of the window, without any refresh; the main sensor ages it at read time.
+    raw["latest_artifact_at"] = latest.isoformat(timespec="seconds") if latest else None
     shipped = raw["merged_product_prs"] + raw["door_receipts"]
     if shipped > 0:
         v = 1.0

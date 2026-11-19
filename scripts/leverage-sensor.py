@@ -590,14 +590,55 @@ def merge_ship_shadow(metrics, raw, workspace, max_age_sec=172800):
             metrics["m6s_meta_work_ship_ratio"] = r
             raw["ship_signal"] = sd.get("raw")
         # BRO-3955: m7 travels in the same file (one gh pass, one throttle). Unlike
-        # m6s it HAS a live setpoint, so it is graded. A null m7 is not merged: the
-        # setpoint then reports as `unmeasured`, which is the honest reading.
-        m7 = sd.get("m7_outward_artifact_floor")
-        if age < max_age_sec and is_gradeable(m7):
+        # m6s it HAS a live setpoint, so it is graded. See effective_m7 for when a
+        # reading may stand; when none may, the setpoint reports as `unmeasured`.
+        m7 = effective_m7(sd, age)
+        if m7 is not None:
             metrics["m7_outward_artifact_floor"] = m7
             raw["outward"] = sd.get("outward")
+            raw["outward_measured_at"] = sd.get("measured_at")
     except Exception:
         pass
+
+
+# A state FILE that is fresh is not a fresh MEASUREMENT of an alarm. The ship sensor
+# runs in the background after the SessionStart brief is rendered, so the brief
+# always reads the previous run. An outward-empty reading (0.0) is therefore only
+# acted on while it is younger than this; the hook refreshes the ship state on the
+# same 6 h cadence, so a merge that landed after the reading misleads for at most
+# one cadence, and the brief prints the reading's age beside the actuator.
+M7_ALARM_MAX_AGE_SEC = 6 * 3600
+
+
+def effective_m7(sd, age, now=None):
+    """m7 as of NOW from a ship-state record `age` seconds old, or None.
+
+    1.0  the newest counted artifact (raw.latest_artifact_at) is still inside the
+         window as of now -- positive evidence ages by its own timestamp, so it
+         needs no refresh until it falls out of the window. A record from before
+         latest_artifact_at existed keeps its 1.0 while the file is fresh (<48 h).
+    0.0  the record found nothing (or its evidence has since aged out) AND the
+         record is younger than M7_ALARM_MAX_AGE_SEC.
+    None anything else: no reading, a stale record, or an alarm too old to act on."""
+    if not isinstance(sd, dict) or age is None or age >= 172800:
+        return None
+    m7 = sd.get("m7_outward_artifact_floor")
+    if not is_gradeable(m7):
+        return None
+    o = sd.get("outward") if isinstance(sd.get("outward"), dict) else {}
+    window_s = float(o.get("window_days") or 7) * 86400
+    now = now or time.time()
+    latest = None
+    try:
+        if o.get("latest_artifact_at"):
+            latest = datetime.fromisoformat(str(o["latest_artifact_at"]).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        latest = None
+    if latest is not None and now - latest <= window_s:
+        return 1.0
+    if float(m7) >= 1.0 and latest is None and "latest_artifact_at" not in o:
+        return 1.0
+    return 0.0 if age <= M7_ALARM_MAX_AGE_SEC else None
 
 
 FLEET_METRICS = ("w1_agent_idle_share", "w2_reply_latency_p50_min", "w3_waiting_sessions_mean")
@@ -613,7 +654,7 @@ def clear_external(metrics, raw):
         metrics.pop(k, None)
     if raw.get("m6_scope") == "fleet":
         metrics["m6_meta_work_session_ratio"] = raw.get("m6_checkout")
-    for k in ("m6_scope", "m6_checkout", "fleet", "fleet_measured_at", "outward"):
+    for k in ("m6_scope", "m6_checkout", "fleet", "fleet_measured_at", "outward", "outward_measured_at"):
         raw.pop(k, None)
 
 
@@ -1158,9 +1199,18 @@ def render_brief(record):
     sign = "↑" if worst.get("direction") == "lower_is_better" else "↓"
     gap = worst.get("gap")
     gap_txt = f", {sign} off by {abs(gap)}" if isinstance(gap, (int, float)) and not isinstance(gap, bool) else ""
+    measured = ""
+    if str(worst.get("key", "")).startswith("m7_"):
+        # The reading comes from a background run: say how old it is (BRO-3955).
+        raw = record.get("raw") if isinstance(record.get("raw"), dict) else {}
+        try:
+            age_h = (time.time() - datetime.fromisoformat(raw["outward_measured_at"]).timestamp()) / 3600
+            measured = f", measured {age_h:.1f} h ago"
+        except (KeyError, TypeError, ValueError):
+            measured = ""
     lines.append(f"Worst gap [{str(worst.get('status', '?')).upper()}] "
                  f"{worst.get('name', worst.get('key', '?'))} ({worst.get('level', 'L?')}) = "
-                 f"{worst.get('value')} (target {worst.get('target')}{gap_txt}).")
+                 f"{worst.get('value')} (target {worst.get('target')}{gap_txt}{measured}).")
     actuator = worst.get("actuator")
     if actuator:
         lines.append(f"→ Corrective actuator: {actuator}")

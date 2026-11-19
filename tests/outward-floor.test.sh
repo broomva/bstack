@@ -33,6 +33,7 @@ J
 )
 eq "one recent merge -> 1.0" "$(m7 "$F" | val "['m7_outward_artifact_floor']")" "1.0"
 eq "counted per repo" "$(m7 "$F" | val "['outward']['per_repo']['acme/a']")" "1"
+eq "the newest artifact time is recorded" "$(m7 "$F" | val "['outward']['latest_artifact_at'][:19]")" "${RECENT:0:19}"
 F=$(fx none <<J
 {"acme/a":[],"acme/b":[]}
 J

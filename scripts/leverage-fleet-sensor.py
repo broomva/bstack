@@ -8,8 +8,8 @@ Two of its questions cannot be answered from there:
   m6  "what share of editing sessions touched only meta repos?" — product work
       happens in OTHER repos (and other checkouts), so a sensor standing in the
       meta repo sees almost only meta sessions and saturates at 1.0 by construction.
-      Measured 2026-11-19 in one workspace: 1.00 at checkout scope, 0.14 (7 days)
-      and 0.54 (30 days) across the host.
+      Measured 2026-11-19 in one workspace: 1.00 at checkout scope, 0.17 (7 days)
+      and 0.44 (30 days) across the host.
   w*  "how long do agents wait on the human?" — a property of every interactive
       session on the host, not of one directory.
 
@@ -46,7 +46,8 @@ Wait time (one main session = one transcript; subagent/exec sessions excluded):
       least one is waiting (capped waits only)
 Codex replays a resumed thread's history stamped with the replay time, so Codex turns
 come from task_started/task_complete's own epoch fields, deduplicated by turn_id.
-Claude lines are deduplicated by uuid, newest file first (a resumed copy is the superset).
+Claude lines are deduplicated by uuid, newest file first (a resumed copy is the
+superset); Codex turns by turn_id, oldest file first (a subagent replays its parent).
 
 No transcript content is written anywhere: only timestamps, paths' repos and counts.
 
@@ -78,7 +79,7 @@ PATCH_FILE_RE = re.compile(r"\*\*\* (?:Update|Add|Delete) File: ([^\n\\\"]+)")
 # script is not a write.
 REDIRECT_RE = re.compile(r"(?:^|[\s;&|])>>?\s*([^\s;&|<>()'\"]+)")
 TEE_RE = re.compile(r"\btee\s+(?:-a\s+)?([^\s;&|<>()'\"]+)")
-PATHLIKE_RE = re.compile(r"/|\.[A-Za-z0-9]{1,8}$")
+PATHLIKE_RE = re.compile(r"/|\.[A-Za-z][A-Za-z0-9]{0,7}$")  # `> 0.5` is a comparison
 # `sed -i[SUFFIX] [-e] SCRIPT FILE` — the FILE is the write target.
 SED_INPLACE_RE = re.compile(
     r"\bsed\s+(?:-[A-Za-z]+\s+)*-i\S*\s+(?:-e\s+)?(?:'[^']*'|\"[^\"]*\"|\S+)\s+([^\s;&|<>()'\"]+)")
@@ -190,12 +191,19 @@ def shell_write_repos(cmd, cwd):
 
 # ── transcript readers ─────────────────────────────────────────────────────────
 
+def _num(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
 def read_claude(path, seen_uuids):
-    """events: [(t, kind)] kind in human|machine|agent; edits: set of repos
-    (tool edits), shell: set of repos (shell writes); meta: cwd/entry."""
-    ev, tool_repos, shell_repos = [], set(), set()
+    """events: [(t, kind)] kind in human|machine|agent; edits: [(t, "tool"|"shell",
+    repo|None)] each stamped with its own line's time, so the window applies to the
+    edit and not to the session; meta: cwd/entry."""
+    ev, edits = [], []
     cwd = entry = None
-    tool_edit_seen = False
     try:
         fh = open(path, errors="ignore")
     except OSError:
@@ -224,37 +232,43 @@ def read_claude(path, seen_uuids):
                 is_tool = any(isinstance(i, dict) and i.get("type") == "tool_result" for i in items)
                 is_text = isinstance(content, str) or any(
                     isinstance(i, dict) and i.get("type") == "text" for i in items)
+                lead = content.lstrip() if isinstance(content, str) else ""
                 if is_tool:
                     ev.append((t, "agent"))
                 elif (is_text and not o.get("isMeta") and not o.get("isCompactSummary")
-                      and not (isinstance(content, str) and content.lstrip().startswith(
-                          ("<local-command-stdout", "<local-command-caveat")))):
-                    ev.append((t, "machine" if o.get("turnOrigin") == "task_notification" else "human"))
+                      and not lead.startswith(("<local-command-stdout", "<local-command-caveat"))):
+                    machine = (o.get("turnOrigin") == "task_notification"
+                               or lead.startswith("<task-notification"))
+                    ev.append((t, "machine" if machine else "human"))
             elif typ == "assistant":
                 if t is not None:
                     ev.append((t, "agent"))
                 for it in content if isinstance(content, list) else []:
-                    if not isinstance(it, dict) or it.get("type") != "tool_use":
+                    if not isinstance(it, dict) or it.get("type") != "tool_use" or t is None:
                         continue
                     inp = it.get("input") if isinstance(it.get("input"), dict) else {}
                     name = it.get("name")
                     if name in EDIT_TOOLS:
-                        tool_edit_seen = True
-                        r = repo_of_path(inp.get("file_path") or inp.get("notebook_path"), cwd)
-                        if r:
-                            tool_repos.add(r)
+                        edits.append((t, "tool", repo_of_path(inp.get("file_path") or inp.get("notebook_path"), cwd)))
                     elif name == "Bash":
-                        shell_repos |= shell_write_repos(str(inp.get("command", "")), cwd)
-    return {"events": ev, "tool_repos": tool_repos, "shell_repos": shell_repos,
-            "edited": tool_edit_seen or bool(shell_repos), "cwd": cwd, "entry": entry}
+                        edits += [(t, "shell", r) for r in shell_write_repos(str(inp.get("command", "")), cwd)]
+    return {"events": ev, "edits": edits, "cwd": cwd, "entry": entry}
 
 
 def read_codex(path, seen_turns):
+    """Codex replays a resumed or forked thread's history -- the parent's turns and
+    tool calls -- into the new file, stamped with the replay time. So every tool
+    call is attributed to the turn it ran in (the last task_started before it), and
+    only turns this file is first to claim count, timed by their own epoch
+    started_at. A subagent file therefore keeps its own turns and none of its
+    parent's edits. The FIRST session_meta is the file's own; later ones belong
+    to replayed history."""
     cwd = src = None
+    meta_seen = False
     starts, ends, aborted = {}, {}, {}
     machine_turns = set()
-    tool_repos, shell_repos = set(), set()
-    edited = False
+    turn_edits = {}
+    cur = None
     try:
         fh = open(path, errors="ignore")
     except OSError:
@@ -269,34 +283,37 @@ def read_codex(path, seen_turns):
                 continue
             p = o.get("payload") if isinstance(o.get("payload"), dict) else {}
             if o.get("type") == "session_meta":
-                cwd, src = p.get("cwd"), p.get("source")
+                if not meta_seen:
+                    cwd, src, meta_seen = p.get("cwd"), p.get("source"), True
                 continue
             pt, tid = p.get("type"), p.get("turn_id")
-            if pt == "task_started" and tid and p.get("started_at"):
-                starts[tid] = float(p["started_at"])
+            if pt == "task_started" and tid:
+                cur = tid
+                st = _num(p.get("started_at"))
+                if st is not None:
+                    starts[tid] = st
                 # A turn another agent or `codex exec` started is not a human
                 # reply: its wait is not the human's latency.
                 ta = p.get("turn_attribution") if isinstance(p.get("turn_attribution"), dict) else {}
                 if ta.get("turn_trigger") or ta.get("parent_turn_id") or ta.get("initiating_agent_path"):
                     machine_turns.add(tid)
-            elif pt == "task_complete" and tid and p.get("completed_at"):
-                ends[tid] = float(p["completed_at"])
-                starts.setdefault(tid, float(p.get("started_at") or p["completed_at"]))
+            elif pt == "task_complete" and tid:
+                en = _num(p.get("completed_at"))
+                if en is not None:
+                    ends[tid] = en
+                    st = _num(p.get("started_at"))
+                    starts.setdefault(tid, st if st is not None else en)
             elif pt == "turn_aborted" and tid:
                 aborted[tid] = _ts(o.get("timestamp"))
-            elif pt in ("custom_tool_call", "function_call"):
+            elif pt in ("custom_tool_call", "function_call") and cur is not None:
                 raw_args = p.get("input") if p.get("input") is not None else p.get("arguments")
                 s = raw_args if isinstance(raw_args, str) else json.dumps(raw_args or "")
                 files = PATCH_FILE_RE.findall(s.replace("\\n", "\n"))
+                bucket = turn_edits.setdefault(cur, [])
                 if files:
-                    edited = True
-                    for f in files:
-                        r = repo_of_path(f, cwd)
-                        if r:
-                            tool_repos.add(r)
+                    bucket += [("tool", repo_of_path(f, cwd)) for f in files]
                 else:
-                    wd = cwd
-                    cmd = s
+                    wd, cmd = cwd, s
                     try:
                         a = json.loads(s) if isinstance(s, str) and s.startswith("{") else None
                         if isinstance(a, dict):
@@ -305,11 +322,8 @@ def read_codex(path, seen_turns):
                             cmd = " ".join(c) if isinstance(c, list) else str(c or "")
                     except Exception:
                         pass
-                    sr = shell_write_repos(cmd, wd)
-                    if sr:
-                        edited = True
-                        shell_repos |= sr
-    ev = []
+                    bucket += [("shell", r) for r in shell_write_repos(cmd, wd)]
+    ev, edits = [], []
     for tid, st in starts.items():
         if tid in seen_turns:
             continue
@@ -318,9 +332,9 @@ def read_codex(path, seen_turns):
         ev.append((st, "machine" if tid in machine_turns else "human"))
         if en and en >= st:
             ev.append((en, "agent"))
+        edits += [(st, k, r) for k, r in turn_edits.get(tid, ())]
     entry = src if isinstance(src, str) else ("subagent" if src else None)
-    return {"events": ev, "tool_repos": tool_repos, "shell_repos": shell_repos,
-            "edited": edited, "cwd": cwd, "entry": entry}
+    return {"events": ev, "edits": edits, "cwd": cwd, "entry": entry}
 
 
 def turns(events):
@@ -367,12 +381,16 @@ def measure(cfg, window_days, claude_root, codex_root, now=None):
         files += [("claude", f) for f in glob.glob(os.path.join(claude_root, "*", "*.jsonl"))]
     if codex_root:
         files += [("codex", f) for f in glob.glob(os.path.join(codex_root, "**", "*.jsonl"), recursive=True)]
-    # Newest first: a resumed or forked session's file repeats the earlier lines and
-    # continues them, so it is the superset and claims the shared lines; the older
-    # file keeps only what the copy lacks. Oldest-first would split one session in
-    # two and lose the wait at the point where it resumed.
+    # Which file claims a shared line or turn (the two harnesses dedupe separately,
+    # so their orders are independent):
+    #   Claude newest first -- a resumed copy repeats the earlier lines and continues
+    #     them, so it is the superset; oldest-first would split one session in two
+    #     and lose the wait where it resumed.
+    #   Codex oldest first -- a subagent's file replays its PARENT's turns before its
+    #     own; newest-first would hand the parent's human turns to the subagent,
+    #     whose waits are then excluded as a subagent's.
     files = [(h, f) for h, f in files if _mtime(f) >= since]
-    files.sort(key=lambda hf: _mtime(hf[1]), reverse=True)
+    files.sort(key=lambda hf: _mtime(hf[1]) if hf[0] == "codex" else -_mtime(hf[1]))
 
     seen_uuids, seen_turns = set(), set()
     read = {"claude": 0, "codex": 0}
@@ -393,15 +411,19 @@ def measure(cfg, window_days, claude_root, codex_root, now=None):
             tt[0] = tt[0][:3] + (None,)
         cwd = (s["cwd"] or "").rstrip("/")
         scratch = any(cwd == p or cwd.startswith(p + "/") for p in scratch_prefixes)
-        # m6 — repo classification of edits
-        if s["edited"] and tt and not scratch:
+        # m6 — repo classification of the edits made INSIDE the window
+        ed = [e for e in s["edits"] if e[0] >= since]
+        tool_repos = {r for _, k, r in ed if k == "tool" and r}
+        shell_repos = {r for _, k, r in ed if k == "shell" and r}
+        edited = any(k == "tool" for _, k, _ in ed) or bool(shell_repos)
+        if edited and not scratch:
             editing += 1
-            repos = s["tool_repos"] | s["shell_repos"]
-            if s["shell_repos"] - s["tool_repos"]:
+            repos = tool_repos | shell_repos
+            if shell_repos - tool_repos:
                 shell_attributed += 1
-            if s["tool_repos"] & product:
+            if tool_repos & product:
                 tool_product += 1
-            elif s["tool_repos"] & meta:
+            elif tool_repos & meta:
                 tool_meta += 1
             if repos & product:
                 product_s += 1
