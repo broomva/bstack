@@ -1,5 +1,18 @@
 #!/usr/bin/env python3
-"""Baseline and audit machine folders outside the unified Broomva home."""
+"""Baseline and audit machine folders outside the unified Broomva home.
+
+  doctor-machine-folders.py                  audit against the baseline (doctor section 31)
+  doctor-machine-folders.py --json           the same audit as one JSON object on stdout
+  doctor-machine-folders.py --baseline-roots [--force]   record the baseline
+
+Exit codes, with or without --json: 0 no unregistered folder, 1 an unregistered
+folder or a broken baseline, 42 no baseline recorded.
+
+--json prints {"schema": 1, "baseline_recorded_at", "unregistered": [{"path",
+"suggested"}], "grandfathered": <count>, "error"}. When the baseline is missing or
+invalid, "error" holds the reason and "unregistered" and "grandfathered" are null:
+"could not look" is never an empty list.
+"""
 import datetime
 import json
 import os
@@ -30,7 +43,18 @@ def scan(home):
     return folders
 
 
+def suggested(folder):
+    root, name = folder.rsplit('/', 1)
+    return f'~/.broomva/{ROOTS[root]}/{name}'
+
+
+def report(recorded_at, unregistered, grandfathered, error):
+    print(json.dumps({'schema': 1, 'baseline_recorded_at': recorded_at, 'unregistered': unregistered,
+                      'grandfathered': grandfathered, 'error': error}))
+
+
 def main():
+    as_json = '--json' in sys.argv
     home = Path(os.environ.get('BSTACK_DOCTOR_HOME', str(Path.home()))).absolute()
     if 'BSTACK_DOCTOR_HOME' in os.environ:
         os.environ['HOME'] = str(home)
@@ -61,6 +85,8 @@ def main():
         # A dangling baseline symlink is a broken opt-in, not an absent one.
         if os.path.lexists(baseline):
             raise
+        if as_json:
+            report(None, None, None, f'no baseline recorded at {baseline}: run bstack doctor --baseline-roots')
         return 42  # No baseline: report an ordinary doctor gap.
     folders = scan(home)
     known = set()
@@ -72,14 +98,18 @@ def main():
                 known.add(str(Path(old).relative_to(home)))
             except ValueError:
                 pass
+    unknown = folders - saved - known
+    if as_json:
+        report(data['recorded_at'],
+               [{'path': f'~/{folder}', 'suggested': suggested(folder)} for folder in sorted(unknown)],
+               len(folders & saved), None)
+        return int(bool(unknown))
     for folder in sorted(saved - folders):
         print(f'[info] baselined folder no longer exists: ~/{folder} (baseline can be tightened)')
     for folder in sorted(folders & saved):
         print(f'[info] grandfathered folder: ~/{folder}')
-    unknown = folders - saved - known
     for folder in sorted(unknown):
-        root, name = folder.rsplit('/', 1)
-        print(f'[failure] unregistered stack folder: ~/{folder}; place it under ~/.broomva/{ROOTS[root]}/{name}')
+        print(f'[failure] unregistered stack folder: ~/{folder}; place it under {suggested(folder)}')
     return int(bool(unknown))
 
 
@@ -87,5 +117,8 @@ if __name__ == '__main__':
     try:
         sys.exit(main())
     except (OSError, ValueError, json.JSONDecodeError) as exc:
+        if '--json' in sys.argv and '--baseline-roots' not in sys.argv:
+            report(None, None, None, f'machine folder check: {exc}')
+            sys.exit(1)
         print(f'[failure] machine folder check: {exc}', file=sys.stderr)
         sys.exit(1)

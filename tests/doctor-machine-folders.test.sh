@@ -89,4 +89,60 @@ rm "$BASELINE"
 ln -s "$TMP/missing-baseline" "$BASELINE"
 if run_doctor; then echo 'dangling baseline passed' >&2; exit 1; fi
 grep -q 'machine folder check' "$TMP/out"
+# --json (BRO-4083): one JSON object on stdout, nothing on stderr, and the exit
+# code of the human run. A baseline it could not read is an error with null
+# lists, never an empty list a consumer would read as "no new folder".
+FOLDERS="$REPO/scripts/doctor-machine-folders.py"
+json_run() {  # json_run EXPECTED_EXIT PYTHON_ASSERTION
+    set +e
+    python3 -I "$FOLDERS" --json >"$TMP/json" 2>"$TMP/json.err"
+    json_rc=$?
+    python3 -I "$FOLDERS" >/dev/null 2>&1
+    human_rc=$?
+    set -e
+    [ "$json_rc" = "$1" ] || { echo "--json exited $json_rc, wanted $1 ($2)" >&2; exit 1; }
+    [ "$json_rc" = "$human_rc" ] || { echo "--json exited $json_rc, the human run $human_rc ($2)" >&2; exit 1; }
+    [ ! -s "$TMP/json.err" ] || { echo "--json wrote to stderr ($2)" >&2; cat "$TMP/json.err" >&2; exit 1; }
+    [ "$(wc -l <"$TMP/json" | tr -d ' ')" = "1" ] || { echo "--json did not print exactly one line ($2)" >&2; exit 1; }
+    python3 - "$TMP/json" "$2" "$BASELINE" <<'PY_JSON'
+import json, sys
+d = json.load(open(sys.argv[1]))
+baseline = sys.argv[3]
+assert sorted(d) == ['baseline_recorded_at', 'error', 'grandfathered', 'schema', 'unregistered'], sorted(d)
+assert d['schema'] == 1, d
+assert eval(sys.argv[2]), (sys.argv[2], d)
+PY_JSON
+}
+unreadable="d['error'] and d['unregistered'] is None and d['grandfathered'] is None and d['baseline_recorded_at'] is None"
+json_run 1 "$unreadable and 'machine folder check' in d['error']"        # dangling symlink
+rm "$BASELINE"
+printf '{bad json' > "$BASELINE"
+json_run 1 "$unreadable and 'machine folder check' in d['error']"        # malformed
+printf '{"recorded_at": "x", "folders": "not-a-list"}' > "$BASELINE"
+json_run 1 "$unreadable and 'invalid baseline format' in d['error']"     # wrong shape
+rm "$BASELINE"
+json_run 42 "$unreadable and 'no baseline recorded' in d['error']"       # not opted in
+# "grandfathered" counts the baselined folders still present, not the baseline's size.
+mkdir -p "$HOME_FIXTURE/.config/broomva/json-gone"
+bash "$DOCTOR" --baseline-roots >"$TMP/out"
+rmdir "$HOME_FIXTURE/.config/broomva/json-gone"
+json_run 0 "d['error'] is None and d['unregistered'] == [] and d['grandfathered'] == 1 and d['baseline_recorded_at'] == json.load(open(baseline))['recorded_at']"
+mkdir -p "$HOME_FIXTURE/.cache/broomva/json-probe" "$HOME_FIXTURE/.control/json-probe"
+json_run 1 "d['error'] is None and d['grandfathered'] == 1 and d['unregistered'] == [{'path': '~/.cache/broomva/json-probe', 'suggested': '~/.broomva/cache/json-probe'}, {'path': '~/.control/json-probe', 'suggested': '~/.broomva/state/json-probe'}]"
+# The human output for the same state is what it was before --json existed.
+python3 -I "$FOLDERS" >"$TMP/out" 2>&1 || true
+grep -Fxq '[failure] unregistered stack folder: ~/.cache/broomva/json-probe; place it under ~/.broomva/cache/json-probe' "$TMP/out"
+grep -Fxq '[info] grandfathered folder: ~/.local/share/broomva/new-folder' "$TMP/out"
+if grep -q '"schema"' "$TMP/out"; then echo 'the human run printed JSON' >&2; exit 1; fi
+# Negative control: with the comparison removed in a copy, --json reports nothing new.
+cp "$REPO/scripts/broomva_paths.py" "$TMP/copy/scripts/broomva_paths.py"
+python3 - "$REPO/scripts/doctor-machine-folders.py" "$TMP/copy/scripts/doctor-machine-folders.py" <<'PY_MUTANT'
+import sys
+s = open(sys.argv[1]).read()
+assert s.count('folders - saved - known') == 1
+open(sys.argv[2], 'w').write(s.replace('folders - saved - known', 'folders - folders - known'))
+PY_MUTANT
+python3 -I "$TMP/copy/scripts/doctor-machine-folders.py" --json >"$TMP/json"
+grep -Fq '"unregistered": []' "$TMP/json"
+rmdir "$HOME_FIXTURE/.cache/broomva/json-probe" "$HOME_FIXTURE/.control/json-probe"
 echo 'machine folder ratchet: passed' 
