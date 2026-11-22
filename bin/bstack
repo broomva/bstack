@@ -22,6 +22,7 @@ bstack — Broomva Stack CLI
 Validation:
   doctor [--quiet|--strict]       Lint primitive-contract compliance.
   doctor --baseline-roots [--force]  Record legacy machine folders.
+  doctor --baseline-entries [--force]  Record entries that run from a working tree.
   validate                        Validate skill frontmatter health.
   verify <contract> <record.json>  Check a versioned verification record.
                                   Contracts: review-result, claim-review,
