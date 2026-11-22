@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.52.1 — 2026-11-21
+
+### feat(doctor): ratchets that report without a person running doctor (BRO-4083, BRO-4084)
+
+- **Reader ratchet in CI.** `scripts/check_control_readers.py` lists the tracked code
+  files that read `.control/<X>` without a matching `.broomva/<X>` and fails when one
+  appears that is not in `scripts/control_readers_baseline.json`. A reader may leave
+  the list, none may join it. The classifier is the one `broomva/workspace` runs,
+  unchanged; it has no exclusion for files that describe both names on purpose, so
+  the checker itself and three path-registry files are in the baseline rather than
+  exempt. `ci.yml` runs it as the `control reader ratchet` job.
+- **`--json` on the machine folder check.** `python3 -I scripts/doctor-machine-folders.py
+  --json` prints one object, `{"schema": 1, "baseline_recorded_at", "unregistered":
+  [{"path", "suggested"}], "grandfathered", "error"}`, with the exit code of the plain
+  run (0, 1, or 42 without a baseline). A missing or invalid baseline sets `error` and
+  leaves `unregistered` and `grandfathered` null, never an empty list. The plain
+  output and exit codes are unchanged.
+- **Working-tree entry ratchet (doctor §33).** `scripts/doctor-worktree-entries.py`
+  reads every `com.broomva.*.plist` LaunchAgent and every hook command in
+  `~/.claude/settings.json` and flags a command that runs a file tracked in a git
+  working tree, where an edit takes effect with no review. A command that writes
+  `git show origin/main:<path>` to a temp file, or runs a released copy outside any
+  working tree, passes. `--report` lists every flagged entry and reads and writes no
+  baseline; `--json`, `--launch-agents DIR` and `--settings FILE` are options.
+
+### Migration
+
+The working-tree entry ratchet is opt-in, like the machine folder ratchet: a machine
+without a baseline gets one `[info] ` line and no gap, so its totals and `--strict`
+result do not change. `bstack doctor --baseline-entries` records the entries that
+exist today (it refuses to overwrite; `--force` replaces after review); from then on a
+new flagged entry, an unreadable plist or settings file, or a broken baseline fails
+doctor even without `--strict`. To tighten the reader baseline after removing a
+reader, replace the committed file with the output of
+`python3 scripts/check_control_readers.py --print-baseline`.
+
 ## 0.52.0 — 2026-11-18
 
 ### feat(verification): checked review results and versioned evidence contracts
