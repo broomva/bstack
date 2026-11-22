@@ -70,6 +70,22 @@ jobs:
           cp assets/templates/policy.yaml.template .control/policy.yaml 2>/dev/null || true
           bash scripts/doctor.sh --quiet
 
+  control-readers:
+    name: control reader ratchet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ratchet unpaired .control readers against the baseline
+        # BRO-4083. A code file that reads `.control/<X>` without `.broomva/<X>`
+        # must already be in scripts/control_readers_baseline.json: a reader may
+        # leave the list, none may join it. The fixture suite that proves the
+        # check bites runs in the tests job (tests/control-readers.test.sh).
+        run: |
+          set -euo pipefail
+          python3 scripts/check_control_readers.py --selftest
+          python3 scripts/check_control_readers.py
+
   tests:
     name: tests/*.test.sh
     runs-on: ubuntu-latest
