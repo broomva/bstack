@@ -36,6 +36,22 @@ class RatchetTest(unittest.TestCase):
     def stage(self):
         subprocess.run(["git", "add", "-A"], cwd=self.root, check=True)
 
+    def commit(self, message):
+        self.stage()
+        subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+                        "commit", "-q", "-m", message], cwd=self.root, check=True)
+
+    def base(self):
+        """Commit the fixture as the base branch's state and return its ref."""
+        self.commit("base")
+        subprocess.run(["git", "tag", "base"], cwd=self.root, check=True)
+        return "base"
+
+    def regenerate_baseline(self):
+        printed = self.check("--print-baseline")
+        self.assertEqual(printed.returncode, 0, printed.stdout + printed.stderr)
+        (self.root / "scripts/control_readers_baseline.json").write_text(printed.stdout)
+
     def check(self, *args):
         return subprocess.run(["python3", CHECKER, *args],
                               cwd=self.root, capture_output=True, text=True)
@@ -112,6 +128,88 @@ class RatchetTest(unittest.TestCase):
         self.stage()
         result = self.check()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    # ── the baseline is compared with the base branch's copy (round 1, finding 1) ──
+
+    def test_reader_added_with_regenerated_baseline_fails_against_base(self):
+        # The reviewer's reproduction: add a reader and write it into the baseline.
+        ref = self.base()
+        (self.root / "actual.py").write_text(f'p = {LEGACY}asks"\n')
+        self.stage()
+        self.regenerate_baseline()
+        self.commit("widen")
+        alone = self.check()
+        self.assertEqual(alone.returncode, 0, alone.stdout + alone.stderr)  # the hole without a base
+        result = self.check("--base-ref", ref)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("Baseline gained readers", result.stdout)
+        self.assertIn("  actual.py", result.stdout)
+
+    def test_baseline_removal_passes_against_base(self):
+        ref = self.base()
+        (self.root / "old.py").write_text("pass\n")
+        self.stage()
+        self.regenerate_baseline()
+        self.commit("shrink")
+        result = self.check("--base-ref", ref)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Unpaired readers: 1; baseline: 1", result.stdout)
+
+    def test_renamed_reader_passes_against_base(self):
+        ref = self.base()
+        subprocess.run(["git", "mv", "old.py", "moved.py"], cwd=self.root, check=True)
+        self.regenerate_baseline()
+        self.commit("rename")
+        result = self.check("--base-ref", ref)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Baseline entry renamed: old.py -> moved.py", result.stdout)
+
+    def test_removal_does_not_pay_for_an_unrelated_addition(self):
+        # A dropped entry admits only the file it was renamed to.
+        ref = self.base()
+        (self.root / "old.py").unlink()
+        (self.root / "other.py").write_text(f'read({LEGACY}policy.yaml")\n')
+        self.stage()
+        self.regenerate_baseline()
+        self.commit("swap")
+        result = self.check("--base-ref", ref)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("  other.py", result.stdout)
+
+    def test_first_introduction_of_baseline_skips_with_note(self):
+        baseline = self.root / "scripts/control_readers_baseline.json"
+        saved = baseline.read_text()
+        baseline.unlink()
+        ref = self.base()
+        baseline.write_text(saved)
+        self.commit("introduce")
+        result = self.check("--base-ref", ref)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("does not exist at base; base comparison skipped", result.stdout)
+
+    def test_unknown_base_ref_is_an_error(self):
+        self.base()
+        result = self.check("--base-ref", "no-such-ref")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("not a commit", result.stderr)
+
+    # ── documented limits (round 1, findings 2 and 4): pinned so a change is deliberate ──
+
+    def test_constructed_path_is_not_counted(self):
+        (self.root / "built.py").write_text('p = "." + "' + 'control/asks"\n')
+        self.stage()
+        result = self.check()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("built.py", result.stdout)
+        self.assertIn("Unpaired readers: 2; baseline: 2", result.stdout)
+
+    def test_comment_mention_is_counted(self):
+        (self.root / "noted.py").write_text(f'# migration note: {LEGACY[1:]}asks\n')
+        self.stage()
+        result = self.check()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("noted.py", result.stdout)
+        self.assertIn("Comments count too", result.stdout)
 
 
 if __name__ == "__main__":

@@ -75,16 +75,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The base commit and the merge base must exist for --base-ref.
+          fetch-depth: 0
 
       - name: Ratchet unpaired .control readers against the baseline
         # BRO-4083. A code file that reads `.control/<X>` without `.broomva/<X>`
         # must already be in scripts/control_readers_baseline.json: a reader may
-        # leave the list, none may join it. The fixture suite that proves the
-        # check bites runs in the tests job (tests/control-readers.test.sh).
+        # leave the list, none may join it. On a pull request the PR's baseline
+        # is also compared with the base commit's, so a PR cannot add a reader
+        # and widen the baseline together; a push to main has no base and runs
+        # the plain check. Literal references only: a path built from pieces is
+        # not seen (see the script's docstring). The fixture suite that proves
+        # the check bites runs in the tests job (tests/control-readers.test.sh).
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           python3 scripts/check_control_readers.py --selftest
-          python3 scripts/check_control_readers.py
+          if [ -n "${BASE_SHA:-}" ]; then
+            python3 scripts/check_control_readers.py --base-ref "$BASE_SHA"
+          else
+            python3 scripts/check_control_readers.py
+          fi
 
   tests:
     name: tests/*.test.sh

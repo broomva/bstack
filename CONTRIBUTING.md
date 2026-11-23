@@ -30,6 +30,28 @@ jq -e . assets/templates/*.snippet >/dev/null   # template JSON shape
 
 CI runs the same checks via `.github/workflows/ci.yml`.
 
+## The `.control` reader ratchet
+
+`scripts/check_control_readers.py` (CI job `control reader ratchet`) lists tracked
+code files that reference `.control/<X>` without `.broomva/<X>` and fails when one is
+not in `scripts/control_readers_baseline.json`. On a pull request it also compares
+your baseline with the base branch's: the baseline may only shrink. Adding a path to
+it fails, unless the same change renames a listed file (`git mv`, which
+`git diff -M` reports as a rename). Do not widen the baseline; name both roots or
+read the path through the path registry.
+
+What it catches and what it does not. It is a ratchet against drift, not a defence
+against someone evading it:
+
+- caught: a literal `.control` reference in a code file (`".control/asks"`,
+  `join(r, ".control", "asks")`, a bare `".control"`);
+- not caught: a path assembled from pieces (`"." + "control/asks"`, an f-string, a
+  variable holding the root). A textual scan cannot be made complete, so review
+  covers these;
+- counted although it reads nothing: a comment in a code file that mentions
+  `.control/<X>`. The checker in `broomva/workspace` behaves the same way. Mention
+  both names in the comment, or reword it.
+
 ## Adding a new primitive (P21+)
 
 bstack's L3 stability budget says governance changes are rare and deliberate. Before adding a new `Pn`:
