@@ -35,8 +35,16 @@
   `"$CLAUDE_PROJECT_DIR"/x.sh`, or a LaunchAgent's without `WorkingDirectory` or an
   absolute `cd`) is reported as `unresolved` with its command and ratchets the same
   way: in the baseline, info while grandfathered, a failure when new. `--json` lists
-  it under `"unresolved": [{"entry", "command", "word"}]`. Program names on PATH and
-  plain arguments are not reported.
+  it under `"unresolved": [{"entry", "command", "word"}]`. A word counts by its
+  position, as the shell would run it, never by how it looks: the command word of a
+  simple command when it contains a `/` (after `VAR=value` assignments and the
+  wrappers `env`, `exec`, `nohup`, `time`, `command`, `sudo`, `nice`), the script
+  operand of a known interpreter (`bash -c '<line>'` scans `<line>` the same way;
+  `python3 -m`, `node -e` and `bun run <name>` name no file), and the word after
+  `source` or `.`. Every other word is an argument and is not reported, so
+  `echo report.sh` and `cat /repo/notes.py` pass, and a quoted path with a space
+  is one word. A LaunchAgent's `ProgramArguments` are read as the argument vector
+  launchd runs, and its unresolved `command` is that vector, shell-quoted.
 
 ### Migration
 

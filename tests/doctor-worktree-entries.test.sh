@@ -13,7 +13,8 @@ AGENTS="$HOME_FIXTURE/Library/LaunchAgents"
 SETTINGS="$HOME_FIXTURE/.claude/settings.json"
 BASELINE="$HOME_FIXTURE/.broomva/state/doctor-worktree-entries.json"
 mkdir -p "$AGENTS" "$HOME_FIXTURE/.claude" "$HOME_FIXTURE/bin" "$TMP/workspace" "$TMP/decoy-home/Library/LaunchAgents" "$TMP/path-bin"
-# A program found on PATH that ends in a script extension is a program name, not a path.
+# A command word without a `/` is a program looked up on PATH, even one that ends in a
+# script extension and is found there.
 printf '#!/bin/sh\n' > "$TMP/path-bin/onpath.sh"
 chmod +x "$TMP/path-bin/onpath.sh"
 export PATH="$TMP/path-bin:$PATH"
@@ -45,6 +46,85 @@ echo '#' > "$TMP/plain/released.sh"
 echo '#' > "$HOME_FIXTURE/.broomva/releases/tool/run.sh"
 ln -s "$TREE/tracked.sh" "$HOME_FIXTURE/bin/linked.sh"
 plist "$TMP/decoy-home/Library/LaunchAgents" com.broomva.decoy /bin/bash "$TREE/tracked.sh"
+
+# ── command-position table: which words of a command line it executes ──
+# A word counts by its position, never by how it looks: the command word when it
+# holds a `/`, an interpreter's script operand, the word after `source` / `.`.
+# Every row is a hook command line; {tree} is a git working tree, {plain} a
+# folder outside any. Each row lists the files it flags or the words it leaves
+# unresolved; an ignored row lists neither. All rows are checked before failing.
+python3 - "$ENTRIES" "$TREE" "$TMP/plain" "$HOME_FIXTURE" <<'PY_TABLE'
+import importlib.util, sys
+from pathlib import Path
+entries, tree, plain, home = sys.argv[1:]
+spec = importlib.util.spec_from_file_location('entries', entries)
+d = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(d)
+T, S = f'{tree}/tracked.sh', f'{tree}/with space.sh'
+rows = [
+    # ignored: arguments, programs on PATH, code from a string, a module, a package script
+    ('ignored', 'echo report.sh', []),
+    ('ignored', 'cat notes.py', []),
+    ('ignored', 'grep foo x.sh', []),
+    ('ignored', 'touch /tmp/a.sh', []),
+    ('ignored', 'rm -f ./old.sh', []),
+    ('ignored', 'git status', []),
+    ('ignored', 'bun run x', []),
+    ('ignored', 'bun test', []),
+    ('ignored', "node -e 'console.log(1)'", []),
+    ('ignored', 'python3 -m http.server', []),
+    ('ignored', 'python3 -c "import x; x.run()" scripts/y.py', []),
+    ('ignored', 'onpath.sh stop', []),
+    ('ignored', 'command -v ./x.sh', []),
+    ('ignored', 'echo ./x.sh > ./y.sh 2>&1', []),
+    ('ignored', f'cat {T}', []),
+    ('ignored', f'grep foo {T} | tee -a {T}', []),
+    ('ignored', f'echo "{S}"', []),
+    ('ignored', 'T=$(mktemp); git show origin/main:x.sh > "$T" && bash "$T"', []),
+    ('ignored', f'bash {plain}/released.sh', []),
+    # unresolved: a counted relative word with no directory to resolve it against
+    ('unresolved', './x.sh', ['./x.sh']),
+    ('unresolved', 'python3 scripts/y.py', ['scripts/y.py']),
+    ('unresolved', 'python3.14 -I -W ignore y.py --fast', ['y.py']),
+    ('unresolved', '"$CLAUDE_PROJECT_DIR"/x.sh', ['$CLAUDE_PROJECT_DIR/x.sh']),
+    ('unresolved', "bash -c 'cd scripts && ./doctor.sh'", ['./doctor.sh']),
+    ('unresolved', 'sh -lc "python3 hooks/z.py"', ['hooks/z.py']),
+    ('unresolved', 'FOO=1 ./x.sh', ['./x.sh']),
+    ('unresolved', 'env FOO=1 bash run.sh', ['run.sh']),
+    ('unresolved', 'bash x', ['x']),
+    ('unresolved', 'a && ./b.sh | cat c.sh', ['./b.sh']),
+    ('unresolved', 'nohup nice -n 5 node scripts/w.js &', ['scripts/w.js']),
+    ('unresolved', 'source ./env.sh; . lib.sh', ['./env.sh', 'lib.sh']),
+    ('unresolved', 'bun run scripts/build.ts', ['scripts/build.ts']),
+    ('unresolved', 'x=$(./gen.sh) 2>&1 | tee log', ['./gen.sh']),
+    ('unresolved', '"./with space.sh" --flag', ['./with space.sh']),
+    # flagged: the same shapes, written with an absolute path in a working tree
+    ('flagged', T, [T]),
+    ('flagged', f'python3 {T}', [T]),
+    ('flagged', f'"{tree}"/tracked.sh', [T]),
+    ('flagged', f"bash -c 'cd {tree} && ./tracked.sh'", [T]),
+    ('flagged', f'sh -lc "python3 {tree}/hook.py"', [f'{tree}/hook.py']),
+    ('flagged', f'FOO=1 {T}', [T]),
+    ('flagged', f'env FOO=1 bash {T}', [T]),
+    ('flagged', f'a && {T} | cat {tree}/hook.py', [T]),
+    ('flagged', f'cd {tree}/sub && /usr/bin/python3 rel.py', [f'{tree}/sub/rel.py']),
+    ('flagged', f'source {T}', [T]),
+    ('flagged', f'"{S}" --flag', [S]),
+    ('flagged', f"bash '{S}'", [S]),
+]
+failed = []
+for want, command, words in rows:
+    found, missed = d.named_files(command, Path(home))
+    tracked = [path for path in found if d.repository(path) is not None]  # as scan() keeps them
+    got = 'flagged' if tracked else 'unresolved' if missed else 'ignored'
+    got_words = tracked if tracked else missed
+    if (got, got_words) != (want, words):
+        failed.append(f'  {command!r}: want {want} {words}, got {got} {got_words}')
+print(f'command-position table: {len(rows) - len(failed)} of {len(rows)} rows as expected')
+if failed:
+    print('\n'.join(failed))
+    sys.exit(1)
+PY_TABLE
 
 # ── classification, read through the two options (--report: no baseline at all) ──
 OPT_AGENTS="$TMP/agents"
@@ -93,12 +173,14 @@ json.dump({'hooks': {
                                 {'type': 'prompt', 'prompt': f'{tree}/tracked.sh'}]}],
     # A hook has no working directory the scanner knows: each relative script path is
     # unresolved (the first is the review's exact string). The second group are a
-    # program on PATH, bare program names and arguments: never reported.
+    # program on PATH, bare program names and arguments (the round-2 review's
+    # `echo report.sh`): never reported.
     'UserPromptSubmit': [{'hooks': [command("bash -c 'cd scripts && ./doctor.sh'"),
                                     command('./hooks/x.sh'),
                                     command('python3 scripts/y.py --fast')]}],
     'PostToolUse': [{'hooks': [command('onpath.sh stop'), command('bun run dev'),
-                               command('git status 2>&1 | tee -a log'), command('python3 -m tool config.json')]}],
+                               command('git status 2>&1 | tee -a log'), command('python3 -m tool config.json'),
+                               command('echo report.sh'), command(f'cat {tree}/tracked.sh')]}],
 }, 'permissions': {'allow': [f'Bash({tree}/tracked.sh)']}}, open(settings, 'w'))
 PY_FIXTURE
 python3 -I "$ENTRIES" --report --json --launch-agents "$OPT_AGENTS" --settings "$OPT_SETTINGS" >"$TMP/json"
@@ -127,7 +209,7 @@ want_unresolved = sorted([
     ('claude-hook:UserPromptSubmit', "bash -c 'cd scripts && ./doctor.sh'", './doctor.sh'),
     ('claude-hook:UserPromptSubmit', './hooks/x.sh', './hooks/x.sh'),
     ('claude-hook:UserPromptSubmit', 'python3 scripts/y.py --fast', 'scripts/y.py'),
-    ('launchd:com.broomva.relative', './run.sh nightly', './run.sh'),
+    ('launchd:com.broomva.relative', "/bin/bash -c './run.sh nightly'", './run.sh'),
 ])
 got_unresolved = [(item['entry'], item['command'], item['word']) for item in d['unresolved']]
 assert got_unresolved == want_unresolved, '\n' + '\n'.join(map(str, sorted(set(got_unresolved) ^ set(want_unresolved))))
