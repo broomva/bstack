@@ -10,7 +10,13 @@
   the list, none may join it. The classifier is the one `broomva/workspace` runs,
   unchanged; it has no exclusion for files that describe both names on purpose, so
   the checker itself and three path-registry files are in the baseline rather than
-  exempt. `ci.yml` runs it as the `control reader ratchet` job.
+  exempt. `ci.yml` runs it as the `control reader ratchet` job. On a pull request
+  it passes `--base-ref <base sha>`, and the PR's baseline may not contain a path the
+  base's baseline lacks, so a change cannot add a reader and widen the baseline at
+  once; an addition is allowed only as the `git diff -M` rename of an entry the same
+  change drops. It finds literal references only: a path built from pieces is not
+  seen, and a comment that mentions `.control/<X>` in a code file counts. Both limits
+  are stated in the script and in CONTRIBUTING.md, and pinned by tests.
 - **`--json` on the machine folder check.** `python3 -I scripts/doctor-machine-folders.py
   --json` prints one object, `{"schema": 1, "baseline_recorded_at", "unregistered":
   [{"path", "suggested"}], "grandfathered", "error"}`, with the exit code of the plain
@@ -24,6 +30,13 @@
   `git show origin/main:<path>` to a temp file, or runs a released copy outside any
   working tree, passes. `--report` lists every flagged entry and reads and writes no
   baseline; `--json`, `--launch-agents DIR` and `--settings FILE` are options.
+  A relative script path the check has no directory to resolve against (a hook's
+  `./hooks/x.sh`, `python3 scripts/y.py`, `cd scripts && ./doctor.sh`,
+  `"$CLAUDE_PROJECT_DIR"/x.sh`, or a LaunchAgent's without `WorkingDirectory` or an
+  absolute `cd`) is reported as `unresolved` with its command and ratchets the same
+  way: in the baseline, info while grandfathered, a failure when new. `--json` lists
+  it under `"unresolved": [{"entry", "command", "word"}]`. Program names on PATH and
+  plain arguments are not reported.
 
 ### Migration
 
