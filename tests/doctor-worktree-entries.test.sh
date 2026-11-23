@@ -12,7 +12,11 @@ TREE="$TMP/tree"
 AGENTS="$HOME_FIXTURE/Library/LaunchAgents"
 SETTINGS="$HOME_FIXTURE/.claude/settings.json"
 BASELINE="$HOME_FIXTURE/.broomva/state/doctor-worktree-entries.json"
-mkdir -p "$AGENTS" "$HOME_FIXTURE/.claude" "$HOME_FIXTURE/bin" "$TMP/workspace" "$TMP/decoy-home/Library/LaunchAgents"
+mkdir -p "$AGENTS" "$HOME_FIXTURE/.claude" "$HOME_FIXTURE/bin" "$TMP/workspace" "$TMP/decoy-home/Library/LaunchAgents" "$TMP/path-bin"
+# A program found on PATH that ends in a script extension is a program name, not a path.
+printf '#!/bin/sh\n' > "$TMP/path-bin/onpath.sh"
+chmod +x "$TMP/path-bin/onpath.sh"
+export PATH="$TMP/path-bin:$PATH"
 export HOME="$TMP/decoy-home"
 export BSTACK_DOCTOR_HOME="$HOME_FIXTURE" BROOMVA_WORKSPACE="$TMP/workspace"
 unset BROOMVA_HOME
@@ -61,6 +65,9 @@ plist "$OPT_AGENTS" com.broomva.plain /bin/bash "$TMP/plain/released.sh"
 plist "$OPT_AGENTS" com.broomva.untracked /bin/bash "$TREE/untracked.sh"
 plist "$OPT_AGENTS" com.broomva.missing /bin/bash "$TREE/gone.sh"
 plist "$OPT_AGENTS" com.broomva.directory /usr/bin/env ls "$TREE/sub"
+# Relative script paths: with no directory they are unresolved; a relative `cd`
+# from a known WorkingDirectory still resolves.
+plist "$OPT_AGENTS" com.broomva.relative /bin/bash -c "./run.sh nightly"
 # Not a com.broomva.* agent: out of scope.
 plist "$OPT_AGENTS" org.example.other /bin/bash "$TREE/tracked.sh"
 python3 - "$OPT_AGENTS" "$OPT_SETTINGS" "$TREE" "$HOME_FIXTURE" <<'PY_FIXTURE'
@@ -73,6 +80,9 @@ with open(f'{agents}/com.broomva.cwd.plist', 'wb') as stream:
 with open(f'{agents}/com.broomva.cwd-shell.plist', 'wb') as stream:
     plistlib.dump({'Label': 'cwd-shell', 'WorkingDirectory': tree,
                    'ProgramArguments': ['/bin/bash', '-c', 'exec ./sub/inner.sh --apply']}, stream)
+with open(f'{agents}/com.broomva.cwd-cd.plist', 'wb') as stream:
+    plistlib.dump({'Label': 'cwd-cd', 'WorkingDirectory': tree,
+                   'ProgramArguments': ['/bin/bash', '-c', 'cd sub && ./inner.sh']}, stream)
 command = lambda text: {'type': 'command', 'command': text}
 json.dump({'hooks': {
     'PreToolUse': [{'matcher': 'Bash', 'hooks': [command(f'python3 -I {tree}/hook.py pretool --harness=claude')]}],
@@ -81,6 +91,14 @@ json.dump({'hooks': {
     'SessionStart': [{'hooks': [command('"$CLAUDE_PROJECT_DIR"/tracked.sh'),
                                 command('python3 -I /nonexistent/hook.py session-start'),
                                 {'type': 'prompt', 'prompt': f'{tree}/tracked.sh'}]}],
+    # A hook has no working directory the scanner knows: each relative script path is
+    # unresolved (the first is the review's exact string). The second group are a
+    # program on PATH, bare program names and arguments: never reported.
+    'UserPromptSubmit': [{'hooks': [command("bash -c 'cd scripts && ./doctor.sh'"),
+                                    command('./hooks/x.sh'),
+                                    command('python3 scripts/y.py --fast')]}],
+    'PostToolUse': [{'hooks': [command('onpath.sh stop'), command('bun run dev'),
+                               command('git status 2>&1 | tee -a log'), command('python3 -m tool config.json')]}],
 }, 'permissions': {'allow': [f'Bash({tree}/tracked.sh)']}}, open(settings, 'w'))
 PY_FIXTURE
 python3 -I "$ENTRIES" --report --json --launch-agents "$OPT_AGENTS" --settings "$OPT_SETTINGS" >"$TMP/json"
@@ -93,6 +111,7 @@ want = sorted([
     ('claude-hook:Stop', '~/bin/linked.sh', tree),
     ('launchd:com.broomva.cd', f'{tree}/sub/rel.py', tree),
     ('launchd:com.broomva.cwd', f'{tree}/tracked.sh', tree),
+    ('launchd:com.broomva.cwd-cd', f'{tree}/sub/inner.sh', tree),
     ('launchd:com.broomva.cwd-shell', f'{tree}/sub/inner.sh', tree),
     ('launchd:com.broomva.direct', f'{tree}/tracked.sh', tree),
     ('launchd:com.broomva.home-link', '~/bin/linked.sh', tree),
@@ -103,12 +122,23 @@ want = sorted([
 ])
 got = [(item['entry'], item['file'], item['repository']) for item in d['flagged']]
 assert got == want, '\n' + '\n'.join(map(str, sorted(set(got) ^ set(want))))
+want_unresolved = sorted([
+    ('claude-hook:SessionStart', '"$CLAUDE_PROJECT_DIR"/tracked.sh', '$CLAUDE_PROJECT_DIR/tracked.sh'),
+    ('claude-hook:UserPromptSubmit', "bash -c 'cd scripts && ./doctor.sh'", './doctor.sh'),
+    ('claude-hook:UserPromptSubmit', './hooks/x.sh', './hooks/x.sh'),
+    ('claude-hook:UserPromptSubmit', 'python3 scripts/y.py --fast', 'scripts/y.py'),
+    ('launchd:com.broomva.relative', './run.sh nightly', './run.sh'),
+])
+got_unresolved = [(item['entry'], item['command'], item['word']) for item in d['unresolved']]
+assert got_unresolved == want_unresolved, '\n' + '\n'.join(map(str, sorted(set(got_unresolved) ^ set(want_unresolved))))
 assert d == {'schema': 1, 'mode': 'report', 'baseline_recorded_at': None, 'flagged': d['flagged'],
-             'grandfathered': None, 'error': None}, d
+             'unresolved': d['unresolved'], 'grandfathered': None, 'error': None}, d
 PY_EXPECT
 python3 -I "$ENTRIES" --report --launch-agents "$OPT_AGENTS" --settings "$OPT_SETTINGS" >"$TMP/out"
 grep -Fxq "[info] launchd:com.broomva.direct runs $TREE/tracked.sh (repository $TREE)" "$TMP/out"
-grep -Fxq '[info] 11 entries run a file from a git working tree (report only: no baseline read or written)' "$TMP/out"
+grep -Fxq '[info] 12 entries run a file from a git working tree (report only: no baseline read or written)' "$TMP/out"
+grep -Fxq '[info] 5 script paths could not be resolved' "$TMP/out"
+grep -Fxq "[info] unresolved: claude-hook:UserPromptSubmit runs \`./doctor.sh\` with no directory to resolve it against, in: bash -c 'cd scripts && ./doctor.sh'" "$TMP/out"
 # Without the options the fixture home is read (empty so far), never HOME's decoy.
 python3 -I "$ENTRIES" --report >"$TMP/out"
 grep -Fxq '[info] 0 entries run a file from a git working tree (report only: no baseline read or written)' "$TMP/out"
@@ -223,13 +253,13 @@ json_run() {  # json_run EXPECTED_EXIT PYTHON_ASSERTION
 import json, sys
 d = json.load(open(sys.argv[1]))
 baseline, tree = sys.argv[3:]
-assert sorted(d) == ['baseline_recorded_at', 'error', 'flagged', 'grandfathered', 'mode', 'schema'], sorted(d)
+assert sorted(d) == ['baseline_recorded_at', 'error', 'flagged', 'grandfathered', 'mode', 'schema', 'unresolved'], sorted(d)
 assert d['schema'] == 1 and d['mode'] == 'check', d
 assert eval(sys.argv[2]), (sys.argv[2], d)
 PY_JSON
 }
-unreadable="d['error'] and d['flagged'] is None and d['grandfathered'] is None and d['baseline_recorded_at'] is None"
-json_run 0 "d['error'] is None and d['flagged'] == [] and d['grandfathered'] == 2 and d['baseline_recorded_at'] == json.load(open(baseline))['recorded_at']"
+unreadable="d['error'] and d['flagged'] is None and d['unresolved'] is None and d['grandfathered'] is None and d['baseline_recorded_at'] is None"
+json_run 0 "d['error'] is None and d['flagged'] == [] and d['unresolved'] == [] and d['grandfathered'] == 2 and d['baseline_recorded_at'] == json.load(open(baseline))['recorded_at']"
 plist "$AGENTS" com.broomva.new /bin/bash "$TREE/tracked.sh"
 json_run 1 "d['error'] is None and d['grandfathered'] == 2 and d['flagged'] == [{'entry': 'launchd:com.broomva.new', 'file': tree + '/tracked.sh', 'repository': tree}]"
 rm "$AGENTS/com.broomva.new.plist"
@@ -243,6 +273,34 @@ json.dump(d, open(sys.argv[1], 'w'))
 PY_SETTINGS
 json_run 0 "d['error'] is None and d['flagged'] == [] and d['grandfathered'] == 1 and len(json.load(open(baseline))['entries']) == 2"
 cp "$TMP/settings.good" "$SETTINGS"
+# An unresolved script path ratchets like a flagged entry: new fails, recorded is
+# grandfathered (info), and one that leaves is information.
+python3 - "$SETTINGS" <<'PY_SETTINGS'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d['hooks']['Stop'][0]['hooks'].append({'type': 'command', 'command': "bash -c 'cd scripts && ./doctor.sh'"})
+json.dump(d, open(sys.argv[1], 'w'))
+PY_SETTINGS
+json_run 1 "d['error'] is None and d['flagged'] == [] and d['grandfathered'] == 2 and d['unresolved'] == [{'entry': 'claude-hook:Stop', 'command': \"bash -c 'cd scripts && ./doctor.sh'\", 'word': './doctor.sh'}]"
+if run_doctor; then echo 'a new unresolved hook passed' >&2; exit 1; fi
+grep -Fq '[failure] new entry runs a script path the check cannot resolve: claude-hook:Stop runs `./doctor.sh`' "$TMP/out"
+# The negative control: without the unresolved comparison the same run passes.
+python3 - "$TMP/copy/scripts/doctor-worktree-entries.py" "$ENTRIES" <<'PY_MUTATE'
+import sys
+s = open(sys.argv[2]).read()
+assert s.count('unresolved - saved_unresolved') == 1
+open(sys.argv[1], 'w').write(s.replace('unresolved - saved_unresolved', 'unresolved - unresolved'))
+PY_MUTATE
+python3 -I "$TMP/copy/scripts/doctor-worktree-entries.py" >"$TMP/out"
+bash "$DOCTOR" --baseline-entries --force >"$TMP/out"
+grep -Fq 'unresolved: claude-hook:Stop runs `./doctor.sh`' "$TMP/out"
+json_run 0 "d['error'] is None and d['flagged'] == [] and d['unresolved'] == [] and d['grandfathered'] == 3"
+run_doctor_verbose
+grep -Fq '[info] grandfathered unresolved entry: claude-hook:Stop runs `./doctor.sh`' "$TMP/out"
+cp "$TMP/settings.good" "$SETTINGS"
+run_doctor_verbose
+grep -Fq '[info] baselined unresolved entry is gone: claude-hook:Stop runs `./doctor.sh`' "$TMP/out"
+bash "$DOCTOR" --baseline-entries --force >"$TMP/out"
 # An input that cannot be read is a failure, never "nothing flagged".
 printf 'not a plist' > "$AGENTS/com.broomva.broken.plist"
 json_run 1 "$unreadable and 'com.broomva.broken.plist' in d['error']"
