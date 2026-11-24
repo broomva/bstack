@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.52.2 — 2026-11-23
+
+### feat(doctor): ratchet launchd and hook entries that name files in a git working tree (BRO-4084)
+
+- **Working-tree entry ratchet (doctor §33).** `scripts/doctor-worktree-entries.py`
+  reads every `com.broomva.*.plist` LaunchAgent (`Program` and each
+  `ProgramArguments` string) and every hook `command` in `~/.claude/settings.json`
+  as raw text, and never interprets shell: no command splitting, no `cd`, no
+  wrapper or interpreter tables. A path word is a run of characters other than
+  whitespace and `; | & ( ) < >` and the backquote that contains a `/`; quotes are
+  dropped without ending the word, `NAME=value` and `--option=value` are read as
+  their value, and words starting with `-`, URLs, git object names
+  (`origin/main:scripts/x.sh`) and the four standard streams under `/dev` are never
+  considered, nor is any word without a `/`.
+- An absolute word (after `~/`, `$HOME/`, `${HOME}/`) is **flagged** when it
+  resolves, following symlinks, to an existing file a git working tree tracks,
+  wherever it appears: as the command, as an interpreter's script, or as an
+  argument that is only read. A hook that reads a file from a working tree feeds
+  it unreviewed content just as one that executes it does. A missing file, a
+  directory, an untracked file or a released copy outside any working tree is
+  ignored. A path with a space is found whether quoted, escaped or bare.
+- A relative word, or one starting with a variable other than HOME, is
+  **unresolved**: the check cannot tell what it names, and the remedy is an
+  absolute path. In a LaunchAgent with a `WorkingDirectory`, relative words (and
+  bare words naming a file there) resolve against it. A `cd` in the text is not
+  followed.
+- Flagged and unresolved entries both ratchet, with the contract of the machine
+  folder ratchet: `bstack doctor --baseline-entries` records them (refuses to
+  overwrite without `--force`); grandfathered entries print as info; a new one, an
+  unreadable plist or settings file, a `git` that cannot answer, or a broken
+  baseline fails doctor even without `--strict`. `--report` lists every entry and
+  reads and writes no baseline; `--json`, `--launch-agents DIR` and `--settings
+  FILE` are options. `--json` prints `{"schema": 1, "mode", "baseline_recorded_at",
+  "flagged": [{"entry", "file", "repository"}], "unresolved": [{"entry", "command",
+  "word"}], "grandfathered", "error"}`, with null lists on an error.
+- Not seen: a path built at run time with no `/` in the text (`bash "$SCRIPT"`, a
+  glob), the file behind a relative path (reported as unresolved), content
+  fetched by a program the entry names, and a bare file name used after a `cd`
+  (`cd /t && python3 x.py`), which is neither flagged nor unresolved.
+
+### Migration
+
+Opt-in, like the machine folder ratchet: a machine without a baseline gets one
+`[info]` line and no gap, so its totals and `--strict` result do not change. Run
+`python3 -I scripts/doctor-worktree-entries.py --report` to see what a baseline
+would record before running `bstack doctor --baseline-entries`.
+
 ## 0.52.1 — 2026-11-21
 
 ### feat(doctor): ratchets that report without a person running doctor (BRO-4083)
