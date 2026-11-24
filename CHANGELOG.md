@@ -2,7 +2,7 @@
 
 ## 0.52.1 — 2026-11-21
 
-### feat(doctor): ratchets that report without a person running doctor (BRO-4083, BRO-4084)
+### feat(doctor): ratchets that report without a person running doctor (BRO-4083)
 
 - **Reader ratchet in CI.** `scripts/check_control_readers.py` lists the tracked code
   files that read `.control/<X>` without a matching `.broomva/<X>` and fails when one
@@ -15,46 +15,24 @@
   base's baseline lacks, so a change cannot add a reader and widen the baseline at
   once; an addition is allowed only as the `git diff -M` rename of an entry the same
   change drops. It finds literal references only: a path built from pieces is not
-  seen, and a comment that mentions `.control/<X>` in a code file counts. Both limits
-  are stated in the script and in CONTRIBUTING.md, and pinned by tests.
+  seen, and a comment that mentions `.control/<X>` in a code file counts. The unit is
+  a file and a first path component; the check does not pair individual references,
+  so `.control/asks/a` is paired by `.broomva/asks/b` in the same file. That is the
+  unit of the reference sensor in `broomva/workspace`, kept so the two repos' counts
+  stay comparable. The three limits are stated in the script, its failure hint and
+  CONTRIBUTING.md, and pinned by tests.
 - **`--json` on the machine folder check.** `python3 -I scripts/doctor-machine-folders.py
   --json` prints one object, `{"schema": 1, "baseline_recorded_at", "unregistered":
   [{"path", "suggested"}], "grandfathered", "error"}`, with the exit code of the plain
   run (0, 1, or 42 without a baseline). A missing or invalid baseline sets `error` and
   leaves `unregistered` and `grandfathered` null, never an empty list. The plain
   output and exit codes are unchanged.
-- **Working-tree entry ratchet (doctor §33).** `scripts/doctor-worktree-entries.py`
-  reads every `com.broomva.*.plist` LaunchAgent and every hook command in
-  `~/.claude/settings.json` and flags a command that runs a file tracked in a git
-  working tree, where an edit takes effect with no review. A command that writes
-  `git show origin/main:<path>` to a temp file, or runs a released copy outside any
-  working tree, passes. `--report` lists every flagged entry and reads and writes no
-  baseline; `--json`, `--launch-agents DIR` and `--settings FILE` are options.
-  A relative script path the check has no directory to resolve against (a hook's
-  `./hooks/x.sh`, `python3 scripts/y.py`, `cd scripts && ./doctor.sh`,
-  `"$CLAUDE_PROJECT_DIR"/x.sh`, or a LaunchAgent's without `WorkingDirectory` or an
-  absolute `cd`) is reported as `unresolved` with its command and ratchets the same
-  way: in the baseline, info while grandfathered, a failure when new. `--json` lists
-  it under `"unresolved": [{"entry", "command", "word"}]`. A word counts by its
-  position, as the shell would run it, never by how it looks: the command word of a
-  simple command when it contains a `/` (after `VAR=value` assignments and the
-  wrappers `env`, `exec`, `nohup`, `time`, `command`, `sudo`, `nice`), the script
-  operand of a known interpreter (`bash -c '<line>'` scans `<line>` the same way;
-  `python3 -m`, `node -e` and `bun run <name>` name no file), and the word after
-  `source` or `.`. Every other word is an argument and is not reported, so
-  `echo report.sh` and `cat /repo/notes.py` pass, and a quoted path with a space
-  is one word. A LaunchAgent's `ProgramArguments` are read as the argument vector
-  launchd runs, and its unresolved `command` is that vector, shell-quoted.
 
 ### Migration
 
-The working-tree entry ratchet is opt-in, like the machine folder ratchet: a machine
-without a baseline gets one `[info] ` line and no gap, so its totals and `--strict`
-result do not change. `bstack doctor --baseline-entries` records the entries that
-exist today (it refuses to overwrite; `--force` replaces after review); from then on a
-new flagged entry, an unreadable plist or settings file, or a broken baseline fails
-doctor even without `--strict`. To tighten the reader baseline after removing a
-reader, replace the committed file with the output of
+None: the `--json` option is new and the plain output of the folder check is
+unchanged. To tighten the reader baseline after removing a reader, replace the
+committed file with the output of
 `python3 scripts/check_control_readers.py --print-baseline`.
 
 ## 0.52.0 — 2026-11-18

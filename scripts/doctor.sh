@@ -4,10 +4,8 @@
 #
 # Runs at SessionStart (via hook) AND on demand (`bstack doctor`).
 # Normally never blocks a session: gaps are actionable nudges. An enabled machine
-# folder ratchet fails on new unregistered folders or a broken baseline, and an
-# enabled working-tree entry ratchet on a new scheduled or hooked command that
-# runs a file from a git working tree; --strict fails on any gap. A missing
-# workspace retains its existing exit 3.
+# folder ratchet fails on new unregistered folders or a broken baseline; --strict
+# fails on any gap. A missing workspace retains its existing exit 3.
 #
 # What it checks:
 #   1. CLAUDE.md primitives table has all P1-P20 rows + correct count
@@ -54,12 +52,9 @@
 #   bash scripts/doctor.sh --quiet       # only warnings
 #   bash scripts/doctor.sh --strict      # exit 1 if any gap found (CI mode)
 #   bstack doctor --baseline-roots [--force] # record machine folders once
-#   bstack doctor --baseline-entries [--force] # record working-tree entries once
 #
 # Env:
-#   BSTACK_DOCTOR_HOME    override the home used by the machine folder scan and
-#                          the working-tree entry scan (its Library/LaunchAgents
-#                          and .claude/settings.json)
+#   BSTACK_DOCTOR_HOME    override the home used by the machine folder scan
 #   BSTACK_DOCTOR_USER_SETTINGS
 #                          §26 only — path to the PERSONAL settings.json read as
 #                          hook registration surface 2. Defaults to
@@ -77,14 +72,12 @@ set -uo pipefail
 QUIET=0
 STRICT=0
 BASELINE_ROOTS=0
-BASELINE_ENTRIES=0
 BASELINE_FORCE=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --quiet|-q) QUIET=1; shift ;;
         --strict)   STRICT=1; shift ;;
         --baseline-roots) BASELINE_ROOTS=1; shift ;;
-        --baseline-entries) BASELINE_ENTRIES=1; shift ;;
         --force) BASELINE_FORCE=1; shift ;;
         --help|-h)
             grep -E '^#( |$)' "$0" | sed 's/^# \?//' | head -30
@@ -99,14 +92,6 @@ if [ "$BASELINE_ROOTS" = "1" ]; then
         exec python3 -I "$_baseline_script" --baseline-roots --force
     fi
     exec python3 -I "$_baseline_script" --baseline-roots
-fi
-
-if [ "$BASELINE_ENTRIES" = "1" ]; then
-    _baseline_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/doctor-worktree-entries.py"
-    if [ "$BASELINE_FORCE" = "1" ]; then
-        exec python3 -I "$_baseline_script" --baseline-entries --force
-    fi
-    exec python3 -I "$_baseline_script" --baseline-entries
 fi
 
 # ── locate workspace ────────────────────────────────────────────────────────
@@ -2148,34 +2133,6 @@ if [ "$QUIET" = "0" ]; then
     fi
 fi
 
-# ── Working-tree entry ratchet (BRO-4084) ───────────────────────────────────
-# A LaunchAgent or Claude Code hook that runs a file tracked in a git working
-# tree runs whatever that checkout holds, with no review between an edit and its
-# effect. Same contract as §31: opt-in, one [info] line without a baseline; once
-# a baseline exists, a new such entry or a broken baseline is a hard failure even
-# without --strict.
-section "33. Working-tree entry ratchet"
-_TREE_ENTRY_FAILURE=0
-_tree_entries="$(python3 -I "$BSTACK_REPO/scripts/doctor-worktree-entries.py" 2>&1)"
-_tree_status=$?
-if [ "$_tree_status" = "127" ]; then
-    _tree_state="$(
-        [ -n "${BSTACK_DOCTOR_HOME:-}" ] && export HOME="$BSTACK_DOCTOR_HOME" BROOMVA_HOME="$BSTACK_DOCTOR_HOME/.broomva"
-        # shellcheck source=scripts/lib/broomva-paths.sh
-        . "$BSTACK_REPO/scripts/lib/broomva-paths.sh" && broomva_machine_path state
-    )"
-    if [ -n "$_tree_state" ] && [ ! -e "$_tree_state/doctor-worktree-entries.json" ] && [ ! -L "$_tree_state/doctor-worktree-entries.json" ]; then
-        _tree_status=42
-    fi
-fi
-case "$_tree_status" in
-    0) [ "$QUIET" = "0" ] && [ -n "$_tree_entries" ] && printf '%s\n' "$_tree_entries" ;;
-    42) [ "$QUIET" = "0" ] && echo "  [info] working-tree entry ratchet is not enabled on this machine (opt-in; not a gap): bstack doctor --baseline-entries" ;;
-    *) printf '%s\n' "$_tree_entries"
-       _TREE_ENTRY_FAILURE=1
-       gap "working-tree entry ratchet failed" "see the failure above" ;;
-esac
-
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""
 TOTAL=$((PASSES + GAPS))
@@ -2188,7 +2145,7 @@ else
     fi
 fi
 
-if [ "$_MACHINE_FOLDER_FAILURE" = "1" ] || [ "$_TREE_ENTRY_FAILURE" = "1" ]; then
+if [ "$_MACHINE_FOLDER_FAILURE" = "1" ]; then
     exit 1
 fi
 

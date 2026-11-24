@@ -193,7 +193,7 @@ class RatchetTest(unittest.TestCase):
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("not a commit", result.stderr)
 
-    # ── documented limits (round 1, findings 2 and 4): pinned so a change is deliberate ──
+    # ── documented limits (round 1, findings 2 and 4; round 3, the pairing unit): pinned so a change is deliberate ──
 
     def test_constructed_path_is_not_counted(self):
         (self.root / "built.py").write_text('p = "." + "' + 'control/asks"\n')
@@ -210,6 +210,26 @@ class RatchetTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("noted.py", result.stdout)
         self.assertIn("Comments count too", result.stdout)
+
+    def test_pairing_unit_is_file_and_first_component(self):
+        # Round 3 (maestro review of the same checker): two different paths under one
+        # first component pair each other in the same file. Kept as the contract, to
+        # match the workspace's sensor; this pins it so a change is deliberate.
+        (self.root / "same_component.py").write_text(
+            f'legacy = {LEGACY}asks/private"\ncurrent = {RENAMED}asks/unrelated"\n')
+        self.stage()
+        result = self.check()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("same_component.py", result.stdout)
+        self.assertIn("Unpaired readers: 2; baseline: 2", result.stdout)
+        # The same two paths in two different files: each file is judged alone.
+        (self.root / "same_component.py").write_text(f'legacy = {LEGACY}asks/private"\n')
+        (self.root / "other_file.py").write_text(f'current = {RENAMED}asks/unrelated"\n')
+        self.stage()
+        result = self.check()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("same_component.py", result.stdout)
+        self.assertIn("first path component", result.stdout)
 
 
 if __name__ == "__main__":

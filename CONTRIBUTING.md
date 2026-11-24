@@ -50,7 +50,12 @@ against someone evading it:
   covers these;
 - counted although it reads nothing: a comment in a code file that mentions
   `.control/<X>`. The checker in `broomva/workspace` behaves the same way. Mention
-  both names in the comment, or reword it.
+  both names in the comment, or reword it;
+- paired although the paths differ: the unit is a file and a first path component;
+  the check does not pair individual references. A file that names
+  `.control/asks/a` and `.broomva/asks/b` counts as paired, because both are `asks`
+  under their folder. This is the unit of the reference sensor in
+  `broomva/workspace`, kept so the counts of the two repos stay comparable.
 
 ## Adding a new primitive (P21+)
 

@@ -7,7 +7,7 @@
 # No skip path: unittest exits 0 on a skipped test or a shrunk suite, so both fail here.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-MIN_TESTS=18
+MIN_TESTS=19
 python3 "$ROOT/scripts/check_control_readers.py" --selftest
 LOG="$(mktemp)"
 trap 'rm -f "$LOG"' EXIT

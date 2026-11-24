@@ -38,7 +38,12 @@ against someone evading it, and a textual scan cannot be made complete:
     a variable holding the root). Review covers those;
   - counted although it reads nothing: a COMMENT that mentions `.control/<X>` in a
     code file. The workspace's checker does the same and this one matches it.
-    Remedy: name both (`.control/<X>` and `.broomva/<X>`) or reword the comment.
+    Remedy: name both (`.control/<X>` and `.broomva/<X>`) or reword the comment;
+  - the unit is a file and a first path component; the check does not pair
+    individual references. `<X>` is the first component under the folder, so a
+    file that names `.control/asks/a` and `.broomva/asks/b` counts as paired
+    although the two paths differ. This is the unit of the reference sensor in
+    broomva/workspace and is kept so the counts of the two repos stay comparable.
 
 Ported from broomva/workspace (scripts/control_readers_count.py for the
 classifier, scripts/check_control_readers.py for the ratchet) into one
@@ -64,7 +69,9 @@ HINT = (
     "A file listed here reads a literal `.control/<X>` without `.broomva/<X>`. Name both,\n"
     "or read the path through the path registry. Comments count too: mention both names\n"
     "or reword. Do not add the file to the baseline. This check finds literal\n"
-    "references only; a path built from pieces is not seen, and review covers that."
+    "references only; a path built from pieces is not seen, and review covers that.\n"
+    "The unit is a file and a first path component; the check does not pair individual\n"
+    "references (`.control/asks/a` is paired by `.broomva/asks/b` in the same file)."
 )
 
 CODE_EXT = {".py", ".sh", ".bash", ".zsh", ".ts", ".tsx", ".js", ".mjs", ".cjs",
