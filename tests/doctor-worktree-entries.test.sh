@@ -207,6 +207,8 @@ rows = [
     # round 6 (the Linux CI failure): a file reached only from INSIDE a word is a suffix of another
     # path (there: `/bin/link` inside `/home/bin/linked.sh`); it adds an annotation only when tracked
     (f'cat /zz{plain}/notes-link.md', [], []),
+    (f'cat "$HOME"{plain}/notes-link.md', [], []),    # after a closing quote is still inside the word
+    (f'cat "{plain}/notes-link.md"', [], [f'hard link {plain}/notes-link.md']),  # after an opening quote starts it
 ]
 failed = []
 for command, want_files, want_missed in rows:

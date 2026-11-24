@@ -351,6 +351,18 @@ def relative_readings(text):
             offset += 1
 
 
+WORD_BOUNDARY = frozenset(' \t;|&<>=:,')
+
+
+def starts_word(text, index):
+    """True when ``index`` begins a shell word: quotes before it are skipped, so
+    the `/` in `"$HOME"/bin` is inside the word and the one in `"/bin` starts it."""
+    j = index - 1
+    while j >= 0 and text[j] in QUOTES:
+        j -= 1
+    return j < 0 or text[j] in WORD_BOUNDARY
+
+
 def named_paths(text, home, cwd=None):
     """(existing files a READABLE text names, path words it cannot resolve).
 
@@ -384,7 +396,7 @@ def named_paths(text, home, cwd=None):
     if cwd is not None and stat_or_none(cwd) is not None:
         add_folder(cwd, os.stat(cwd))
     for index, base, rest_at in absolute_starts(text, home):
-        begins_word = index == 0 or text[index - 1] in RELATIVE_STARTS_AFTER
+        begins_word = starts_word(text, index)
         rest = text[rest_at:]
         plain, kept = without_quotes(rest)
         for variant, position in ((rest, None), (plain, kept)):
