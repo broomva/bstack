@@ -8,32 +8,29 @@
   reads every `com.broomva.*.plist` LaunchAgent (`Program` and each
   `ProgramArguments` string) and every hook `command` in `~/.claude/settings.json`
   as raw text, and never interprets shell: no command splitting, no `cd`, no
-  wrapper or interpreter tables. A path word is a run of characters other than
-  whitespace and `; | & ( ) < >` and the backquote that contains a `/`; quotes are
-  dropped without ending the word, `NAME=value` and `--option=value` are read as
-  their value, and words starting with `-`, URLs, git object names
-  (`origin/main:scripts/x.sh`) and the four standard streams under `/dev` are never
-  considered, nor is any word without a `/`.
-- An absolute word (after `~/`, `$HOME/`, `${HOME}/`) is **flagged** when it
-  resolves, following symlinks, to an existing file a git working tree tracks,
-  wherever it appears: as the command, as an interpreter's script, or as an
-  argument that is only read. A hook that reads a file from a working tree feeds
-  it unreviewed content just as one that executes it does. A missing file, a
-  directory, an untracked file or a released copy outside any working tree is
-  ignored. A path with a space is found quoted or bare.
-- In a readable entry, a relative word is
-  **unresolved**: the check cannot tell what it names, and the remedy is an
-  absolute path. In a LaunchAgent with a `WorkingDirectory`, relative words
-  resolve against it. A `cd` in the text is not followed.
-- A bare word (no `/`) paired with a directory: every absolute directory word in
-  the text, and a LaunchAgent's `WorkingDirectory`, is paired with every bare
-  word of the same text, in any order; when the pair names a tracked file the
-  entry is flagged with it. So `cd /t && python3 x.py` is flagged without
-  following the `cd`. A directory word alone is never reported, so
-  `git -C /t log` alone is not reported. This errs on the conservative
-  side: `git -C /t log README.md` is flagged although nothing runs or reads
-  `README.md`, because a false flag costs a baseline line and a miss runs
-  unreviewed code.
+  wrapper or interpreter tables. A hook that reads a file from a working tree
+  feeds it unreviewed content just as one that executes it does, so both count.
+- **In a readable entry, a reading may only ADD candidates; the raw text is always
+  a candidate too.** Absolute paths are found by asking the file system: from
+  every place an absolute path can start (`/`, `~/` at a word start, `$HOME`,
+  `${HOME}`), every end position is tried, as written and with quotes removed,
+  and an existing file (following symlinks) tracked by a git working tree
+  **flags** the entry. `=`, `:`, `,`, `+`, `@`, `%`, spaces and quotes in a file
+  name do not matter, and the file is flagged as the command, an interpreter's
+  script, an option's value or an argument that is only read. Directories met
+  in a working tree, and a LaunchAgent's `WorkingDirectory`, are joined with
+  every place a relative name can start (a token start, after a quote, `=`, `:`
+  or `,`), again with every end position, so `cd /t && python3 x.py` and
+  `git -C /t show HEAD:x.py` are flagged without following the `cd`. A relative
+  piece holding a `/` is **unresolved** (the remedy is an absolute path) unless a
+  `WorkingDirectory` resolves it; URLs and git object names are not judged. A
+  missing, untracked or out-of-tree file is ignored. Deleted in round 3 of the
+  review: reading `NAME=value` and `--option=value` as their value, joining a
+  word with the next across spaces, and pairing only whole bare words with
+  whole directory words; each replaced the text it read, and a tracked
+  `/t/a=b.sh` passed clean. A generated test flags 15 tracked names holding each
+  readable punctuation character, a space and combinations, in 12 command
+  shapes (180 commands).
 - Flagged and unresolved entries both ratchet, with the contract of the machine
   folder ratchet: `bstack doctor --baseline-entries` records them (refuses to
   overwrite without `--force`); grandfathered entries print as info; a new one, an

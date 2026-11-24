@@ -36,51 +36,48 @@ as unresolved and must be acknowledged in the baseline.
   accepted because scheduled jobs and hooks are added rarely, and a new one
   should be looked at once; a reviewed baseline line is that look.
 
-Only a fully readable entry is scanned, by words. The check never splits
-commands, follows a `cd`, or models a wrapper (`timeout`, `xargs`, `exec`) or an
-interpreter's options:
+Only a fully readable entry is scanned. The principle of the scan: a reading may
+only ADD candidates; the raw text is always a candidate too. No rule replaces the
+text it interprets (a word by its value after `=`, a word joined with the next),
+so there is no word boundary to get wrong. The check never splits commands,
+follows a `cd`, or models a wrapper or an interpreter's options:
 
-  A PATH WORD is a maximal run of characters other than space, tab and the
-  operator characters, that contains a `/`. A quote character is dropped without
-  ending the word, so `"$HOME"/x.sh` is the one word `$HOME/x.sh`. A word of the
-  form NAME=value or --option=value is read as its value. Never considered: a
-  word with no `/` (`echo report.sh`, `git status`, `bun run x`), a word starting
-  with `-`, a URL (`scheme://`), a git object name `<ref>:<path>`
-  (`git show origin/main:scripts/x.sh`), and /dev/null, /dev/stdin, /dev/stdout,
-  /dev/stderr.
+  ABSOLUTE paths are found by asking the file system. From every place in the
+  text where an absolute path can start (a `/`, a `~/` at the start of a word,
+  `$HOME`, `${HOME}`), every end position to the right is tried, on the text as
+  written and with quote characters removed. A candidate that is an existing
+  file (following symlinks) tracked by a git working tree flags the entry
+  (walk up for `.git`; `git ls-files` is read once per repository; a linked
+  worktree counts). So `=`, `:`, `,`, `+`, `@`, `%`, spaces and quotes in a
+  file name do not matter, and a file is flagged wherever it appears: as the
+  command, as an interpreter's script, inside an option (`-o/t/x`), as a
+  `NAME=/t/x` value, or as an argument that is only read. A shorter prefix that
+  names a tracked file also counts (`/t/x.sh.bak` flags `/t/x.sh` if that is
+  tracked): the conservative side. A missing, untracked or out-of-tree file is
+  not reported: a released copy outside any working tree passes.
 
-  An ABSOLUTE word (after expanding a leading `~/`, `$HOME/` or `${HOME}/`) is
-  FLAGGED when it resolves, following symlinks, to an existing file that a git
-  working tree tracks (walk up for `.git`, then `git ls-files --error-unmatch`;
-  a linked worktree counts). It is flagged wherever it appears: as the command,
-  as an interpreter's script, or as an argument that is only read. An absolute
-  word that does not exist, is a directory, or is not tracked is not reported
-  itself (a directory is used only for the pairing below): a released copy
-  outside any working tree passes.
+  DIRECTORIES met by the same scan that lie in a git working tree, and a
+  LaunchAgent's WorkingDirectory, are joined with every place a relative name
+  can start (the start of a token, after a quote, after `=`, `:` or `,`), again
+  trying every end position. When that names a tracked file the entry is
+  flagged with it, in any order and with no `cd` tracking: `cd /t && python3
+  x.py`, `cd /t && bash 'A=1 B.sh'`, `git -C /t show HEAD:x.py` and
+  `python3 x.py; ls /t/sub` (the tree itself is on the way to `/t/sub`) are all
+  flagged. A directory by itself is never reported. A false flag costs one
+  baseline line or an absolute rewrite; a missed entry runs unreviewed code.
 
-  A path with a space. An absolute word followed by more words, separated only
-  by spaces or tabs, is also tried joined with them (up to eight): when such a
-  join names an existing file, that file is the word. So `"/t/with space.sh"`
-  and `'/t/with space.sh'` are found; words used up by such a join are not
-  reported again.
-
-  A RELATIVE word is UNRESOLVED: this check cannot tell what it names, and the
-  remedy is an absolute path. The one exception: in a LaunchAgent with a
-  `WorkingDirectory`, a relative word is resolved against it and then treated as
-  absolute. A bare word is never unresolved. A `cd` in the text is not followed,
-  so `cd /t && ./x.sh` leaves `./x.sh` unresolved. Words that are not file paths
-  at all (`origin/main`, `text/plain`) are unresolved too.
-
-  A BARE word paired with a DIRECTORY. Every absolute word that resolves
-  (following symlinks) to a directory, and a LaunchAgent's WorkingDirectory, is
-  paired with every bare word (no `/`) of the same text, in any order and with
-  no `cd` tracking: when directory/bare-word is an existing tracked file, the
-  entry is flagged with that file. So `cd /t && python3 x.py` and
-  `/bin/sh run.sh` under a WorkingDirectory are flagged. A directory word by
-  itself is never reported. That is the conservative side, and deliberate:
-  `git -C /t log README.md` is flagged although nothing runs or reads
-  README.md. A false flag costs one baseline line or an absolute rewrite; a
-  missed entry runs unreviewed code.
+  A RELATIVE path word is UNRESOLVED: this check cannot tell what it names, and
+  the remedy is an absolute path. Tokens end at whitespace and operators, quotes
+  are removed; a token with no `=`, `:` or `,` is judged whole, otherwise each
+  piece between those characters is judged, so every `/` in it is seen. A piece
+  holding a `/` is unresolved unless it starts an absolute path, starts with
+  `-`, is one of /dev/null, /dev/stdin, /dev/stdout, /dev/stderr, or lies inside
+  an absolute path the scan found (`dir/x.sh` in `"/t/my dir/x.sh"`). Never
+  judged: a URL (`scheme://`) and a git object name `<ref>:<path>`. In a
+  LaunchAgent with a WorkingDirectory, relative pieces resolve against it
+  instead. Words that are not file paths at all (`origin/main`, `text/plain`)
+  are unresolved too. `cd /t && ./x.sh` is flagged (directory x token) and
+  `./x.sh` is still unresolved.
 
 A fully readable entry with nothing flagged and nothing unresolved is clean.
 Flagged and unresolved entries both ratchet: recorded in the baseline, printed
@@ -131,7 +128,7 @@ BASELINE_NAME = 'doctor-worktree-entries.json'
 GIT_TIMEOUT = 10
 FIELDS = ('entry', 'file', 'repository')
 UNRESOLVED_FIELDS = ('entry', 'command', 'word')
-HOME_PREFIXES = ('~/', '$HOME/', '${HOME}/')  # expanded in a readable word
+HOME_PREFIXES = ('~/', '$HOME/', '${HOME}/')  # expanded in a LaunchAgent's WorkingDirectory
 # ── The readable text of an entry. Written down once: anything else in an entry
 # makes the whole entry unresolved (see read_entry). ──
 READABLE_CHARS = frozenset(
@@ -144,11 +141,13 @@ READABLE_CHARS = frozenset(
 HOME_FORMS = ('${HOME}', '$HOME')  # the only `$` forms: exactly these, `$HOME` not followed by a name character
 TILDE_FOLLOWS = frozenset(' \t&|;<>=')  # `~` is readable only at the start of a word: after these or at the start
 NAME_CHARS = frozenset('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_')
-QUOTES = set('\'"')
-DELIMITERS = set(' \t;|&<>')
+QUOTES = frozenset('\'"')
+DELIMITERS = frozenset(' \t;|&<>')  # end a token for the unresolved reading
+# A relative reading starts at the start of the text or after one of these: a
+# token boundary, a quote, or the `=`, `:`, `,` that separate pieces of a token.
+RELATIVE_STARTS_AFTER = frozenset(' \t;|&<>\'"=:,')
 STANDARD_STREAMS = {'/dev/null', '/dev/stdin', '/dev/stdout', '/dev/stderr'}
 URL = re.compile(r'[A-Za-z][A-Za-z0-9+.-]*://')
-MAX_JOIN = 8
 
 
 def unreadable(text):
@@ -171,50 +170,6 @@ def unreadable(text):
     return None
 
 
-def words(text):
-    """[(value, joinable)] for each word of a readable text.
-
-    A word is a maximal run of characters other than space, tab and the
-    operator characters. Quote characters are dropped from a word without ending
-    it, so `"$HOME"/x.sh` is the one word `$HOME/x.sh`. ``joinable``: only
-    spaces or tabs separate the word from the next one.
-    """
-    found, value, i, n = [], [], 0, len(text)
-    while i < n:
-        c = text[i]
-        if c in QUOTES:
-            i += 1
-            continue
-        if c in DELIMITERS:
-            if value:
-                j = i
-                while j < n and text[j] in ' \t':
-                    j += 1
-                joinable = j > i and j < n and text[j] not in DELIMITERS
-                found.append((''.join(value), joinable))
-                value = []
-            i += 1
-            continue
-        value.append(c)
-        i += 1
-    if value:
-        found.append((''.join(value), False))
-    return found
-
-
-def path_word(word):
-    """The path a word names, or None when the word is never considered."""
-    if URL.match(word):
-        return None
-    if '=' in word:
-        word = word.split('=', 1)[1]
-    if '/' not in word or word.startswith('-') or word in STANDARD_STREAMS:
-        return None
-    if ':' in word and not word.startswith(('/', '~', '$', '.')):
-        return None  # a git object name, <ref>:<path>
-    return word
-
-
 def expand(word, home):
     for prefix in HOME_PREFIXES:
         if word.startswith(prefix):
@@ -222,14 +177,171 @@ def expand(word, home):
     return word
 
 
-def absolute(word, home, cwd):
-    """The absolute path a word names, or None when the check cannot resolve it."""
-    path = expand(word, home)
-    if os.path.isabs(path):
-        return path
-    if cwd is None or path.startswith(('$', '~')):
-        return None
-    return os.path.normpath(os.path.join(cwd, path))
+def without_quotes(text):
+    """(text with quote characters removed, index in ``text`` of each kept character)."""
+    kept = [i for i, c in enumerate(text) if c not in QUOTES]
+    return ''.join(text[i] for i in kept), kept
+
+
+class FileSystem:
+    """Directory listings and work-tree answers, cached for one entry."""
+
+    def __init__(self):
+        self.listings, self.trees = {}, {}
+
+    def names(self, folder):
+        if folder not in self.listings:
+            try:
+                self.listings[folder] = frozenset(os.listdir(folder))
+            except OSError:
+                self.listings[folder] = frozenset()
+        return self.listings[folder]
+
+    def in_work_tree(self, folder):
+        if folder not in self.trees:
+            top = folder
+            while not os.path.lexists(os.path.join(top, '.git')):
+                parent = os.path.dirname(top)
+                if parent == top:
+                    top = None
+                    break
+                top = parent
+            self.trees[folder] = top is not None
+        return self.trees[folder]
+
+    def walk(self, base, rest):
+        """Every existing file or directory named by a prefix of ``rest`` read from ``base``.
+
+        Yields (path, is_file, length) for each prefix of ``rest`` (length is its
+        number of characters) that names one, trying EVERY end position: a path
+        may hold spaces, `=`, `:`, quotes or any other readable character. A
+        prefix stops growing only when no entry of the directory it is in starts
+        with the component read so far, so the walk costs a few listings.
+        """
+        folder, component = base, ''
+        for length, c in enumerate(rest, 1):
+            if c == '/':
+                if component:
+                    nested = os.path.join(folder, component)
+                    if not os.path.isdir(nested):
+                        return
+                    folder, component = nested, ''
+                continue
+            component += c
+            names = self.names(folder)
+            if component not in ('.', '..') and not any(name.startswith(component) for name in names):
+                return
+            if component in names:
+                path = os.path.normpath(os.path.join(folder, component))
+                if os.path.isfile(path):
+                    yield path, True, length
+                elif os.path.isdir(path):
+                    yield path, False, length
+
+
+def absolute_starts(text, home):
+    """(index, base directory, offset of the rest) for each place an absolute path can start."""
+    for i, c in enumerate(text):
+        if c == '/':
+            yield i, '/', i
+        elif c == '~' and text.startswith('~/', i) and (i == 0 or text[i - 1] in TILDE_FOLLOWS):
+            yield i, str(home), i + 1
+        elif text.startswith('${HOME}', i):
+            yield i, str(home), i + len('${HOME}')
+        elif text.startswith('$HOME', i) and (i + 5 >= len(text) or text[i + 5] not in NAME_CHARS):
+            yield i, str(home), i + len('$HOME')
+
+
+def relative_readings(text):
+    """(start index, piece) for every piece of the text a relative path could be.
+
+    Tokens end at whitespace and operators; quotes are removed. A token with no
+    `=`, `:` or `,` is one piece. Otherwise its pieces are what lies between
+    those characters, so every `/` of the token is in some piece and is judged.
+    A git object name (`<ref>:<path>`) and a URL are skipped as a whole.
+    """
+    tokens, start = [], None
+    for i, c in enumerate(text + ' '):
+        if c in DELIMITERS:
+            if start is not None:
+                tokens.append((start, text[start:i]))
+                start = None
+        elif start is None:
+            start = i
+    for start, token in tokens:
+        plain, kept = without_quotes(token)
+        if not plain or URL.match(plain):
+            continue
+        offset = 0
+        for value in plain.split('='):
+            if ':' in value and not value.startswith(('/', '~', '$', '.')):
+                offset += len(value) + 1
+                continue  # a git object name, <ref>:<path>
+            for piece in re.split('([:,])', value):
+                if piece and piece not in ':,':
+                    yield start + kept[offset], piece
+                offset += len(piece)
+            offset += 1
+
+
+def named_paths(text, home, cwd=None):
+    """(existing files a READABLE text names, path words it cannot resolve).
+
+    Called only through read_entry. Readings may only ADD candidates; the raw text
+    is always a candidate too:
+      - absolute: from every place an absolute path can start (`/`, `~/` at a word
+        start, `$HOME`, `${HOME}`), every end position to the right is asked of
+        the file system, on the text as written and with quotes removed;
+      - directories met on the way that lie in a git working tree, and a
+        LaunchAgent's WorkingDirectory, are joined with every relative reading
+        start (a word start, after a quote, after `=`, `:` or `,`), again with
+        every end position;
+      - a relative piece holding a `/` is unresolved (unless a WorkingDirectory
+        resolves it), except where it lies inside an absolute path found above.
+    """
+    fs = FileSystem()
+    files, seen, folders, covered = [], set(), [], []
+
+    def add(path):
+        real = os.path.realpath(path)
+        if real not in seen:
+            seen.add(real)
+            files.append(path)
+
+    if cwd is not None:
+        folders.append(os.path.realpath(cwd))
+    for index, base, rest_at in absolute_starts(text, home):
+        rest = text[rest_at:]
+        plain, kept = without_quotes(rest)
+        for variant, position in ((rest, None), (plain, kept)):
+            for path, is_file, length in fs.walk(base, variant):
+                end = rest_at + (length if position is None else position[length - 1] + 1)
+                covered.append((index, end))
+                if is_file:
+                    add(path)
+                elif fs.in_work_tree(path):
+                    folders.append(os.path.realpath(path))
+    starts = [i for i in range(len(text))
+              if (i == 0 or text[i - 1] in RELATIVE_STARTS_AFTER)
+              and text[i] not in DELIMITERS and text[i] not in '/~$']
+    for folder in dict.fromkeys(folders):
+        for i in starts:
+            rest = text[i:]
+            for variant in (rest, without_quotes(rest)[0]):
+                for path, is_file, _ in fs.walk(folder, variant):
+                    if is_file:
+                        add(path)
+    unresolved = []
+    for start, piece in relative_readings(text):
+        if '/' not in piece or piece.startswith(('/', '~/', '$HOME/', '${HOME}/', '-')) or piece in STANDARD_STREAMS:
+            continue
+        if cwd is not None and not piece.startswith(('~', '$')):
+            continue  # resolved against the WorkingDirectory above
+        if any(a <= start < b for a, b in covered):
+            continue  # part of an absolute path that names something (`/t/my dir/x.sh`)
+        if piece not in unresolved:
+            unresolved.append(piece)
+    return files, unresolved
 
 
 def read_entry(texts, home, cwd=None):
@@ -253,53 +365,6 @@ def read_entry(texts, home, cwd=None):
         files.extend(named)
         missed.extend(unresolved)
     return files, missed
-
-
-def named_paths(text, home, cwd=None):
-    """(existing files a READABLE text names by absolute path, words it cannot resolve).
-
-    Called only through read_entry. ``cwd`` is a LaunchAgent's WorkingDirectory:
-    relative words resolve against it. Every absolute directory word is paired
-    with every bare word of the same text (no order, no `cd`): a pair that names
-    an existing file counts as that file.
-    """
-    items = words(text)
-    files, unresolved, folders, bare_words, i = [], [], [], [], 0
-    if cwd is not None:
-        folders.append(cwd)
-    while i < len(items):
-        value, _ = items[i]
-        word = path_word(value)
-        if word is None:
-            bare = value.split('=', 1)[-1]
-            if bare and '/' not in bare and not bare.startswith(('-', '$', '~')) and bare not in ('.', '..'):
-                bare_words.append(bare)
-            i += 1
-            continue
-        path = absolute(word, home, cwd)
-        if path is None:
-            unresolved.append(word)
-            i += 1
-            continue
-        # A path with a space: try the next words, joined by one space each.
-        used, k, joined = 1, i, path
-        while items[k][1] and k + 1 < len(items) and k - i < MAX_JOIN:
-            k += 1
-            joined = f'{joined} {items[k][0]}'
-            if os.path.isfile(joined):
-                path, used = joined, k - i + 1
-        if os.path.isfile(path):
-            files.append(path)
-        elif os.path.isdir(path):
-            folders.append(path)  # never reported by itself; see the pairing below
-        i += used
-    # A bare file name used from a directory the text names (`cd /t && python3 x.py`).
-    for folder in dict.fromkeys(os.path.realpath(f) for f in folders):
-        for bare in dict.fromkeys(bare_words):
-            candidate = os.path.join(folder, bare)
-            if os.path.isfile(candidate) and candidate not in files:
-                files.append(candidate)
-    return files, unresolved
 
 
 def launchd_entries(folder, home):
@@ -356,6 +421,9 @@ def hook_entries(settings, home):
                     yield label, named, [(command, word) for word in missed]
 
 
+TRACKED = {}  # work-tree top -> the set of paths `git ls-files` lists there, read once per process
+
+
 def repository(path):
     """The top level of the working tree that tracks ``path``, or None."""
     real = os.path.realpath(path)
@@ -365,19 +433,18 @@ def repository(path):
         if parent == top:
             return None
         top = parent
-    env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
-    try:
-        out = subprocess.run(
-            ['git', '-C', top, 'ls-files', '--error-unmatch', '--', os.path.relpath(real, top)],
-            capture_output=True, text=True, timeout=GIT_TIMEOUT, env=env)
-    except subprocess.TimeoutExpired as exc:
-        raise ValueError(f'git ls-files timed out in {top}') from exc
-    if out.returncode == 0:
-        return top
-    if out.returncode == 1:
-        return None
-    # Any other status means git could not answer; unknown is not "untracked".
-    raise ValueError(f'git ls-files failed in {top}: {out.stderr.strip()}')
+    if top not in TRACKED:
+        env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
+        try:
+            out = subprocess.run(['git', '-C', top, 'ls-files', '-z'],
+                                 capture_output=True, timeout=GIT_TIMEOUT, env=env)
+        except subprocess.TimeoutExpired as exc:
+            raise ValueError(f'git ls-files timed out in {top}') from exc
+        if out.returncode != 0:
+            # git could not answer; unknown is not "untracked".
+            raise ValueError(f'git ls-files failed in {top}: {out.stderr.decode(errors="replace").strip()}')
+        TRACKED[top] = {os.fsdecode(name) for name in out.stdout.split(b'\0') if name}
+    return top if os.path.relpath(real, top) in TRACKED[top] else None
 
 
 def scan(launch_agents, settings, home):

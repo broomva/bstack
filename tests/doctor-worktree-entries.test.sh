@@ -42,6 +42,14 @@ for f in tracked.sh sub/inner.sh sub/rel.py hook.py x.py notes.md 'with space.sh
     echo '#' > "$TREE/$f"
 done
 git -C "$TREE" add tracked.sh sub/inner.sh sub/rel.py hook.py x.py notes.md 'with space.sh' 'my dir/x.sh'
+# Round 3: tracked names holding each readable punctuation character, a space, and combinations.
+mkdir -p "$TREE/punct"
+for f in 'p=q.sh' 'p:q.sh' 'p,q.sh' 'p+q.sh' 'p@q.sh' 'p%q.sh' 'p-q.sh' 'p_q.sh' 'p.q.sh' 'p q.sh' \
+         'a=b.sh' 'a:b.sh' '--x=y.sh' 'A=1 B.sh' 'x,y.sh'; do
+    echo '#' > "$TREE/punct/$f"
+done
+echo '#' > "$TREE/a=b.sh"
+git -C "$TREE" add punct 'a=b.sh'
 git -C "$TREE" -c user.name=t -c user.email=t@example.invalid commit -q -m fixture
 git -C "$TREE" worktree add -q "$TMP/linked" -b linked >/dev/null 2>&1
 [ -f "$TMP/linked/.git" ] || { echo 'fixture: the linked worktree has no .git file' >&2; exit 1; }
@@ -124,7 +132,7 @@ rows = [
     ('git status', [], []),
     ('bun run x', [], []),
     ('bash "$T"', [], U('`$T`')),                           # round 2: a variable other than HOME
-    (f'cmd -o{T}', [], []),
+    (f'cmd -o{T}', [T], []),                                 # round 3: an absolute path inside an option is found
     ('cmd 2>/dev/null </dev/stdin >/dev/stdout 2>/dev/stderr', [], []),
     ('git show HEAD:a/b.sh', [], []),
     ('wget ftp://host/a/b.sh', [], []),
@@ -139,15 +147,15 @@ rows = [
     ('"$(dirname "$0")"/x.sh', [], U('`$(`')),
     (f'x=$(pwd){T}', [], U('`$(`')),                        # round 2: a substitution, whatever follows
     ('python3 x.py', [], []),                               # a bare word: no WorkingDirectory here
-    (f'cd {tree} && ./tracked.sh', [], ['./tracked.sh']),   # a cd is not followed
+    (f'cd {tree} && ./tracked.sh', [T], ['./tracked.sh']),  # round 3: a directory x a token adds the file; still unresolved
     # a directory word paired with every bare word of the text (no cd tracking, no order)
     (f'cd {tree} && python3 x.py', [f'{tree}/x.py'], []),
     (f"bash -lc 'cd {tree} && exec python3 -I x.py arg'", [f'{tree}/x.py'], []),
-    (f'cd {tree}; ./x.py', [], ['./x.py']),                  # a path word: still unresolved
+    (f'cd {tree}; ./x.py', [f'{tree}/x.py'], ['./x.py']),     # round 3: flagged too; the relative word stays unresolved
     (f'git -C {tree} show origin/main:scripts/x.sh > "$T"', [], U('`$T`')),
-    (f'git -C {tree} fetch origin && git -C {tree} show HEAD:x.py', [], []),  # `fetch`, `show`, `origin` are not files there
+    (f'git -C {tree} fetch origin && git -C {tree} show HEAD:x.py', [f'{tree}/x.py'], []),  # round 3: the piece after `:` names a tracked file
     (f'git -C {tree} log notes.md', [f'{tree}/notes.md'], []),  # conservative: named, though not run or read
-    (f'python3 x.py; ls {tree}/sub', [], []),                # x.py is not in sub
+    (f'python3 x.py; ls {tree}/sub', [f'{tree}/x.py'], []),  # round 3: every tracked directory on the way pairs, here the tree
     (f'ls {tree}', [], []),                                  # a directory alone is never reported
     ('git diff origin/main', [], ['origin/main']),          # not a file, still unresolved
     (f'a && ./b.sh | cat {T}', [T], ['./b.sh']),
@@ -180,6 +188,8 @@ rows = [
     ('echo $HOMEX/bin/linked.sh', [], U('`$H`')),            # not $HOME: another variable
     ('a~/bin/linked.sh', [], U('`~`')),                       # ~ inside a word
     (f'cmd 2>&1 | tee -a log; {T} >> out & wait', [T], []),   # every operator in the grammar
+    # round 3 review of #155, the reviewer's string: `=` inside a tracked absolute file name
+    (f'bash {tree}/a=b.sh', [f'{tree}/a=b.sh'], []),
 ]
 failed = []
 for command, want_files, want_missed in rows:
@@ -310,6 +320,26 @@ if set(d.READABLE_CHARS) != GRAMMAR:
     failed.append(f'  the module grammar differs from the test grammar: {sorted(set(d.READABLE_CHARS) ^ GRAMMAR)}')
 print(f'inserted: {never_clean} of {inserted} generated commands flagged or unresolved '
       f'({len(OUTSIDE_ASCII)} ASCII + {len(NON_ASCII)} non-ASCII characters x 3 positions x {len(BASES)} commands x 2)')
+
+# Round 3, the class: a reading may only ADD candidates. A tracked file whose name holds
+# readable punctuation or a space is flagged in every command shape, none clean.
+PUNCT = ['p=q.sh', 'p:q.sh', 'p,q.sh', 'p+q.sh', 'p@q.sh', 'p%q.sh', 'p-q.sh', 'p_q.sh', 'p.q.sh', 'p q.sh',
+         'a=b.sh', 'a:b.sh', '--x=y.sh', 'A=1 B.sh', 'x,y.sh']
+SHAPES = ['{f}', 'bash {f}', 'python3 -I {f} arg', 'env K=V bash {f}', 'cd {d} && bash {n}', 'K={f} bash -c run',
+          "bash '{f}'", 'bash "{f}"', "cd {d} && bash '{n}'", 'cd {d} && bash "{n}"', 'exec {f}', 'cat {f}']
+named = named_flagged = 0
+for name in PUNCT:
+    target = f'{tree}/punct/{name}'
+    real = os.path.realpath(target)
+    for shape in SHAPES:
+        text = shape.format(f=target, d=f'{tree}/punct', n=name)
+        named += 1
+        assert d.unreadable(text) is None, text
+        if any(os.path.realpath(path) == real for path in classify(text)[0]):
+            named_flagged += 1
+        else:
+            failed.append(f'  punctuation: {text!r} does not flag {target}')
+print(f'punctuation: {named_flagged} of {named} generated commands flagged ({len(PUNCT)} names x {len(SHAPES)} shapes)')
 if failed:
     print('\n'.join(failed[:40]))
     sys.exit(1)
@@ -373,6 +403,7 @@ want = sorted([
     ('claude-hook:PostToolUse', f'{tree}/notes.md', tree),
     ('claude-hook:PreToolUse[Bash]', f'{tree}/hook.py', tree),
     ('claude-hook:Stop', '~/bin/linked.sh', tree),
+    ('launchd:com.broomva.cd', f'{tree}/sub/rel.py', tree),  # round 3: cd dir x ./rel.py adds the file
     ('launchd:com.broomva.cwd', f'{tree}/tracked.sh', tree),
     ('launchd:com.broomva.cwd-shell', f'{tree}/sub/inner.sh', tree),
     ('launchd:com.broomva.direct', f'{tree}/tracked.sh', tree),
@@ -402,7 +433,7 @@ assert d == {'schema': 1, 'mode': 'report', 'baseline_recorded_at': None, 'flagg
 PY_EXPECT
 python3 -I "$ENTRIES" --report --launch-agents "$OPT_AGENTS" --settings "$OPT_SETTINGS" >"$TMP/out"
 grep -Fxq "[info] launchd:com.broomva.direct names $TREE/tracked.sh (repository $TREE)" "$TMP/out"
-grep -Fxq '[info] 12 entries name a file in a git working tree, run or read (report only: no baseline read or written)' "$TMP/out"
+grep -Fxq '[info] 13 entries name a file in a git working tree, run or read (report only: no baseline read or written)' "$TMP/out"
 grep -Fxq '[info] 6 path words could not be resolved' "$TMP/out"
 grep -Fxq "[info] unresolved: claude-hook:UserPromptSubmit names \`./doctor.sh\`, a path this check cannot resolve, in: bash -c 'cd scripts && ./doctor.sh'" "$TMP/out"
 # Without the options the fixture home is read (empty so far), never HOME's decoy.
