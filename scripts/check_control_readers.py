@@ -1,64 +1,44 @@
 #!/usr/bin/env python3
-"""check_control_readers.py — ratchet the code files that read `.control` on one key.
+"""check_control_readers.py — ratchet the code files that mention the legacy `.control` folder.
 
-The unified-layout ADR (BRO-3200) renames a repo's shared state from `.control/`
-to `.broomva/`. Until a reader goes through the path registry it must name both.
-This check answers one question per tracked code file: does every `.control/<X>`
-reference have a matching `.broomva/<X>`?
+The contract, in two sentences: the ratchet lists every tracked code file that
+mentions the legacy folder name `.control` at all; a pull request may not add a
+file to that list.
 
-  unpaired  some `.control/<X>` has no `.broomva/<X>` in the same file: a reader not
-            yet switched to the registry, or a gate / tree reader not dual-keyed.
-  paired    every `.control/<X>` is matched: dual-keyed for the move.
+New code spells neither folder name (`.control` nor `.broomva`) and resolves
+paths through the generated path reader: scripts/broomva_paths.py,
+scripts/lib/broomva-paths.sh or scripts/lib/broomva_paths.rs. Existing mentions
+are grandfathered in scripts/control_readers_baseline.json, and the list only
+shrinks. A file that names both folders is listed like any other: nothing pairs
+a `.control` mention with a `.broomva` one.
 
-A reader switched to the registry names neither and leaves the count.
+What counts as a MENTION is one pattern, MENTION below, used for every file.
 
-Pairing is by SUFFIX, not by "the file mentions both names":
-  - `join(x, ".control", "asks")` and `".control/asks"` both normalise to `asks`;
-  - machine-scope mentions (`~/.broomva`, `$HOME/.broomva`, `BROOMVA_HOME`) are
-    ignored, as is `.broomva/loops`, which is not a renamed path;
-  - a bare `.control` (the directory itself) pairs with a bare `.broomva`.
+This checker counts files that MENTION `.control`. That is not the "unpaired
+readers" count of the workspace's sensor (scripts/control_readers_count.py in
+broomva/workspace), and the two numbers are not comparable.
 
-The ratchet is on the SET in scripts/control_readers_baseline.json: a reader may
-leave, none may be added. Only tracked code is counted (by extension), read from
-the checkout.
+Which files are code: tracked files with a code extension or name (CODE_EXT,
+CODE_NAMES), except those under a directory named exactly `docs`, `research`,
+`archive`, `.control`, `.broomva` or `node_modules` at any depth (whole path
+components: `scripts/mydocs/x.py` is code).
 
-On a pull request, CI also passes `--base-ref <base>`: the PR's baseline may not
-contain a path the base branch's baseline lacks, so a change cannot add a reader
+On a pull request CI also passes `--base-ref <base>`: the PR's baseline may not
+contain a path the base branch's baseline lacks, so a change cannot add a file
 and write it into the baseline at once. The one exception is a rename: an added
 path is allowed when the same change drops a baseline entry and
 `git diff --name-status -M <base>...HEAD` reports the drop renamed to the
 addition. If the base has no baseline file yet (the change that first introduces
 it), the comparison is skipped with a note and only the set check applies.
 
-What this does and does not catch. It is a ratchet against drift, not a defence
-against someone evading it, and a textual scan cannot be made complete:
-  - caught: a literal `.control` reference (`".control/asks"`,
-    `join(r, ".control", "asks")`, a bare `".control"`) in a tracked code file;
-  - not caught: a path assembled from pieces (`"." + "control/asks"`, an f-string,
-    a variable holding the root). Review covers those;
-  - counted although it reads nothing: a COMMENT that mentions `.control/<X>` in a
-    code file. The workspace's checker does the same and this one matches it.
-    Remedy: name both (`.control/<X>` and `.broomva/<X>`) or reword the comment;
-  - the unit is a file and a first path component; the check does not pair
-    individual references. `<X>` is the first component under the folder, so a
-    file that names `.control/asks/a` and `.broomva/asks/b` counts as paired
-    although the two paths differ. This is the unit of the reference sensor in
-    broomva/workspace and is kept so the counts of the two repos stay comparable.
+Limits. It is a ratchet against drift, not a defence against someone evading it:
+  - a mention assembled from pieces (`"." + "control"`, an f-string, a variable
+    holding the name) is not found; review covers those;
+  - a comment counts: a code file whose comment mentions the folder is listed.
+    Reword the comment.
 
-Ported from broomva/workspace (scripts/control_readers_count.py for the
-classifier, scripts/check_control_readers.py for the ratchet) into one
-standard-library file. The classifier is the workspace's except that names are
-matched as whole path components, never as substrings:
-  - the skipped directories (`docs`, `research`, `archive`, `.control`, `.broomva`,
-    `node_modules`) are skipped only when a directory component equals one, so
-    `scripts/mydocs/x.py` is counted where the workspace's `"docs/" in path` hides it;
-  - `.control/<X>` must start a path component, so `my.control/asks` is not a
-    reference to the folder.
-This filter is deliberately stricter than the reference sensor's: for the same
-tree this repo's count can be higher, never because a reader was added. It has no
-exclusion for files that describe both names on purpose, and this file is itself
-counted (its selftest strings below are unpaired by design) and sits in the
-baseline, as the workspace's does.
+This file is itself listed (it has to spell the name it looks for) and sits in
+the baseline.
 
 Usage: python3 scripts/check_control_readers.py [--selftest | --print-baseline | --base-ref REF]
 """
@@ -74,12 +54,12 @@ ROOT = Path(__file__).resolve().parent.parent
 BASELINE_PATH = "scripts/control_readers_baseline.json"
 BASELINE = ROOT / BASELINE_PATH
 HINT = (
-    "A file listed here reads a literal `.control/<X>` without `.broomva/<X>`. Name both,\n"
-    "or read the path through the path registry. Comments count too: mention both names\n"
-    "or reword. Do not add the file to the baseline. This check finds literal\n"
-    "references only; a path built from pieces is not seen, and review covers that.\n"
-    "The unit is a file and a first path component; the check does not pair individual\n"
-    "references (`.control/asks/a` is paired by `.broomva/asks/b` in the same file).\n"
+    "A file listed here mentions the legacy folder name `.control` and is not in the\n"
+    "baseline. Do not spell the folder name: resolve the path through the generated\n"
+    "path reader (scripts/broomva_paths.py, scripts/lib/broomva-paths.sh,\n"
+    "scripts/lib/broomva_paths.rs). Naming `.broomva` as well does not help; any\n"
+    "mention counts, comments included (reword the comment). Do not add the file to\n"
+    "the baseline. A mention assembled from pieces is not found; review covers that.\n"
     "The base comparison is skipped, with a note, only when the base branch has no\n"
     "baseline file yet (the change that first introduces it)."
 )
@@ -87,52 +67,22 @@ HINT = (
 CODE_EXT = {".py", ".sh", ".bash", ".zsh", ".ts", ".tsx", ".js", ".mjs", ".cjs",
             ".rs", ".go", ".yml", ".toml", ".template"}
 CODE_NAMES = {"Makefile", "pre-commit", "pre-push", "commit-msg"}
-# Directory names skipped wherever they occur in a path. Matched as WHOLE path
+# Directory names skipped wherever they occur in a path, matched as WHOLE path
 # components: `a/docs/x.py` is skipped, `scripts/mydocs/x.py` and
-# `archived/x.py` are not. The reference sensor in broomva/workspace tests these as substrings
-# ("docs/" in path), which also hides any directory whose name merely ends with one;
-# this filter is deliberately stricter, so its count can be higher for the same tree.
+# `archived/x.py` are not.
 SKIP_DIRS = frozenset({"docs", "research", "archive", ".control", ".broomva", "node_modules"})
 
-# `.control` followed by `/suffix`, or a quoted `.control` segment followed by
-# further quoted segments (join(..., ".control", "asks")), or a bare final segment.
-# The root must start a path component: `my.control/asks` names another folder.
-SLASH = re.compile(r"(?<![A-Za-z0-9_.\-])\.(control|broomva)/([A-Za-z0-9_.\-]+)")
-JOINED = re.compile(r"""["'`]\.(control|broomva)["'`]\s*,\s*["'`]([A-Za-z0-9_.\-]+)["'`]""")
-BARE = re.compile(r"""[/"'`]\.(control|broomva)(?=["'`]|$|\s)""", re.M)
-# Machine scope: these name ~/.broomva, never a repo root.
-MACHINE = re.compile(r"""(~|HOME\}?|HOME["']?\s*[,)]|home\(\)|homedir\(\))\s*/?\s*\.broomva""")
-NOT_RENAMED = {"loops"}
+# The one definition of a MENTION of the legacy folder: the text `.control` where
+#   left:  the dot starts the text, or follows a character that is not a letter,
+#          digit or `_` (any script, \w) and not `)` or `]`; so `self.control` and
+#          `x).control` are attribute access, not the folder;
+#   right: `control` is followed by `/`, a single or double quote, a backtick, or
+#          the end of a line; so `.controller` and `.control(` are not mentions.
+MENTION = re.compile(r"""(?<![\w)\]])\.control(?=[/'"`]|$)""", re.M)
 
 
-def refs(text: str) -> tuple[set[str], set[str]]:
-    """Suffixes referenced under each root; "" stands for the bare directory."""
-    control: set[str] = set()
-    broomva: set[str] = set()
-    machine_spans = [m.span() for m in MACHINE.finditer(text)]
-
-    def is_machine(pos: int) -> bool:
-        return any(a <= pos < b + 1 for a, b in machine_spans)
-
-    for rx in (SLASH, JOINED):
-        for m in rx.finditer(text):
-            root, suffix = m.group(1), m.group(2)
-            if root == "control":
-                control.add(suffix)
-            elif not is_machine(m.start()) and suffix not in NOT_RENAMED:
-                broomva.add(suffix)
-    # A quoted segment that a JOINED match already read with its suffix is not
-    # also a bare-directory reference.
-    joined_spans = [m.span() for m in JOINED.finditer(text)]
-    for m in BARE.finditer(text):
-        if any(a <= m.start() < b for a, b in joined_spans):
-            continue
-        root = m.group(1)
-        if root == "control":
-            control.add("")
-        elif not is_machine(m.start()):
-            broomva.add("")
-    return control, broomva
+def mentions(text: str) -> bool:
+    return MENTION.search(text) is not None
 
 
 def is_code(path: str) -> bool:
@@ -143,47 +93,40 @@ def is_code(path: str) -> bool:
 
 
 def readers(root: Path) -> set[str]:
-    """Tracked code files under ``root`` with an unpaired `.control` reference."""
-    result = subprocess.run(
-        ["git", "-C", str(root), "grep", "-lzE", r"\.control([/\"'`]|$)", "--"],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-    )
-    if result.returncode not in (0, 1):
+    """Tracked code files under ``root`` that mention the legacy folder."""
+    result = subprocess.run(["git", "-C", str(root), "ls-files", "-z", "--"],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode != 0:
         raise RuntimeError(result.stderr.decode(errors="replace"))
     found = set()
     for raw_path in result.stdout.split(b"\0"):
         if not raw_path:
             continue
         path = raw_path.decode("utf-8", errors="surrogateescape")
-        if not is_code(path):
-            continue
-        text = (root / path).read_text(encoding="utf-8", errors="replace")
-        control, broomva = refs(text)
-        if control and not control <= broomva:
+        if not is_code(path) or not (root / path).is_file():
+            continue  # a tracked file deleted in the checkout reads nothing
+        if mentions((root / path).read_text(encoding="utf-8", errors="replace")):
             found.add(path)
     return found
 
 
 SELFTEST = (
-    # (text, expected) — a positive control: a zero "paired" count means nothing
-    # unless the classifier can say "paired" at all.
-    ('read(".control/asks"); read(".broomva/asks")', "paired"),
-    ('p = join(r, ".control", "asks"); q = ".broomva/asks/x"', "paired"),
-    ('[ -d "$W/.control" ] || [ -d "$W/.broomva" ]', "paired"),
-    ('read(".control/asks"); home = "~/.broomva/asks"', "unpaired"),
-    ('read(".control/policy.yaml"); loops = ".broomva/loops"', "unpaired"),
-    ('ASKS = ".control/asks"; DEFAULT = HOME + "/.broomva"', "unpaired"),
-    ('read(".control/asks"); read(".broomva/initiatives")', "unpaired"),
+    # (text, mentions?) — both answers must be reachable, or a zero means nothing.
+    ('read(".control/asks")', True),
+    ('join(r, ".control", "asks")', True),
+    ('[ -d "$W/.control" ]', True),
+    ('read(".control/asks"); read(".broomva/asks")', True),
+    ('self.control = 1', False),
+    ('x.controller("a/b")', False),
+    ('read(".broomva/asks")', False),
 )
 
 
 def selftest() -> int:
     bad = 0
     for text, want in SELFTEST:
-        control, broomva = refs(text)
-        got = "paired" if control and control <= broomva else "unpaired"
-        if got != want:
-            print(f"[FAIL] {text!r}: {got}, wanted {want}")
+        if mentions(text) != want:
+            print(f"[FAIL] {text!r}: {not want}, wanted {want}")
             bad += 1
     print(f"selftest: {len(SELFTEST) - bad}/{len(SELFTEST)}")
     return 1 if bad else 0
@@ -242,7 +185,7 @@ def compare_with_base(base: str, expected: set[str]) -> int:
         else:
             widened.append(path)
     if widened:
-        print(f"Baseline gained readers that {base} does not list (the baseline may only shrink):")
+        print(f"Baseline gained files that {base} does not list (the baseline may only shrink):")
         for path in widened:
             print(f"  {path}")
         print(HINT)
@@ -267,19 +210,19 @@ def main() -> int:
     expected = load_baseline(BASELINE.read_text(), BASELINE_PATH)
     count = len(current)
     limit = len(expected)
-    print(f"Unpaired readers: {count}; baseline: {limit}")
+    print(f"Files mentioning .control: {count}; baseline: {limit}")
     status = 0
-    # The ratchet is on the set, not the number: a reader may leave, none may be added. Comparing counts alone
-    # would let a new reader in whenever an old one was removed in the same change.
+    # The ratchet is on the set, not the number: a file may leave, none may be added. Comparing counts alone
+    # would let a new file in whenever an old one was removed in the same change.
     new = sorted(current - expected)
     if new:
-        print("New readers since baseline:")
+        print("New files mentioning .control since baseline:")
         for path in new:
             print(f"  {path}")
         print(HINT)
         status = 1
     elif count < limit:
-        print(f"Reader count fell to {count}; tighten the baseline.")
+        print(f"Count fell to {count}; tighten the baseline.")
     # The baseline lives in the change under review, so on a pull request it is
     # itself compared with the base branch's copy.
     if base is not None and compare_with_base(base, expected):

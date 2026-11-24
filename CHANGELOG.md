@@ -73,31 +73,27 @@ would record before running `bstack doctor --baseline-entries`.
 
 ### feat(doctor): ratchets that report without a person running doctor (BRO-4083)
 
-- **Reader ratchet in CI.** `scripts/check_control_readers.py` lists the tracked code
-  files that read `.control/<X>` without a matching `.broomva/<X>` and fails when one
-  appears that is not in `scripts/control_readers_baseline.json`. A reader may leave
-  the list, none may join it. The classifier is the one `broomva/workspace` runs,
-  unchanged; it has no exclusion for files that describe both names on purpose, so
-  the checker itself and three path-registry files are in the baseline rather than
-  exempt. `ci.yml` runs it as the `control reader ratchet` job. On a pull request
-  it passes `--base-ref <base sha>`, and the PR's baseline may not contain a path the
-  base's baseline lacks, so a change cannot add a reader and widen the baseline at
-  once; an addition is allowed only as the `git diff -M` rename of an entry the same
-  change drops. It finds literal references only: a path built from pieces is not
-  seen, and a comment that mentions `.control/<X>` in a code file counts. The unit is
-  a file and a first path component; the check does not pair individual references,
-  so `.control/asks/a` is paired by `.broomva/asks/b` in the same file. That is the
-  unit of the reference sensor in `broomva/workspace`, kept so the two repos' counts
-  stay comparable. The three limits are stated in the script, its failure hint and
-  CONTRIBUTING.md, and pinned by tests. Names are matched as whole path components:
-  a file is skipped only when a directory component equals `docs`, `research`,
-  `archive`, `.control`, `.broomva` or `node_modules`, so `scripts/mydocs/x.py` is
-  counted, and `.control/<X>` must start a component, so `my.control/asks` is not a
-  reference. The reference sensor tests those names as substrings; this filter is
-  deliberately stricter, so for the same tree this repo's count can be higher. On
-  this repo the change moves no file (74 before and after). The base comparison is
-  skipped, with a note, only when the base has no baseline file yet; the hint and
-  CONTRIBUTING.md say so.
+- **Reader ratchet in CI.** The contract: the ratchet lists every code file that
+  mentions the legacy folder name `.control` at all; a pull request may not add a
+  file to that list. `scripts/check_control_readers.py` implements it, and
+  `ci.yml` runs it as the `control reader ratchet` job. New code spells neither
+  folder name and resolves paths through the generated path reader
+  (`scripts/broomva_paths.py`, `scripts/lib/broomva-paths.sh`,
+  `scripts/lib/broomva_paths.rs`). Existing mentions are grandfathered in
+  `scripts/control_readers_baseline.json` (81 files), and the list only shrinks. A
+  mention is one pattern: `.control` not preceded by a letter, digit, `_`, `)` or
+  `]`, and followed by `/`, a quote, a backtick or the end of a line. Files under a
+  directory named exactly `docs`, `research`, `archive`, `.control`, `.broomva` or
+  `node_modules` are skipped, matched as whole path components. On a pull request it
+  passes `--base-ref <base sha>`, and the PR's baseline may not contain a path the
+  base's baseline lacks, except as the `git diff -M` rename of an entry the same
+  change drops; the comparison is skipped, with a note, when the base has no
+  baseline yet. Limits: a mention assembled from pieces is not found, and a comment
+  counts. This count of mentioning files is not the "unpaired readers" count of
+  the sensor in `broomva/workspace`. An earlier draft of this PR paired each
+  `.control/<area>` with a `.broomva/<area>`; review rounds kept finding new holes
+  in that pairing, here and in `broomva/maestro`, so it was removed rather than
+  hardened.
 - **`--json` on the machine folder check.** `python3 -I scripts/doctor-machine-folders.py
   --json` prints one object, `{"schema": 1, "baseline_recorded_at", "unregistered":
   [{"path", "suggested"}], "grandfathered", "error"}`, with the exit code of the plain
