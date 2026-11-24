@@ -27,8 +27,8 @@ contain a path the base branch's baseline lacks, so a change cannot add a reader
 and write it into the baseline at once. The one exception is a rename: an added
 path is allowed when the same change drops a baseline entry and
 `git diff --name-status -M <base>...HEAD` reports the drop renamed to the
-addition. If the base has no baseline file yet, the comparison is skipped with a
-note.
+addition. If the base has no baseline file yet (the change that first introduces
+it), the comparison is skipped with a note and only the set check applies.
 
 What this does and does not catch. It is a ratchet against drift, not a defence
 against someone evading it, and a textual scan cannot be made complete:
@@ -47,10 +47,18 @@ against someone evading it, and a textual scan cannot be made complete:
 
 Ported from broomva/workspace (scripts/control_readers_count.py for the
 classifier, scripts/check_control_readers.py for the ratchet) into one
-standard-library file. The classifier is the workspace's, unchanged, so the two
-repos count the same way; it has no exclusion for files that describe both names
-on purpose, and this file is itself counted (its selftest strings below are
-unpaired by design) and sits in the baseline, as the workspace's does.
+standard-library file. The classifier is the workspace's except that names are
+matched as whole path components, never as substrings:
+  - the skipped directories (`docs`, `research`, `archive`, `.control`, `.broomva`,
+    `node_modules`) are skipped only when a directory component equals one, so
+    `scripts/mydocs/x.py` is counted where the workspace's `"docs/" in path` hides it;
+  - `.control/<X>` must start a path component, so `my.control/asks` is not a
+    reference to the folder.
+This filter is deliberately stricter than the reference sensor's: for the same
+tree this repo's count can be higher, never because a reader was added. It has no
+exclusion for files that describe both names on purpose, and this file is itself
+counted (its selftest strings below are unpaired by design) and sits in the
+baseline, as the workspace's does.
 
 Usage: python3 scripts/check_control_readers.py [--selftest | --print-baseline | --base-ref REF]
 """
@@ -71,17 +79,25 @@ HINT = (
     "or reword. Do not add the file to the baseline. This check finds literal\n"
     "references only; a path built from pieces is not seen, and review covers that.\n"
     "The unit is a file and a first path component; the check does not pair individual\n"
-    "references (`.control/asks/a` is paired by `.broomva/asks/b` in the same file)."
+    "references (`.control/asks/a` is paired by `.broomva/asks/b` in the same file).\n"
+    "The base comparison is skipped, with a note, only when the base branch has no\n"
+    "baseline file yet (the change that first introduces it)."
 )
 
 CODE_EXT = {".py", ".sh", ".bash", ".zsh", ".ts", ".tsx", ".js", ".mjs", ".cjs",
             ".rs", ".go", ".yml", ".toml", ".template"}
 CODE_NAMES = {"Makefile", "pre-commit", "pre-push", "commit-msg"}
-SKIP_PARTS = ("docs/", "research/", "archive/", ".control/", ".broomva/", "node_modules/")
+# Directory names skipped wherever they occur in a path. Matched as WHOLE path
+# components: `a/docs/x.py` is skipped, `scripts/mydocs/x.py` and `my.control/x.py`
+# are not. The reference sensor in broomva/workspace tests these as substrings
+# ("docs/" in path), which also hides any directory whose name merely ends with one;
+# this filter is deliberately stricter, so its count can be higher for the same tree.
+SKIP_DIRS = frozenset({"docs", "research", "archive", ".control", ".broomva", "node_modules"})
 
 # `.control` followed by `/suffix`, or a quoted `.control` segment followed by
 # further quoted segments (join(..., ".control", "asks")), or a bare final segment.
-SLASH = re.compile(r"\.(control|broomva)/([A-Za-z0-9_.\-]+)")
+# The root must start a path component: `my.control/asks` names another folder.
+SLASH = re.compile(r"(?<![A-Za-z0-9_.\-])\.(control|broomva)/([A-Za-z0-9_.\-]+)")
 JOINED = re.compile(r"""["'`]\.(control|broomva)["'`]\s*,\s*["'`]([A-Za-z0-9_.\-]+)["'`]""")
 BARE = re.compile(r"""[/"'`]\.(control|broomva)(?=["'`]|$|\s)""", re.M)
 # Machine scope: these name ~/.broomva, never a repo root.
@@ -120,9 +136,9 @@ def refs(text: str) -> tuple[set[str], set[str]]:
 
 
 def is_code(path: str) -> bool:
-    if any(part in path for part in SKIP_PARTS) or path.startswith((".control", ".broomva")):
+    *dirs, name = path.split("/")
+    if SKIP_DIRS.intersection(dirs):
         return False
-    name = path.rsplit("/", 1)[-1]
     return name in CODE_NAMES or Path(name).suffix in CODE_EXT
 
 
