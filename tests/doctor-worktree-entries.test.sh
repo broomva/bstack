@@ -4,11 +4,10 @@
 # fixtures only: HOME is a decoy that holds an entry the check would flag, so a
 # run that read HOME instead of its fixture home or its options fails here.
 #
-# The check reads raw text and never interprets shell. The word table pins the
-# class of each word in the command shapes three review rounds of the earlier,
-# shell-parsing version got wrong; the property test generates wrappers and
-# quotings around tracked files and requires every one to be flagged, so the
-# class "a shape hides the path" is tested, not single cases.
+# The ratchet is on the identity of each entry: the generated mutation test
+# changes every recorded entry one character at a time and requires each change
+# to fail. The classifier is an annotation only; the word table and the earlier
+# generated tests pin what the annotation says, never whether doctor passes.
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 TMP="$(cd "$(mktemp -d)" && pwd -P)"
@@ -330,7 +329,7 @@ for base, target in BASES:
                 if any(os.path.realpath(path) == real for path in found) or missed:
                     never_clean += 1
                 else:
-                    failed.append(f'  inserted {c!r}: {entry!r} came out clean')
+                    failed.append(f'  inserted {c!r}: {entry!r} was annotated "no working-tree file found"')
 if set(d.READABLE_CHARS) != GRAMMAR:
     failed.append(f'  the module grammar differs from the test grammar: {sorted(set(d.READABLE_CHARS) ^ GRAMMAR)}')
 print(f'inserted: {never_clean} of {inserted} generated commands flagged or unresolved '
@@ -428,9 +427,9 @@ for form in ('NFC', 'NFD'):
 for probe in ('/usr/bin/python3', '/usr/bin/git'):
     if os.path.exists(probe) and os.stat(probe).st_nlink > 1 and d.read_only(probe):
         if classify(f'{probe} -V') != ([], []):
-            failed.append(f'  identity: {probe} (read-only, {os.stat(probe).st_nlink} names) is not clean')
+            failed.append(f'  identity: {probe} (read-only, {os.stat(probe).st_nlink} names) is annotated')
         else:
-            print(f'identity: {probe} has {os.stat(probe).st_nlink} names on a read-only volume: clean')
+            print(f'identity: {probe} has {os.stat(probe).st_nlink} names on a read-only volume: no hard-link annotation')
 if failed:
     print('\n'.join(failed[:40]))
     sys.exit(1)
@@ -485,16 +484,45 @@ json.dump({'hooks': {
                                command('echo report.sh'), command(f'cat {tree}/notes.md')]}],
 }, 'permissions': {'allow': [f'Bash({tree}/tracked.sh)']}}, open(settings, 'w'))
 PY_FIXTURE
-python3 -I "$ENTRIES" --report --json --launch-agents "$OPT_AGENTS" --settings "$OPT_SETTINGS" >"$TMP/json"
-python3 - "$TMP/json" "$TREE" "$TMP/linked" <<'PY_EXPECT'
+# Codex user hooks share the settings.json shape: a third source.
+OPT_CODEX="$TMP/codex-hooks.json"
+python3 - "$OPT_CODEX" "$TREE" <<'PY_CODEX'
+import json, sys
+json.dump({'hooks': {'Stop': [{'hooks': [{'type': 'command', 'command': f'python3 {sys.argv[2]}/hook.py codex-stop', 'timeout': 5}]}]}},
+          open(sys.argv[1], 'w'))
+PY_CODEX
+# Not read: a project-level settings file inside the tree (a fixture that would be flagged if it were).
+mkdir -p "$TREE/.claude"
+printf '{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "%s/tracked.sh"}]}]}}' "$TREE" > "$TREE/.claude/settings.json"
+python3 -I "$ENTRIES" --report --json --launch-agents "$OPT_AGENTS" --settings "$OPT_SETTINGS" --codex-hooks "$OPT_CODEX" >"$TMP/json"
+python3 - "$TMP/json" "$TREE" "$TMP/linked" "$OPT_AGENTS" "$OPT_SETTINGS" "$OPT_CODEX" <<'PY_EXPECT'
 import json, sys
 d = json.load(open(sys.argv[1]))
-tree, linked = sys.argv[2:]
+tree, linked, agents, settings, codex = sys.argv[2:]
+assert sorted(d) == ['baseline_recorded_at', 'entries', 'error', 'mode', 'new', 'removed', 'schema', 'unchanged'], sorted(d)
+assert (d['schema'], d['mode'], d['error'], d['new'], d['removed'], d['unchanged']) == (2, 'report', None, None, None, None), d
+
+
+def label(item):  # the earlier names of the fixture entries, so the expectations below read as before
+    if item['source'] == agents:
+        return 'launchd:' + item['entry'][:-len('.plist')]
+    return ('codex-hook:' if item['source'] == codex else 'claude-hook:') + item['entry']
+
+
+entries = d['entries']
+# Scope: com.broomva.* agents, the user's Claude settings and the Codex user hooks file. Not read:
+# other labels, prompt-type hooks, a project-level settings file, LaunchDaemons, cron.
+assert {item['source'] for item in entries} == {agents, settings, codex}, {item['source'] for item in entries}
+assert not any('org.example' in item['entry'] for item in entries)
+assert len([i for i in entries if i['source'] == settings]) == 11, 'prompt-type hooks are not entries'
+for item in entries:
+    assert len(item['sha256']) == 64 and item['annotation']['class'] in ('flagged', 'unresolved', 'no working-tree file found'), item
 want = sorted([
     ('claude-hook:PostToolUse', f'{tree}/notes.md', tree),
     ('claude-hook:PreToolUse[Bash]', f'{tree}/hook.py', tree),
     ('claude-hook:Stop', '~/bin/linked.sh', tree),
-    ('launchd:com.broomva.cd', f'{tree}/sub/rel.py', tree),  # round 3: cd dir x ./rel.py adds the file
+    ('codex-hook:Stop', f'{tree}/hook.py', tree),
+    ('launchd:com.broomva.cd', f'{tree}/sub/rel.py', tree),
     ('launchd:com.broomva.cwd', f'{tree}/tracked.sh', tree),
     ('launchd:com.broomva.cwd-shell', f'{tree}/sub/inner.sh', tree),
     ('launchd:com.broomva.direct', f'{tree}/tracked.sh', tree),
@@ -505,11 +533,10 @@ want = sorted([
     ('launchd:com.broomva.shell', f'{tree}/sub/inner.sh', tree),
     ('launchd:com.broomva.space', f'{tree}/with space.sh', tree),
 ])
-got = [(item['entry'], item['file'], item['repository']) for item in d['flagged']]
+got = sorted((label(i), f['file'], f['repository']) for i in entries for f in i['annotation']['files'])
 assert got == want, '\n' + '\n'.join(map(str, sorted(set(got) ^ set(want))))
-want_unresolved = sorted([
+want_reasons = sorted([
     ('claude-hook:SessionStart', '"$CLAUDE_PROJECT_DIR"/tracked.sh', 'unreadable `$C` at column 2'),
-    # main's copy into a temp file: not plain text, so unresolved as a whole and baselined once
     ('launchd:com.broomva.gitshow', "/bin/bash -lc 'T=$(mktemp); git -C \"" + tree + "\" show origin/main:tracked.sh > \"$T\" "
      "|| exit 0; bash \"$T\"; rm -f \"$T\"'", 'unreadable `$(` at column 3 of argument 2'),
     ('claude-hook:UserPromptSubmit', "bash -c 'cd scripts && ./doctor.sh'", './doctor.sh'),
@@ -517,25 +544,27 @@ want_unresolved = sorted([
     ('launchd:com.broomva.cd', f"/bin/bash -c 'cd {tree}/sub && /usr/bin/python3 ./rel.py harvest'", './rel.py'),
     ('launchd:com.broomva.relative', "/bin/bash -c './run.sh nightly'", './run.sh'),
 ])
-got_unresolved = [(item['entry'], item['command'], item['word']) for item in d['unresolved']]
-assert got_unresolved == want_unresolved, '\n' + '\n'.join(map(str, sorted(set(got_unresolved) ^ set(want_unresolved))))
-assert d == {'schema': 1, 'mode': 'report', 'baseline_recorded_at': None, 'flagged': d['flagged'],
-             'unresolved': d['unresolved'], 'grandfathered': None, 'error': None}, d
+got_reasons = sorted((label(i), i['command'], r) for i in entries for r in i['annotation']['reasons'])
+assert got_reasons == want_reasons, '\n' + '\n'.join(map(str, sorted(set(got_reasons) ^ set(want_reasons))))
+counts = {}
+for item in entries:
+    counts[item['annotation']['class']] = counts.get(item['annotation']['class'], 0) + 1
+assert counts == {'flagged': 14, 'unresolved': 5, 'no working-tree file found': 10}, counts
 PY_EXPECT
-python3 -I "$ENTRIES" --report --launch-agents "$OPT_AGENTS" --settings "$OPT_SETTINGS" >"$TMP/out"
-grep -Fxq "[info] launchd:com.broomva.direct names $TREE/tracked.sh (repository $TREE)" "$TMP/out"
-grep -Fxq '[info] 13 entries name a file in a git working tree, run or read (report only: no baseline read or written)' "$TMP/out"
-grep -Fxq '[info] 6 path words could not be resolved' "$TMP/out"
-grep -Fxq "[info] unresolved: claude-hook:UserPromptSubmit names \`./doctor.sh\`, a path this check cannot resolve, in: bash -c 'cd scripts && ./doctor.sh'" "$TMP/out"
+python3 -I "$ENTRIES" --report --launch-agents "$OPT_AGENTS" --settings "$OPT_SETTINGS" --codex-hooks "$OPT_CODEX" >"$TMP/out"
+grep -Fq "[info] $OPT_AGENTS com.broomva.direct.plist: /bin/bash $TREE/tracked.sh compile [annotation, best effort: flagged: $TREE/tracked.sh (repository $TREE)]" "$TMP/out"
+grep -Fxq '[info] 29 entries (report only: no baseline read or written); annotation, best effort: 14 flagged, 10 no working-tree file found, 5 unresolved' "$TMP/out"
+if grep -q 'clean' "$TMP/out"; then echo 'the report calls an entry clean' >&2; exit 1; fi
 # Without the options the fixture home is read (empty so far), never HOME's decoy.
 python3 -I "$ENTRIES" --report >"$TMP/out"
-grep -Fxq '[info] 0 entries name a file in a git working tree, run or read (report only: no baseline read or written)' "$TMP/out"
+grep -Fq '[info] 0 entries (report only: no baseline read or written)' "$TMP/out"
 if python3 -I "$ENTRIES" --report --baseline-entries >"$TMP/out" 2>&1; then echo '--report accepted a baseline write' >&2; exit 1; fi
 [ ! -e "$HOME_FIXTURE/.broomva/state" ] || { echo '--report wrote under the machine state path' >&2; exit 1; }
 [ ! -e "$HOME/.broomva" ] || { echo 'the check wrote under HOME' >&2; exit 1; }
 
-# ── the ratchet through doctor, on the fixture home's own two paths ──
-# Without a baseline the ratchet is off: one [info] line, never a gap.
+# ── the ratchet: on the identity of each entry; the annotation never decides ──
+CODEX="$HOME_FIXTURE/.codex/hooks.json"
+mkdir -p "$HOME_FIXTURE/.codex"
 assert_not_enabled() {
     grep -Fq '[info] working-tree entry ratchet is not enabled on this machine' "$TMP/out"
     if grep -Fq '[gap] working-tree entry' "$TMP/out"; then echo "missing baseline counted as a gap ($1)" >&2; exit 1; fi
@@ -554,147 +583,195 @@ chmod +x "$TMP/no-python/python3"
 PATH="$TMP/no-python:$PATH" run_doctor_verbose
 assert_not_enabled 'no python'
 plist "$AGENTS" com.broomva.existing /bin/bash "$TREE/tracked.sh"
-python3 - "$SETTINGS" "$TREE" <<'PY_SETTINGS'
+python3 - "$SETTINGS" "$CODEX" "$TREE" <<'PY_SETTINGS'
 import json, sys
-json.dump({'hooks': {'Stop': [{'hooks': [{'type': 'command', 'command': f'python3 -I {sys.argv[2]}/hook.py stop'}]}]}},
-          open(sys.argv[1], 'w'))
+json.dump({'hooks': {'Stop': [{'hooks': [{'type': 'command', 'command': f'python3 -I {sys.argv[3]}/hook.py stop'},
+                                         {'type': 'command', 'command': 'echo report.sh'}]}]}}, open(sys.argv[1], 'w'))
+json.dump({'hooks': {'Stop': [{'hooks': [{'type': 'command', 'command': "bash -c 'cd scripts && ./doctor.sh'"}]}]}},
+          open(sys.argv[2], 'w'))
 PY_SETTINGS
 run_doctor_verbose
 assert_not_enabled 'entries present'
 run_doctor_verbose --strict || true
 assert_not_enabled 'strict'
+# Recording acknowledges, and says what it acknowledges.
 bash "$DOCTOR" --baseline-entries >"$TMP/out"
-grep -Fq "launchd:com.broomva.existing names $TREE/tracked.sh (repository $TREE)" "$TMP/out"
-grep -Fq "claude-hook:Stop names $TREE/hook.py (repository $TREE)" "$TMP/out"
+grep -Fq 'acknowledged 4 new or changed, 0 removed, 0 unchanged:' "$TMP/out"
+grep -Fq "  new: ~/Library/LaunchAgents com.broomva.existing.plist: /bin/bash $TREE/tracked.sh [annotation, best effort: flagged: $TREE/tracked.sh (repository $TREE)]" "$TMP/out"
+grep -Fq '  new: ~/.claude/settings.json Stop: echo report.sh [annotation, best effort: no working-tree file found]' "$TMP/out"
+grep -Fq "  new: ~/.codex/hooks.json Stop: bash -c 'cd scripts && ./doctor.sh' [annotation, best effort: unresolved: ./doctor.sh]" "$TMP/out"
 if grep -q 'decoy' "$TMP/out" "$BASELINE"; then echo 'the baseline read HOME, not the fixture home' >&2; exit 1; fi
 run_doctor_verbose
-grep -Fq "[info] grandfathered entry: launchd:com.broomva.existing names $TREE/tracked.sh (repository $TREE)" "$TMP/out"
-# A passing ratchet prints nothing under --quiet.
+grep -Fq '[info] 4 acknowledged entries unchanged' "$TMP/out"
 run_doctor
-if grep -q 'grandfathered\|working-tree entry' "$TMP/out"; then echo 'quiet mode listed grandfathered entries' >&2; exit 1; fi
+if grep -q 'working-tree entry\|acknowledged' "$TMP/out"; then echo 'quiet mode printed a passing ratchet' >&2; exit 1; fi
 if PATH="$TMP/no-python:$PATH" run_doctor; then echo 'enabled ratchet without python passed' >&2; exit 1; fi
-# A new entry fails doctor and names the entry, the file and the repository.
-plist "$AGENTS" com.broomva.new /bin/bash -lc "timeout 60 $TREE/sub/inner.sh --apply"
-if run_doctor; then echo 'new launchd entry passed' >&2; exit 1; fi
-grep -Fq "[failure] new entry names a file in a git working tree: launchd:com.broomva.new names $TREE/sub/inner.sh (repository $TREE)" "$TMP/out"
-grep -Fq 'whether the entry runs the file or only reads it' "$TMP/out"
-grep -Fq '[gap] working-tree entry ratchet failed' "$TMP/out"
-if grep -Fq '[failure] new entry names a file in a git working tree: launchd:com.broomva.existing' "$TMP/out"; then echo 'a grandfathered entry failed' >&2; exit 1; fi
 if bash "$DOCTOR" --baseline-entries >"$TMP/out" 2>&1; then echo 'baseline overwrite passed' >&2; exit 1; fi
-if run_doctor; then echo 'baseline was widened' >&2; exit 1; fi
-# The negative control removes the comparison in an isolated copy.
-mkdir -p "$TMP/copy/scripts"
-cp "$ENTRIES" "$REPO/scripts/broomva_paths.py" "$TMP/copy/scripts/"
-python3 - "$TMP/copy/scripts/doctor-worktree-entries.py" <<'PY'
-import sys
-p = sys.argv[1]
-s = open(p).read()
-assert s.count('flagged - saved') == 1
-open(p, 'w').write(s.replace('flagged - saved', 'flagged - flagged'))
-PY
-python3 -I "$TMP/copy/scripts/doctor-worktree-entries.py" >"$TMP/out"
-# Repointed at main's copy it is not plain text: unresolved as a whole, so it fails
-# until acknowledged in the baseline. Repointed at a released copy, it passes.
-plist "$AGENTS" com.broomva.new /bin/bash -lc "T=\$(mktemp); git -C \"$TREE\" show origin/main:sub/inner.sh > \"\$T\" && bash \"\$T\""
-if run_doctor; then echo 'an entry that is not plain text passed' >&2; exit 1; fi
-grep -Fq '[failure] new entry names a path this check cannot resolve: launchd:com.broomva.new is not plain text (unreadable `$(` at column 3 of argument 2)' "$TMP/out"
-grep -Fq 'this check certifies only entries it can read completely' "$TMP/out"
-plist "$AGENTS" com.broomva.new /bin/bash "$HOME_FIXTURE/.broomva/releases/tool/run.sh"
-run_doctor
+# A NEW entry fails whatever its annotation; this one names no working-tree file at all.
+plist "$AGENTS" com.broomva.new /bin/echo hello
+if run_doctor; then echo 'a new entry passed' >&2; exit 1; fi
+grep -Fq '[failure] new entry since the baseline: ~/Library/LaunchAgents com.broomva.new.plist: /bin/echo hello [annotation, best effort: no working-tree file found]' "$TMP/out"
+grep -Fq 'review it, then acknowledge it with bstack doctor --baseline-entries --force' "$TMP/out"
+grep -Fq 'it never decides' "$TMP/out" || grep -Fq 'never decides' "$TMP/out"
+grep -Fq '[gap] working-tree entry ratchet failed' "$TMP/out"
 rm "$AGENTS/com.broomva.new.plist"
-# A new hook that only reads a tracked file fails the same way.
-python3 - "$SETTINGS" "$TREE" <<'PY_SETTINGS'
-import json, sys
-d = json.load(open(sys.argv[1]))
-d['hooks']['PreToolUse'] = [{'matcher': 'Bash', 'hooks': [{'type': 'command', 'command': f'cat {sys.argv[2]}/notes.md'}]}]
-json.dump(d, open(sys.argv[1], 'w'))
-PY_SETTINGS
-if run_doctor; then echo 'new hook entry passed' >&2; exit 1; fi
-grep -Fq "claude-hook:PreToolUse[Bash] names $TREE/notes.md (repository $TREE)" "$TMP/out"
-# A grandfathered entry that leaves is information; the baseline can be re-recorded.
-rm "$AGENTS/com.broomva.existing.plist"
-if run_doctor; then echo 'new hook entry passed after a removal' >&2; exit 1; fi
-grep -Fq '[info] baselined entry no longer names a file in a working tree: launchd:com.broomva.existing' "$TMP/out"
-bash "$DOCTOR" --baseline-entries --force >"$TMP/out"
 run_doctor
-# A grandfathered entry repointed at another tracked file is a new entry.
-python3 - "$SETTINGS" "$TREE" <<'PY_SETTINGS'
+# A CHANGED entry fails: one trailing space in a hook command.
+cp "$SETTINGS" "$TMP/settings.good"
+python3 - "$SETTINGS" <<'PY_CHANGE'
 import json, sys
 d = json.load(open(sys.argv[1]))
-d['hooks']['PreToolUse'][0]['hooks'][0]['command'] = f'cat {sys.argv[2]}/sub/inner.sh'
+d['hooks']['Stop'][0]['hooks'][1]['command'] += ' '
 json.dump(d, open(sys.argv[1], 'w'))
-PY_SETTINGS
-if run_doctor; then echo 'a repointed grandfathered entry passed' >&2; exit 1; fi
-grep -Fq "claude-hook:PreToolUse[Bash] names $TREE/sub/inner.sh (repository $TREE)" "$TMP/out"
+PY_CHANGE
+if run_doctor; then echo 'a changed entry passed' >&2; exit 1; fi
+grep -Fq '[failure] changed entry since the baseline: ~/.claude/settings.json Stop: echo report.sh  [annotation, best effort: no working-tree file found]' "$TMP/out"
+cp "$TMP/settings.good" "$SETTINGS"
+run_doctor
+# A REMOVED entry passes and is reported; re-recording says it is acknowledged as removed.
+mv "$AGENTS/com.broomva.existing.plist" "$TMP/existing.plist"
+run_doctor_verbose
+grep -Fq '[info] acknowledged entry is gone: ~/Library/LaunchAgents com.broomva.existing.plist' "$TMP/out"
 bash "$DOCTOR" --baseline-entries --force >"$TMP/out"
+grep -Fq 'acknowledged 0 new or changed, 1 removed, 3 unchanged:' "$TMP/out"
+grep -Fq '  removed: ~/Library/LaunchAgents com.broomva.existing.plist' "$TMP/out"
+mv "$TMP/existing.plist" "$AGENTS/com.broomva.existing.plist"
+bash "$DOCTOR" --baseline-entries --force >"$TMP/out"
+grep -Fq 'acknowledged 1 new or changed, 0 removed, 3 unchanged:' "$TMP/out"
 run_doctor
 
-# ── --json: one object, the exit code of the human run, null lists on an error ──
-json_run() {  # json_run EXPECTED_EXIT PYTHON_ASSERTION
-    set +e
-    python3 -I "$ENTRIES" --json >"$TMP/json" 2>"$TMP/json.err"
-    json_rc=$?
-    python3 -I "$ENTRIES" >/dev/null 2>&1
-    human_rc=$?
-    set -e
-    [ "$json_rc" = "$1" ] || { echo "--json exited $json_rc, wanted $1 ($2)" >&2; exit 1; }
-    [ "$json_rc" = "$human_rc" ] || { echo "--json exited $json_rc, the human run $human_rc ($2)" >&2; exit 1; }
-    [ ! -s "$TMP/json.err" ] || { echo "--json wrote to stderr ($2)" >&2; cat "$TMP/json.err" >&2; exit 1; }
-    [ "$(wc -l <"$TMP/json" | tr -d ' ')" = "1" ] || { echo "--json did not print exactly one line ($2)" >&2; exit 1; }
-    python3 - "$TMP/json" "$2" "$BASELINE" "$TREE" <<'PY_JSON'
-import json, sys
-d = json.load(open(sys.argv[1]))
-baseline, tree = sys.argv[3:]
-assert sorted(d) == ['baseline_recorded_at', 'error', 'flagged', 'grandfathered', 'mode', 'schema', 'unresolved'], sorted(d)
-assert d['schema'] == 1 and d['mode'] == 'check', d
-assert eval(sys.argv[2]), (sys.argv[2], d)
-PY_JSON
-}
-unreadable="d['error'] and d['flagged'] is None and d['unresolved'] is None and d['grandfathered'] is None and d['baseline_recorded_at'] is None"
-json_run 0 "d['error'] is None and d['flagged'] == [] and d['unresolved'] == [] and d['grandfathered'] == 2 and d['baseline_recorded_at'] == json.load(open(baseline))['recorded_at']"
-plist "$AGENTS" com.broomva.new /bin/bash "$TREE/tracked.sh"
-json_run 1 "d['error'] is None and d['grandfathered'] == 2 and d['flagged'] == [{'entry': 'launchd:com.broomva.new', 'file': tree + '/tracked.sh', 'repository': tree}]"
-rm "$AGENTS/com.broomva.new.plist"
-# "grandfathered" counts the baselined entries still flagged, not the baseline's size.
-cp "$SETTINGS" "$TMP/settings.good"
-python3 - "$SETTINGS" <<'PY_SETTINGS'
-import json, sys
-d = json.load(open(sys.argv[1]))
-del d['hooks']['PreToolUse']
-json.dump(d, open(sys.argv[1], 'w'))
-PY_SETTINGS
-json_run 0 "d['error'] is None and d['flagged'] == [] and d['grandfathered'] == 1 and len(json.load(open(baseline))['entries']) == 2"
-cp "$TMP/settings.good" "$SETTINGS"
-# An unresolved path word ratchets like a flagged entry: new fails, recorded is
-# grandfathered (info), and one that leaves is information.
-python3 - "$SETTINGS" <<'PY_SETTINGS'
-import json, sys
-d = json.load(open(sys.argv[1]))
-d['hooks']['Stop'][0]['hooks'].append({'type': 'command', 'command': "bash -c 'cd scripts && ./doctor.sh'"})
-json.dump(d, open(sys.argv[1], 'w'))
-PY_SETTINGS
-json_run 1 "d['error'] is None and d['flagged'] == [] and d['grandfathered'] == 2 and d['unresolved'] == [{'entry': 'claude-hook:Stop', 'command': \"bash -c 'cd scripts && ./doctor.sh'\", 'word': './doctor.sh'}]"
-if run_doctor; then echo 'a new unresolved hook passed' >&2; exit 1; fi
-grep -Fq '[failure] new entry names a path this check cannot resolve: claude-hook:Stop names `./doctor.sh`' "$TMP/out"
-grep -Fq 'this check certifies only entries it can read completely; write plain absolute paths' "$TMP/out"
-# The negative control: without the unresolved comparison the same run passes.
-python3 - "$TMP/copy/scripts/doctor-worktree-entries.py" "$ENTRIES" <<'PY_MUTATE'
-import sys
-s = open(sys.argv[2]).read()
-assert s.count('unresolved - saved_unresolved') == 1
-open(sys.argv[1], 'w').write(s.replace('unresolved - saved_unresolved', 'unresolved - unresolved'))
+# ── the property: for a recorded baseline, ANY change to any entry fails and names it ──
+python3 - "$ENTRIES" "$AGENTS" "$SETTINGS" "$CODEX" "$TREE" <<'PY_MUTATE'
+import contextlib, importlib.util, io, json, os, plistlib, shutil, sys
+entries_path, agents, settings, codex, tree = sys.argv[1:]
+sys.path.insert(0, os.path.dirname(entries_path))
+spec = importlib.util.spec_from_file_location('entries', entries_path)
+d = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(d)
+# One more agent that uses every hashed key.
+with open(f'{agents}/com.broomva.env.plist', 'wb') as stream:
+    plistlib.dump({'Label': 'env', 'Program': '/bin/echo', 'ProgramArguments': ['/bin/echo', 'hello  world'],
+                   'WorkingDirectory': tree, 'EnvironmentVariables': {'A': '1', 'PATH': '/usr/bin:/bin'}}, stream)
+
+
+def run(*args):
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        code = d.main(d.arguments([*args, '--json']))
+    return code, json.loads(out.getvalue())
+
+
+code, rec = run('--baseline-entries', '--force')
+assert code == 0 and rec['action'] == 'recorded', rec
+code, base = run()
+assert code == 0 and base['new'] == [] and base['unchanged'] == 5, base
+saved = {path: open(path, 'rb').read() for path in (settings, codex, *(f'{agents}/{n}' for n in os.listdir(agents)))}
+
+
+def restore():
+    for path, data in saved.items():
+        open(path, 'wb').write(data)
+    for name in os.listdir(agents):
+        if f'{agents}/{name}' not in saved:
+            os.remove(f'{agents}/{name}')
+
+
+def mutations(text):
+    """Insert, delete and replace one character at several positions, whitespace included."""
+    spots = sorted({0, len(text) // 2, len(text)} | ({text.index(' ')} if ' ' in text else set()))
+    for at in spots:
+        for c in (' ', '\t', 'x'):
+            yield text[:at] + c + text[at:]
+        if at < len(text):
+            yield text[:at] + text[at + 1:]
+            yield text[:at] + ('x' if text[at] != 'x' else 'y') + text[at + 1:]
+            yield text[:at] + (' ' if text[at] != ' ' else '_') + text[at + 1:]
+
+
+# Every text of every fixture entry: (file, how to rewrite it with a new text, original text, entry name).
+targets = []
+for name in sorted(os.listdir(agents)):
+    data = plistlib.load(open(f'{agents}/{name}', 'rb'))
+    for k, arg in enumerate(data.get('ProgramArguments', [])):
+        targets.append((f'{agents}/{name}', name, ('ProgramArguments', k), arg))
+    for field in ('Program', 'WorkingDirectory'):
+        if field in data:
+            targets.append((f'{agents}/{name}', name, (field, None), data[field]))
+    for var, value in data.get('EnvironmentVariables', {}).items():
+        targets.append((f'{agents}/{name}', name, ('EnvironmentVariables', var), value))
+for path in (settings, codex):
+    data = json.load(open(path))
+    for event, groups in data['hooks'].items():
+        for g, group in enumerate(groups):
+            for h, hook in enumerate(group['hooks']):
+                targets.append((path, event, (event, g, h), hook['command']))
+
+
+def write(path, where, value):
+    if path.endswith('.plist'):
+        data = plistlib.load(open(path, 'rb'))
+        field, index = where
+        if index is None:
+            data[field] = value
+        else:
+            data[field][index] = value
+        plistlib.dump(data, open(path, 'wb'))
+    else:
+        data = json.load(open(path))
+        event, g, h = where
+        data['hooks'][event][g]['hooks'][h]['command'] = value
+        json.dump(data, open(path, 'w'))
+
+
+failed, total = [], 0
+for path, entry, where, original in targets:
+    for text in dict.fromkeys(mutations(original)):
+        if text == original:
+            continue
+        total += 1
+        write(path, where, text)
+        code, out = run()
+        if code != 1 or not any(item['entry'] == entry for item in out['new']):
+            failed.append(f'  mutation of {entry} {where}: {text!r} -> exit {code}, new {[i["entry"] for i in out["new"]]}')
+        restore()
+# Added entries: a new agent, a new hook in each hooks file.
+additions = [
+    lambda: plistlib.dump({'Label': 'added', 'ProgramArguments': ['/bin/echo', 'added']}, open(f'{agents}/com.broomva.added.plist', 'wb')),
+    lambda: write_hook(settings), lambda: write_hook(codex)]
+
+
+def write_hook(path):
+    data = json.load(open(path))
+    data['hooks'].setdefault('SessionEnd', []).append({'hooks': [{'type': 'command', 'command': 'true'}]})
+    json.dump(data, open(path, 'w'))
+
+
+for k, add in enumerate(additions):
+    total += 1
+    add()
+    code, out = run()
+    if code != 1 or len(out['new']) != 1:
+        failed.append(f'  addition {k}: exit {code}, new {out["new"]}')
+    restore()
+code, out = run()
+if code != 0 or out['new'] != []:
+    failed.append(f'  the unchanged machine does not pass: {code} {out}')
+os.rename(f'{agents}/com.broomva.env.plist', f'{agents}/env.removed')
+code, out = run()
+if code != 0 or [r['entry'] for r in out['removed']] != ['com.broomva.env.plist']:
+    failed.append(f'  a removed entry does not pass: {code} {out}')
+os.rename(f'{agents}/env.removed', f'{agents}/com.broomva.env.plist')
+print(f'mutation: {total - len(failed)} of {total} changes to recorded entries fail and name the entry '
+      f'({len(targets)} texts, insert/delete/replace at several positions, plus 3 additions)')
+if failed:
+    print('\n'.join(failed[:20]))
+    sys.exit(1)
+os.remove(f'{agents}/com.broomva.env.plist')
+code, rec = run('--baseline-entries', '--force')
+assert code == 0 and [r['entry'] for r in rec['removed']] == ['com.broomva.env.plist'], rec
 PY_MUTATE
-python3 -I "$TMP/copy/scripts/doctor-worktree-entries.py" >"$TMP/out"
-bash "$DOCTOR" --baseline-entries --force >"$TMP/out"
-grep -Fq 'unresolved: claude-hook:Stop names `./doctor.sh`' "$TMP/out"
-json_run 0 "d['error'] is None and d['flagged'] == [] and d['unresolved'] == [] and d['grandfathered'] == 3"
-run_doctor_verbose
-grep -Fq '[info] grandfathered unresolved entry: claude-hook:Stop names `./doctor.sh`' "$TMP/out"
-cp "$TMP/settings.good" "$SETTINGS"
-run_doctor_verbose
-grep -Fq '[info] baselined unresolved entry is gone: claude-hook:Stop names `./doctor.sh`' "$TMP/out"
-bash "$DOCTOR" --baseline-entries --force >"$TMP/out"
-# --json in every mode: recording a baseline, refusing to overwrite one, a usage error.
+
+# ── --json: one object in every mode, with the exit code of the plain run ──
 json_mode() {  # json_mode EXPECTED_EXIT PYTHON_ASSERTION ARG...
     want="$1" assertion="$2"; shift 2
     set +e
@@ -704,50 +781,75 @@ json_mode() {  # json_mode EXPECTED_EXIT PYTHON_ASSERTION ARG...
     [ "$rc" = "$want" ] || { echo "$* exited $rc, wanted $want" >&2; cat "$TMP/json" "$TMP/json.err" >&2; exit 1; }
     [ ! -s "$TMP/json.err" ] || { echo "$* wrote to stderr" >&2; cat "$TMP/json.err" >&2; exit 1; }
     [ "$(wc -l <"$TMP/json" | tr -d ' ')" = "1" ] || { echo "$* did not print exactly one line" >&2; cat "$TMP/json" >&2; exit 1; }
-    python3 - "$TMP/json" "$assertion" "$BASELINE" "$TREE" <<'PY_MODE'
+    python3 - "$TMP/json" "$assertion" "$BASELINE" <<'PY_MODE'
 import json, sys
 d = json.load(open(sys.argv[1]))
-baseline, tree = sys.argv[3:]
-assert d['schema'] == 1, d
+baseline = sys.argv[3]
+assert d['schema'] == 2 and 'error' in d, d
 assert eval(sys.argv[2]), (sys.argv[2], d)
 PY_MODE
 }
-json_mode 0 "d['mode'] == 'baseline' and d['action'] == 'recorded' and d['baseline'] == baseline and d['error'] is None and d['baseline_recorded_at'] == json.load(open(baseline))['recorded_at'] and d['flagged'] == [dict(entry=e['entry'], file=e['file'], repository=e['repository']) for e in json.load(open(baseline))['entries']] and d['unresolved'] == [] and d['grandfathered'] is None" --baseline-entries --force --json
-json_mode 1 "d['mode'] == 'baseline' and d['action'] is None and d['baseline'] == baseline and 'File exists' in d['error'] and d['flagged'] is None and d['unresolved'] is None" --baseline-entries --json
-json_mode 2 "d['mode'] is None and d['error'].startswith('usage: ') and d['flagged'] is None" --report --baseline-entries --json
-json_mode 2 "d['mode'] is None and 'unrecognized arguments' in d['error']" --json --no-such-option
-# An input that cannot be read is a failure, never "nothing flagged".
+unreadable="d['error'] and d['new'] is None and d['removed'] is None and d['unchanged'] is None"
+json_mode 0 "d['mode'] == 'check' and d['new'] == [] and d['removed'] == [] and d['unchanged'] == 4" --json
+json_mode 0 "d['mode'] == 'report' and len(d['entries']) == 4" --report --json
+plist "$AGENTS" com.broomva.new /bin/bash "$TREE/tracked.sh"
+json_mode 1 "[(i['entry'], i['annotation']['class']) for i in d['new']] == [('com.broomva.new.plist', 'flagged')]" --json
+json_mode 1 "d['mode'] == 'baseline' and d['action'] is None and d['baseline'] == baseline and 'File exists' in d['error']" --baseline-entries --json
+json_mode 0 "d['mode'] == 'baseline' and d['action'] == 'recorded' and [i['entry'] for i in d['new']] == ['com.broomva.new.plist'] and d['unchanged'] == 4" --baseline-entries --force --json
+rm "$AGENTS/com.broomva.new.plist"
+json_mode 0 "[r['entry'] for r in d['removed']] == ['com.broomva.new.plist']" --json
+bash "$DOCTOR" --baseline-entries --force >"$TMP/out"
+json_mode 2 "d['mode'] is None and d['error'].startswith('usage: ')" --report --baseline-entries --json
+json_mode 2 "'unrecognized arguments' in d['error']" --json --no-such-option
+# A source that exists but cannot be read or parsed fails and names it, never a pass or an empty list.
+source_fails() {  # source_fails NAME — the current inputs must fail, naming NAME, plain and --json
+    json_mode 1 "$unreadable and '$1' in d['error']" --json
+    if run_doctor; then echo "an unreadable source passed ($1)" >&2; exit 1; fi
+    grep -Fq "$1" "$TMP/out" || { echo "the failure does not name $1" >&2; exit 1; }
+}
 printf 'not a plist' > "$AGENTS/com.broomva.broken.plist"
-json_run 1 "$unreadable and 'com.broomva.broken.plist' in d['error']"
-if run_doctor; then echo 'unreadable plist passed' >&2; exit 1; fi
-grep -q 'working-tree entry check: cannot read' "$TMP/out"
+source_fails com.broomva.broken.plist
 rm "$AGENTS/com.broomva.broken.plist"
+cp "$AGENTS/com.broomva.existing.plist" "$AGENTS/com.broomva.locked.plist"
+chmod 000 "$AGENTS/com.broomva.locked.plist"
+if [ -r "$AGENTS/com.broomva.locked.plist" ]; then
+    echo '  skipped (unreadable plist): this user can read a mode-000 file (root)'
+else
+    source_fails com.broomva.locked.plist
+fi
+chmod 600 "$AGENTS/com.broomva.locked.plist"
+rm "$AGENTS/com.broomva.locked.plist"
 printf '{bad json' > "$SETTINGS"
-json_run 1 "$unreadable and 'settings.json' in d['error']"
-if run_doctor; then echo 'unreadable settings passed' >&2; exit 1; fi
+source_fails settings.json
+mv "$SETTINGS" "$TMP/settings.moved"
+mkdir "$SETTINGS"
+source_fails settings.json
+rmdir "$SETTINGS"
+mv "$TMP/settings.moved" "$SETTINGS"
 cp "$TMP/settings.good" "$SETTINGS"
+cp "$CODEX" "$TMP/codex.good"
+printf '{"hooks": [1, 2]}' > "$CODEX"
+source_fails hooks.json
+cp "$TMP/codex.good" "$CODEX"
 # git that cannot answer for a file is a failure, never "untracked".
 mkdir -p "$TMP/broken-tree"
 printf 'not a git dir\n' > "$TMP/broken-tree/.git"
 echo '#' > "$TMP/broken-tree/run.sh"
 plist "$AGENTS" com.broomva.unknown /bin/bash "$TMP/broken-tree/run.sh"
-json_run 1 "$unreadable and 'git ls-files failed' in d['error']"
-if run_doctor; then echo 'a file git could not classify passed' >&2; exit 1; fi
+json_mode 1 "$unreadable and 'git ls-files failed' in d['error']" --json
 rm "$AGENTS/com.broomva.unknown.plist"
 run_doctor
 # A missing or broken baseline.
 printf '{bad json' > "$BASELINE"
-json_run 1 "$unreadable and 'working-tree entry check' in d['error']"
+json_mode 1 "$unreadable and 'working-tree entry check' in d['error']" --json
 if run_doctor; then echo 'malformed baseline passed' >&2; exit 1; fi
-grep -q 'working-tree entry check' "$TMP/out"
-printf '{"recorded_at": "x", "entries": [{"entry": "e"}], "unresolved": []}' > "$BASELINE"
-json_run 1 "$unreadable and 'invalid baseline format' in d['error']"
+printf '{"schema": 1, "recorded_at": "x", "entries": []}' > "$BASELINE"
+json_mode 1 "$unreadable and 'invalid baseline format' in d['error']" --json
 rm "$BASELINE"
 ln -s "$TMP/missing-baseline" "$BASELINE"
-json_run 1 "$unreadable and 'working-tree entry check' in d['error']"
+json_mode 1 "$unreadable and 'working-tree entry check' in d['error']" --json
 if run_doctor; then echo 'dangling baseline passed' >&2; exit 1; fi
-grep -q 'working-tree entry check' "$TMP/out"
 rm "$BASELINE"
-json_run 42 "$unreadable and 'no baseline recorded' in d['error']"
+json_mode 42 "$unreadable and 'no baseline recorded' in d['error']" --json
 [ ! -e "$HOME/.broomva" ] || { echo 'the check wrote under HOME' >&2; exit 1; }
 echo 'working-tree entry ratchet: passed'

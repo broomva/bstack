@@ -5,8 +5,8 @@
 # Runs at SessionStart (via hook) AND on demand (`bstack doctor`).
 # Normally never blocks a session: gaps are actionable nudges. An enabled machine
 # folder ratchet fails on new unregistered folders or a broken baseline, and an
-# enabled working-tree entry ratchet on a new scheduled or hooked command that
-# names a file in a git working tree; --strict fails on any gap. A missing
+# enabled working-tree entry ratchet on a new or changed scheduled job or hook
+# that has not been acknowledged; --strict fails on any gap. A missing
 # workspace retains its existing exit 3.
 #
 # What it checks:
@@ -54,12 +54,12 @@
 #   bash scripts/doctor.sh --quiet       # only warnings
 #   bash scripts/doctor.sh --strict      # exit 1 if any gap found (CI mode)
 #   bstack doctor --baseline-roots [--force] # record machine folders once
-#   bstack doctor --baseline-entries [--force] # record working-tree entries once
+#   bstack doctor --baseline-entries [--force] # acknowledge scheduled jobs and hooks
 #
 # Env:
 #   BSTACK_DOCTOR_HOME    override the home used by the machine folder scan and
-#                          the working-tree entry scan (its Library/LaunchAgents
-#                          and .claude/settings.json)
+#                          the working-tree entry scan (its Library/LaunchAgents,
+#                          .claude/settings.json and .codex/hooks.json)
 #   BSTACK_DOCTOR_USER_SETTINGS
 #                          §26 only — path to the PERSONAL settings.json read as
 #                          hook registration surface 2. Defaults to
@@ -2149,17 +2149,18 @@ if [ "$QUIET" = "0" ]; then
 fi
 
 # ── Working-tree entry ratchet (BRO-4084) ───────────────────────────────────
-# A LaunchAgent or Claude Code hook that names a file tracked in a git working
-# tree uses whatever that checkout holds, with no review between an edit and its
-# effect, whether it runs the file or only reads it. The check reads the raw
-# text and never interprets shell. It certifies only entries it can read
-# completely: an entry with any shell construct outside a small plain grammar
-# is "unresolved" as a whole and must be acknowledged in the baseline. In a
-# readable entry, an absolute path word naming a tracked file is flagged
-# wherever it appears; a relative one is unresolved. Both ratchet. Same
-# contract as §31: opt-in, one [info] line without a baseline; once a baseline
-# exists, a new entry of either kind or a broken baseline is a hard failure even
-# without --strict.
+# A scheduled job or hook runs whatever its command names; if that is a file in
+# a git working tree, an edit there runs without review. The ratchet is on the
+# identity of each entry (plist name + hash of its program, arguments, working
+# directory and environment; hooks file + event + matcher + hash of the exact
+# command): a new or changed entry fails until it is acknowledged with
+# `bstack doctor --baseline-entries --force`; a removed one passes. The
+# classifier's annotation (flagged / unresolved / no working-tree file found)
+# is shown to help the review; it is best effort and never decides. Sources:
+# com.broomva.* LaunchAgents, ~/.claude/settings.json hooks, ~/.codex/hooks.json.
+# Same contract as §31: opt-in, one [info] line without a baseline; once a
+# baseline exists, a new or changed entry, an unreadable source or a broken
+# baseline is a hard failure even without --strict.
 section "33. Working-tree entry ratchet"
 _TREE_ENTRY_FAILURE=0
 _tree_entries="$(python3 -I "$BSTACK_REPO/scripts/doctor-worktree-entries.py" 2>&1)"

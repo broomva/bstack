@@ -2,82 +2,47 @@
 
 ## 0.52.2 — 2026-11-23
 
-### feat(doctor): ratchet launchd and hook entries that name files in a git working tree (BRO-4084)
+### feat(doctor): ratchet scheduled jobs and hooks: a new or changed entry must be acknowledged (BRO-4084)
 
 - **Working-tree entry ratchet (doctor §33).** `scripts/doctor-worktree-entries.py`
-  reads every `com.broomva.*.plist` LaunchAgent (`Program` and each
-  `ProgramArguments` string) and every hook `command` in `~/.claude/settings.json`
-  as raw text, and never interprets shell: no command splitting, no `cd`, no
-  wrapper or interpreter tables. A hook that reads a file from a working tree
-  feeds it unreviewed content just as one that executes it does, so both count.
-- **In a readable entry, a reading may only ADD candidates; the raw text is always
-  a candidate too.** Absolute paths are found by asking the file system: from
-  every place an absolute path can start (`/`, `~/` at a word start, `$HOME`,
-  `${HOME}`), every end position is tried, as written and with quotes removed,
-  and an existing file (following symlinks) tracked by a git working tree
-  **flags** the entry. `=`, `:`, `,`, `+`, `@`, `%`, spaces and quotes in a file
-  name do not matter, and the file is flagged as the command, an interpreter's
-  script, an option's value or an argument that is only read. Directories met
-  in a working tree, and a LaunchAgent's `WorkingDirectory`, are joined with
-  every place a relative name can start (a token start, after a quote, `=`, `:`
-  or `,`), again with every end position, so `cd /t && python3 x.py` and
-  `git -C /t show HEAD:x.py` are flagged without following the `cd`. A relative
-  piece holding a `/` is **unresolved** (the remedy is an absolute path) unless a
-  `WorkingDirectory` resolves it; URLs and git object names are not judged. A
-  missing, untracked or out-of-tree file is ignored. Deleted in round 3 of the
-  review: reading `NAME=value` and `--option=value` as their value, joining a
-  word with the next across spaces, and pairing only whole bare words with
-  whole directory words; each replaced the text it read, and a tracked
-  `/t/a=b.sh` passed clean. A generated test flags 15 tracked names holding each
-  readable punctuation character, a space and combinations, in 12 command
-  shapes (180 commands).
-- Flagged and unresolved entries both ratchet, with the contract of the machine
-  folder ratchet: `bstack doctor --baseline-entries` records them (refuses to
-  overwrite without `--force`); grandfathered entries print as info; a new one, an
-  unreadable plist or settings file, a `git` that cannot answer, or a broken
-  baseline fails doctor even without `--strict`. `--report` lists every entry and
-  reads and writes no baseline; `--json`, `--launch-agents DIR` and `--settings
-  FILE` are options. `--json` prints `{"schema": 1, "mode", "baseline_recorded_at",
-  "flagged": [{"entry", "file", "repository"}], "unresolved": [{"entry", "command",
-  "word"}], "grandfathered", "error"}`, with null lists on an error. Every mode
-  prints one JSON object under `--json`, errors included: `--baseline-entries
-  --json` prints mode `"baseline"` with `"action": "recorded"` (null when nothing
-  was written) and `"baseline"` (the file's path), and a usage error prints mode
-  null and exits 2.
-- **The contract: this check certifies only entries it can read completely; an
-  entry containing any shell construct outside a small plain grammar is reported
-  as unresolved and must be acknowledged in the baseline.** The grammar is
-  written down once (`READABLE_CHARS`): ASCII letters and digits;
-  `_ - . / : = , + @ %`; space and tab; single and double quotes; the operator
-  characters `& | ; < >`; `~` at the start of a word; and exactly `$HOME` and
-  `${HOME}`. Anything else (any other `$`, a backquote, `( ) { } * ? [ ] ! #`, a
-  backslash, a newline, a control character, any non-ASCII character including
-  non-breaking and zero-width spaces) makes the whole entry unresolved, with a
-  reason naming the first such construct and its column. For a LaunchAgent the
-  entry is the Program and all ProgramArguments together. Nothing is decoded:
-  the line-continuation, ANSI-C and NUL handling of an earlier draft, and its
-  glob, brace and variable special cases, collapse into this one rule. What it
-  costs: an entry that uses `$(mktemp)` and `"$T"`, including the recommended
-  `git show origin/main:<path> > "$T"` form, is unresolved and needs a baseline
-  line. That is accepted because scheduled jobs and hooks are added rarely, and a
-  new one should be looked at once. A generated test inserts every ASCII
-  character outside the grammar and six non-ASCII ones at the start, inside the
-  path and at the end of three flagged commands (954 variants); none comes out
-  clean.
-- **Files are compared by identity, never by path string** (round 4). A
-  candidate exists if `os.stat` succeeds; its identity is (device, inode); each
-  working tree's tracked set is built once as the identities of what
-  `git ls-files` lists. So letter case on a case-insensitive volume, `//`, `/./`,
-  `..`, symlinks and a hard link inside the tree all name the tracked file. A
-  hard link that is not tracked where it sits makes the entry unresolved (the
-  file has more than one name); a file on a read-only file system is exempt.
-  Removed: exact `listdir` membership and case-sensitive prefix pruning in the
-  walk, realpath-string de-duplication of files and directories, and
-  `relpath in ls-files` membership. A generated test spells five tracked files
-  seven other ways (71 commands with the reviewer's `T/X.SH`); the letter-case
-  rows run only where a probe shows the file system is case-insensitive.
-- Not seen: content fetched at run time by a program the entry names (a script
-  that reads another file, a URL it downloads).
+  ratchets the identity of each scheduled job and hook. For a LaunchAgent the
+  identity is the plist file name and the SHA-256 of the canonical JSON of its
+  `ProgramArguments`, `Program`, `WorkingDirectory` and `EnvironmentVariables`;
+  for a hook it is the hooks file, the event, the matcher and the SHA-256 of the
+  exact command. Whitespace is significant; nothing is normalised. Doctor fails
+  when an entry is new or its text changed, whatever the classifier says; a
+  removed entry passes and is reported. Acknowledging is
+  `bstack doctor --baseline-entries --force`, which prints (and with `--json`
+  returns) every new or changed entry with its annotation and every removed one;
+  it refuses to overwrite without `--force`.
+- **Sources:** `com.broomva.*` LaunchAgents, the hooks in `~/.claude/settings.json`
+  and the hooks in `~/.codex/hooks.json` (same shape). Not read: other labels,
+  LaunchDaemons, project-level settings files, `prompt` hooks, cron. A source
+  that exists but cannot be read or parsed fails and names it.
+- **The annotation is best effort and never decides.** Each entry is annotated
+  `flagged` (a tracked file it names, with its repository), `unresolved` (why
+  its text could not be read), or `no working-tree file found`. The annotation
+  reads only plain text (ASCII letters and digits, `_ - . / : = , + @ %`, space,
+  tab, quotes, `& | ; < >`, a leading `~`, exactly `$HOME` and `${HOME}`); in
+  plain text a reading may only add candidates, and absolute paths are found by
+  asking the file system at every start and end; files are compared by
+  (device, inode). It can miss a file reached through a symlinked directory and
+  `..`, an unlistable directory, a file system mounted twice, or content
+  fetched at run time.
+- `--report` lists every entry with its annotation and reads and writes no
+  baseline. `--json` prints one object in every mode, errors included (schema 2).
+- **Why (review rounds 1–5 of #155):** each round found a text that runs a tracked
+  file but was classed clean: a line continuation, a substitution, `=` in a file
+  name, letter case, then a symlinked directory with `..`, an unlistable
+  directory and a twice-mounted file system. A classifier of shell text over a
+  real file system always has another such case, so the ratchet no longer
+  depends on it.
+- **Tests:** a generated test records a baseline, then changes every recorded
+  entry text one character at a time (insert, delete, replace at several
+  positions, whitespace included) and adds entries: 184 of 184 changes fail and
+  name the entry. Making the ratchet pass entries annotated
+  `no working-tree file found` leaves 118 of them passing. The earlier generated
+  tests remain as tests of the annotation.
 
 ### fix(ci): a `.control` mention followed by `:` counts (BRO-4083 follow-up)
 
@@ -92,8 +57,8 @@
 
 Opt-in, like the machine folder ratchet: a machine without a baseline gets one
 `[info]` line and no gap, so its totals and `--strict` result do not change. Run
-`python3 -I scripts/doctor-worktree-entries.py --report` to see what a baseline
-would record before running `bstack doctor --baseline-entries`.
+`python3 -I scripts/doctor-worktree-entries.py --report` to see every entry and
+its annotation before running `bstack doctor --baseline-entries`.
 
 ## 0.52.1 — 2026-11-21
 

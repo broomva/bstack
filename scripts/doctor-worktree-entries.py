@@ -1,21 +1,45 @@
 #!/usr/bin/env python3
-"""Baseline and audit scheduled or hooked commands that name a file in a git working tree.
+"""Ratchet scheduled jobs and hooks: a new or changed entry must be acknowledged.
 
-A LaunchAgent or a Claude Code hook that names a file tracked in a working tree
-uses whatever that checkout holds: an edit takes effect on the next run, without
-a commit, a review or a merge. That is as true of a file the entry only reads
-(`cat`, a config, a prompt) as of one it executes, so this check does not ask
-which: a hook that reads a file from a working tree feeds it unreviewed content
-just as one that executes it does. Two surfaces are read, as raw text:
+A LaunchAgent or a hook runs whatever its command names, and if that is a file in
+a git working tree, an edit there takes effect on the next run without a
+commit, a review or a merge. Deciding from shell text whether an entry reaches
+such a file cannot be made sound on a real file system, so the ratchet does not
+depend on it.
 
-  - every com.broomva.*.plist in the LaunchAgents folder: `Program` and each
-    `ProgramArguments` string, each scanned on its own (so the string of a
-    `bash -c` is covered without being parsed);
-  - every hook `command` in the personal Claude Code settings.json.
+THE RATCHET is on the identity of each entry, which no reading of its text
+changes:
+  - a LaunchAgent: the plist file name, and the SHA-256 of the canonical JSON
+    serialisation (keys sorted, values exactly as stored) of its
+    ProgramArguments, Program, WorkingDirectory and EnvironmentVariables;
+  - a hook: the hooks file, the event and matcher, and the SHA-256 of the exact
+    command string.
+Whitespace is significant; nothing is normalised. The baseline is the set of
+identities. Doctor FAILS when the machine has an entry whose identity is not in
+the baseline (new, or its text changed), whatever the annotation says. A
+removed entry passes and is reported. Nothing passes because of its class.
+Acknowledging is recording the baseline again (`bstack doctor
+--baseline-entries --force` after a review); recording prints, and with --json
+returns, every new or changed entry with its annotation and every removed one.
 
-THE CONTRACT. This check certifies only entries it can read completely; an
-entry containing any shell construct outside a small plain grammar is reported
-as unresolved and must be acknowledged in the baseline.
+SOURCES read: every com.broomva.*.plist in ~/Library/LaunchAgents; the hooks of
+the user's Claude Code settings (~/.claude/settings.json); the user's Codex
+hooks file (~/.codex/hooks.json), which has the same shape. NOT read: other
+LaunchAgent labels, LaunchDaemons, project-level settings files, `prompt`-type
+hooks, cron and other schedulers. A source that exists but cannot be read or
+parsed is a failure that names it, never a pass and never an empty list.
+
+THE ANNOTATION is best effort and never decides whether doctor passes. For
+each entry it says `flagged` (a tracked file it names, and its repository),
+`unresolved` (why the text could not be read), or `no working-tree file
+found`. It can miss a file reached through a symlinked directory and `..`, a
+file in a directory that can be searched but not listed, a file on a file
+system mounted twice, and content fetched at run time. The rules below are the
+annotation's.
+
+ANNOTATION, READABLE TEXT. The annotation reads only entries it can read
+completely; an entry containing any shell construct outside a small plain
+grammar is annotated unresolved.
 
   The plain grammar (READABLE_CHARS and its neighbours below, written down
   once): ASCII letters and digits; `_ - . / : = , + @ %`; space and tab; single
@@ -29,12 +53,6 @@ as unresolved and must be acknowledged in the baseline.
   line continuation, escape, substitution, expansion or quoting form is
   decoded. For a LaunchAgent the entry is the Program and every
   ProgramArguments string together.
-
-  What that costs. An entry that uses a variable or a substitution is
-  unresolved, including the recommended form `T=$(mktemp); git -C /t show
-  origin/main:<path> > "$T" && bash "$T"`: it needs a baseline line. That is
-  accepted because scheduled jobs and hooks are added rarely, and a new one
-  should be looked at once; a reviewed baseline line is that look.
 
 Only a fully readable entry is scanned. The principle of the scan: a reading may
 only ADD candidates; the raw text is always a candidate too. No rule replaces the
@@ -98,38 +116,33 @@ follows a `cd`, or models a wrapper or an interpreter's options:
   are unresolved too. `cd /t && ./x.sh` is flagged (directory x token) and
   `./x.sh` is still unresolved.
 
-A fully readable entry with nothing flagged and nothing unresolved is clean.
-Flagged and unresolved entries both ratchet: recorded in the baseline, printed
-as info while grandfathered, and a new one fails.
+A fully readable entry with nothing flagged and nothing unresolved is annotated
+`no working-tree file found`.
 
-What this check does not see: content fetched at run time by a program the
-entry names (a script that reads another file, a URL it downloads).
+  doctor-worktree-entries.py                    check against the baseline (doctor section 33)
+  doctor-worktree-entries.py --report           list every entry with its annotation; reads and writes no baseline
+  doctor-worktree-entries.py --baseline-entries [--force]   record (acknowledge) the baseline
+  options: --json, --launch-agents DIR, --settings FILE, --codex-hooks FILE
 
-  doctor-worktree-entries.py                    audit against the baseline (doctor section 33)
-  doctor-worktree-entries.py --report           list every flagged and unresolved entry; reads and writes no baseline
-  doctor-worktree-entries.py --baseline-entries [--force]   record the baseline
-  options: --json, --launch-agents DIR, --settings FILE
+Exit codes, with or without --json: 0 no new or changed entry (always, for
+--report and a successful recording), 1 a new or changed entry, a source that
+cannot be read, a broken baseline, or a baseline that could not be recorded, 42
+no baseline recorded, 2 a usage error.
 
-Exit codes, with or without --json: 0 no new flagged or unresolved entry
-(always, for --report), 1 a new flagged or unresolved entry, a broken baseline
-or an input that could not be read (or a baseline that could not be recorded),
-42 no baseline recorded, 2 a usage error.
-
-With --json every mode prints exactly one JSON object, errors included. It is
-{"schema": 1, "mode": "check"|"report"|"baseline", "baseline_recorded_at",
-"flagged": [{"entry", "file", "repository"}], "unresolved": [{"entry",
-"command", "word"}], "grandfathered": <count>, "error"}. "flagged" and
-"unresolved" hold the entries that are not in the baseline (every one, for
---report, where "grandfathered" is null); "grandfathered" counts both kinds. On
-an error "flagged", "unresolved" and "grandfathered" are null: "could not look"
-is never an empty list. Mode "baseline" (--baseline-entries) adds "action"
-("recorded", or null when nothing was written) and "baseline" (the baseline
-file's path); "flagged" and "unresolved" are everything recorded and
-"grandfathered" is null. A usage error prints mode null with the message in
-"error".
+With --json every mode prints exactly one JSON object, errors included:
+{"schema": 2, "mode": "check"|"report"|"baseline", "baseline_recorded_at",
+"new": [entry], "removed": [{"source", "entry", "sha256"}], "unchanged":
+<count>, "error"}, where an entry is {"source", "entry", "sha256", "command",
+"annotation": {"class", "files": [{"file", "repository"}], "reasons"}}.
+--report adds "entries" (every entry; "new", "removed", "unchanged" are null).
+Recording adds "action" ("recorded", or null when nothing was written) and
+"baseline" (the file's path); its "new" and "removed" are what it acknowledged.
+On an error "new", "removed" and "unchanged" are null. A usage error prints mode
+null.
 """
 import argparse
 import datetime
+import hashlib
 import json
 import os
 import plistlib
@@ -415,13 +428,29 @@ def read_entry(texts, home, cwd=None):
     return files, missed
 
 
+LAUNCHD_KEYS = ('ProgramArguments', 'Program', 'WorkingDirectory', 'EnvironmentVariables')
+
+
+def digest(text):
+    """SHA-256 of the exact text: whitespace is significant, nothing is normalised."""
+    return hashlib.sha256(text.encode('utf-8', 'surrogatepass')).hexdigest()
+
+
 def launchd_entries(folder, home):
+    """(entry, command, files, missed, sha256) for each com.broomva.*.plist in ``folder``.
+
+    The identity hashes the canonical JSON serialisation of the plist's
+    ProgramArguments, Program, WorkingDirectory and EnvironmentVariables (keys
+    sorted, values exactly as stored). Any change to any of them is a new identity.
+    """
     try:
         with os.scandir(folder) as listing:
             names = sorted(item.name for item in listing
                            if item.name.startswith('com.broomva.') and item.name.endswith('.plist'))
     except FileNotFoundError:
         return
+    except OSError as exc:
+        raise ValueError(f'cannot read {folder}: {exc}') from exc
     for plist in (folder / name for name in names):
         try:
             with plist.open('rb') as stream:
@@ -430,6 +459,8 @@ def launchd_entries(folder, home):
             raise ValueError(f'cannot read {plist}: {exc}') from exc
         if not isinstance(data, dict):
             raise ValueError(f'cannot read {plist}: not a dictionary')
+        canonical = json.dumps({key: data.get(key) for key in LAUNCHD_KEYS}, sort_keys=True,
+                               ensure_ascii=False, separators=(',', ':'), default=repr)
         cwd = data.get('WorkingDirectory')
         cwd = expand(cwd, home) if isinstance(cwd, str) and cwd else None
         cwd = cwd if cwd is not None and os.path.isabs(cwd) else None
@@ -438,35 +469,45 @@ def launchd_entries(folder, home):
         program = data.get('Program')
         strings = ([program] if isinstance(program, str) and program else []) + argv
         files, missed = read_entry(strings, home, cwd)
-        command = shlex.join(strings)
-        yield f'launchd:{plist.name[:-len(".plist")]}', command, files, missed
+        yield plist.name, shlex.join(strings), files, missed, digest(canonical)
 
 
 def hook_entries(settings, home):
+    """(entry, command, files, missed, sha256) for each hook command in a hooks file.
+
+    Claude Code's settings.json and Codex's hooks.json share the shape
+    {"hooks": {event: [{"matcher", "hooks": [{"type": "command", "command"}]}]}}.
+    The entry is the event and matcher; the identity hashes the exact command.
+    A file that exists but cannot be read or parsed is an error naming it.
+    """
     try:
         data = json.loads(settings.read_text(encoding='utf-8'))
     except FileNotFoundError:
-        # A dangling settings symlink is a file that could not be read, not an absent one.
+        # A dangling symlink is a file that could not be read, not an absent one.
         if os.path.lexists(settings):
-            raise
+            raise ValueError(f'cannot read {settings}: dangling symlink')
         return
-    except ValueError as exc:
+    except (OSError, ValueError) as exc:
         raise ValueError(f'cannot read {settings}: {exc}') from exc
-    hooks = data.get('hooks') if isinstance(data, dict) else None
-    if not isinstance(hooks, dict):
+    if not isinstance(data, dict):
+        raise ValueError(f'cannot read {settings}: not a JSON object')
+    hooks = data.get('hooks')
+    if hooks is None:
         return
+    if not isinstance(hooks, dict):
+        raise ValueError(f'cannot read {settings}: "hooks" is not an object')
     for event, groups in hooks.items():
         for group in groups if isinstance(groups, list) else []:
             if not isinstance(group, dict):
                 continue
             matcher = group.get('matcher')
-            label = f'claude-hook:{event}' + (f'[{matcher}]' if isinstance(matcher, str) and matcher else '')
+            label = f'{event}' + (f'[{matcher}]' if isinstance(matcher, str) and matcher else '')
             commands = group.get('hooks')
             for hook in commands if isinstance(commands, list) else []:
                 command = hook.get('command') if isinstance(hook, dict) else None
                 if isinstance(command, str):
                     named, missed = read_entry([command], home)
-                    yield label, command, named, missed
+                    yield label, command, named, missed, digest(command)
 
 
 TRACKED = {}  # work-tree top -> identities of the files `git ls-files` lists there, built once per process
@@ -526,12 +567,21 @@ def repository(path):
     return verdict[1] if verdict and verdict[0] == 'tracked' else None
 
 
-def scan(launch_agents, settings, home):
-    """(flagged, unresolved): every (entry, file, repository) where a scheduled or hooked
-    command names a tracked file, and every (entry, command, word) it cannot resolve."""
+NOT_FOUND = 'no working-tree file found'
+IDENTITY_FIELDS = ('source', 'entry', 'sha256')
+
+
+def collect(sources, home):
+    """Every entry of every source: {source, entry, sha256, command, annotation}.
+
+    ``sources`` is [(kind, path)] with kind 'launchd' or 'hooks'. The annotation
+    is the classifier's best-effort reading (flagged, unresolved, or no
+    working-tree file found); it never decides whether the ratchet passes.
+    """
     homes = sorted({str(home), os.path.realpath(home)}, key=len, reverse=True)
 
     def display(path):
+        path = str(path)
         for prefix in homes:
             if path == prefix or path.startswith(prefix + os.sep):
                 return '~' + path[len(prefix):]
@@ -542,46 +592,63 @@ def scan(launch_agents, settings, home):
             text = text.replace(prefix + os.sep, '~' + os.sep)
         return text
 
-    flagged, unresolved = set(), set()
-    entries = list(launchd_entries(launch_agents, home)) + list(hook_entries(settings, home))
-    for entry, command, files, missed in entries:
-        for path in files:
-            verdict = judge(path)
-            if verdict and verdict[0] == 'tracked':
-                flagged.add((entry, display(path), display(verdict[1])))
-            elif verdict:
-                unresolved.add((entry, display_text(command), f'hard link {display(path)} {HARD_LINK}'))
-        for word in missed:
-            unresolved.add((entry, display_text(command), word))
-    return flagged, unresolved
+    found = []
+    for kind, path in sources:
+        rows = launchd_entries(path, home) if kind == 'launchd' else hook_entries(path, home)
+        for entry, command, files, missed, sha in rows:
+            tracked, reasons = [], list(missed)
+            for file in files:
+                verdict = judge(file)
+                if verdict and verdict[0] == 'tracked':
+                    tracked.append({'file': display(file), 'repository': display(verdict[1])})
+                elif verdict:
+                    reasons.append(f'hard link {display(file)} {HARD_LINK}')
+            label = 'flagged' if tracked else 'unresolved' if reasons else NOT_FOUND
+            found.append({'source': display(path), 'entry': entry, 'sha256': sha,
+                          'command': display_text(command),
+                          'annotation': {'class': label, 'files': tracked, 'reasons': reasons}})
+    return found
 
 
-def line(item):
-    return f'{item[0]} names {item[1]} (repository {item[2]})'
+def key(item):
+    return tuple(item[field] for field in IDENTITY_FIELDS)
 
 
-def unresolved_line(item):
-    if item[2].startswith('hard link '):
-        return f'{item[0]} names a {item[2]}, in: {item[1]}'
-    if item[2].startswith('unreadable '):
-        return f'{item[0]} is not plain text ({item[2]}), in: {item[1]}'
-    return f'{item[0]} names `{item[2]}`, a path this check cannot resolve, in: {item[1]}'
+def describe(item):
+    note = item['annotation']
+    if note['class'] == 'flagged':
+        what = 'flagged: ' + ', '.join(f"{f['file']} (repository {f['repository']})" for f in note['files'])
+    elif note['class'] == 'unresolved':
+        what = 'unresolved: ' + '; '.join(note['reasons'])
+    else:
+        what = NOT_FOUND
+    return f"{item['source']} {item['entry']}: {item['command']} [annotation, best effort: {what}]"
 
 
-def report(mode, recorded_at, flagged, unresolved, grandfathered, error, **extra):
-    print(json.dumps({
-        'schema': 1, 'mode': mode, 'baseline_recorded_at': recorded_at,
-        'flagged': None if flagged is None else [dict(zip(FIELDS, item)) for item in sorted(flagged)],
-        'unresolved': None if unresolved is None else [dict(zip(UNRESOLVED_FIELDS, item))
-                                                       for item in sorted(unresolved)],
-        'grandfathered': grandfathered, 'error': error, **extra}))
+def compare(current, saved):
+    """(new or changed entries, removed identities, unchanged count)."""
+    saved_keys = {key(item) for item in saved}
+    current_keys = {key(item) for item in current}
+    new = [item for item in current if key(item) not in saved_keys]
+    removed = [dict(zip(IDENTITY_FIELDS, k)) for k in sorted(saved_keys - current_keys)]
+    return new, removed, len(current_keys & saved_keys)
+
+
+def change_kind(item, saved):
+    named = {(s['source'], s['entry']) for s in saved}
+    return 'changed' if (item['source'], item['entry']) in named else 'new'
+
+
+def report(mode, recorded_at, error, **fields):
+    print(json.dumps({'schema': 2, 'mode': mode, 'baseline_recorded_at': recorded_at,
+                      'new': None, 'removed': None, 'unchanged': None, 'error': error, **fields}))
 
 
 class JsonArgumentParser(argparse.ArgumentParser):
     """With --json, a usage error is one JSON object too (exit 2)."""
     def error(self, message):
         if '--json' in sys.argv[1:]:
-            report(None, None, None, None, None, f'usage: {message}')
+            report(None, None, f'usage: {message}')
             sys.exit(2)
         super().error(message)
 
@@ -590,6 +657,7 @@ def arguments(argv):
     parser = JsonArgumentParser(description=__doc__.split('\n\n')[0], allow_abbrev=False)
     parser.add_argument('--launch-agents', metavar='DIR', help='default: ~/Library/LaunchAgents')
     parser.add_argument('--settings', metavar='FILE', help='default: ~/.claude/settings.json')
+    parser.add_argument('--codex-hooks', metavar='FILE', help='default: ~/.codex/hooks.json')
     parser.add_argument('--json', action='store_true')
     parser.add_argument('--report', action='store_true')
     parser.add_argument('--baseline-entries', action='store_true')
@@ -600,104 +668,99 @@ def arguments(argv):
     return args
 
 
-FLAGGED_NOTE = ('an edit there reaches the entry without review, whether the entry runs the file or only '
-                'reads it. Use a released copy outside any working tree, or `git show origin/main:<path>` into a temp '
-                'file (that form is not plain text, so it is acknowledged once in the baseline)')
-UNRESOLVED_NOTE = ('this check certifies only entries it can read completely; write plain absolute paths, '
-                   'or acknowledge the entry with bstack doctor --baseline-entries --force after reviewing it')
-
-
+ACKNOWLEDGE = ('review it, then acknowledge it with bstack doctor --baseline-entries --force. '
+               'The annotation is best effort and never decides: it can miss a file reached through a '
+               'symlinked directory and `..`, an unlistable directory, a file system mounted twice, or '
+               'content fetched at run time')
 BASELINE_PATH = None  # set by main(); named in a --baseline-entries --json error
 
 
+def load_baseline(baseline):
+    with baseline.open(encoding='utf-8') as stream:
+        data = json.load(stream)
+    rows = data.get('entries') if isinstance(data, dict) else None
+    if (not isinstance(data, dict) or data.get('schema') != 2 or not isinstance(data.get('recorded_at'), str)
+            or not isinstance(rows, list)
+            or not all(isinstance(r, dict) and all(isinstance(r.get(f), str) for f in IDENTITY_FIELDS)
+                       for r in rows)):
+        raise ValueError(f'invalid baseline format in {baseline} (re-record with bstack doctor '
+                         '--baseline-entries --force)')
+    return data['recorded_at'], [{f: r[f] for f in IDENTITY_FIELDS} for r in rows]
+
+
 def main(args):
+    global BASELINE_PATH
     home = Path(os.environ.get('BSTACK_DOCTOR_HOME', str(Path.home()))).absolute()
     if 'BSTACK_DOCTOR_HOME' in os.environ:
         os.environ['HOME'] = str(home)
         os.environ['BROOMVA_HOME'] = str(home / '.broomva')
-    launch_agents = Path(args.launch_agents).absolute() if args.launch_agents else home / 'Library/LaunchAgents'
-    settings = Path(args.settings).absolute() if args.settings else home / '.claude/settings.json'
-    if args.report:
-        flagged, unresolved = scan(launch_agents, settings, home)
-        if args.json:
-            report('report', None, flagged, unresolved, None, None)
-            return 0
-        for item in sorted(flagged):
-            print(f'[info] {line(item)}')
-        for item in sorted(unresolved):
-            print(f'[info] unresolved: {unresolved_line(item)}')
-        print(f'[info] {len(flagged)} entr{"y names" if len(flagged) == 1 else "ies name"} a file in a git '
-              'working tree, run or read (report only: no baseline read or written)')
-        print(f'[info] {len(unresolved)} path word{"" if len(unresolved) == 1 else "s"} could not be resolved')
-        return 0
-    global BASELINE_PATH
+    sources = [
+        ('launchd', Path(args.launch_agents).absolute() if args.launch_agents else home / 'Library/LaunchAgents'),
+        ('hooks', Path(args.settings).absolute() if args.settings else home / '.claude/settings.json'),
+        ('hooks', Path(args.codex_hooks).absolute() if args.codex_hooks else home / '.codex/hooks.json'),
+    ]
     baseline = paths.machine_path('state') / BASELINE_NAME
     BASELINE_PATH = str(baseline)
+    if args.report:
+        current = collect(sources, home)
+        if args.json:
+            report('report', None, None, entries=current)
+            return 0
+        for item in current:
+            print(f'[info] {describe(item)}')
+        counts = {}
+        for item in current:
+            counts[item['annotation']['class']] = counts.get(item['annotation']['class'], 0) + 1
+        print(f'[info] {len(current)} entries (report only: no baseline read or written); annotation, best effort: '
+              + ', '.join(f'{n} {label}' for label, n in sorted(counts.items())))
+        return 0
     if args.baseline_entries:
-        flagged, unresolved = scan(launch_agents, settings, home)
+        current = collect(sources, home)
+        previous = []
+        if baseline.exists() and args.force:
+            try:
+                previous = load_baseline(baseline)[1]
+            except (OSError, ValueError):
+                previous = []  # a broken baseline is replaced; everything is acknowledged anew
+        new, removed, unchanged = compare(current, previous)
         os.umask(0o077)
         baseline.parent.mkdir(parents=True, exist_ok=True)
         recorded_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
         with baseline.open('w' if args.force else 'x', encoding='utf-8') as stream:
-            json.dump({'recorded_at': recorded_at,
-                       'entries': [dict(zip(FIELDS, item)) for item in sorted(flagged)],
-                       'unresolved': [dict(zip(UNRESOLVED_FIELDS, item)) for item in sorted(unresolved)]},
-                      stream, indent=2)
+            json.dump({'schema': 2, 'recorded_at': recorded_at,
+                       'entries': [{f: item[f] for f in IDENTITY_FIELDS} for item in current]}, stream, indent=2)
             stream.write('\n')
         if args.json:
-            report('baseline', recorded_at, flagged, unresolved, None, None,
+            report('baseline', recorded_at, None, new=new, removed=removed, unchanged=unchanged,
                    action='recorded', baseline=str(baseline))
             return 0
-        print(f'[info] baseline recorded at {baseline}:')
-        for item in sorted(flagged):
-            print(f'  {line(item)}')
-        for item in sorted(unresolved):
-            print(f'  unresolved: {unresolved_line(item)}')
+        print(f'[info] baseline recorded at {baseline}; acknowledged {len(new)} new or changed, '
+              f'{len(removed)} removed, {unchanged} unchanged:')
+        for item in new:
+            print(f'  {change_kind(item, previous)}: {describe(item)}')
+        for item in removed:
+            print(f"  removed: {item['source']} {item['entry']} ({item['sha256'][:12]})")
         return 0
     try:
-        with baseline.open(encoding='utf-8') as stream:
-            data = json.load(stream)
-
-        def rows(items, fields):
-            return isinstance(items, list) and all(
-                isinstance(item, dict) and all(isinstance(item.get(field), str) for field in fields)
-                for item in items)
-        if (not isinstance(data, dict) or not isinstance(data.get('recorded_at'), str)
-                or not rows(data.get('entries'), FIELDS)
-                or not rows(data.get('unresolved'), UNRESOLVED_FIELDS)):
-            raise ValueError('invalid baseline format')
-        saved = {tuple(item[field] for field in FIELDS) for item in data['entries']}
-        saved_unresolved = {tuple(item[field] for field in UNRESOLVED_FIELDS) for item in data['unresolved']}
+        recorded_at, saved = load_baseline(baseline)
     except FileNotFoundError:
         # A dangling baseline symlink is a broken opt-in, not an absent one.
         if os.path.lexists(baseline):
             raise
         if args.json:
-            report('check', None, None, None, None,
-                   f'no baseline recorded at {baseline}: run bstack doctor --baseline-entries')
+            report('check', None, f'no baseline recorded at {baseline}: run bstack doctor --baseline-entries')
         return 42  # No baseline: the ratchet is off on this machine.
-    flagged, unresolved = scan(launch_agents, settings, home)
-    new = flagged - saved
-    new_unresolved = unresolved - saved_unresolved
-    failed = int(bool(new or new_unresolved))
+    current = collect(sources, home)
+    new, removed, unchanged = compare(current, saved)
+    failed = int(bool(new))
     if args.json:
-        report('check', data['recorded_at'], new, new_unresolved,
-               len(flagged & saved) + len(unresolved & saved_unresolved), None)
+        report('check', recorded_at, None, new=new, removed=removed, unchanged=unchanged)
         return failed
-    for item in sorted(saved - flagged):
-        print(f'[info] baselined entry no longer names a file in a working tree: {line(item)} '
-              '(baseline can be tightened)')
-    for item in sorted(saved_unresolved - unresolved):
-        print(f'[info] baselined unresolved entry is gone: {unresolved_line(item)} (baseline can be tightened)')
-    for item in sorted(flagged & saved):
-        print(f'[info] grandfathered entry: {line(item)}')
-    for item in sorted(unresolved & saved_unresolved):
-        print(f'[info] grandfathered unresolved entry: {unresolved_line(item)}')
-    for item in sorted(new):
-        print(f'[failure] new entry names a file in a git working tree: {line(item)}; {FLAGGED_NOTE}')
-    for item in sorted(new_unresolved):
-        print(f'[failure] new entry names a path this check cannot resolve: {unresolved_line(item)}; '
-              f'{UNRESOLVED_NOTE}')
+    for item in removed:
+        print(f"[info] acknowledged entry is gone: {item['source']} {item['entry']} (baseline can be re-recorded)")
+    print(f'[info] {unchanged} acknowledged entr{"y" if unchanged == 1 else "ies"} unchanged')
+    for item in new:
+        print(f'[failure] {change_kind(item, saved)} entry since the baseline: {describe(item)}; {ACKNOWLEDGE}')
     return failed
 
 
@@ -707,12 +770,9 @@ if __name__ == '__main__':
         sys.exit(main(ARGS))
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         if ARGS.json:
-            if ARGS.baseline_entries:
-                report('baseline', None, None, None, None, f'working-tree entry check: {exc}',
-                       action=None, baseline=BASELINE_PATH)
-            else:
-                report('report' if ARGS.report else 'check', None, None, None, None,
-                       f'working-tree entry check: {exc}')
+            mode = 'report' if ARGS.report else 'baseline' if ARGS.baseline_entries else 'check'
+            extra = {'action': None, 'baseline': BASELINE_PATH} if ARGS.baseline_entries else {}
+            report(mode, None, f'working-tree entry check: {exc}', **extra)
             sys.exit(1)
         print(f'[failure] working-tree entry check: {exc}', file=sys.stderr)
         sys.exit(1)
