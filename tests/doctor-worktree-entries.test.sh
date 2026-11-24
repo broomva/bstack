@@ -500,10 +500,30 @@ PY_CODEX
 mkdir -p "$TREE/.claude"
 printf '{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "%s/tracked.sh"}]}]}}' "$TREE" > "$TREE/.claude/settings.json"
 python3 -I "$ENTRIES" --report --json --launch-agents "$OPT_AGENTS" --settings "$OPT_SETTINGS" --codex-hooks "$OPT_CODEX" >"$TMP/json"
-python3 - "$TMP/json" "$TREE" "$TMP/linked" "$OPT_AGENTS" "$OPT_SETTINGS" "$OPT_CODEX" <<'PY_EXPECT'
+python3 - "$TMP/json" "$TREE" "$TMP/linked" "$OPT_AGENTS" "$OPT_SETTINGS" "$OPT_CODEX" "$TMP" <<'PY_EXPECT'
 import json, sys
 d = json.load(open(sys.argv[1]))
-tree, linked, agents, settings, codex = sys.argv[2:]
+tree, linked, agents, settings, codex, fixtures = sys.argv[2:]
+
+
+def host_reason(reason):
+    """A hard-link note about a file outside the fixtures (a system binary such as
+    /usr/bin/env): whether it has several names depends on the host, so it is
+    reported here, not asserted."""
+    return reason.startswith('hard link ') and not reason.startswith(f'hard link {fixtures}/')
+
+
+for item in d['entries']:
+    host = [r for r in item['annotation']['reasons'] if host_reason(r)]
+    if host:
+        print(f"  host-dependent annotation (not asserted): {item['entry']}: {'; '.join(host)}")
+        item['annotation']['reasons'] = [r for r in item['annotation']['reasons'] if not host_reason(r)]
+        if item['annotation']['class'] == 'unresolved' and not item['annotation']['reasons']:
+            item['annotation']['class'] = 'no working-tree file found'
+counts = {}
+for item in d['entries']:
+    counts[item['annotation']['class']] = counts.get(item['annotation']['class'], 0) + 1
+open(sys.argv[1] + '.counts', 'w').write(json.dumps(counts))
 assert sorted(d) == ['baseline_recorded_at', 'entries', 'error', 'mode', 'new', 'removed', 'schema', 'unchanged'], sorted(d)
 assert (d['schema'], d['mode'], d['error'], d['new'], d['removed'], d['unchanged']) == (3, 'report', None, None, None, None), d
 
@@ -560,7 +580,17 @@ assert counts == {'flagged': 14, 'unresolved': 5, 'no working-tree file found': 
 PY_EXPECT
 python3 -I "$ENTRIES" --report --launch-agents "$OPT_AGENTS" --settings "$OPT_SETTINGS" --codex-hooks "$OPT_CODEX" >"$TMP/out"
 grep -Fq "[info] $OPT_AGENTS com.broomva.direct.plist: /bin/bash $TREE/tracked.sh compile [annotation, best effort: flagged: $TREE/tracked.sh (repository $TREE)]" "$TMP/out"
-grep -Fxq '[info] 30 entries (report only: no baseline read or written); annotation, best effort: 14 flagged, 11 no working-tree file found, 5 unresolved' "$TMP/out"
+# The text report's summary agrees with the JSON report of the same inputs (host notes included).
+python3 - "$TMP/out" "$TMP/json" <<'PY_SUMMARY'
+import json, re, sys
+raw = json.load(open(sys.argv[2]))
+counts = {}
+for item in raw['entries']:
+    counts[item['annotation']['class']] = counts.get(item['annotation']['class'], 0) + 1
+want = '[info] 30 entries (report only: no baseline read or written); annotation, best effort: ' + \
+    ', '.join(f'{n} {label}' for label, n in sorted(counts.items()))
+assert want in open(sys.argv[1]).read().splitlines(), want
+PY_SUMMARY
 if grep -q 'clean' "$TMP/out"; then echo 'the report calls an entry clean' >&2; exit 1; fi
 # Without the options the fixture home is read (empty so far), never HOME's decoy.
 python3 -I "$ENTRIES" --report >"$TMP/out"
@@ -617,7 +647,7 @@ if bash "$DOCTOR" --baseline-entries >"$TMP/out" 2>&1; then echo 'baseline overw
 # A NEW entry fails whatever its annotation; this one names no working-tree file at all.
 plist "$AGENTS" com.broomva.new /bin/echo hello
 if run_doctor; then echo 'a new entry passed' >&2; exit 1; fi
-grep -Fq '[failure] new entry since the baseline (0 -> 1): ~/Library/LaunchAgents com.broomva.new.plist: /bin/echo hello [annotation, best effort: no working-tree file found]' "$TMP/out"
+grep -Fq '[failure] new entry since the baseline (0 -> 1): ~/Library/LaunchAgents com.broomva.new.plist: /bin/echo hello [annotation, best effort: ' "$TMP/out"
 grep -Fq 'review it, then acknowledge it with bstack doctor --baseline-entries --force' "$TMP/out"
 grep -Fq 'it never decides' "$TMP/out" || grep -Fq 'never decides' "$TMP/out"
 grep -Fq '[gap] working-tree entry ratchet failed' "$TMP/out"
