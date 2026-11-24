@@ -15,6 +15,59 @@ SOURCE = Path(__file__).resolve().parent.parent / "scripts"
 CHECKER = "scripts/check_control_readers.py"
 LEGACY = '".' + 'control/'
 RENAMED = '".' + 'broomva/'
+NAME = "." + "control"  # the folder name, assembled so this file never spells it
+
+
+def load_checker():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("checker", SOURCE / "check_control_readers.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class MentionPatternTest(unittest.TestCase):
+    """Round 5: one pattern decides a mention. Every left context x right context, generated."""
+
+    LEFT_COUNTS = ["", "/", "'", '"', " ", "\t", "=", "(", ",", "."]   # "" is the start of the text
+    LEFT_NOT = ["a", "Z", "\u00e9", "7", "_", ")", "]"]
+    RIGHT_COUNTS = ["/", "'", '"', "`", "", "\n"]                     # "" is the end of the text
+    RIGHT_NOT = ["a", "7", "_", "(", "."]
+
+    def test_every_left_and_right_context(self):
+        mentions = load_checker().mentions
+        checked = 0
+        for left in self.LEFT_COUNTS + self.LEFT_NOT:
+            for right in self.RIGHT_COUNTS + self.RIGHT_NOT:
+                text = left + NAME + right
+                want = left in self.LEFT_COUNTS and right in self.RIGHT_COUNTS
+                with self.subTest(text=text):
+                    self.assertEqual(mentions(text), want)
+                # The same text inside a longer line: the left rule must also hold mid-text.
+                if left:
+                    self.assertEqual(mentions("x = 1; " + text), want, repr(text))
+                checked += 1
+        self.assertEqual(checked, 17 * 11)
+
+    def test_reviewers_strings(self):
+        # Round 5 of this PR and the same hour's Maestro review: each is a mention now,
+        # whatever else the line says, because nothing pairs any more.
+        mentions = load_checker().mentions
+        cases = {
+            "bstack r5 major, components differ after +": f'p = "{NAME}/asks+old"; q = ".broomva/asks+new"',
+            "bstack r5 minor, + before the dot": f'p = "my+{NAME}/asks"',
+            "bstack r5 minor, HOME inside a name": f'p = "{NAME}/asks"; q = "SOMEHOME/.broomva/asks"',
+            "maestro major, ..broomva pairs falsely": f'a = "{NAME}/asks"; b = "my..broomva/asks"',
+            "maestro major, a dot before the folder name": f'a = "my.{NAME}/asks"',
+            "maestro minor, REPO-HOME": f'a = "{NAME}/asks"; b = "REPO-HOME/.broomva/asks"',
+            "maestro minor, a literal ~ component": f'a = "{NAME}/asks"; b = "/tmp/~/.broomva/asks"',
+        }
+        for label, text in cases.items():
+            with self.subTest(label):
+                self.assertTrue(mentions(text), text)
+        self.assertFalse(mentions('a = "my' + NAME + '/asks"'))  # a letter before the dot
+
+
 
 
 class RatchetTest(unittest.TestCase):
@@ -59,7 +112,7 @@ class RatchetTest(unittest.TestCase):
     def test_baseline_fixture_passes(self):
         result = self.check()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("Unpaired readers: 2; baseline: 2", result.stdout)
+        self.assertIn("Files mentioning .control: 2; baseline: 2", result.stdout)
 
     def test_added_reader_fails_and_names_file(self):
         (self.root / "new.py").write_text(f'read({LEGACY}policy.yaml")\n')
@@ -67,22 +120,6 @@ class RatchetTest(unittest.TestCase):
         result = self.check()
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("new.py", result.stdout)
-
-    def test_added_paired_reader_passes(self):
-        (self.root / "dual.py").write_text(f'read({LEGACY}asks") or read({RENAMED}asks")\n')
-        self.stage()
-        result = self.check()
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertNotIn("dual.py", result.stdout)
-        self.assertIn("Unpaired readers: 2; baseline: 2", result.stdout)
-
-    def test_pairing_is_by_suffix(self):
-        # The renamed root with another suffix does not pair the legacy reference.
-        (self.root / "half.py").write_text(f'read({LEGACY}asks") or read({RENAMED}audit")\n')
-        self.stage()
-        result = self.check()
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("half.py", result.stdout)
 
     def test_removed_reader_passes_and_reports_lower_count(self):
         (self.root / "old.py").write_text("pass\n")
@@ -98,7 +135,7 @@ class RatchetTest(unittest.TestCase):
         result = self.check()
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("new.py", result.stdout)
-        self.assertIn("Unpaired readers: 2; baseline: 2", result.stdout)
+        self.assertIn("Files mentioning .control: 2; baseline: 2", result.stdout)
 
     def test_comparison_is_live(self):
         (self.root / "new.py").write_text(f'read({LEGACY}policy.yaml")\n')
@@ -142,7 +179,7 @@ class RatchetTest(unittest.TestCase):
         self.assertEqual(alone.returncode, 0, alone.stdout + alone.stderr)  # the hole without a base
         result = self.check("--base-ref", ref)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("Baseline gained readers", result.stdout)
+        self.assertIn("Baseline gained files", result.stdout)
         self.assertIn("  actual.py", result.stdout)
 
     def test_baseline_removal_passes_against_base(self):
@@ -153,7 +190,7 @@ class RatchetTest(unittest.TestCase):
         self.commit("shrink")
         result = self.check("--base-ref", ref)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("Unpaired readers: 1; baseline: 1", result.stdout)
+        self.assertIn("Files mentioning .control: 1; baseline: 1", result.stdout)
 
     def test_renamed_reader_passes_against_base(self):
         ref = self.base()
@@ -193,7 +230,7 @@ class RatchetTest(unittest.TestCase):
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("not a commit", result.stderr)
 
-    # ── documented limits (round 1, findings 2 and 4; round 3, the pairing unit): pinned so a change is deliberate ──
+    # ── documented limits (round 1, findings 2 and 4): pinned so a change is deliberate ──
 
     def test_constructed_path_is_not_counted(self):
         (self.root / "built.py").write_text('p = "." + "' + 'control/asks"\n')
@@ -201,7 +238,7 @@ class RatchetTest(unittest.TestCase):
         result = self.check()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertNotIn("built.py", result.stdout)
-        self.assertIn("Unpaired readers: 2; baseline: 2", result.stdout)
+        self.assertIn("Files mentioning .control: 2; baseline: 2", result.stdout)
 
     def test_comment_mention_is_counted(self):
         (self.root / "noted.py").write_text(f'# migration note: {LEGACY[1:]}asks\n')
@@ -209,27 +246,16 @@ class RatchetTest(unittest.TestCase):
         result = self.check()
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("noted.py", result.stdout)
-        self.assertIn("Comments count too", result.stdout)
+        self.assertIn("comments included", result.stdout)
 
-    def test_pairing_unit_is_file_and_first_component(self):
-        # Round 3 (maestro review of the same checker): two different paths under one
-        # first component pair each other in the same file. Kept as the contract, to
-        # match the workspace's sensor; this pins it so a change is deliberate.
-        (self.root / "same_component.py").write_text(
-            f'legacy = {LEGACY}asks/private"\ncurrent = {RENAMED}asks/unrelated"\n')
-        self.stage()
-        result = self.check()
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertNotIn("same_component.py", result.stdout)
-        self.assertIn("Unpaired readers: 2; baseline: 2", result.stdout)
-        # The same two paths in two different files: each file is judged alone.
-        (self.root / "same_component.py").write_text(f'legacy = {LEGACY}asks/private"\n')
-        (self.root / "other_file.py").write_text(f'current = {RENAMED}asks/unrelated"\n')
+    def test_file_naming_both_folders_is_listed(self):
+        # There is no pairing: naming the new folder as well does not take a file off the list.
+        (self.root / "both.py").write_text(f'read({LEGACY}asks") or read({RENAMED}asks")\n')
         self.stage()
         result = self.check()
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("same_component.py", result.stdout)
-        self.assertIn("first path component", result.stdout)
+        self.assertIn("both.py", result.stdout)
+        self.assertIn("Naming `.broomva` as well does not help", result.stdout)
 
     # ── round 4: names are whole path components, never substrings ──
 
@@ -245,7 +271,7 @@ class RatchetTest(unittest.TestCase):
         result = self.check()
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("scripts/mydocs/probe.py", result.stdout)
-        self.assertIn("Unpaired readers: 3; baseline: 2", result.stdout)
+        self.assertIn("Files mentioning .control: 3; baseline: 2", result.stdout)
 
     def test_skipped_directories_match_whole_components_at_any_depth(self):
         for rel in ("docs/x.py", "a/docs/x.py", "a/research/x.py", "node_modules/x.js"):
@@ -253,7 +279,7 @@ class RatchetTest(unittest.TestCase):
         self.stage()
         result = self.check()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("Unpaired readers: 2; baseline: 2", result.stdout)
+        self.assertIn("Files mentioning .control: 2; baseline: 2", result.stdout)
 
     def test_names_containing_a_skipped_name_are_counted(self):
         counted = ("scripts/research_notes/x.py", "archived/x.py", "my." + "control/x.py")
@@ -264,10 +290,10 @@ class RatchetTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         for rel in counted:
             self.assertIn(rel, result.stdout)
-        self.assertIn("Unpaired readers: 5; baseline: 2", result.stdout)
+        self.assertIn("Files mentioning .control: 5; baseline: 2", result.stdout)
 
-    def test_root_must_start_a_path_component(self):
-        # `my.control/asks` names another folder, not the legacy one.
+    def test_attribute_style_left_neighbour_is_not_a_mention(self):
+        # A letter before the dot (`my.control/asks`) is not a mention under the one pattern.
         (self.root / "other.py").write_text('p = "my.' + 'control/asks"\n')
         self.stage()
         result = self.check()

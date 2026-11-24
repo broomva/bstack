@@ -32,41 +32,40 @@ CI runs the same checks via `.github/workflows/ci.yml`.
 
 ## The `.control` reader ratchet
 
-`scripts/check_control_readers.py` (CI job `control reader ratchet`) lists tracked
-code files that reference `.control/<X>` without `.broomva/<X>` and fails when one is
-not in `scripts/control_readers_baseline.json`. On a pull request it also compares
-your baseline with the base branch's: the baseline may only shrink. Adding a path to
-it fails, unless the same change renames a listed file (`git mv`, which
-`git diff -M` reports as a rename). Do not widen the baseline; name both roots or
-read the path through the path registry. The base comparison is skipped, with a
-note, only when the base branch has no baseline file yet: the change that first
-introduces the baseline is checked against its own set only.
+The contract: the ratchet lists every code file that mentions the legacy folder
+name `.control` at all; a pull request may not add a file to that list.
 
-Which files count: tracked code files (by extension), except those under a
-directory named exactly `docs`, `research`, `archive`, `.control`, `.broomva` or
-`node_modules` at any depth. Names are matched as whole path components:
-`scripts/mydocs/x.py` is counted, and `my.control/asks` is not a reference to the
-folder. The reference sensor in `broomva/workspace` tests those names as
-substrings, which hides any directory whose name merely ends with one. This
-filter is deliberately stricter, so for the same tree this repo's count can be
-higher than that sensor's; a gap between the two is not a new reader.
+`scripts/check_control_readers.py` (CI job `control reader ratchet`) runs it. Files
+already listed are grandfathered in `scripts/control_readers_baseline.json`, and the
+list only shrinks. On a pull request your baseline is also compared with the base
+branch's: adding a path fails, unless the same change renames a listed file
+(`git mv`, which `git diff -M` reports as a rename). The base comparison is skipped,
+with a note, only when the base branch has no baseline file yet: the change that
+first introduces the baseline is checked against its own set only.
 
-What it catches and what it does not. It is a ratchet against drift, not a defence
-against someone evading it:
+If the check fails on your file: do not spell the folder name. Resolve the path
+through the generated path reader (`scripts/broomva_paths.py`,
+`scripts/lib/broomva-paths.sh`, `scripts/lib/broomva_paths.rs`). Writing `.broomva`
+next to it does not help; a file that names both folders is still listed. Do not
+widen the baseline.
 
-- caught: a literal `.control` reference in a code file (`".control/asks"`,
-  `join(r, ".control", "asks")`, a bare `".control"`);
-- not caught: a path assembled from pieces (`"." + "control/asks"`, an f-string, a
-  variable holding the root). A textual scan cannot be made complete, so review
-  covers these;
-- counted although it reads nothing: a comment in a code file that mentions
-  `.control/<X>`. The checker in `broomva/workspace` behaves the same way. Mention
-  both names in the comment, or reword it;
-- paired although the paths differ: the unit is a file and a first path component;
-  the check does not pair individual references. A file that names
-  `.control/asks/a` and `.broomva/asks/b` counts as paired, because both are `asks`
-  under their folder. This is the unit of the reference sensor in
-  `broomva/workspace`, kept so the counts of the two repos stay comparable.
+What counts as a mention: the text `.control` where the character before the dot is
+the start of the text or anything other than a letter, digit, `_`, `)` or `]` (so
+`self.control` is not one), and the character after it is `/`, a quote, a backtick
+or the end of the line. Which files count: tracked code files (by extension or
+name), except those under a directory named exactly `docs`, `research`, `archive`,
+`.control`, `.broomva` or `node_modules` at any depth (`scripts/mydocs/x.py`
+counts).
+
+The limits that remain:
+
+- a mention assembled from pieces (`"." + "control"`, an f-string, a variable
+  holding the name) is not found; review covers it;
+- a comment counts: reword the comment rather than baselining it.
+
+This checker counts files that mention `.control`. That is not the "unpaired
+readers" count of the sensor in `broomva/workspace`, and the two numbers do not
+compare.
 
 ## Adding a new primitive (P21+)
 

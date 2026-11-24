@@ -79,15 +79,16 @@ jobs:
           # The base commit and the merge base must exist for --base-ref.
           fetch-depth: 0
 
-      - name: Ratchet unpaired .control readers against the baseline
-        # BRO-4083. A code file that reads `.control/<X>` without `.broomva/<X>`
-        # must already be in scripts/control_readers_baseline.json: a reader may
-        # leave the list, none may join it. On a pull request the PR's baseline
-        # is also compared with the base commit's, so a PR cannot add a reader
-        # and widen the baseline together; a push to main has no base and runs
-        # the plain check. Literal references only: a path built from pieces is
-        # not seen (see the script's docstring). The fixture suite that proves
-        # the check bites runs in the tests job (tests/control-readers.test.sh).
+      - name: Ratchet code files that mention the legacy .control folder
+        # BRO-4083. A code file that mentions `.control` must already be in
+        # scripts/control_readers_baseline.json: a file may leave the list, none
+        # may join it. New code spells neither folder name and uses the generated
+        # path reader. On a pull request the PR's baseline is also compared with
+        # the base commit's, so a PR cannot add a file and widen the baseline
+        # together; a push to main has no base and runs the plain check. A
+        # mention assembled from pieces is not found (see the script's
+        # docstring). The fixture suite runs in the tests job
+        # (tests/control-readers.test.sh).
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
