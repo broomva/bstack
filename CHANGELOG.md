@@ -20,8 +20,8 @@
   argument that is only read. A hook that reads a file from a working tree feeds
   it unreviewed content just as one that executes it does. A missing file, a
   directory, an untracked file or a released copy outside any working tree is
-  ignored. A path with a space is found whether quoted, escaped or bare.
-- A relative word, or one starting with a variable other than HOME, is
+  ignored. A path with a space is found quoted or bare.
+- In a readable entry, a relative word is
   **unresolved**: the check cannot tell what it names, and the remedy is an
   absolute path. In a LaunchAgent with a `WorkingDirectory`, relative words
   resolve against it. A `cd` in the text is not followed.
@@ -30,7 +30,7 @@
   word of the same text, in any order; when the pair names a tracked file the
   entry is flagged with it. So `cd /t && python3 x.py` is flagged without
   following the `cd`. A directory word alone is never reported, so
-  `git -C /t show origin/main:<path>` stays clean. This errs on the conservative
+  `git -C /t log` alone is not reported. This errs on the conservative
   side: `git -C /t log README.md` is flagged although nothing runs or reads
   `README.md`, because a false flag costs a baseline line and a miss runs
   unreviewed code.
@@ -47,20 +47,28 @@
   --json` prints mode `"baseline"` with `"action": "recorded"` (null when nothing
   was written) and `"baseline"` (the file's path), and a usage error prints mode
   null and exits 2.
-- Raw text a shell reads differently is normalised at the one place it enters the
-  scan, before any word is formed: a backslash-newline (or backslash-CRLF) line
-  continuation is deleted, so `/t/x.\<newline>sh` is `/t/x.sh`; an ANSI-C `$'...'`
-  string is decoded, so `\x2f` and `\057` read as `/`; a NUL ends a word. A
-  backslash before any other character is dropped (`x\.sh`, `with\ space.sh`), and
-  tabs and newlines separate words like spaces. An absolute word that names
-  nothing and holds a control character or a glob or brace pattern (`/t/*.sh`,
-  `/t/{a,b}.sh`) is unresolved, never ignored, and so is a `$"..."` word. The word
-  table pins each shape, and two generated properties cover the class: every
-  continuation, CRLF, escape, ANSI-C and NUL spelling of every tracked file under
-  every wrapper is flagged, and every unreadable spelling is unresolved.
-- Not seen: a path built at run time with no `/` in the text (`bash "$SCRIPT"`, a
-  name read from a file), the file behind a relative path (reported as
-  unresolved), and content fetched by a program the entry names.
+- **The contract: this check certifies only entries it can read completely; an
+  entry containing any shell construct outside a small plain grammar is reported
+  as unresolved and must be acknowledged in the baseline.** The grammar is
+  written down once (`READABLE_CHARS`): ASCII letters and digits;
+  `_ - . / : = , + @ %`; space and tab; single and double quotes; the operator
+  characters `& | ; < >`; `~` at the start of a word; and exactly `$HOME` and
+  `${HOME}`. Anything else (any other `$`, a backquote, `( ) { } * ? [ ] ! #`, a
+  backslash, a newline, a control character, any non-ASCII character including
+  non-breaking and zero-width spaces) makes the whole entry unresolved, with a
+  reason naming the first such construct and its column. For a LaunchAgent the
+  entry is the Program and all ProgramArguments together. Nothing is decoded:
+  the line-continuation, ANSI-C and NUL handling of an earlier draft, and its
+  glob, brace and variable special cases, collapse into this one rule. What it
+  costs: an entry that uses `$(mktemp)` and `"$T"`, including the recommended
+  `git show origin/main:<path> > "$T"` form, is unresolved and needs a baseline
+  line. That is accepted because scheduled jobs and hooks are added rarely, and a
+  new one should be looked at once. A generated test inserts every ASCII
+  character outside the grammar and six non-ASCII ones at the start, inside the
+  path and at the end of three flagged commands (954 variants); none comes out
+  clean.
+- Not seen: content fetched at run time by a program the entry names (a script
+  that reads another file, a URL it downloads).
 
 ### Migration
 

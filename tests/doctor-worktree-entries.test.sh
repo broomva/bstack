@@ -65,8 +65,27 @@ L = f'{home}/bin/linked.sh'
 
 
 def classify(command):
-    found, missed = d.named_paths(command, HOME)
+    found, missed = d.read_entry([command], HOME)
     return [p for p in found if d.repository(p) is not None], missed  # as scan() keeps them
+
+
+class U(list):
+    """Expected: the whole entry is unresolved, the reason naming this construct."""
+    def __init__(self, construct):
+        super().__init__()
+        self.construct = construct
+
+    def matches(self, missed):
+        return len(missed) == 1 and missed[0].startswith(f'unreadable {self.construct} at column ')
+
+    def __repr__(self):
+        return f'U({self.construct})'
+
+
+def agrees(got, want_files, want_missed):
+    if isinstance(want_missed, U):
+        return got[0] == want_files and want_missed.matches(got[1])
+    return got == (want_files, want_missed)
 
 
 # (command, flagged files, unresolved words). Neither: the command is ignored.
@@ -74,20 +93,20 @@ rows = [
     # the three review rounds' shapes
     ("bash -c 'cd scripts && ./doctor.sh'", [], ['./doctor.sh']),
     ('echo report.sh', [], []),
-    ('(cd /tmp); ./scripts/x.py', [], ['./scripts/x.py']),
+    ('(cd /tmp); ./scripts/x.py', [], U('`(`')),            # round 2: `(` is outside the plain grammar
     (f'cat {tree}/notes.md', [f'{tree}/notes.md'], []),
     (f'/bin/bash {T}', [T], []),
     (f'python3 -I {tree}/x.py arg', [f'{tree}/x.py'], []),
     (f'exec {T}', [T], []),
     (f'timeout 5 {T}', [T], []),
     (f'xargs {T}', [T], []),
-    ('git show origin/main:scripts/x.sh > "$T"', [], []),
+    ('git show origin/main:scripts/x.sh > "$T"', [], U('`$T`')),  # round 2: the recommended form costs a baseline line
     ('curl https://example.com/x.sh', [], []),
     # a path with a space: handled, quoted or not
     (f'"{S}" --flag', [S], []),
     (f"bash '{S}'", [S], []),
     (f'cat {S}', [S], []),
-    (f'cat {tree}/with\\ space.sh', [S], []),
+    (f'cat {tree}/with\\ space.sh', [], U('`\\`')),        # round 2: a backslash is not plain text
     (f'"{D}"', [D], []),              # `dir/x.sh` is used up by the join, not reported
     ('"./with space.sh" --flag', [], ['./with']),
     # not a working tree, not a file, not tracked
@@ -104,56 +123,68 @@ rows = [
     # never considered: no `/`, an option, a URL, a git object, a standard stream
     ('git status', [], []),
     ('bun run x', [], []),
-    ('bash "$T"', [], []),
+    ('bash "$T"', [], U('`$T`')),                           # round 2: a variable other than HOME
     (f'cmd -o{T}', [], []),
     ('cmd 2>/dev/null </dev/stdin >/dev/stdout 2>/dev/stderr', [], []),
     ('git show HEAD:a/b.sh', [], []),
     ('wget ftp://host/a/b.sh', [], []),
-    ('curl https://example.com/get?file=a/b.sh', [], []),
+    ('curl https://example.com/get?file=a/b.sh', [], U('`?`')),  # round 2: `?`
     # NAME=value and --option=value are read as their value
     (f'FOO={T} cmd', [T], []),
     (f'cmd --config={T}', [T], []),
     ('PYTHONPATH=lib/x cmd', [], ['lib/x']),
     # unresolved: relative, a variable other than HOME, the rest of a substitution
-    ('"$CLAUDE_PROJECT_DIR"/x.sh', [], ['$CLAUDE_PROJECT_DIR/x.sh']),
-    ('${DIR}/x.sh', [], ['${DIR}/x.sh']),
-    ('"$(dirname "$0")"/x.sh', [], ['/x.sh']),
-    (f'x=$(pwd){T}', [T], []),                              # glued, but names an existing file
+    ('"$CLAUDE_PROJECT_DIR"/x.sh', [], U('`$C`')),
+    ('${DIR}/x.sh', [], U('`${`')),
+    ('"$(dirname "$0")"/x.sh', [], U('`$(`')),
+    (f'x=$(pwd){T}', [], U('`$(`')),                        # round 2: a substitution, whatever follows
     ('python3 x.py', [], []),                               # a bare word: no WorkingDirectory here
     (f'cd {tree} && ./tracked.sh', [], ['./tracked.sh']),   # a cd is not followed
     # a directory word paired with every bare word of the text (no cd tracking, no order)
     (f'cd {tree} && python3 x.py', [f'{tree}/x.py'], []),
     (f"bash -lc 'cd {tree} && exec python3 -I x.py arg'", [f'{tree}/x.py'], []),
     (f'cd {tree}; ./x.py', [], ['./x.py']),                  # a path word: still unresolved
-    (f'git -C {tree} show origin/main:scripts/x.sh > "$T"', [], []),
+    (f'git -C {tree} show origin/main:scripts/x.sh > "$T"', [], U('`$T`')),
     (f'git -C {tree} fetch origin && git -C {tree} show HEAD:x.py', [], []),  # `fetch`, `show`, `origin` are not files there
     (f'git -C {tree} log notes.md', [f'{tree}/notes.md'], []),  # conservative: named, though not run or read
     (f'python3 x.py; ls {tree}/sub', [], []),                # x.py is not in sub
     (f'ls {tree}', [], []),                                  # a directory alone is never reported
     ('git diff origin/main', [], ['origin/main']),          # not a file, still unresolved
     (f'a && ./b.sh | cat {T}', [T], ['./b.sh']),
-    # round 1 review of #155: raw text a shell reads differently, decided at the one entry point
-    (f'bash {tree}/x.\\\npy', [f'{tree}/x.py'], []),       # the reviewer's shape: a line continuation
-    (f'bash {tree}/x.\\\r\npy', [f'{tree}/x.py'], []),    # the same with CRLF
-    (f'bash "{tree}/tra\\\ncked.sh"', [T], []),           # inside double quotes a shell deletes it too
-    (f"bash '{tree}/x.\\\npy'", [f'{tree}/x.py'], []),     # inside single quotes a shell keeps it: flagged anyway (conservative)
-    (f'cat {tree}/with\\ space.sh', [S], []),              # a backslash before a space: one word
-    (f'bash {tree}/tracked\\.sh', [T], []),                # a backslash before another character: dropped
-    ("bash $'" + T.replace('/', '\\x2f') + "'", [T], []),  # ANSI-C quoting, hex
-    ("bash $'" + T.replace('/', '\\057') + "'", [T], []),  # ANSI-C quoting, octal
-    ("bash $'" + S.replace('/', '\\u002f') + "'", [S], []), # ANSI-C, a space in the decoded path
-    (f'bash $"{T}"', [], [f'${T}']),                         # $"..." is not decoded: unresolved
-    (f'bash {T}\0ignored', [T], []),                        # a NUL ends the word, as exec ends the argument
-    (f'bash {tree}/trac\x01ked.sh', [], [f'{tree}/trac\x01ked.sh']),  # a control character: unresolved
-    (f'bash {tree}/*.sh', [], [f'{tree}/*.sh']),             # a glob: unresolved, never ignored
-    (f'bash {tree}/{{tracked,x}}.sh', [], [f'{tree}/{{tracked,x}}.sh']),  # brace expansion: unresolved
-    (f'cd {tree}\npython3 x.py', [f'{tree}/x.py'], []),     # a newline between the directory and the bare word
-    (f'cd\t{tree}\t&&\tpython3\tx.py', [f'{tree}/x.py'], []),  # tabs
+    # round 1 review of #155: raw text a shell reads differently. Since round 2 none of it is
+    # decoded: it is outside the plain grammar, so the whole entry is unresolved.
+    (f'bash {tree}/x.\\\npy', [], U('`\\`')),              # round 1 reviewer: a line continuation
+    (f'bash {tree}/x.\\\r\npy', [], U('`\\`')),           # the same with CRLF
+    (f'bash "{tree}/tra\\\ncked.sh"', [], U('`\\`')),
+    (f"bash '{tree}/x.\\\npy'", [], U('`\\`')),
+    (f'bash {tree}/tracked\\.sh', [], U('`\\`')),
+    ("bash $'" + T.replace('/', '\\x2f') + "'", [], U("`$'`")),
+    ("bash $'" + T.replace('/', '\\057') + "'", [], U("`$'`")),
+    (f'bash $"{T}"', [], U('`$"`')),
+    (f'bash {T}\0ignored', [], U('U+0000')),
+    (f'bash {tree}/trac\x01ked.sh', [], U('U+0001')),
+    (f'bash {tree}/*.sh', [], U('`*`')),
+    (f'bash {tree}/{{tracked,x}}.sh', [], U('`{`')),
+    (f'cd {tree}\npython3 x.py', [], U('U+000A')),          # a newline: not plain text
+    (f'cd\t{tree}\t&&\tpython3\tx.py', [f'{tree}/x.py'], []),  # tabs are plain text: still flagged
+    # round 2 review of #155, the reviewer's strings
+    (f'bash $(echo {tree}/x).py', [], U('`$(`')),           # MAJOR: a substitution hid x.py
+    (f'bash {tree}/x.py$EMPTY', [], U('`$E`')),             # MAJOR: an empty variable suffix hid x.py
+    (f'bash {tree}/x\u00a0.py', [], U('U+00A0')),            # MINOR: a non-breaking space
+    (f'bash {tree}/x\u200b.py', [], U('U+200B')),            # MINOR: a zero-width space
+    (f'bash `echo {tree}`/x.py', [], U('```')),
+    (f'bash ${{T_VAR}}/x.py', [], U('`${`')),
+    (f'git -C {tree} show origin/main:x.py > "$OUT" && bash "$OUT"', [], U('`$O`')),  # an honest entry: unresolved, by design
+    # the exact HOME forms and a leading ~ stay plain text
+    ('"$HOME"/bin/linked.sh', [L], []),
+    ('echo $HOMEX/bin/linked.sh', [], U('`$H`')),            # not $HOME: another variable
+    ('a~/bin/linked.sh', [], U('`~`')),                       # ~ inside a word
+    (f'cmd 2>&1 | tee -a log; {T} >> out & wait', [T], []),   # every operator in the grammar
 ]
 failed = []
 for command, want_files, want_missed in rows:
     got = classify(command)
-    if got != (want_files, want_missed):
+    if not agrees(got, want_files, want_missed):
         failed.append(f'  {command!r}: want {want_files} {want_missed}, got {got[0]} {got[1]}')
 print(f'word table: {len(rows) - len(failed)} of {len(rows)} rows as expected')
 
@@ -161,9 +192,9 @@ print(f'word table: {len(rows) - len(failed)} of {len(rows)} rows as expected')
 for command, want, want_missed in [
         ('./tracked.sh', [T], []), ('sub/inner.sh', [f'{tree}/sub/inner.sh'], []),
         ('python3 x.py', [f'{tree}/x.py'], []), ('origin/main', [], []), ('echo nothing-here', [], []),
-        ('"$DIR"/tracked.sh', [], ['$DIR/tracked.sh']), ('~other/tracked.sh', [], ['~other/tracked.sh'])]:
-    found, missed = d.named_paths(command, HOME, cwd=tree)
-    if (found, missed) != (want, want_missed):
+        ('"$DIR"/tracked.sh', [], U('`$D`')), ('~other/tracked.sh', [], ['~other/tracked.sh'])]:
+    found, missed = d.read_entry([command], HOME, cwd=tree)
+    if not agrees((found, missed), want, want_missed):
         failed.append(f'  WorkingDirectory {command!r}: want {want} {want_missed}, got {found} {missed}')
 
 # Property: every wrapper around every spelling of every tracked file is flagged.
@@ -199,6 +230,16 @@ def raw_spellings(p):
 
 for target in files:
     files[target] = files[target] + raw_spellings(files[target][0])
+
+
+def reads_as_expected(text, real):
+    """Plain text must flag the target; anything else must leave the whole entry unresolved."""
+    found, missed = classify(text)
+    if d.unreadable(text) is None:
+        return any(os.path.realpath(path) == real for path in found)
+    return found == [] and len(missed) == 1 and missed[0].startswith('unreadable ')
+
+
 generated = flagged = 0
 for target, spellings in files.items():
     real = os.path.realpath(target)
@@ -206,11 +247,10 @@ for target, spellings in files.items():
         command = wrapper.format(p=spelling)
         for text in (command, f"bash -c '{command}'"):
             generated += 1
-            found, _ = classify(text)
-            if any(os.path.realpath(path) == real for path in found):
+            if reads_as_expected(text, real):
                 flagged += 1
             else:
-                failed.append(f'  property: {text!r} does not flag {target}')
+                failed.append(f'  property: {text!r} neither flags {target} nor is unresolved as a whole')
 # The `cd D && <interpreter> W` shape: a directory word and a bare word, in any spelling.
 for target in (T, f'{tree}/x.py', f'{tree}/sub/inner.sh', f'{tree}/notes.md', f'{linked}/tracked.sh'):
     folder, name = os.path.split(target)
@@ -223,12 +263,11 @@ for target in (T, f'{tree}/x.py', f'{tree}/sub/inner.sh', f'{tree}/notes.md', f'
                       'cd {d}\r\n{w}', 'cd {d}\0{w}'):
             for text in (shape.format(d=folder_spelling, w=name), "bash -lc '" + shape.format(d=folder_spelling, w=name) + "'"):
                 generated += 1
-                found, _ = classify(text)
-                if any(os.path.realpath(path) == real for path in found):
+                if reads_as_expected(text, real):
                     flagged += 1
                 else:
-                    failed.append(f'  property: {text!r} does not flag {target}')
-print(f'property: {flagged} of {generated} generated commands flagged')
+                    failed.append(f'  property: {text!r} neither flags {target} nor is unresolved as a whole')
+print(f'property: {flagged} of {generated} generated commands flagged, or unresolved as a whole when not plain text')
 # Property: a path the check cannot read comes out unresolved, never ignored.
 unread = missed_count = 0
 for target, spellings in files.items():
@@ -244,6 +283,33 @@ for target, spellings in files.items():
                 else:
                     failed.append(f'  unreadable: {text!r} was ignored')
 print(f'unreadable: {missed_count} of {unread} generated commands unresolved')
+
+# Round 2, the class: every character outside the plain grammar, at the start, inside
+# the path and at the end of a flagged command, comes out flagged or unresolved, never clean.
+# The grammar is spelled here independently of the module, so a change to the module's set
+# is caught by this generator rather than silently shrinking it.
+GRAMMAR = set('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789' + '_-./:=,+@%' + ' \t' + '\'"' + '&|;<>')
+OUTSIDE_ASCII = [chr(c) for c in range(128) if chr(c) not in GRAMMAR]
+NON_ASCII = ['\u00a0', '\u200b', '\u200d', '\u200f', '\u00e9', '\uff0f']  # NBSP, ZWSP, ZWJ, RLM, e-acute, full-width slash
+BASES = [(f'bash {T}', T), (f'cat {tree}/notes.md', f'{tree}/notes.md'), (f'cd {tree} && python3 x.py', f'{tree}/x.py')]
+inserted = never_clean = 0
+for base, target in BASES:
+    real = os.path.realpath(target)
+    assert reads_as_expected(base, real), base
+    cut = base.rindex('/') + 3  # inside the file name (for the bare-word shape, inside the directory)
+    for c in OUTSIDE_ASCII + NON_ASCII:
+        for text in (c + base, base[:cut] + c + base[cut:], base + c):
+            for entry in (text, f"bash -c '{text}'"):
+                inserted += 1
+                found, missed = classify(entry)
+                if any(os.path.realpath(path) == real for path in found) or missed:
+                    never_clean += 1
+                else:
+                    failed.append(f'  inserted {c!r}: {entry!r} came out clean')
+if set(d.READABLE_CHARS) != GRAMMAR:
+    failed.append(f'  the module grammar differs from the test grammar: {sorted(set(d.READABLE_CHARS) ^ GRAMMAR)}')
+print(f'inserted: {never_clean} of {inserted} generated commands flagged or unresolved '
+      f'({len(OUTSIDE_ASCII)} ASCII + {len(NON_ASCII)} non-ASCII characters x 3 positions x {len(BASES)} commands x 2)')
 if failed:
     print('\n'.join(failed[:40]))
     sys.exit(1)
@@ -259,8 +325,8 @@ plist "$OPT_AGENTS" com.broomva.read /bin/bash -c "cat $TREE/notes.md | wc -l"
 plist "$OPT_AGENTS" com.broomva.home-link /bin/bash -c "exec \$HOME/bin/linked.sh serve"
 plist "$OPT_AGENTS" com.broomva.space "$TREE/with space.sh"
 plist "$OPT_AGENTS" com.broomva.linked-worktree /bin/bash "$TMP/linked/tracked.sh"
-# These pass: main's copy into a temp file, a released copy, a plain folder, an
-# untracked file in the tree, a missing file, a directory.
+# These pass: a released copy, a plain folder, an untracked file in the tree, a
+# missing file, a directory. Main's copy into a temp file is unresolved (not plain text).
 plist "$OPT_AGENTS" com.broomva.gitshow /bin/bash -lc "T=\$(mktemp); git -C \"$TREE\" show origin/main:tracked.sh > \"\$T\" || exit 0; bash \"\$T\"; rm -f \"\$T\""
 plist "$OPT_AGENTS" com.broomva.released /bin/bash "$HOME_FIXTURE/.broomva/releases/tool/run.sh"
 plist "$OPT_AGENTS" com.broomva.plain /bin/bash "$TMP/plain/released.sh"
@@ -320,7 +386,10 @@ want = sorted([
 got = [(item['entry'], item['file'], item['repository']) for item in d['flagged']]
 assert got == want, '\n' + '\n'.join(map(str, sorted(set(got) ^ set(want))))
 want_unresolved = sorted([
-    ('claude-hook:SessionStart', '"$CLAUDE_PROJECT_DIR"/tracked.sh', '$CLAUDE_PROJECT_DIR/tracked.sh'),
+    ('claude-hook:SessionStart', '"$CLAUDE_PROJECT_DIR"/tracked.sh', 'unreadable `$C` at column 2'),
+    # main's copy into a temp file: not plain text, so unresolved as a whole and baselined once
+    ('launchd:com.broomva.gitshow', "/bin/bash -lc 'T=$(mktemp); git -C \"" + tree + "\" show origin/main:tracked.sh > \"$T\" "
+     "|| exit 0; bash \"$T\"; rm -f \"$T\"'", 'unreadable `$(` at column 3 of argument 2'),
     ('claude-hook:UserPromptSubmit', "bash -c 'cd scripts && ./doctor.sh'", './doctor.sh'),
     ('claude-hook:UserPromptSubmit', 'python3 scripts/y.py --fast', 'scripts/y.py'),
     ('launchd:com.broomva.cd', f"/bin/bash -c 'cd {tree}/sub && /usr/bin/python3 ./rel.py harvest'", './rel.py'),
@@ -334,7 +403,7 @@ PY_EXPECT
 python3 -I "$ENTRIES" --report --launch-agents "$OPT_AGENTS" --settings "$OPT_SETTINGS" >"$TMP/out"
 grep -Fxq "[info] launchd:com.broomva.direct names $TREE/tracked.sh (repository $TREE)" "$TMP/out"
 grep -Fxq '[info] 12 entries name a file in a git working tree, run or read (report only: no baseline read or written)' "$TMP/out"
-grep -Fxq '[info] 5 path words could not be resolved' "$TMP/out"
+grep -Fxq '[info] 6 path words could not be resolved' "$TMP/out"
 grep -Fxq "[info] unresolved: claude-hook:UserPromptSubmit names \`./doctor.sh\`, a path this check cannot resolve, in: bash -c 'cd scripts && ./doctor.sh'" "$TMP/out"
 # Without the options the fixture home is read (empty so far), never HOME's decoy.
 python3 -I "$ENTRIES" --report >"$TMP/out"
@@ -402,9 +471,12 @@ assert s.count('flagged - saved') == 1
 open(p, 'w').write(s.replace('flagged - saved', 'flagged - flagged'))
 PY
 python3 -I "$TMP/copy/scripts/doctor-worktree-entries.py" >"$TMP/out"
-# Repointed at main's copy, then at a released copy, the same entry passes.
+# Repointed at main's copy it is not plain text: unresolved as a whole, so it fails
+# until acknowledged in the baseline. Repointed at a released copy, it passes.
 plist "$AGENTS" com.broomva.new /bin/bash -lc "T=\$(mktemp); git -C \"$TREE\" show origin/main:sub/inner.sh > \"\$T\" && bash \"\$T\""
-run_doctor
+if run_doctor; then echo 'an entry that is not plain text passed' >&2; exit 1; fi
+grep -Fq '[failure] new entry names a path this check cannot resolve: launchd:com.broomva.new is not plain text (unreadable `$(` at column 3 of argument 2)' "$TMP/out"
+grep -Fq 'this check certifies only entries it can read completely' "$TMP/out"
 plist "$AGENTS" com.broomva.new /bin/bash "$HOME_FIXTURE/.broomva/releases/tool/run.sh"
 run_doctor
 rm "$AGENTS/com.broomva.new.plist"
@@ -482,7 +554,7 @@ PY_SETTINGS
 json_run 1 "d['error'] is None and d['flagged'] == [] and d['grandfathered'] == 2 and d['unresolved'] == [{'entry': 'claude-hook:Stop', 'command': \"bash -c 'cd scripts && ./doctor.sh'\", 'word': './doctor.sh'}]"
 if run_doctor; then echo 'a new unresolved hook passed' >&2; exit 1; fi
 grep -Fq '[failure] new entry names a path this check cannot resolve: claude-hook:Stop names `./doctor.sh`' "$TMP/out"
-grep -Fq 'this check cannot tell what it names; write it as an absolute path' "$TMP/out"
+grep -Fq 'this check certifies only entries it can read completely; write plain absolute paths' "$TMP/out"
 # The negative control: without the unresolved comparison the same run passes.
 python3 - "$TMP/copy/scripts/doctor-worktree-entries.py" "$ENTRIES" <<'PY_MUTATE'
 import sys

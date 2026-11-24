@@ -13,31 +13,41 @@ just as one that executes it does. Two surfaces are read, as raw text:
     `bash -c` is covered without being parsed);
   - every hook `command` in the personal Claude Code settings.json.
 
-The check does not interpret shell. It never splits commands, follows a `cd`,
-models a wrapper (`timeout`, `xargs`, `exec`) or an interpreter's options, or
-tracks quotes beyond what is written below. It looks at words.
+THE CONTRACT. This check certifies only entries it can read completely; an
+entry containing any shell construct outside a small plain grammar is reported
+as unresolved and must be acknowledged in the baseline.
 
-  BEFORE ANY WORD IS FORMED the text is read the way a shell reads it in three
-  respects, at one entry point (shell_text): a backslash followed by a newline
-  (LF or CRLF) is deleted, as a shell deletes a line continuation, so
-  `/t/x.\\<newline>sh` is `/t/x.sh`; an ANSI-C string `$'...'` is replaced by
-  what it decodes to, so `\\x2f` and `\\057` read as `/`; and a NUL ends a
-  word, as exec ends an argument there. The first two are applied everywhere,
-  inside single quotes too, where a shell keeps the text: that can add a flag,
-  never hide one. A `$"..."` string is not decoded; its word starts with `$`
-  and is unresolved.
+  The plain grammar (READABLE_CHARS and its neighbours below, written down
+  once): ASCII letters and digits; `_ - . / : = , + @ %`; space and tab; single
+  and double quotes; the operator characters `& | ; < >` (so `&&`, `||`, `;`,
+  `|`, `>`, `>>`, `<`, `2>&1`, `&`); `~` at the start of a word; and exactly
+  `$HOME` and `${HOME}`. Anything else anywhere in an entry (any other `$`, a
+  backquote, `( ) { } * ? [ ] ! #`, a backslash, a `~` inside a word, a newline, any
+  control character, any non-ASCII character including non-breaking and
+  zero-width spaces) makes the WHOLE entry unresolved, with one reason naming
+  the first such construct and its column. Nothing in it is interpreted: no
+  line continuation, escape, substitution, expansion or quoting form is
+  decoded. For a LaunchAgent the entry is the Program and every
+  ProgramArguments string together.
 
-  A PATH WORD is a maximal run of characters other than whitespace and the
-  shell operator characters ; | & ( ) < > and the backquote, that contains a
-  `/`. A quote character is dropped without ending the word, so
-  `"$CLAUDE_PROJECT_DIR"/x.sh` is the one word `$CLAUDE_PROJECT_DIR/x.sh`; a
-  backslash keeps the next character in the word and is dropped
-  (`with\\ space.sh`, `x\\.sh`). Tabs and newlines separate words like
-  spaces. A word of the form NAME=value or --option=value is read as its value. Never
-  considered: a word with no `/` (`echo report.sh`, `git status`, `bun run x`),
-  a word starting with `-`, a URL (`scheme://`), a git object name
-  `<ref>:<path>` (`git show origin/main:scripts/x.sh`), and /dev/null,
-  /dev/stdin, /dev/stdout, /dev/stderr.
+  What that costs. An entry that uses a variable or a substitution is
+  unresolved, including the recommended form `T=$(mktemp); git -C /t show
+  origin/main:<path> > "$T" && bash "$T"`: it needs a baseline line. That is
+  accepted because scheduled jobs and hooks are added rarely, and a new one
+  should be looked at once; a reviewed baseline line is that look.
+
+Only a fully readable entry is scanned, by words. The check never splits
+commands, follows a `cd`, or models a wrapper (`timeout`, `xargs`, `exec`) or an
+interpreter's options:
+
+  A PATH WORD is a maximal run of characters other than space, tab and the
+  operator characters, that contains a `/`. A quote character is dropped without
+  ending the word, so `"$HOME"/x.sh` is the one word `$HOME/x.sh`. A word of the
+  form NAME=value or --option=value is read as its value. Never considered: a
+  word with no `/` (`echo report.sh`, `git status`, `bun run x`), a word starting
+  with `-`, a URL (`scheme://`), a git object name `<ref>:<path>`
+  (`git show origin/main:scripts/x.sh`), and /dev/null, /dev/stdin, /dev/stdout,
+  /dev/stderr.
 
   An ABSOLUTE word (after expanding a leading `~/`, `$HOME/` or `${HOME}/`) is
   FLAGGED when it resolves, following symlinks, to an existing file that a git
@@ -46,27 +56,20 @@ tracks quotes beyond what is written below. It looks at words.
   as an interpreter's script, or as an argument that is only read. An absolute
   word that does not exist, is a directory, or is not tracked is not reported
   itself (a directory is used only for the pairing below): a released copy
-  outside any working tree passes, and so does a command that writes
-  `git show origin/main:<path>` to a temp file.
+  outside any working tree passes.
 
   A path with a space. An absolute word followed by more words, separated only
   by spaces or tabs, is also tried joined with them (up to eight): when such a
-  join names an existing file, that file is the word. So `"/t/with space.sh"`,
-  `'/t/with space.sh'` and `/t/with\\ space.sh` are all found, quoted or not;
-  words used up by such a join are not reported again.
+  join names an existing file, that file is the word. So `"/t/with space.sh"`
+  and `'/t/with space.sh'` are found; words used up by such a join are not
+  reported again.
 
-  A RELATIVE word, or one that starts with a variable other than HOME
-  (`"$CLAUDE_PROJECT_DIR"/x.sh`), is UNRESOLVED: this check cannot tell what it
-  names, and the remedy is an absolute path. So is an absolute word that names
-  nothing and holds a character this check does not read: a control character
-  other than tab and newline, or a pattern a shell would expand (`*`, `?`, `[`,
-  `{`), as in `/t/*.sh` or `/t/{a,b}.sh`; and a path with a space whose next
-  words hold one (`/t/with space.s?`). So is a word that starts right
-  after a `)` or a backquote and names no existing file (`$(dirname "$0")/x.sh`,
-  the rest of a command substitution's output). The one exception: in a
-  LaunchAgent with a `WorkingDirectory`, a relative word is resolved against it
-  and then treated as absolute. A bare word is never unresolved. A `cd` in the
-  text is not followed, so `cd /t && ./x.sh` leaves `./x.sh` unresolved.
+  A RELATIVE word is UNRESOLVED: this check cannot tell what it names, and the
+  remedy is an absolute path. The one exception: in a LaunchAgent with a
+  `WorkingDirectory`, a relative word is resolved against it and then treated as
+  absolute. A bare word is never unresolved. A `cd` in the text is not followed,
+  so `cd /t && ./x.sh` leaves `./x.sh` unresolved. Words that are not file paths
+  at all (`origin/main`, `text/plain`) are unresolved too.
 
   A BARE word paired with a DIRECTORY. Every absolute word that resolves
   (following symlinks) to a directory, and a LaunchAgent's WorkingDirectory, is
@@ -74,21 +77,17 @@ tracks quotes beyond what is written below. It looks at words.
   no `cd` tracking: when directory/bare-word is an existing tracked file, the
   entry is flagged with that file. So `cd /t && python3 x.py` and
   `/bin/sh run.sh` under a WorkingDirectory are flagged. A directory word by
-  itself is never reported, so `git -C /t show origin/main:<path>` stays clean
-  unless one of its bare words happens to name a tracked file in /t. That is
-  the conservative side, and deliberate: `git -C /t log README.md` is flagged
-  although nothing runs or reads README.md. A false flag costs one baseline
-  line or an absolute rewrite; a missed entry runs unreviewed code. Words that are not file paths at all
-  (`origin/main`, `text/plain`) are unresolved too; they ratchet like the rest.
+  itself is never reported. That is the conservative side, and deliberate:
+  `git -C /t log README.md` is flagged although nothing runs or reads
+  README.md. A false flag costs one baseline line or an absolute rewrite; a
+  missed entry runs unreviewed code.
 
+A fully readable entry with nothing flagged and nothing unresolved is clean.
 Flagged and unresolved entries both ratchet: recorded in the baseline, printed
 as info while grandfathered, and a new one fails.
 
-What this check does not see: a path built at run time with no `/` written in
-the text (`bash "$SCRIPT"`, a name read from a file);
-the file behind a relative path it cannot resolve (reported as unresolved, never
-ignored); and content fetched by a program it names (a script that reads another
-file, a URL it downloads).
+What this check does not see: content fetched at run time by a program the
+entry names (a script that reads another file, a URL it downloads).
 
   doctor-worktree-entries.py                    audit against the baseline (doctor section 33)
   doctor-worktree-entries.py --report           list every flagged and unresolved entry; reads and writes no baseline
@@ -132,72 +131,57 @@ BASELINE_NAME = 'doctor-worktree-entries.json'
 GIT_TIMEOUT = 10
 FIELDS = ('entry', 'file', 'repository')
 UNRESOLVED_FIELDS = ('entry', 'command', 'word')
-HOME_PREFIXES = ('~/', '$HOME/', '${HOME}/')
+HOME_PREFIXES = ('~/', '$HOME/', '${HOME}/')  # expanded in a readable word
+# ── The readable text of an entry. Written down once: anything else in an entry
+# makes the whole entry unresolved (see read_entry). ──
+READABLE_CHARS = frozenset(
+    'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'  # names: ASCII letters and digits
+    + '_-./:=,+@%'                                                     # path and argument punctuation
+    + ' \t'                                                            # word separators: space and tab
+    + '\'"'                                                            # single and double quotes
+    + '&|;<>'                                                          # operators: && || ; | > >> < 2>&1 &
+)
+HOME_FORMS = ('${HOME}', '$HOME')  # the only `$` forms: exactly these, `$HOME` not followed by a name character
+TILDE_FOLLOWS = frozenset(' \t&|;<>=')  # `~` is readable only at the start of a word: after these or at the start
+NAME_CHARS = frozenset('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_')
 QUOTES = set('\'"')
-DELIMITERS = set(' \t\r\n`;|&()<>')
+DELIMITERS = set(' \t;|&<>')
 STANDARD_STREAMS = {'/dev/null', '/dev/stdin', '/dev/stdout', '/dev/stderr'}
 URL = re.compile(r'[A-Za-z][A-Za-z0-9+.-]*://')
 MAX_JOIN = 8
-# A backslash before a newline (LF or CRLF) is a line continuation: the shell
-# deletes both before it forms a word.
-CONTINUATION = re.compile(r'\\\r?\n')
-# ANSI-C quoting, $'...': its escapes are decoded so `\x2f` and `\057` read as `/`.
-ANSI_C = re.compile(r"\$'((?:[^'\\]|\\.)*)'", re.S)
-ANSI_C_ESCAPE = re.compile(r'\\(x[0-9A-Fa-f]{1,2}|u[0-9A-Fa-f]{1,4}|U[0-9A-Fa-f]{1,8}|[0-7]{1,3}|c.|.)', re.S)
-ANSI_C_SIMPLE = {'a': '\a', 'b': '\b', 'e': '\x1b', 'E': '\x1b', 'f': '\f', 'n': '\n', 'r': '\r',
-                 't': '\t', 'v': '\v', '\\': '\\', "'": "'", '"': '"', '?': '?'}
-# A character the check does not read inside a path word: a control character,
-# or a pattern character a shell would expand (`*`, `?`, `[`, `{`).
-UNREADABLE = re.compile(r'[\x01-\x1f\x7f*?\[{]')
 
 
-def ansi_c(match):
-    """The text a shell reads for one $'...' string."""
-    def escape(m):
-        code = m.group(1)
-        if code[0] in 'xuU' and len(code) > 1:
-            return chr(int(code[1:], 16)) if int(code[1:], 16) <= 0x10FFFF else m.group(0)
-        if code[0] in '01234567':
-            return chr(int(code, 8) & 0xFF)
-        if code[0] == 'c':
-            return chr(ord(code[1]) & 0x1F)
-        return ANSI_C_SIMPLE.get(code, m.group(0))
-    return ANSI_C_ESCAPE.sub(escape, match.group(1))
-
-
-def shell_text(text):
-    """The raw text as the scanner reads it: the one place text enters the scan.
-
-    Before any word is formed: a backslash-newline (or backslash-CRLF) pair is
-    deleted, as a shell deletes a line continuation; a $'...' string is replaced
-    by what it decodes to; and a NUL ends a word, since exec ends an argument
-    there. The first two edits are made everywhere, even inside single quotes
-    where a shell would keep the text: that can only add a flag, never hide one.
-    """
-    text = CONTINUATION.sub('', text)
-    text = ANSI_C.sub(ansi_c, text)
-    return text.replace('\0', '\n')
+def unreadable(text):
+    """(construct, index) of the first thing outside the readable text, or None."""
+    i, n = 0, len(text)
+    while i < n:
+        form = next((f for f in HOME_FORMS if text.startswith(f, i)), None)
+        if form and (form == '${HOME}' or i + len(form) >= n or text[i + len(form)] not in NAME_CHARS):
+            i += len(form)
+            continue
+        c = text[i]
+        if c in READABLE_CHARS or (c == '~' and (i == 0 or text[i - 1] in TILDE_FOLLOWS)):
+            i += 1
+            continue
+        if c == '$' and i + 1 < n and 0x20 < ord(text[i + 1]) < 0x7f:
+            return f'`{text[i:i + 2]}`', i
+        if 0x20 < ord(c) < 0x7f:
+            return f'`{c}`', i
+        return f'U+{ord(c):04X}', i
+    return None
 
 
 def words(text):
-    """[(value, joinable, glued)] for each word of the text.
+    """[(value, joinable)] for each word of a readable text.
 
-    A word is a maximal run of characters other than whitespace, the shell
-    operator characters and the backquote. Quote characters are dropped from a
-    word without ending it, so `"$DIR"/x.sh` is the one word `$DIR/x.sh`. A
-    backslash keeps the next character in the word. ``joinable``: only spaces or
-    tabs separate the word from the next one. ``glued``: the word starts right
-    after a `)` or backquote, so it continues a command substitution's output.
+    A word is a maximal run of characters other than space, tab and the
+    operator characters. Quote characters are dropped from a word without ending
+    it, so `"$HOME"/x.sh` is the one word `$HOME/x.sh`. ``joinable``: only
+    spaces or tabs separate the word from the next one.
     """
     found, value, i, n = [], [], 0, len(text)
-    after_substitution = glued = False
     while i < n:
         c = text[i]
-        if c == '\\' and i + 1 < n:
-            glued = glued or (not value and after_substitution)
-            value.append(text[i + 1])
-            i += 2
-            continue
         if c in QUOTES:
             i += 1
             continue
@@ -207,17 +191,14 @@ def words(text):
                 while j < n and text[j] in ' \t':
                     j += 1
                 joinable = j > i and j < n and text[j] not in DELIMITERS
-                found.append((''.join(value), joinable, glued))
-                value, glued = [], False
-            after_substitution = c in ')`'
+                found.append((''.join(value), joinable))
+                value = []
             i += 1
             continue
-        if not value:
-            glued = after_substitution
         value.append(c)
         i += 1
     if value:
-        found.append((''.join(value), False, glued))
+        found.append((''.join(value), False))
     return found
 
 
@@ -251,20 +232,43 @@ def absolute(word, home, cwd):
     return os.path.normpath(os.path.join(cwd, path))
 
 
-def named_paths(text, home, cwd=None):
-    """(existing files the text names by absolute path, words it cannot resolve).
+def read_entry(texts, home, cwd=None):
+    """(files, unresolved) for one entry: the single place raw text enters the scan.
 
-    ``cwd`` is a LaunchAgent's WorkingDirectory: relative words resolve against
-    it. Every absolute directory word is paired with every bare word of the same
-    text (no order, no `cd`): a pair that names an existing file counts as that
-    file. Nothing else in the text changes how a word resolves.
+    ``texts`` are the entry's strings (a hook's command; a LaunchAgent's Program
+    and each ProgramArguments string). If any of them holds anything outside the
+    readable text, the WHOLE entry is unresolved, with one reason naming the
+    first such construct and its column, and nothing in it is interpreted.
+    Otherwise each string is scanned for path words.
     """
-    items = words(shell_text(text))
+    for k, text in enumerate(texts):
+        found = unreadable(text)
+        if found is not None:
+            construct, index = found
+            where = f'column {index + 1}' + (f' of argument {k}' if len(texts) > 1 else '')
+            return [], [f'unreadable {construct} at {where}']
+    files, missed = [], []
+    for text in texts:
+        named, unresolved = named_paths(text, home, cwd)
+        files.extend(named)
+        missed.extend(unresolved)
+    return files, missed
+
+
+def named_paths(text, home, cwd=None):
+    """(existing files a READABLE text names by absolute path, words it cannot resolve).
+
+    Called only through read_entry. ``cwd`` is a LaunchAgent's WorkingDirectory:
+    relative words resolve against it. Every absolute directory word is paired
+    with every bare word of the same text (no order, no `cd`): a pair that names
+    an existing file counts as that file.
+    """
+    items = words(text)
     files, unresolved, folders, bare_words, i = [], [], [], [], 0
     if cwd is not None:
         folders.append(cwd)
     while i < len(items):
-        value, _, glued = items[i]
+        value, _ = items[i]
         word = path_word(value)
         if word is None:
             bare = value.split('=', 1)[-1]
@@ -273,31 +277,21 @@ def named_paths(text, home, cwd=None):
             i += 1
             continue
         path = absolute(word, home, cwd)
-        if path is None or (UNREADABLE.search(path) and not os.path.exists(path)):
+        if path is None:
             unresolved.append(word)
             i += 1
             continue
         # A path with a space: try the next words, joined by one space each.
-        used, k, joined, unreadable = 1, i, path, None
+        used, k, joined = 1, i, path
         while items[k][1] and k + 1 < len(items) and k - i < MAX_JOIN:
             k += 1
             joined = f'{joined} {items[k][0]}'
             if os.path.isfile(joined):
                 path, used = joined, k - i + 1
-            elif unreadable is None and UNREADABLE.search(items[k][0]):
-                unreadable = joined  # a join this check cannot read further
         if os.path.isfile(path):
             files.append(path)
         elif os.path.isdir(path):
             folders.append(path)  # never reported by itself; see the pairing below
-        elif unreadable is not None:
-            # `/t/with space.s?`: the path may go on past the space into text this
-            # check cannot read, so it is unresolved rather than ignored.
-            unresolved.append(unreadable)
-        elif glued:
-            # Right after `)` or a backquote, a word that names no file may continue
-            # a substitution's output (`$(dirname "$0")/x.sh`): it is not absolute.
-            unresolved.append(word)
         i += used
     # A bare file name used from a directory the text names (`cd /t && python3 x.py`).
     for folder in dict.fromkeys(os.path.realpath(f) for f in folders):
@@ -330,11 +324,7 @@ def launchd_entries(folder, home):
         argv = [item for item in arguments if isinstance(item, str)] if isinstance(arguments, list) else []
         program = data.get('Program')
         strings = ([program] if isinstance(program, str) and program else []) + argv
-        files, missed = [], []
-        for text in strings:
-            named, unresolved = named_paths(text, home, cwd)
-            files.extend(named)
-            missed.extend(unresolved)
+        files, missed = read_entry(strings, home, cwd)
         command = shlex.join(strings)
         yield f'launchd:{plist.name[:-len(".plist")]}', files, [(command, word) for word in missed]
 
@@ -362,7 +352,7 @@ def hook_entries(settings, home):
             for hook in commands if isinstance(commands, list) else []:
                 command = hook.get('command') if isinstance(hook, dict) else None
                 if isinstance(command, str):
-                    named, missed = named_paths(command, home)
+                    named, missed = read_entry([command], home)
                     yield label, named, [(command, word) for word in missed]
 
 
@@ -423,6 +413,8 @@ def line(item):
 
 
 def unresolved_line(item):
+    if item[2].startswith('unreadable '):
+        return f'{item[0]} is not plain text ({item[2]}), in: {item[1]}'
     return f'{item[0]} names `{item[2]}`, a path this check cannot resolve, in: {item[1]}'
 
 
@@ -459,8 +451,10 @@ def arguments(argv):
 
 
 FLAGGED_NOTE = ('an edit there reaches the entry without review, whether the entry runs the file or only '
-                'reads it. Use a released copy, or `git show origin/main:<path>` into a temp file')
-UNRESOLVED_NOTE = 'this check cannot tell what it names; write it as an absolute path'
+                'reads it. Use a released copy outside any working tree, or `git show origin/main:<path>` into a temp '
+                'file (that form is not plain text, so it is acknowledged once in the baseline)')
+UNRESOLVED_NOTE = ('this check certifies only entries it can read completely; write plain absolute paths, '
+                   'or acknowledge the entry with bstack doctor --baseline-entries --force after reviewing it')
 
 
 BASELINE_PATH = None  # set by main(); named in a --baseline-entries --json error

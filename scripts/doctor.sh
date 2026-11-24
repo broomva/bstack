@@ -2152,9 +2152,11 @@ fi
 # A LaunchAgent or Claude Code hook that names a file tracked in a git working
 # tree uses whatever that checkout holds, with no review between an edit and its
 # effect, whether it runs the file or only reads it. The check reads the raw
-# text and never interprets shell: an absolute path word naming a tracked file
-# is flagged wherever it appears; a relative one is "unresolved" (the check
-# cannot tell what it names; the remedy is an absolute path). Both ratchet. Same
+# text and never interprets shell. It certifies only entries it can read
+# completely: an entry with any shell construct outside a small plain grammar
+# is "unresolved" as a whole and must be acknowledged in the baseline. In a
+# readable entry, an absolute path word naming a tracked file is flagged
+# wherever it appears; a relative one is unresolved. Both ratchet. Same
 # contract as §31: opt-in, one [info] line without a baseline; once a baseline
 # exists, a new entry of either kind or a broken baseline is a hard failure even
 # without --strict.
