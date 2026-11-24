@@ -70,6 +70,15 @@
 - Not seen: content fetched at run time by a program the entry names (a script
   that reads another file, a URL it downloads).
 
+### fix(ci): a `.control` mention followed by `:` counts (BRO-4083 follow-up)
+
+- `scripts/check_control_readers.py` now counts `.control` followed by a `:`, as
+  in `PATH="$HOME/.control:$PATH"`; the mention pattern's right-hand contexts are
+  `/`, a quote, a backtick, `:` or the end of a line. The generated left x right
+  test grows to 204 combinations, and the PATH string is a named case. On this
+  tree no file enters the baseline (81 before and after); the reader test now
+  assembles the checker's output line from pieces so it stays off the list.
+
 ### Migration
 
 Opt-in, like the machine folder ratchet: a machine without a baseline gets one

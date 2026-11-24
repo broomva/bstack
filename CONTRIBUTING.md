@@ -51,8 +51,8 @@ widen the baseline.
 
 What counts as a mention: the text `.control` where the character before the dot is
 the start of the text or anything other than a letter, digit, `_`, `)` or `]` (so
-`self.control` is not one), and the character after it is `/`, a quote, a backtick
-or the end of the line. Which files count: tracked code files (by extension or
+`self.control` is not one), and the character after it is `/`, a quote, a backtick,
+a `:` (as in a PATH list) or the end of the line. Which files count: tracked code files (by extension or
 name), except those under a directory named exactly `docs`, `research`, `archive`,
 `.control`, `.broomva` or `node_modules` at any depth (`scripts/mydocs/x.py`
 counts).
