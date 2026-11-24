@@ -121,7 +121,15 @@ rows = [
     (f'x=$(pwd){T}', [T], []),                              # glued, but names an existing file
     ('python3 x.py', [], []),                               # a bare word: no WorkingDirectory here
     (f'cd {tree} && ./tracked.sh', [], ['./tracked.sh']),   # a cd is not followed
-    (f'cd {tree} && python3 x.py', [], []),                 # stated limit: a bare name after a cd is not seen
+    # a directory word paired with every bare word of the text (no cd tracking, no order)
+    (f'cd {tree} && python3 x.py', [f'{tree}/x.py'], []),
+    (f"bash -lc 'cd {tree} && exec python3 -I x.py arg'", [f'{tree}/x.py'], []),
+    (f'cd {tree}; ./x.py', [], ['./x.py']),                  # a path word: still unresolved
+    (f'git -C {tree} show origin/main:scripts/x.sh > "$T"', [], []),
+    (f'git -C {tree} fetch origin && git -C {tree} show HEAD:x.py', [], []),  # `fetch`, `show`, `origin` are not files there
+    (f'git -C {tree} log notes.md', [f'{tree}/notes.md'], []),  # conservative: named, though not run or read
+    (f'python3 x.py; ls {tree}/sub', [], []),                # x.py is not in sub
+    (f'ls {tree}', [], []),                                  # a directory alone is never reported
     ('git diff origin/main', [], ['origin/main']),          # not a file, still unresolved
     (f'a && ./b.sh | cat {T}', [T], ['./b.sh']),
 ]
@@ -176,6 +184,21 @@ for target, spellings in files.items():
                 flagged += 1
             else:
                 failed.append(f'  property: {text!r} does not flag {target}')
+# The `cd D && <interpreter> W` shape: a directory word and a bare word, in any spelling.
+for target in (T, f'{tree}/x.py', f'{tree}/sub/inner.sh', f'{tree}/notes.md', f'{linked}/tracked.sh'):
+    folder, name = os.path.split(target)
+    real = os.path.realpath(target)
+    for folder_spelling in (folder, f'"{folder}"', f"'{folder}'"):
+        for shape in ('cd {d} && {w}', 'cd {d} && python3 -I {w} arg', 'cd {d}; bash {w}', 'cd {d} && exec ./x; sh {w}',
+                      '(cd {d} && nohup timeout 5 node {w} &)', 'pushd {d} >/dev/null; ruby {w}; popd',
+                      'cd {d} || exit 1; cat {w} | tee -a log', 'env -C {d} perl {w}', '{w} --in {d}'):
+            for text in (shape.format(d=folder_spelling, w=name), "bash -lc '" + shape.format(d=folder_spelling, w=name) + "'"):
+                generated += 1
+                found, _ = classify(text)
+                if any(os.path.realpath(path) == real for path in found):
+                    flagged += 1
+                else:
+                    failed.append(f'  property: {text!r} does not flag {target}')
 print(f'property: {flagged} of {generated} generated commands flagged')
 if failed:
     print('\n'.join(failed[:40]))

@@ -23,9 +23,17 @@
   ignored. A path with a space is found whether quoted, escaped or bare.
 - A relative word, or one starting with a variable other than HOME, is
   **unresolved**: the check cannot tell what it names, and the remedy is an
-  absolute path. In a LaunchAgent with a `WorkingDirectory`, relative words (and
-  bare words naming a file there) resolve against it. A `cd` in the text is not
-  followed.
+  absolute path. In a LaunchAgent with a `WorkingDirectory`, relative words
+  resolve against it. A `cd` in the text is not followed.
+- A bare word (no `/`) paired with a directory: every absolute directory word in
+  the text, and a LaunchAgent's `WorkingDirectory`, is paired with every bare
+  word of the same text, in any order; when the pair names a tracked file the
+  entry is flagged with it. So `cd /t && python3 x.py` is flagged without
+  following the `cd`. A directory word alone is never reported, so
+  `git -C /t show origin/main:<path>` stays clean. This errs on the conservative
+  side: `git -C /t log README.md` is flagged although nothing runs or reads
+  `README.md`, because a false flag costs a baseline line and a miss runs
+  unreviewed code.
 - Flagged and unresolved entries both ratchet, with the contract of the machine
   folder ratchet: `bstack doctor --baseline-entries` records them (refuses to
   overwrite without `--force`); grandfathered entries print as info; a new one, an
@@ -36,9 +44,8 @@
   "flagged": [{"entry", "file", "repository"}], "unresolved": [{"entry", "command",
   "word"}], "grandfathered", "error"}`, with null lists on an error.
 - Not seen: a path built at run time with no `/` in the text (`bash "$SCRIPT"`, a
-  glob), the file behind a relative path (reported as unresolved), content
-  fetched by a program the entry names, and a bare file name used after a `cd`
-  (`cd /t && python3 x.py`), which is neither flagged nor unresolved.
+  glob), the file behind a relative path (reported as unresolved), and content
+  fetched by a program the entry names.
 
 ### Migration
 

@@ -33,9 +33,10 @@ tracks quotes beyond what is written below. It looks at words:
   working tree tracks (walk up for `.git`, then `git ls-files --error-unmatch`;
   a linked worktree counts). It is flagged wherever it appears: as the command,
   as an interpreter's script, or as an argument that is only read. An absolute
-  word that does not exist, is a directory, or is not tracked is ignored: a
-  released copy outside any working tree passes, and so does a command that
-  writes `git show origin/main:<path>` to a temp file.
+  word that does not exist, is a directory, or is not tracked is not reported
+  itself (a directory is used only for the pairing below): a released copy
+  outside any working tree passes, and so does a command that writes
+  `git show origin/main:<path>` to a temp file.
 
   A path with a space. An absolute word followed by more words, separated only
   by spaces or tabs, is also tried joined with them (up to eight): when such a
@@ -49,10 +50,20 @@ tracks quotes beyond what is written below. It looks at words:
   after a `)` or a backquote and names no existing file (`$(dirname "$0")/x.sh`,
   the rest of a command substitution's output). The one exception: in a
   LaunchAgent with a `WorkingDirectory`, a relative word is resolved against it
-  and then treated as absolute, and a bare word that names a file in that
-  directory (`/bin/sh run.sh`) is treated the same way; a bare word is never
-  unresolved. A `cd` in the text is not followed, so `cd /t && ./x.sh` leaves
-  `./x.sh` unresolved. Words that are not file paths at all
+  and then treated as absolute. A bare word is never unresolved. A `cd` in the
+  text is not followed, so `cd /t && ./x.sh` leaves `./x.sh` unresolved.
+
+  A BARE word paired with a DIRECTORY. Every absolute word that resolves
+  (following symlinks) to a directory, and a LaunchAgent's WorkingDirectory, is
+  paired with every bare word (no `/`) of the same text, in any order and with
+  no `cd` tracking: when directory/bare-word is an existing tracked file, the
+  entry is flagged with that file. So `cd /t && python3 x.py` and
+  `/bin/sh run.sh` under a WorkingDirectory are flagged. A directory word by
+  itself is never reported, so `git -C /t show origin/main:<path>` stays clean
+  unless one of its bare words happens to name a tracked file in /t. That is
+  the conservative side, and deliberate: `git -C /t log README.md` is flagged
+  although nothing runs or reads README.md. A false flag costs one baseline
+  line or an absolute rewrite; a missed entry runs unreviewed code. Words that are not file paths at all
   (`origin/main`, `text/plain`) are unresolved too; they ratchet like the rest.
 
 Flagged and unresolved entries both ratchet: recorded in the baseline, printed
@@ -61,11 +72,8 @@ as info while grandfathered, and a new one fails.
 What this check does not see: a path built at run time with no `/` written in
 the text (`bash "$SCRIPT"`, a glob such as `/t/*.sh`, a name read from a file);
 the file behind a relative path it cannot resolve (reported as unresolved, never
-ignored); content fetched by a program it names (a script that reads another
-file, a URL it downloads); and a bare file name used from a directory the text
-changes into (`cd /t && python3 x.py`): `x.py` has no `/`, the `cd` is not
-followed, and the directory is not a file, so that entry is neither flagged nor
-unresolved. Write such a command with the file's absolute path.
+ignored); and content fetched by a program it names (a script that reads another
+file, a URL it downloads).
 
   doctor-worktree-entries.py                    audit against the baseline (doctor section 33)
   doctor-worktree-entries.py --report           list every flagged and unresolved entry; reads and writes no baseline
@@ -187,19 +195,21 @@ def named_paths(text, home, cwd=None):
     """(existing files the text names by absolute path, words it cannot resolve).
 
     ``cwd`` is a LaunchAgent's WorkingDirectory: relative words resolve against
-    it. Nothing else in the text changes how a word resolves.
+    it. Every absolute directory word is paired with every bare word of the same
+    text (no order, no `cd`): a pair that names an existing file counts as that
+    file. Nothing else in the text changes how a word resolves.
     """
     items = words(text)
-    files, unresolved, i = [], [], 0
+    files, unresolved, folders, bare_words, i = [], [], [], [], 0
+    if cwd is not None:
+        folders.append(cwd)
     while i < len(items):
         value, _, glued = items[i]
         word = path_word(value)
         if word is None:
-            # Under a WorkingDirectory a bare word may name a file in it (`sh run.sh`).
             bare = value.split('=', 1)[-1]
-            if cwd is not None and bare and '/' not in bare and not bare.startswith(('-', '$', '~')) \
-                    and os.path.isfile(os.path.join(cwd, bare)):
-                files.append(os.path.join(cwd, bare))
+            if bare and '/' not in bare and not bare.startswith(('-', '$', '~')) and bare not in ('.', '..'):
+                bare_words.append(bare)
             i += 1
             continue
         path = absolute(word, home, cwd)
@@ -216,11 +226,19 @@ def named_paths(text, home, cwd=None):
                 path, used = joined, k - i + 1
         if os.path.isfile(path):
             files.append(path)
+        elif os.path.isdir(path):
+            folders.append(path)  # never reported by itself; see the pairing below
         elif glued:
             # Right after `)` or a backquote, a word that names no file may continue
             # a substitution's output (`$(dirname "$0")/x.sh`): it is not absolute.
             unresolved.append(word)
         i += used
+    # A bare file name used from a directory the text names (`cd /t && python3 x.py`).
+    for folder in dict.fromkeys(os.path.realpath(f) for f in folders):
+        for bare in dict.fromkeys(bare_words):
+            candidate = os.path.join(folder, bare)
+            if os.path.isfile(candidate) and candidate not in files:
+                files.append(candidate)
     return files, unresolved
 
 
