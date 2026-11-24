@@ -38,7 +38,18 @@ not in `scripts/control_readers_baseline.json`. On a pull request it also compar
 your baseline with the base branch's: the baseline may only shrink. Adding a path to
 it fails, unless the same change renames a listed file (`git mv`, which
 `git diff -M` reports as a rename). Do not widen the baseline; name both roots or
-read the path through the path registry.
+read the path through the path registry. The base comparison is skipped, with a
+note, only when the base branch has no baseline file yet: the change that first
+introduces the baseline is checked against its own set only.
+
+Which files count: tracked code files (by extension), except those under a
+directory named exactly `docs`, `research`, `archive`, `.control`, `.broomva` or
+`node_modules` at any depth. Names are matched as whole path components:
+`scripts/mydocs/x.py` is counted, and `my.control/asks` is not a reference to the
+folder. The reference sensor in `broomva/workspace` tests those names as
+substrings, which hides any directory whose name merely ends with one. This
+filter is deliberately stricter, so for the same tree this repo's count can be
+higher than that sensor's; a gap between the two is not a new reader.
 
 What it catches and what it does not. It is a ratchet against drift, not a defence
 against someone evading it:

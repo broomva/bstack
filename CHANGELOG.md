@@ -74,7 +74,15 @@ would record before running `bstack doctor --baseline-entries`.
   so `.control/asks/a` is paired by `.broomva/asks/b` in the same file. That is the
   unit of the reference sensor in `broomva/workspace`, kept so the two repos' counts
   stay comparable. The three limits are stated in the script, its failure hint and
-  CONTRIBUTING.md, and pinned by tests.
+  CONTRIBUTING.md, and pinned by tests. Names are matched as whole path components:
+  a file is skipped only when a directory component equals `docs`, `research`,
+  `archive`, `.control`, `.broomva` or `node_modules`, so `scripts/mydocs/x.py` is
+  counted, and `.control/<X>` must start a component, so `my.control/asks` is not a
+  reference. The reference sensor tests those names as substrings; this filter is
+  deliberately stricter, so for the same tree this repo's count can be higher. On
+  this repo the change moves no file (74 before and after). The base comparison is
+  skipped, with a note, only when the base has no baseline file yet; the hint and
+  CONTRIBUTING.md say so.
 - **`--json` on the machine folder check.** `python3 -I scripts/doctor-machine-folders.py
   --json` prints one object, `{"schema": 1, "baseline_recorded_at", "unregistered":
   [{"path", "suggested"}], "grandfathered", "error"}`, with the exit code of the plain

@@ -231,6 +231,56 @@ class RatchetTest(unittest.TestCase):
         self.assertIn("same_component.py", result.stdout)
         self.assertIn("first path component", result.stdout)
 
+    # ── round 4: names are whole path components, never substrings ──
+
+    def write_reader(self, rel):
+        path = self.root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f'p = {LEGACY}asks"\n')
+
+    def test_directory_ending_in_a_skipped_name_is_counted(self):
+        # The reviewer's reproduction: `mydocs` is not `docs`.
+        self.write_reader("scripts/mydocs/probe.py")
+        self.stage()
+        result = self.check()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("scripts/mydocs/probe.py", result.stdout)
+        self.assertIn("Unpaired readers: 3; baseline: 2", result.stdout)
+
+    def test_skipped_directories_match_whole_components_at_any_depth(self):
+        for rel in ("docs/x.py", "a/docs/x.py", "a/research/x.py", "node_modules/x.js"):
+            self.write_reader(rel)
+        self.stage()
+        result = self.check()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Unpaired readers: 2; baseline: 2", result.stdout)
+
+    def test_names_containing_a_skipped_name_are_counted(self):
+        counted = ("scripts/research_notes/x.py", "archived/x.py", "my." + "control/x.py")
+        for rel in counted:
+            self.write_reader(rel)
+        self.stage()
+        result = self.check()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        for rel in counted:
+            self.assertIn(rel, result.stdout)
+        self.assertIn("Unpaired readers: 5; baseline: 2", result.stdout)
+
+    def test_root_must_start_a_path_component(self):
+        # `my.control/asks` names another folder, not the legacy one.
+        (self.root / "other.py").write_text('p = "my.' + 'control/asks"\n')
+        self.stage()
+        result = self.check()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("other.py", result.stdout)
+
+    def test_hint_states_the_first_introduction_skip(self):
+        self.write_reader("new.py")
+        self.stage()
+        result = self.check()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("no\nbaseline file yet", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
