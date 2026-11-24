@@ -7,22 +7,29 @@ commit, a review or a merge. Deciding from shell text whether an entry reaches
 such a file cannot be made sound on a real file system, so the ratchet does not
 depend on it.
 
-THE RATCHET is on the identity of each WHOLE entry, and entries are counted:
-  - a LaunchAgent: the plist file name, and the SHA-256 of the canonical form of
-    the whole plist dictionary, every key;
-  - a hook: the hooks file, the event, the matcher, and the SHA-256 of the
-    canonical form of the whole hook object, every key, whatever its `type`.
-The canonical form is JSON with keys sorted and no added whitespace; strings
-are kept exactly (nothing normalised); a plist date is {"$date": ISO 8601
-text} and plist data is {"$data": lowercase hex}. Nothing is selected, so
-nothing can change unseen; reordering keys within an entry, or entries within
-a list, changes nothing. The baseline is a multiset: each identity and how
-many times it occurs. Doctor FAILS when an identity occurs more often than the
-baseline records (a new entry, a changed one, or one more copy of an existing
-one), whatever the annotation says. Fewer is a removal: it passes and is
-reported. Nothing passes because of its class. Acknowledging is recording the
-baseline again (`bstack doctor --baseline-entries --force` after a review);
-recording prints, and with --json returns, everything it acknowledges.
+THE RATCHET is on the identity of each WHOLE entry, and entries are counted.
+An identity is the SHA-256 of an injective encoding (encode(), grammar in its
+docstring: every value a type tag plus an explicit length or count) of exactly
+what the file says; nothing is joined with a delimiter and nothing is parsed
+lossily:
+  - a LaunchAgent: encode([plist file name, the file's raw bytes]). The plist
+    is not parsed for its identity, so re-saving it in another format (binary
+    or XML) or with other whitespace changes the identity and must be
+    acknowledged;
+  - a hook: encode([source file, event, matcher, whole hook object]), where the
+    matcher is [] when the group has none and [value] when it has one (so an
+    absent matcher, a null one and "" differ). Hooks files are read without
+    loss: numbers stay their literal text (1, 1.0 and 1e0 differ), NaN and
+    Infinity are refused, and an object that repeats a key fails, naming the
+    file and the JSON path.
+Reordering keys within a hook object, or entries within a list, changes
+nothing. The baseline is a multiset: each identity and how many times it
+occurs. Doctor FAILS when an identity occurs more often than the baseline
+records (a new entry, a changed one, or one more copy of an existing one),
+whatever the annotation says. Fewer is a removal: it passes and is reported.
+Nothing passes because of its class. Acknowledging is recording the baseline
+again (`bstack doctor --baseline-entries --force` after a review); recording
+prints, and with --json returns, everything it acknowledges.
 
 SOURCES read: every com.broomva.*.plist in ~/Library/LaunchAgents; every hook
 object, of any type, in the user's Claude Code settings (~/.claude/settings.json)
@@ -35,6 +42,13 @@ and never an empty list. Accepted shapes of a hooks file: a JSON object;
 `hooks`, if present, an object; each hooks.<event> a list; each element an
 object with a `hooks` list, an optional `matcher` and no other key; each
 element of that list an object. A plist must be a dictionary.
+
+AN ABSENT SOURCE (no LaunchAgents directory, no settings file, no Codex hooks
+file) holds no entries and is not a failure: every run names it, `[info]
+source not present: <path>` in the text output and {"source", "present":
+false} under "sources" in --json. If it held entries when the baseline was
+recorded, each of them is reported as removed. A dangling symlink is not
+absent: it is a source that cannot be read.
 
 THE ANNOTATION is best effort and never decides whether doctor passes. For
 each entry it says `flagged` (a tracked file it names, and its repository),
@@ -137,12 +151,13 @@ cannot be read, a broken baseline, or a baseline that could not be recorded, 42
 no baseline recorded, 2 a usage error.
 
 With --json every mode prints exactly one JSON object, errors included:
-{"schema": 3, "mode": "check"|"report"|"baseline", "baseline_recorded_at",
+{"schema": 4, "mode": "check"|"report"|"baseline", "baseline_recorded_at",
 "new": [entry], "removed": [{"source", "entry", "sha256", "count",
 "baseline_count"}], "unchanged": <occurrences>, "error"}, where an entry is
 {"source", "entry", "sha256", "command", "annotation": {"class", "files":
 [{"file", "repository"}], "reasons"}} and, in "new", also "count" and
-"baseline_count". --report adds "entries" (every occurrence; "new", "removed",
+"baseline_count". Every mode that reads the sources adds "sources": [{"source",
+"present"}]. --report adds "entries" (every occurrence; "new", "removed",
 "unchanged" are null). Recording adds "action" ("recorded", or null when
 nothing was written) and "baseline" (the file's path); its "new" and "removed"
 are what it acknowledged. On an error "new", "removed" and "unchanged" are
@@ -458,38 +473,144 @@ def read_entry(texts, home, cwd=None):
     return files, missed
 
 
-def canonical(value, where):
-    """The one canonical text of a plist or JSON value: JSON with sorted keys and no
-    added whitespace. A plist date is {"$date": ISO 8601 text}, plist data is
-    {"$data": lowercase hex}; strings are kept exactly (no normalisation)."""
-    def plain(item, path):
-        if isinstance(item, dict):
-            if not all(isinstance(k, str) for k in item):
-                raise ValueError(f'cannot read {where}: a non-text key at {path}')
-            return {k: plain(v, f'{path}.{k}') for k, v in item.items()}
-        if isinstance(item, list):
-            return [plain(v, f'{path}[{i}]') for i, v in enumerate(item)]
-        if isinstance(item, (bytes, bytearray)):
-            return {'$data': bytes(item).hex()}
-        if isinstance(item, datetime.datetime):
-            return {'$date': item.isoformat()}
-        if item is None or isinstance(item, (str, int, float, bool)):
-            return item
-        raise ValueError(f'cannot read {where}: an unsupported value at {path}')
-    return json.dumps(plain(value, '$'), sort_keys=True, ensure_ascii=False, separators=(',', ':'))
+class JsonNumber:
+    """A JSON number kept as the exact literal in the file (kind 'i' or 'f')."""
+    __slots__ = ('kind', 'text')
+
+    def __init__(self, kind, text):
+        self.kind, self.text = kind, text
+
+    def __eq__(self, other):
+        return isinstance(other, JsonNumber) and (self.kind, self.text) == (other.kind, other.text)
+
+    def __hash__(self):
+        return hash((self.kind, self.text))
+
+    def __repr__(self):
+        return self.text
 
 
-def digest(text):
-    """SHA-256 of the exact text: whitespace is significant, nothing is normalised."""
-    return hashlib.sha256(text.encode('utf-8', 'surrogatepass')).hexdigest()
+class Duplicate(dict):
+    """An object whose JSON text repeats a key; reported with its path, never hashed."""
+    def __init__(self, pairs, key):
+        super().__init__(pairs)
+        self.duplicate = key
+
+
+def read_json(text, where):
+    """Parse JSON without losing anything the file says: numbers stay literal text,
+    NaN and Infinity are refused, and an object that repeats a key fails with the
+    JSON path of that object."""
+    def constant(name):
+        raise ValueError(f'cannot read {where}: {name} is not JSON')
+
+    def pairs(items):
+        seen = set()
+        for key_, _ in items:
+            if key_ in seen:
+                return Duplicate(items, key_)
+            seen.add(key_)
+        return dict(items)
+
+    data = json.loads(text, parse_int=lambda t: JsonNumber('i', t), parse_float=lambda t: JsonNumber('f', t),
+                      parse_constant=constant, object_pairs_hook=pairs)
+
+    def check(value, path):
+        if isinstance(value, Duplicate):
+            raise ValueError(f'cannot read {where}: {path} has a duplicate key {value.duplicate!r}')
+        if isinstance(value, dict):
+            for k, v in value.items():
+                check(v, f'{path}.{k}' if path != '$' else k)
+        elif isinstance(value, list):
+            for i, v in enumerate(value):
+                check(v, f'{path}[{i}]')
+    check(data, '$')
+    return data
+
+
+def encode(value):
+    """The one injective encoding every identity is hashed from.
+
+    Each value is a type tag followed by an explicit length or count, so no two
+    different values share an encoding and nothing is joined by a delimiter:
+      string        s<UTF-8 byte length>:<UTF-8 bytes>
+      integer       i<decimal text>;        (a JSON integer: its literal as written;
+                                            a Python int: its decimal text)
+      real          f<literal text>;        (a JSON real as written; a plist real: Python repr)
+      true / false  t / b
+      null          n
+      list          l<count>:<item encodings>
+      dictionary    d<count>:<key encoding><value encoding>...   keys in sorted UTF-8 byte order
+      plist date    D<length>:<ISO 8601 text>
+      plist data    B<length>:<raw bytes>
+      plist UID     U<decimal>;
+    """
+    if isinstance(value, str):
+        raw = value.encode('utf-8', 'surrogatepass')
+        return b's%d:' % len(raw) + raw
+    if value is True:
+        return b't'
+    if value is False:
+        return b'b'
+    if value is None:
+        return b'n'
+    if isinstance(value, JsonNumber):
+        return value.kind.encode() + value.text.encode('ascii') + b';'
+    if isinstance(value, int):
+        return b'i%d;' % value
+    if isinstance(value, float):
+        return b'f' + repr(value).encode('ascii') + b';'
+    if isinstance(value, (list, tuple)):
+        return b'l%d:' % len(value) + b''.join(encode(item) for item in value)
+    if isinstance(value, dict):
+        if not all(isinstance(k, str) for k in value):
+            raise ValueError('a dictionary key that is not text')
+        keys = sorted(value, key=lambda k: k.encode('utf-8', 'surrogatepass'))
+        return b'd%d:' % len(value) + b''.join(encode(k) + encode(value[k]) for k in keys)
+    if isinstance(value, datetime.datetime):
+        raw = value.isoformat().encode('ascii')
+        return b'D%d:' % len(raw) + raw
+    if isinstance(value, (bytes, bytearray)):
+        return b'B%d:' % len(value) + bytes(value)
+    if isinstance(value, plistlib.UID):
+        return b'U%d;' % value.data
+    raise ValueError(f'a value with no encoding: {type(value).__name__}')
+
+
+def identity_of(value):
+    return hashlib.sha256(encode(value)).hexdigest()
+
+
+def show(value):
+    """Display text for a JSON value (numbers as their literal); never hashed."""
+    if isinstance(value, dict):
+        return '{' + ','.join(f'{json.dumps(k, ensure_ascii=False)}:{show(value[k])}' for k in sorted(value)) + '}'
+    if isinstance(value, list):
+        return '[' + ','.join(show(v) for v in value) + ']'
+    if isinstance(value, JsonNumber):
+        return value.text
+    return json.dumps(value, ensure_ascii=False)
+
+
+def plist_identity(name, raw):
+    """A LaunchAgent: the plist file name and the file's raw bytes, unparsed."""
+    return identity_of([name, bytes(raw)])
+
+
+def hook_identity(source, event, group, hook):
+    """A hook: [source file, event, matcher, whole hook object]. The matcher is []
+    when the group has none and [value] when it has one, so an absent matcher, a
+    null one and an empty string are three different identities."""
+    return identity_of([source, event, [group['matcher']] if 'matcher' in group else [], hook])
 
 
 def launchd_entries(folder, home):
     """(entry, command, files, missed, sha256) for each com.broomva.*.plist in ``folder``.
 
-    The identity is the plist file name and the SHA-256 of the canonical form of
-    the WHOLE plist dictionary (every key). The annotation reads Program,
-    ProgramArguments and WorkingDirectory.
+    The identity is the plist file name and the file's RAW BYTES: nothing is
+    parsed for it, so re-saving a plist in another format (binary or XML) or with
+    other whitespace changes its identity and must be acknowledged. The file is
+    parsed only to check it is a dictionary and for the annotation.
     """
     try:
         with os.scandir(folder) as listing:
@@ -501,13 +622,12 @@ def launchd_entries(folder, home):
         raise ValueError(f'cannot read {folder}: {exc}') from exc
     for plist in (folder / name for name in names):
         try:
-            with plist.open('rb') as stream:
-                data = plistlib.load(stream)
+            raw = plist.read_bytes()
+            data = plistlib.loads(raw)
         except Exception as exc:  # plistlib raises expat errors that are not ValueError
             raise ValueError(f'cannot read {plist}: {exc}') from exc
         if not isinstance(data, dict):
             raise ValueError(f'cannot read {plist}: not a dictionary')
-        sha = digest(canonical(data, plist))
         cwd = data.get('WorkingDirectory')
         cwd = expand(cwd, home) if isinstance(cwd, str) and cwd else None
         cwd = cwd if cwd is not None and os.path.isabs(cwd) else None
@@ -516,25 +636,25 @@ def launchd_entries(folder, home):
         program = data.get('Program')
         strings = ([program] if isinstance(program, str) and program else []) + argv
         files, missed = read_entry(strings, home, cwd)
-        yield plist.name, shlex.join(strings), files, missed, sha
+        yield plist.name, shlex.join(strings), files, missed, plist_identity(plist.name, raw)
 
 
-def hook_entries(settings, home):
+def hook_entries(settings, home, source):
     """(entry, command, files, missed, sha256) for each hook object in a hooks file.
 
-    Claude Code's settings.json and Codex's hooks.json share one shape, walked
-    strictly; anything else is an error naming the file and the JSON path:
+    Claude Code's settings.json and Codex's hooks.json share one shape, read
+    losslessly (read_json) and walked strictly; anything else is an error naming
+    the file and the JSON path:
       the file is a JSON object; `hooks`, if present, is an object;
       hooks.<event> is a list;
       hooks.<event>[i] is an object with a `hooks` list, an optional `matcher`
         and no other key;
       hooks.<event>[i].hooks[j] is an object (any keys, any `type`).
-    Each hook object is one entry, whatever its type. Its identity is the file,
-    the event, the matcher and the SHA-256 of the canonical form of the WHOLE
-    hook object. The annotation reads its `command` when that is a string.
+    Each hook object is one entry, whatever its type; its identity is
+    hook_identity(source, event, group, hook).
     """
     try:
-        data = json.loads(settings.read_text(encoding='utf-8'))
+        text = settings.read_text(encoding='utf-8')
     except FileNotFoundError:
         # A dangling symlink is a file that could not be read, not an absent one.
         if os.path.lexists(settings):
@@ -542,6 +662,10 @@ def hook_entries(settings, home):
         return
     except (OSError, ValueError) as exc:
         raise ValueError(f'cannot read {settings}: {exc}') from exc
+    try:
+        data = read_json(text, settings)
+    except ValueError as exc:
+        raise ValueError(str(exc) if str(exc).startswith('cannot read') else f'cannot read {settings}: {exc}') from exc
 
     def bad(path, what):
         return ValueError(f'cannot read {settings}: {path} is {what}')
@@ -568,14 +692,14 @@ def hook_entries(settings, home):
                 raise bad(at, f'an object with unexpected keys {extra}')
             matcher = group.get('matcher')
             label = f'{event}' + ('' if 'matcher' not in group else
-                                  f'[{matcher}]' if isinstance(matcher, str) else f'[{canonical(matcher, settings)}]')
+                                  f'[{matcher}]' if isinstance(matcher, str) else f'[{show(matcher)}]')
             for h, hook in enumerate(group['hooks']):
                 if not isinstance(hook, dict):
                     raise bad(f'{at}.hooks[{h}]', 'not an object')
                 command = hook.get('command')
                 named, missed = read_entry([command], home) if isinstance(command, str) else ([], [])
-                shown = command if isinstance(command, str) else canonical(hook, settings)
-                yield label, shown, named, missed, digest(canonical(hook, settings))
+                shown = command if isinstance(command, str) else show(hook)
+                yield label, shown, named, missed, hook_identity(source, event, group, hook)
 
 
 TRACKED = {}  # work-tree top -> identities of the files `git ls-files` lists there, built once per process
@@ -660,9 +784,10 @@ def collect(sources, home):
             text = text.replace(prefix + os.sep, '~' + os.sep)
         return text
 
-    found = []
+    found, presence = [], []
     for kind, path in sources:
-        rows = launchd_entries(path, home) if kind == 'launchd' else hook_entries(path, home)
+        presence.append({'source': display(path), 'present': os.path.lexists(path)})
+        rows = launchd_entries(path, home) if kind == 'launchd' else hook_entries(path, home, display(path))
         for entry, command, files, missed, sha in rows:
             tracked, reasons = [], list(missed)
             for file in files:
@@ -675,7 +800,12 @@ def collect(sources, home):
             found.append({'source': display(path), 'entry': entry, 'sha256': sha,
                           'command': display_text(command),
                           'annotation': {'class': label, 'files': tracked, 'reasons': reasons}})
-    return found
+    return found, presence
+
+
+def absent_lines(presence):
+    return [f"[info] source not present: {p['source']} (it holds no entries; if it held entries at the "
+            'baseline, each is reported as removed)' for p in presence if not p['present']]
 
 
 def key(item):
@@ -728,7 +858,7 @@ def change_kind(item, saved):
 
 
 def report(mode, recorded_at, error, **fields):
-    print(json.dumps({'schema': 3, 'mode': mode, 'baseline_recorded_at': recorded_at,
+    print(json.dumps({'schema': 4, 'mode': mode, 'baseline_recorded_at': recorded_at,
                       'new': None, 'removed': None, 'unchanged': None, 'error': error, **fields}))
 
 
@@ -767,7 +897,7 @@ def load_baseline(baseline):
     with baseline.open(encoding='utf-8') as stream:
         data = json.load(stream)
     rows = data.get('entries') if isinstance(data, dict) else None
-    if (not isinstance(data, dict) or data.get('schema') != 3 or not isinstance(data.get('recorded_at'), str)
+    if (not isinstance(data, dict) or data.get('schema') != 4 or not isinstance(data.get('recorded_at'), str)
             or not isinstance(rows, list)
             or not all(isinstance(r, dict) and all(isinstance(r.get(f), str) for f in IDENTITY_FIELDS)
                        and type(r.get('count')) is int and r['count'] > 0 for r in rows)):
@@ -790,10 +920,12 @@ def main(args):
     baseline = paths.machine_path('state') / BASELINE_NAME
     BASELINE_PATH = str(baseline)
     if args.report:
-        current = collect(sources, home)
+        current, presence = collect(sources, home)
         if args.json:
-            report('report', None, None, entries=current)
+            report('report', None, None, entries=current, sources=presence)
             return 0
+        for line_ in absent_lines(presence):
+            print(line_)
         for item in current:
             print(f'[info] {describe(item)}')
         counts = {}
@@ -803,7 +935,7 @@ def main(args):
               + ', '.join(f'{n} {label}' for label, n in sorted(counts.items())))
         return 0
     if args.baseline_entries:
-        current = collect(sources, home)
+        current, presence = collect(sources, home)
         previous = []
         if baseline.exists() and args.force:
             try:
@@ -815,14 +947,16 @@ def main(args):
         baseline.parent.mkdir(parents=True, exist_ok=True)
         recorded_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
         with baseline.open('w' if args.force else 'x', encoding='utf-8') as stream:
-            json.dump({'schema': 3, 'recorded_at': recorded_at,
+            json.dump({'schema': 4, 'recorded_at': recorded_at,
                        'entries': [{**dict(zip(IDENTITY_FIELDS, k)), 'count': n}
                                    for k, n in sorted(counted(current).items())]}, stream, indent=2)
             stream.write('\n')
         if args.json:
             report('baseline', recorded_at, None, new=new, removed=removed, unchanged=unchanged,
-                   action='recorded', baseline=str(baseline))
+                   action='recorded', baseline=str(baseline), sources=presence)
             return 0
+        for line_ in absent_lines(presence):
+            print(line_)
         print(f'[info] baseline recorded at {baseline}; acknowledged {len(new)} new or changed, '
               f'{len(removed)} removed, {unchanged} unchanged:')
         for item in new:
@@ -839,12 +973,14 @@ def main(args):
         if args.json:
             report('check', None, f'no baseline recorded at {baseline}: run bstack doctor --baseline-entries')
         return 42  # No baseline: the ratchet is off on this machine.
-    current = collect(sources, home)
+    current, presence = collect(sources, home)
     new, removed, unchanged = compare(current, saved)
     failed = int(bool(new))
     if args.json:
-        report('check', recorded_at, None, new=new, removed=removed, unchanged=unchanged)
+        report('check', recorded_at, None, new=new, removed=removed, unchanged=unchanged, sources=presence)
         return failed
+    for line_ in absent_lines(presence):
+        print(line_)
     for item in removed:
         print(f"[info] acknowledged entry is gone: {item['source']} {item['entry']} "
               f"({item['baseline_count']} -> {item['count']}; baseline can be re-recorded)")

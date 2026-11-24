@@ -435,6 +435,162 @@ for probe in ('/usr/bin/python3', '/usr/bin/git'):
             failed.append(f'  identity: {probe} (read-only, {os.stat(probe).st_nlink} names) is annotated')
         else:
             print(f'identity: {probe} has {os.stat(probe).st_nlink} names on a read-only volume: no hard-link annotation')
+
+# Round 7, injectivity as a property: a decoder written HERE, independent of the module,
+# reads every encoding back to the value it came from. decode(encode(x)) == x for every
+# generated x proves that no two different values share an encoding.
+import datetime, plistlib, random
+
+
+def decode(data):
+    def value(i):
+        tag = data[i:i + 1]
+        if tag in (b't', b'b', b'n'):
+            return {b't': True, b'b': False, b'n': None}[tag], i + 1
+        if tag in (b'i', b'f', b'U'):
+            end = data.index(b';', i)
+            text = data[i + 1:end].decode('ascii')
+            if tag == b'U':
+                return plistlib.UID(int(text)), end + 1
+            return d.JsonNumber(tag.decode(), text), end + 1
+        if tag in (b's', b'D', b'B', b'l', b'd'):
+            colon = data.index(b':', i)
+            n = int(data[i + 1:colon])
+            i = colon + 1
+            if tag == b's':
+                return data[i:i + n].decode('utf-8', 'surrogatepass'), i + n
+            if tag == b'D':
+                return datetime.datetime.fromisoformat(data[i:i + n].decode('ascii')), i + n
+            if tag == b'B':
+                return data[i:i + n], i + n
+            items = []
+            for _ in range(n * (2 if tag == b'd' else 1)):
+                item, i = value(i)
+                items.append(item)
+            if tag == b'l':
+                return items, i
+            return dict(zip(items[0::2], items[1::2])), i
+        raise ValueError(f'unknown tag {tag!r} at {i}')
+    result, end = value(0)
+    assert end == len(data), 'trailing bytes'
+    return result
+
+
+def same(a, b):
+    """Equality that also compares types: True is not 1, 1 is not 1.0, "1" is not 1. A Python
+    int (a plist integer) is the integer literal with its decimal text, as the grammar says."""
+    if type(a) is int:
+        a = d.JsonNumber('i', str(a))
+    if type(b) is int:
+        b = d.JsonNumber('i', str(b))
+    if type(a) is not type(b):
+        return False
+    if isinstance(a, dict):
+        return a.keys() == b.keys() and all(same(a[k], b[k]) for k in a)
+    if isinstance(a, list):
+        return len(a) == len(b) and all(same(x, y) for x, y in zip(a, b))
+    return a == b
+
+
+rng = random.Random(7)
+ALPHABET = 'sitfbnldDBU:;0123456789"\\\'{}[], $é字 \n'
+
+
+def text():
+    return ''.join(rng.choice(ALPHABET) for _ in range(rng.randrange(0, 8)))
+
+
+def number():
+    kind = rng.choice('if')
+    if kind == 'i':
+        return d.JsonNumber('i', str(rng.choice([0, -1, 1, 7, 10 ** rng.randrange(1, 40), -(2 ** 63), 9007199254740993])))
+    return d.JsonNumber('f', rng.choice(['0.1', '0.10', '1.0', '1e0', '1E+0', '-0.0', '9007199254740993.0', '1e400', '2.5e-7']))
+
+
+def leaf(plist):
+    choices = [text, number, lambda: rng.choice([True, False, None]), lambda: rng.randrange(-10 ** 20, 10 ** 20)]
+    if plist:
+        choices += [lambda: datetime.datetime(2000 + rng.randrange(50), 1 + rng.randrange(12), 1 + rng.randrange(28),
+                                              rng.randrange(24), rng.randrange(60), rng.randrange(60)),
+                    lambda: bytes(rng.randrange(256) for _ in range(rng.randrange(0, 6))),
+                    lambda: plistlib.UID(rng.randrange(1000))]
+    return rng.choice(choices)()
+
+
+def structure(depth, plist):
+    roll = rng.random()
+    if depth == 0 or roll < 0.4:
+        return leaf(plist)
+    if roll < 0.7:
+        return [structure(depth - 1, plist) for _ in range(rng.randrange(0, 4))]
+    return {text(): structure(depth - 1, plist) for _ in range(rng.randrange(0, 4))}
+
+
+values = [structure(4, plist=k % 2 == 1) for k in range(3200)]
+by_encoding = {}
+round_tripped = 0
+for v in values:
+    raw = d.encode(v)
+    try:
+        back = decode(raw)
+    except (ValueError, IndexError, UnicodeDecodeError, AssertionError) as exc:
+        back = exc  # not in the grammar at all: a failed round trip
+    if same(back, v):
+        round_tripped += 1
+    else:
+        failed.append(f'  injectivity: decode(encode(x)) != x for {v!r}')
+    by_encoding.setdefault(raw, []).append(v)
+clashes = sum(1 for group in by_encoding.values() if any(not same(group[0], other) for other in group[1:]))
+if clashes:
+    failed.append(f'  injectivity: {clashes} encodings shared by different values')
+print(f'injectivity: {round_tripped} of {len(values)} generated values decode back to themselves; '
+      f'{len(by_encoding)} distinct encodings, {clashes} shared by different values')
+
+
+# Round 7, named collision cases from the review and their relatives: each pair must differ.
+def hook_id(event, group, hook):
+    return d.hook_identity('~/.claude/settings.json', event, group, hook)
+
+
+J = lambda text: d.read_json(text, 'test')  # noqa: E731
+H = {'type': 'command', 'command': 'echo hi'}
+pairs = {
+    'event A, matcher x  vs  event A[x], no matcher': (hook_id('A', {'matcher': 'x'}, H), hook_id('A[x]', {}, H)),
+    'event A, matcher "B" vs event "A B"': (hook_id('A', {'matcher': 'B'}, H), hook_id('A B', {}, H)),
+    'matcher absent vs ""': (hook_id('A', {}, H), hook_id('A', {'matcher': ''}, H)),
+    'matcher absent vs null': (hook_id('A', {}, H), hook_id('A', {'matcher': None}, H)),
+    'plist date vs {"$date": same text}': (d.encode({'k': datetime.datetime(2024, 1, 1)}), d.encode({'k': {'$date': '2024-01-01T00:00:00'}})),
+    'plist data vs {"$data": same hex}': (d.encode({'k': b'\x00\xff'}), d.encode({'k': {'$data': '00ff'}})),
+    '1 vs 1.0': (d.encode(J('1')), d.encode(J('1.0'))),
+    '1.0 vs 1e0': (d.encode(J('1.0')), d.encode(J('1e0'))),
+    '1 vs true': (d.encode(J('1')), d.encode(J('true'))),
+    '9007199254740993 vs 9007199254740992': (d.encode(J('9007199254740993')), d.encode(J('9007199254740992'))),
+    '9007199254740993.0 vs 9007199254740992.0': (d.encode(J('9007199254740993.0')), d.encode(J('9007199254740992.0'))),
+    '1e400 vs 1e401': (d.encode(J('1e400')), d.encode(J('1e401'))),
+    '0.1 vs 0.10': (d.encode(J('0.1')), d.encode(J('0.10'))),
+    '"1" vs 1': (d.encode(J('"1"')), d.encode(J('1'))),
+    'plist file, same text, other bytes': (d.plist_identity('a.plist', b'<a/>'), d.plist_identity('a.plist', b'<a/> ')),
+}
+distinct = 0
+for label, (x, y) in pairs.items():
+    if x != y:
+        distinct += 1
+    else:
+        failed.append(f'  collision: {label} share an identity')
+for bad_json, message in (('{"a": 1, "a": 2}', "$ has a duplicate key 'a'"),
+                          ('{"hooks": {"Stop": [{"hooks": [{"type": "x", "type": "y"}]}]}}',
+                           "hooks.Stop[0].hooks[0] has a duplicate key 'type'"),
+                          ('{"n": NaN}', 'NaN is not JSON'), ('{"n": -Infinity}', '-Infinity is not JSON')):
+    try:
+        J(bad_json)
+        failed.append(f'  lossless JSON: {bad_json} was accepted')
+    except ValueError as exc:
+        if message in str(exc):
+            distinct += 1
+        else:
+            failed.append(f'  lossless JSON: {bad_json} failed without naming {message!r}: {exc}')
+print(f'collisions: {distinct} of {len(pairs) + 4} named cases kept apart or refused')
+
 if failed:
     print('\n'.join(failed[:40]))
     sys.exit(1)
@@ -524,8 +680,9 @@ counts = {}
 for item in d['entries']:
     counts[item['annotation']['class']] = counts.get(item['annotation']['class'], 0) + 1
 open(sys.argv[1] + '.counts', 'w').write(json.dumps(counts))
-assert sorted(d) == ['baseline_recorded_at', 'entries', 'error', 'mode', 'new', 'removed', 'schema', 'unchanged'], sorted(d)
-assert (d['schema'], d['mode'], d['error'], d['new'], d['removed'], d['unchanged']) == (3, 'report', None, None, None, None), d
+assert sorted(d) == ['baseline_recorded_at', 'entries', 'error', 'mode', 'new', 'removed', 'schema', 'sources', 'unchanged'], sorted(d)
+assert all(p['present'] for p in d['sources']) and len(d['sources']) == 3, d['sources']
+assert (d['schema'], d['mode'], d['error'], d['new'], d['removed'], d['unchanged']) == (4, 'report', None, None, None, None), d
 
 
 def label(item):  # the earlier names of the fixture entries, so the expectations below read as before
@@ -595,6 +752,21 @@ if grep -q 'clean' "$TMP/out"; then echo 'the report calls an entry clean' >&2; 
 # Without the options the fixture home is read (empty so far), never HOME's decoy.
 python3 -I "$ENTRIES" --report >"$TMP/out"
 grep -Fq '[info] 0 entries (report only: no baseline read or written)' "$TMP/out"
+# An absent source passes but is named in every run, never silent.
+grep -Fq '[info] source not present: ~/.claude/settings.json' "$TMP/out"
+grep -Fq '[info] source not present: ~/.codex/hooks.json' "$TMP/out"
+if grep -Fq 'source not present: ~/Library/LaunchAgents' "$TMP/out"; then echo 'a present LaunchAgents folder reported absent' >&2; exit 1; fi
+python3 -I "$ENTRIES" --report --launch-agents "$TMP/no-such-agents" >"$TMP/out"
+grep -Fq "[info] source not present: $TMP/no-such-agents" "$TMP/out"
+python3 -I "$ENTRIES" --report --json --launch-agents "$TMP/no-such-agents" >"$TMP/json"
+python3 - "$TMP/json" "$TMP/no-such-agents" <<'PY_ABSENT'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d['sources'] == [{'source': sys.argv[2], 'present': False},
+                        {'source': '~/.claude/settings.json', 'present': False},
+                        {'source': '~/.codex/hooks.json', 'present': False}], d['sources']
+assert d['entries'] == [] and d['error'] is None, d
+PY_ABSENT
 if python3 -I "$ENTRIES" --report --baseline-entries >"$TMP/out" 2>&1; then echo '--report accepted a baseline write' >&2; exit 1; fi
 [ ! -e "$HOME_FIXTURE/.broomva/state" ] || { echo '--report wrote under the machine state path' >&2; exit 1; }
 [ ! -e "$HOME/.broomva" ] || { echo 'the check wrote under HOME' >&2; exit 1; }
@@ -676,6 +848,14 @@ if run_doctor; then echo 'a second identical hook passed' >&2; exit 1; fi
 grep -Fq '[failure] one more copy of an entry since the baseline (1 -> 2): ~/.claude/settings.json Stop: echo report.sh' "$TMP/out"
 cp "$TMP/settings.good" "$SETTINGS"
 run_doctor
+# A source present at the baseline and absent now: each entry it held is a removal, reported,
+# and the source is named as not present.
+mv "$CODEX" "$TMP/codex.away"
+run_doctor_verbose
+grep -Fq '[info] source not present: ~/.codex/hooks.json' "$TMP/out"
+grep -Fq '[info] acknowledged entry is gone: ~/.codex/hooks.json Stop (1 -> 0;' "$TMP/out"
+mv "$TMP/codex.away" "$CODEX"
+run_doctor
 # A REMOVED entry passes and is reported; re-recording says it is acknowledged as removed.
 mv "$AGENTS/com.broomva.existing.plist" "$TMP/existing.plist"
 run_doctor_verbose
@@ -701,9 +881,9 @@ with open(f'{agents}/com.broomva.env.plist', 'wb') as stream:
     plistlib.dump({'Label': 'env', 'Program': '/bin/echo', 'ProgramArguments': ['/bin/echo', 'hello  world'],
                    'WorkingDirectory': tree, 'EnvironmentVariables': {'A': '1', 'PATH': '/usr/bin:/bin'},
                    'RunAtLoad': True, 'XDate': datetime.datetime(2026, 1, 2, 3, 4, 5), 'XData': b'\x00\xff'}, stream)
-# The canonical form, defined once: sorted keys, no added whitespace, dates as ISO text, data as hex.
-assert d.canonical({'b': b'\x00\xff', 'a': datetime.datetime(2026, 1, 2, 3, 4, 5), 's': ' x '}, 'test') == \
-    '{"a":{"$date":"2026-01-02T03:04:05"},"b":{"$data":"00ff"},"s":" x "}'
+# The encoding, defined once: a tag and an explicit length or count for every value.
+assert d.encode({'b': b'\x00\xff', 'a': datetime.datetime(2026, 1, 2, 3, 4, 5), 's': ' x '}) == \
+    b'd3:s1:aD19:2026-01-02T03:04:05s1:bB2:\x00\xffs1:ss3: x '
 
 
 def run(*args):
@@ -847,14 +1027,25 @@ for name in plists:
                          ('XDate', datetime.datetime(2027, 1, 1)), ('XData', b'\x01')):
         expect_fail(field, name, edit_plist(f'{agents}/{name}', lambda d, f=field, v=value: d.__setitem__(f, v)))
     expect_fail('RunAtLoad', name, edit_plist(f'{agents}/{name}', lambda d: d.__setitem__('RunAtLoad', not d.get('RunAtLoad', False))))
-# (c) reordering keys inside an entry changes nothing; (d) nor does reordering entries in a list,
-# because the baseline is a multiset of identities: the same entries, counted, in any order.
+# A plist's identity is its raw bytes: re-saving it differently is a change to acknowledge,
+# even when nothing it says changed (other key order, one byte of whitespace, binary format).
+for name in plists:
+    expect_fail('key order (re-saved)', name, edit_plist(f'{agents}/{name}', lambda d: dict(reversed(list(d.items()))), sort_keys=False))
+
+    def whitespace(n=name):
+        raw = open(f'{agents}/{n}', 'rb').read()
+        assert b'\t' in raw
+        open(f'{agents}/{n}', 'wb').write(raw.replace(b'\t', b'  ', 1))
+        assert plistlib.loads(open(f'{agents}/{n}', 'rb').read()) == plistlib.loads(raw)
+    expect_fail('one byte of whitespace', name, whitespace)
+    expect_fail('binary format', name, lambda n=name: plistlib.dump(plistlib.load(open(f'{agents}/{n}', 'rb')),
+                                                                       open(f'{agents}/{n}', 'wb'), fmt=plistlib.FMT_BINARY))
+# (c) reordering keys inside a hook object changes nothing (a dictionary is encoded in sorted key
+# order); (d) nor does reordering entries in a list: the baseline is a multiset of identities.
 passes = total_pass = 0
 for path, event, g, h in hooks:
     expect_pass(f'key order of {event}', edit_json(path, lambda d, e=event, g=g, h=h: d['hooks'][e][g]['hooks'].__setitem__(
         h, dict(reversed(list(d['hooks'][e][g]['hooks'][h].items()))))))
-for name in plists:
-    expect_pass(f'key order of {name}', edit_plist(f'{agents}/{name}', lambda d: dict(reversed(list(d.items()))), sort_keys=False))
 expect_pass('two hooks swapped in a list', edit_json(settings, lambda d: d['hooks']['Stop'][0]['hooks'].reverse()))
 # Added entries: a new agent, a new hook in each hooks file.
 # Added entries: a new agent, a new hook in each hooks file.
@@ -909,7 +1100,7 @@ json_mode() {  # json_mode EXPECTED_EXIT PYTHON_ASSERTION ARG...
 import json, sys
 d = json.load(open(sys.argv[1]))
 baseline = sys.argv[3]
-assert d['schema'] == 3 and 'error' in d, d
+assert d['schema'] == 4 and 'error' in d, d
 assert eval(sys.argv[2]), (sys.argv[2], d)
 PY_MODE
 }
