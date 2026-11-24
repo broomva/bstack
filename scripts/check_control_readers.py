@@ -88,8 +88,8 @@ CODE_EXT = {".py", ".sh", ".bash", ".zsh", ".ts", ".tsx", ".js", ".mjs", ".cjs",
             ".rs", ".go", ".yml", ".toml", ".template"}
 CODE_NAMES = {"Makefile", "pre-commit", "pre-push", "commit-msg"}
 # Directory names skipped wherever they occur in a path. Matched as WHOLE path
-# components: `a/docs/x.py` is skipped, `scripts/mydocs/x.py` and `my.control/x.py`
-# are not. The reference sensor in broomva/workspace tests these as substrings
+# components: `a/docs/x.py` is skipped, `scripts/mydocs/x.py` and
+# `archived/x.py` are not. The reference sensor in broomva/workspace tests these as substrings
 # ("docs/" in path), which also hides any directory whose name merely ends with one;
 # this filter is deliberately stricter, so its count can be higher for the same tree.
 SKIP_DIRS = frozenset({"docs", "research", "archive", ".control", ".broomva", "node_modules"})
