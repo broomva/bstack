@@ -1,5 +1,85 @@
 # Changelog
 
+## 0.52.2 — 2026-11-23
+
+### feat(doctor): ratchet scheduled jobs and hooks: a new or changed entry must be acknowledged (BRO-4084)
+
+- **Working-tree entry ratchet (doctor §33).** `scripts/doctor-worktree-entries.py`
+  ratchets the identity of each whole scheduled job and hook, and counts them.
+  An identity is the SHA-256 of an injective encoding of exactly what the file
+  says: every value is a type tag plus an explicit length or count (`s<len>:`,
+  `i<text>;`, `f<literal>;`, `t`, `b`, `n`, `l<count>:`, `d<count>:` with keys in
+  byte order, `D<len>:` for a plist date, `B<len>:` for data, `U<n>;` for a UID),
+  so nothing is joined by a delimiter. A LaunchAgent is encoded as
+  `[file name, raw bytes of the plist]`: re-saving a plist in another format or
+  with other whitespace changes its identity and must be acknowledged. A hook is
+  `[source file, event, matcher ([] when absent, [value] when present), whole hook
+  object]`. Hooks files are read without loss: numbers stay their literal text,
+  `NaN`/`Infinity` are refused, and a repeated key fails naming the JSON path.
+  Reordering keys in a hook object, or entries in a list, changes nothing. The
+  baseline is a multiset (schema 4): doctor fails when an identity occurs more
+  often than recorded (new, changed, or one more copy), whatever the classifier
+  says; fewer is a removal, which passes and is reported. Acknowledging is
+  `bstack doctor --baseline-entries --force`, which prints (and with `--json`
+  returns) everything it acknowledges; it refuses to overwrite without `--force`.
+- **Sources:** `com.broomva.*` LaunchAgents, and every hook object of any type in
+  `~/.claude/settings.json` and `~/.codex/hooks.json`. Not read: other labels,
+  LaunchDaemons, project-level or managed settings files, other keys of the
+  settings file, cron. A hooks file is walked strictly (object; `hooks` object;
+  each event a list of objects with a `hooks` list, an optional `matcher` and no
+  other key; each hook an object); any other shape fails and names the file and
+  the JSON path. A plist must be a dictionary. An unreadable source fails too.
+- **An absent source** (no LaunchAgents folder, settings file or Codex file)
+  holds no entries and passes, but every run names it (`[info] source not
+  present: <path>`; `"sources": [{"source", "present"}]` in `--json`). If it held
+  entries at the baseline, each is reported as removed.
+- **The annotation is best effort and never decides.** Each entry is annotated
+  `flagged` (a tracked file it names, with its repository), `unresolved` (why
+  its text could not be read), or `no working-tree file found`. The annotation
+  reads only plain text (ASCII letters and digits, `_ - . / : = , + @ %`, space,
+  tab, quotes, `& | ; < >`, a leading `~`, exactly `$HOME` and `${HOME}`); in
+  plain text a reading may only add candidates, and absolute paths are found by
+  asking the file system at every start and end; files are compared by
+  (device, inode). It can miss a file reached through a symlinked directory and
+  `..`, an unlistable directory, a file system mounted twice, or content
+  fetched at run time.
+- `--report` lists every entry with its annotation and reads and writes no
+  baseline. `--json` prints one object in every mode, errors included (schema 2).
+- **Why (review rounds 1–5 of #155):** each round found a text that runs a tracked
+  file but was classed clean: a line continuation, a substitution, `=` in a file
+  name, letter case, then a symlinked directory with `..`, an unlistable
+  directory and a twice-mounted file system. A classifier of shell text over a
+  real file system always has another such case, so the ratchet no longer
+  depends on it.
+- **Tests:** injectivity is a property: a decoder written in the test reads every
+  encoding back, and 3200 generated structures (nested lists and dictionaries,
+  strings full of tag characters, colons, quotes and non-ASCII, integers of any
+  size, real literals, dates, data, UIDs) all decode to themselves; 19 named
+  collision cases from the review stay apart or are refused. The generated
+  mutation test makes 216 changes (one-character edits of each entry text, one
+  more copy of each entry, each non-command hook field, plist keys, a plist
+  re-saved with other key order, one byte of whitespace or in binary, additions):
+  all fail and name the entry, and 4 reorderings pass. Replacing the encoder with
+  `json.dumps(sort_keys=True)`, comparing identities as a set, hashing only the
+  command, or passing entries annotated `no working-tree file found` each fails
+  the tests.
+
+### fix(ci): a `.control` mention followed by `:` counts (BRO-4083 follow-up)
+
+- `scripts/check_control_readers.py` now counts `.control` followed by a `:`, as
+  in `PATH="$HOME/.control:$PATH"`; the mention pattern's right-hand contexts are
+  `/`, a quote, a backtick, `:` or the end of a line. The generated left x right
+  test grows to 204 combinations, and the PATH string is a named case. On this
+  tree no file enters the baseline (81 before and after); the reader test now
+  assembles the checker's output line from pieces so it stays off the list.
+
+### Migration
+
+Opt-in, like the machine folder ratchet: a machine without a baseline gets one
+`[info]` line and no gap, so its totals and `--strict` result do not change. Run
+`python3 -I scripts/doctor-worktree-entries.py --report` to see every entry and
+its annotation before running `bstack doctor --baseline-entries`.
+
 ## 0.52.1 — 2026-11-21
 
 ### feat(doctor): ratchets that report without a person running doctor (BRO-4083)

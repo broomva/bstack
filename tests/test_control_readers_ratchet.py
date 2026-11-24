@@ -31,7 +31,7 @@ class MentionPatternTest(unittest.TestCase):
 
     LEFT_COUNTS = ["", "/", "'", '"', " ", "\t", "=", "(", ",", "."]   # "" is the start of the text
     LEFT_NOT = ["a", "Z", "\u00e9", "7", "_", ")", "]"]
-    RIGHT_COUNTS = ["/", "'", '"', "`", "", "\n"]                     # "" is the end of the text
+    RIGHT_COUNTS = ["/", "'", '"', "`", ":", "", "\n"]                # "" is the end of the text
     RIGHT_NOT = ["a", "7", "_", "(", "."]
 
     def test_every_left_and_right_context(self):
@@ -47,7 +47,7 @@ class MentionPatternTest(unittest.TestCase):
                 if left:
                     self.assertEqual(mentions("x = 1; " + text), want, repr(text))
                 checked += 1
-        self.assertEqual(checked, 17 * 11)
+        self.assertEqual(checked, 17 * 12)
 
     def test_reviewers_strings(self):
         # Round 5 of this PR and the same hour's Maestro review: each is a mention now,
@@ -61,6 +61,7 @@ class MentionPatternTest(unittest.TestCase):
             "maestro major, a dot before the folder name": f'a = "my.{NAME}/asks"',
             "maestro minor, REPO-HOME": f'a = "{NAME}/asks"; b = "REPO-HOME/.broomva/asks"',
             "maestro minor, a literal ~ component": f'a = "{NAME}/asks"; b = "/tmp/~/.broomva/asks"',
+            "bstack r6 minor, a PATH list": f'PATH="$HOME/{NAME}:$PATH"',
         }
         for label, text in cases.items():
             with self.subTest(label):
@@ -112,7 +113,7 @@ class RatchetTest(unittest.TestCase):
     def test_baseline_fixture_passes(self):
         result = self.check()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("Files mentioning .control: 2; baseline: 2", result.stdout)
+        self.assertIn(f"Files mentioning {NAME}: 2; baseline: 2", result.stdout)
 
     def test_added_reader_fails_and_names_file(self):
         (self.root / "new.py").write_text(f'read({LEGACY}policy.yaml")\n')
@@ -135,7 +136,7 @@ class RatchetTest(unittest.TestCase):
         result = self.check()
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("new.py", result.stdout)
-        self.assertIn("Files mentioning .control: 2; baseline: 2", result.stdout)
+        self.assertIn(f"Files mentioning {NAME}: 2; baseline: 2", result.stdout)
 
     def test_comparison_is_live(self):
         (self.root / "new.py").write_text(f'read({LEGACY}policy.yaml")\n')
@@ -190,7 +191,7 @@ class RatchetTest(unittest.TestCase):
         self.commit("shrink")
         result = self.check("--base-ref", ref)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("Files mentioning .control: 1; baseline: 1", result.stdout)
+        self.assertIn(f"Files mentioning {NAME}: 1; baseline: 1", result.stdout)
 
     def test_renamed_reader_passes_against_base(self):
         ref = self.base()
@@ -238,7 +239,7 @@ class RatchetTest(unittest.TestCase):
         result = self.check()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertNotIn("built.py", result.stdout)
-        self.assertIn("Files mentioning .control: 2; baseline: 2", result.stdout)
+        self.assertIn(f"Files mentioning {NAME}: 2; baseline: 2", result.stdout)
 
     def test_comment_mention_is_counted(self):
         (self.root / "noted.py").write_text(f'# migration note: {LEGACY[1:]}asks\n')
@@ -271,7 +272,7 @@ class RatchetTest(unittest.TestCase):
         result = self.check()
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("scripts/mydocs/probe.py", result.stdout)
-        self.assertIn("Files mentioning .control: 3; baseline: 2", result.stdout)
+        self.assertIn(f"Files mentioning {NAME}: 3; baseline: 2", result.stdout)
 
     def test_skipped_directories_match_whole_components_at_any_depth(self):
         for rel in ("docs/x.py", "a/docs/x.py", "a/research/x.py", "node_modules/x.js"):
@@ -279,7 +280,7 @@ class RatchetTest(unittest.TestCase):
         self.stage()
         result = self.check()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("Files mentioning .control: 2; baseline: 2", result.stdout)
+        self.assertIn(f"Files mentioning {NAME}: 2; baseline: 2", result.stdout)
 
     def test_names_containing_a_skipped_name_are_counted(self):
         counted = ("scripts/research_notes/x.py", "archived/x.py", "my." + "control/x.py")
@@ -290,7 +291,7 @@ class RatchetTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         for rel in counted:
             self.assertIn(rel, result.stdout)
-        self.assertIn("Files mentioning .control: 5; baseline: 2", result.stdout)
+        self.assertIn(f"Files mentioning {NAME}: 5; baseline: 2", result.stdout)
 
     def test_attribute_style_left_neighbour_is_not_a_mention(self):
         # A letter before the dot (`my.control/asks`) is not a mention under the one pattern.

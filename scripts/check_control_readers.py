@@ -76,9 +76,10 @@ SKIP_DIRS = frozenset({"docs", "research", "archive", ".control", ".broomva", "n
 #   left:  the dot starts the text, or follows a character that is not a letter,
 #          digit or `_` (any script, \w) and not `)` or `]`; so `self.control` and
 #          `x).control` are attribute access, not the folder;
-#   right: `control` is followed by `/`, a single or double quote, a backtick, or
-#          the end of a line; so `.controller` and `.control(` are not mentions.
-MENTION = re.compile(r"""(?<![\w)\]])\.control(?=[/'"`]|$)""", re.M)
+#   right: `control` is followed by `/`, a single or double quote, a backtick, a
+#          `:` (a PATH-style list, `$HOME/.control:$PATH`), or the end of a line;
+#          so `.controller` and `.control(` are not mentions.
+MENTION = re.compile(r"""(?<![\w)\]])\.control(?=[/'"`:]|$)""", re.M)
 
 
 def mentions(text: str) -> bool:
