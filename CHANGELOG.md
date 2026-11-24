@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.52.1 — 2026-11-21
+
+### feat(doctor): ratchets that report without a person running doctor (BRO-4083)
+
+- **Reader ratchet in CI.** The contract: the ratchet lists every code file that
+  mentions the legacy folder name `.control` at all; a pull request may not add a
+  file to that list. `scripts/check_control_readers.py` implements it, and
+  `ci.yml` runs it as the `control reader ratchet` job. New code spells neither
+  folder name and resolves paths through the generated path reader
+  (`scripts/broomva_paths.py`, `scripts/lib/broomva-paths.sh`,
+  `scripts/lib/broomva_paths.rs`). Existing mentions are grandfathered in
+  `scripts/control_readers_baseline.json` (81 files), and the list only shrinks. A
+  mention is one pattern: `.control` not preceded by a letter, digit, `_`, `)` or
+  `]`, and followed by `/`, a quote, a backtick or the end of a line. Files under a
+  directory named exactly `docs`, `research`, `archive`, `.control`, `.broomva` or
+  `node_modules` are skipped, matched as whole path components. On a pull request it
+  passes `--base-ref <base sha>`, and the PR's baseline may not contain a path the
+  base's baseline lacks, except as the `git diff -M` rename of an entry the same
+  change drops; the comparison is skipped, with a note, when the base has no
+  baseline yet. Limits: a mention assembled from pieces is not found, and a comment
+  counts. This count of mentioning files is not the "unpaired readers" count of
+  the sensor in `broomva/workspace`. An earlier draft of this PR paired each
+  `.control/<area>` with a `.broomva/<area>`; review rounds kept finding new holes
+  in that pairing, here and in `broomva/maestro`, so it was removed rather than
+  hardened.
+- **`--json` on the machine folder check.** `python3 -I scripts/doctor-machine-folders.py
+  --json` prints one object, `{"schema": 1, "baseline_recorded_at", "unregistered":
+  [{"path", "suggested"}], "grandfathered", "error"}`, with the exit code of the plain
+  run (0, 1, or 42 without a baseline). A missing or invalid baseline sets `error` and
+  leaves `unregistered` and `grandfathered` null, never an empty list. The plain
+  output and exit codes are unchanged.
+
+### Migration
+
+None: the `--json` option is new and the plain output of the folder check is
+unchanged. To tighten the reader baseline after removing a reader, replace the
+committed file with the output of
+`python3 scripts/check_control_readers.py --print-baseline`.
+
 ## 0.52.0 — 2026-11-18
 
 ### feat(verification): checked review results and versioned evidence contracts
