@@ -64,6 +64,18 @@
   character outside the grammar and six non-ASCII ones at the start, inside the
   path and at the end of three flagged commands (954 variants); none comes out
   clean.
+- **Files are compared by identity, never by path string** (round 4). A
+  candidate exists if `os.stat` succeeds; its identity is (device, inode); each
+  working tree's tracked set is built once as the identities of what
+  `git ls-files` lists. So letter case on a case-insensitive volume, `//`, `/./`,
+  `..`, symlinks and a hard link inside the tree all name the tracked file. A
+  hard link that is not tracked where it sits makes the entry unresolved (the
+  file has more than one name); a file on a read-only file system is exempt.
+  Removed: exact `listdir` membership and case-sensitive prefix pruning in the
+  walk, realpath-string de-duplication of files and directories, and
+  `relpath in ls-files` membership. A generated test spells five tracked files
+  seven other ways (71 commands with the reviewer's `T/X.SH`); the letter-case
+  rows run only where a probe shows the file system is case-insensitive.
 - Not seen: content fetched at run time by a program the entry names (a script
   that reads another file, a URL it downloads).
 

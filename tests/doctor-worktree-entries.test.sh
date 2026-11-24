@@ -50,12 +50,18 @@ for f in 'p=q.sh' 'p:q.sh' 'p,q.sh' 'p+q.sh' 'p@q.sh' 'p%q.sh' 'p-q.sh' 'p_q.sh'
 done
 echo '#' > "$TREE/a=b.sh"
 git -C "$TREE" add punct 'a=b.sh'
+# Round 4: x.sh (the reviewer's file) and a name with an accented letter, written in NFC.
+echo '#' > "$TREE/x.sh"
+python3 -c 'import sys; open(sys.argv[1] + "/caf\u00e9.sh", "w").write("#\n")' "$TREE"
+git -C "$TREE" add x.sh "$(printf 'caf\303\251.sh')"
 git -C "$TREE" -c user.name=t -c user.email=t@example.invalid commit -q -m fixture
 git -C "$TREE" worktree add -q "$TMP/linked" -b linked >/dev/null 2>&1
 [ -f "$TMP/linked/.git" ] || { echo 'fixture: the linked worktree has no .git file' >&2; exit 1; }
 echo '#' > "$TMP/plain/released.sh"
 echo '#' > "$HOME_FIXTURE/.broomva/releases/tool/run.sh"
 ln -s "$TREE/tracked.sh" "$HOME_FIXTURE/bin/linked.sh"
+# A hard link outside any working tree: the same file as tracked notes.md under an untracked name.
+ln "$TREE/notes.md" "$TMP/plain/notes-link.md"
 plist "$TMP/decoy-home/Library/LaunchAgents" com.broomva.decoy /bin/bash "$TREE/tracked.sh"
 
 # ── word table and property test (module functions, fixture home only) ──
@@ -74,7 +80,14 @@ L = f'{home}/bin/linked.sh'
 
 def classify(command):
     found, missed = d.read_entry([command], HOME)
-    return [p for p in found if d.repository(p) is not None], missed  # as scan() keeps them
+    flagged = []
+    for path in found:  # as scan() judges them: by identity
+        verdict = d.judge(path)
+        if verdict and verdict[0] == 'tracked':
+            flagged.append(path)
+        elif verdict:
+            missed = missed + [f'hard link {path}']
+    return flagged, missed
 
 
 class U(list):
@@ -190,6 +203,8 @@ rows = [
     (f'cmd 2>&1 | tee -a log; {T} >> out & wait', [T], []),   # every operator in the grammar
     # round 3 review of #155, the reviewer's string: `=` inside a tracked absolute file name
     (f'bash {tree}/a=b.sh', [f'{tree}/a=b.sh'], []),
+    # round 4: a hard link outside any working tree is unresolved: another name of it may be tracked
+    (f'cat {plain}/notes-link.md', [], [f'hard link {plain}/notes-link.md']),
 ]
 failed = []
 for command, want_files, want_missed in rows:
@@ -340,6 +355,82 @@ for name in PUNCT:
         else:
             failed.append(f'  punctuation: {text!r} does not flag {target}')
 print(f'punctuation: {named_flagged} of {named} generated commands flagged ({len(PUNCT)} names x {len(SHAPES)} shapes)')
+
+# Round 4, the class: files are compared by identity, never by path string. Every other
+# spelling of a tracked file that the file system resolves to it must be flagged.
+import unicodedata
+aliases = os.path.join(os.path.dirname(tree), 'aliases')
+os.makedirs(aliases, exist_ok=True)
+case_insensitive = os.path.exists(os.path.join(tree, 'TRACKED.SH'))
+print(f'identity: this file system is case-{"in" if case_insensitive else ""}sensitive (probe: TRACKED.SH)')
+
+
+def other_case(name):
+    return name.swapcase() if name.swapcase() != name else name
+
+
+IDENTITY_FILES = [T, f'{tree}/x.py', f'{tree}/notes.md', f'{tree}/sub/inner.sh', f'{linked}/tracked.sh']
+spelled = spelled_flagged = skipped = 0
+for k, target in enumerate(IDENTITY_FILES):
+    folder, name = os.path.split(target)
+    root = linked if target.startswith(linked + '/') else tree
+    rel = os.path.relpath(target, root)
+    os.symlink(target, f'{aliases}/file-{k}')
+    os.symlink(folder, f'{aliases}/dir-{k}')
+    os.makedirs(f'{root}/hardlinks', exist_ok=True)
+    os.link(target, f'{root}/hardlinks/{k}-{name}')       # untracked name, same file, same tree
+    spellings = {
+        'letter case': (f'{folder}/{other_case(name)}', case_insensitive),
+        'doubled slash': (f'{folder}//{name}', True),
+        '/./': (f'{folder}/./{name}', True),
+        'sub/../': (f'{root}/sub/../{rel}', True),
+        'symlink to the file': (f'{aliases}/file-{k}', True),
+        'symlink to its directory': (f'{aliases}/dir-{k}/{name}', True),
+        'hard link in the same tree': (f'{root}/hardlinks/{k}-{name}', True),
+    }
+    real = os.stat(target)
+    for label, (spelling, applies) in spellings.items():
+        for shape in ('bash {s}', 'cat {s}'):
+            text = shape.format(s=spelling)
+            if not applies:
+                skipped += 1
+                print(f'  skipped ({label}): this file system is case-sensitive, so {text!r} names no file')
+                continue
+            spelled += 1
+            found, missed = classify(text)
+            if any(os.path.samestat(os.stat(path), real) for path in found):
+                spelled_flagged += 1
+            else:
+                failed.append(f'  identity ({label}): {text!r} does not flag {target}, got {found} {missed}')
+# The reviewer's string: `T/X.SH` names the tracked `T/x.sh` on a case-insensitive file system.
+if case_insensitive:
+    spelled += 1
+    if classify(f'bash {tree}/X.SH')[0] == [f'{tree}/X.SH']:
+        spelled_flagged += 1
+    else:
+        failed.append(f'  identity (round 4 reviewer): bash T/X.SH is not flagged: {classify(f"bash {tree}/X.SH")}')
+else:
+    skipped += 1
+    print('  skipped (round 4 reviewer, bash T/X.SH): this file system is case-sensitive')
+print(f'identity: {spelled_flagged} of {spelled} generated spellings flagged, {skipped} skipped')
+# NFC and NFD: a name with an accented letter is non-ASCII text, so the allowlist makes the whole
+# entry unresolved before any file is compared. Both spellings, on any file system.
+nfd_same = os.path.exists(os.path.join(tree, unicodedata.normalize('NFD', 'caf\u00e9.sh')))
+print(f'identity: NFD spelling {"resolves" if nfd_same else "does not resolve"} to the NFC file here; '
+      'either way the text is not plain, so it is unresolved')
+for form in ('NFC', 'NFD'):
+    text = f'bash {tree}/' + unicodedata.normalize(form, 'caf\u00e9.sh')
+    found, missed = classify(text)
+    if found or not (len(missed) == 1 and missed[0].startswith('unreadable U+')):
+        failed.append(f'  identity ({form}): {text!r} is not unresolved as a whole: {found} {missed}')
+# A file with many names on a read-only file system (macOS's system volume) is not a hard-link
+# risk: no name of it can be edited. Shown when this machine has one.
+for probe in ('/usr/bin/python3', '/usr/bin/git'):
+    if os.path.exists(probe) and os.stat(probe).st_nlink > 1 and d.read_only(probe):
+        if classify(f'{probe} -V') != ([], []):
+            failed.append(f'  identity: {probe} (read-only, {os.stat(probe).st_nlink} names) is not clean')
+        else:
+            print(f'identity: {probe} has {os.stat(probe).st_nlink} names on a read-only volume: clean')
 if failed:
     print('\n'.join(failed[:40]))
     sys.exit(1)

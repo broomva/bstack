@@ -56,6 +56,25 @@ follows a `cd`, or models a wrapper or an interpreter's options:
   tracked): the conservative side. A missing, untracked or out-of-tree file is
   not reported: a released copy outside any working tree passes.
 
+  FILES ARE COMPARED BY IDENTITY, never by path string. A candidate exists if
+  os.stat succeeds; whether it is a file or a directory comes from that stat;
+  its identity is (device, inode). The working tree it sits in is found by
+  walking up from its real path asking the file system for `.git`. Each tree's
+  tracked set is built once: `git ls-files`, then the identity of each listed
+  path. A candidate is tracked when its identity is in that set, so letter case
+  on a case-insensitive volume, `//`, `/./`, `..`, symlinks to the file or its
+  directory, and a hard link inside the tree all name the tracked file. The scan
+  skips text that cannot be a directory entry by a folded spelling (Unicode
+  decomposed, case folded), which only ever merges names; it never decides.
+
+  A HARD LINK that is not tracked where it sits (or sits in no working tree)
+  makes the entry unresolved: the file has more than one name, and this check
+  cannot tell whether another name is tracked. That is the conservative side:
+  an outside copy made with `ln` instead of `cp` costs a baseline line, or a
+  real copy. A file on a read-only file system (macOS's system volume, where
+  `/usr/bin/python3` and `/usr/bin/git` have dozens of names) is exempt, since
+  no name of it can be edited.
+
   DIRECTORIES met by the same scan that lie in a git working tree, and a
   LaunchAgent's WorkingDirectory, are joined with every place a relative name
   can start (the start of a token, after a quote, after `=`, `:` or `,`), again
@@ -116,8 +135,10 @@ import os
 import plistlib
 import re
 import shlex
+import stat
 import subprocess
 import sys
+import unicodedata
 from pathlib import Path
 
 # Isolated Python (-I) omits the script directory from sys.path.
@@ -183,60 +204,85 @@ def without_quotes(text):
     return ''.join(text[i] for i in kept), kept
 
 
+def identity(st):
+    """A file's identity: the same file has one, however its path is spelled."""
+    return st.st_dev, st.st_ino
+
+
+def stat_or_none(path):
+    try:
+        return os.stat(path)
+    except (OSError, ValueError):
+        return None
+
+
+def fold(name):
+    """A spelling key that only ever MERGES names: Unicode decomposed, case folded.
+
+    Used solely to skip text that cannot be a name in a directory. Two names a
+    file system treats as one (letter case on a case-insensitive volume, NFC and
+    NFD on macOS) always fold alike, so the filter never skips a real match;
+    whether a candidate exists, and which file it is, is decided by os.stat.
+    """
+    return unicodedata.normalize('NFD', name).casefold()
+
+
+def tree_root(path):
+    """The top of the git working tree ``path`` sits in, or None (asked of the file system)."""
+    top = os.path.dirname(os.path.realpath(path)) if not os.path.isdir(path) else os.path.realpath(path)
+    while not os.path.exists(os.path.join(top, '.git')):
+        parent = os.path.dirname(top)
+        if parent == top:
+            return None
+        top = parent
+    return top
+
+
 class FileSystem:
-    """Directory listings and work-tree answers, cached for one entry."""
+    """Directory listings (folded) and stat answers, cached for one entry."""
 
     def __init__(self):
-        self.listings, self.trees = {}, {}
+        self.listings = {}
 
-    def names(self, folder):
+    def folded_names(self, folder):
         if folder not in self.listings:
             try:
-                self.listings[folder] = frozenset(os.listdir(folder))
+                names = os.listdir(folder)
             except OSError:
-                self.listings[folder] = frozenset()
+                names = []
+            self.listings[folder] = frozenset(fold(name) for name in names)
         return self.listings[folder]
-
-    def in_work_tree(self, folder):
-        if folder not in self.trees:
-            top = folder
-            while not os.path.lexists(os.path.join(top, '.git')):
-                parent = os.path.dirname(top)
-                if parent == top:
-                    top = None
-                    break
-                top = parent
-            self.trees[folder] = top is not None
-        return self.trees[folder]
 
     def walk(self, base, rest):
         """Every existing file or directory named by a prefix of ``rest`` read from ``base``.
 
-        Yields (path, is_file, length) for each prefix of ``rest`` (length is its
-        number of characters) that names one, trying EVERY end position: a path
-        may hold spaces, `=`, `:`, quotes or any other readable character. A
-        prefix stops growing only when no entry of the directory it is in starts
-        with the component read so far, so the walk costs a few listings.
+        Yields (path, stat result, length) for each prefix of ``rest`` (length is
+        its number of characters) that os.stat finds, trying EVERY end position: a
+        path may hold spaces, `=`, `:`, quotes or any other readable character. A
+        component stops growing only when its folded spelling starts no folded
+        name in its directory (see fold), so the walk costs a few listings.
         """
         folder, component = base, ''
         for length, c in enumerate(rest, 1):
             if c == '/':
                 if component:
                     nested = os.path.join(folder, component)
-                    if not os.path.isdir(nested):
+                    st = stat_or_none(nested)
+                    if st is None or not stat.S_ISDIR(st.st_mode):
                         return
                     folder, component = nested, ''
                 continue
             component += c
-            names = self.names(folder)
-            if component not in ('.', '..') and not any(name.startswith(component) for name in names):
+            special = component in ('.', '..')
+            key = fold(component)
+            names = self.folded_names(folder)
+            if not special and not any(name.startswith(key) for name in names):
                 return
-            if component in names:
-                path = os.path.normpath(os.path.join(folder, component))
-                if os.path.isfile(path):
-                    yield path, True, length
-                elif os.path.isdir(path):
-                    yield path, False, length
+            if special or key in names:
+                joined = os.path.join(folder, component)
+                st = stat_or_none(joined)
+                if st is not None:
+                    yield os.path.normpath(joined), st, length
 
 
 def absolute_starts(text, home):
@@ -300,37 +346,39 @@ def named_paths(text, home, cwd=None):
         resolves it), except where it lies inside an absolute path found above.
     """
     fs = FileSystem()
-    files, seen, folders, covered = [], set(), [], []
+    files, seen, folders, covered = [], set(), {}, []
 
-    def add(path):
-        real = os.path.realpath(path)
-        if real not in seen:
-            seen.add(real)
+    def add(path, st):
+        if identity(st) not in seen:
+            seen.add(identity(st))
             files.append(path)
 
-    if cwd is not None:
-        folders.append(os.path.realpath(cwd))
+    def add_folder(path, st):
+        folders.setdefault(identity(st), os.path.realpath(path))
+
+    if cwd is not None and stat_or_none(cwd) is not None:
+        add_folder(cwd, os.stat(cwd))
     for index, base, rest_at in absolute_starts(text, home):
         rest = text[rest_at:]
         plain, kept = without_quotes(rest)
         for variant, position in ((rest, None), (plain, kept)):
-            for path, is_file, length in fs.walk(base, variant):
+            for path, st, length in fs.walk(base, variant):
                 end = rest_at + (length if position is None else position[length - 1] + 1)
                 covered.append((index, end))
-                if is_file:
-                    add(path)
-                elif fs.in_work_tree(path):
-                    folders.append(os.path.realpath(path))
+                if stat.S_ISREG(st.st_mode):
+                    add(path, st)
+                elif stat.S_ISDIR(st.st_mode) and tree_root(path) is not None:
+                    add_folder(path, st)
     starts = [i for i in range(len(text))
               if (i == 0 or text[i - 1] in RELATIVE_STARTS_AFTER)
               and text[i] not in DELIMITERS and text[i] not in '/~$']
-    for folder in dict.fromkeys(folders):
+    for folder in folders.values():
         for i in starts:
             rest = text[i:]
             for variant in (rest, without_quotes(rest)[0]):
-                for path, is_file, _ in fs.walk(folder, variant):
-                    if is_file:
-                        add(path)
+                for path, st, _ in fs.walk(folder, variant):
+                    if stat.S_ISREG(st.st_mode):
+                        add(path, st)
     unresolved = []
     for start, piece in relative_readings(text):
         if '/' not in piece or piece.startswith(('/', '~/', '$HOME/', '${HOME}/', '-')) or piece in STANDARD_STREAMS:
@@ -391,7 +439,7 @@ def launchd_entries(folder, home):
         strings = ([program] if isinstance(program, str) and program else []) + argv
         files, missed = read_entry(strings, home, cwd)
         command = shlex.join(strings)
-        yield f'launchd:{plist.name[:-len(".plist")]}', files, [(command, word) for word in missed]
+        yield f'launchd:{plist.name[:-len(".plist")]}', command, files, missed
 
 
 def hook_entries(settings, home):
@@ -418,21 +466,14 @@ def hook_entries(settings, home):
                 command = hook.get('command') if isinstance(hook, dict) else None
                 if isinstance(command, str):
                     named, missed = read_entry([command], home)
-                    yield label, named, [(command, word) for word in missed]
+                    yield label, command, named, missed
 
 
-TRACKED = {}  # work-tree top -> the set of paths `git ls-files` lists there, read once per process
+TRACKED = {}  # work-tree top -> identities of the files `git ls-files` lists there, built once per process
+HARD_LINK = ('has more than one name; this check cannot tell whether another name is tracked')
 
 
-def repository(path):
-    """The top level of the working tree that tracks ``path``, or None."""
-    real = os.path.realpath(path)
-    top = os.path.dirname(real)
-    while not os.path.lexists(os.path.join(top, '.git')):
-        parent = os.path.dirname(top)
-        if parent == top:
-            return None
-        top = parent
+def tracked_identities(top):
     if top not in TRACKED:
         env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
         try:
@@ -443,8 +484,46 @@ def repository(path):
         if out.returncode != 0:
             # git could not answer; unknown is not "untracked".
             raise ValueError(f'git ls-files failed in {top}: {out.stderr.decode(errors="replace").strip()}')
-        TRACKED[top] = {os.fsdecode(name) for name in out.stdout.split(b'\0') if name}
-    return top if os.path.relpath(real, top) in TRACKED[top] else None
+        found = set()
+        for name in out.stdout.split(b'\0'):
+            if name:
+                try:
+                    found.add(identity(os.lstat(os.path.join(top, os.fsdecode(name)))))
+                except OSError:
+                    pass  # listed but gone from the checkout
+        TRACKED[top] = found
+    return TRACKED[top]
+
+
+def judge(path):
+    """('tracked', top) when ``path`` is a tracked file, ('hard link', None) when it is a
+    file with more than one name that is not tracked where it sits, else None.
+    Compared by identity (device, inode), never by path string."""
+    st = stat_or_none(path)
+    if st is None or not stat.S_ISREG(st.st_mode):
+        return None
+    top = tree_root(path)
+    if top is not None and identity(st) in tracked_identities(top):
+        return 'tracked', top
+    if st.st_nlink > 1 and not read_only(path):
+        return 'hard link', None
+    return None
+
+
+def read_only(path):
+    """True when the file system holding ``path`` is mounted read-only (as macOS's
+    system volume is): no name of a file there can be edited, so its other names
+    cannot carry an unreviewed edit."""
+    try:
+        return bool(os.statvfs(path).f_flag & os.ST_RDONLY)
+    except OSError:
+        return False
+
+
+def repository(path):
+    """The top level of the working tree that tracks ``path``, or None."""
+    verdict = judge(path)
+    return verdict[1] if verdict and verdict[0] == 'tracked' else None
 
 
 def scan(launch_agents, settings, home):
@@ -465,12 +544,14 @@ def scan(launch_agents, settings, home):
 
     flagged, unresolved = set(), set()
     entries = list(launchd_entries(launch_agents, home)) + list(hook_entries(settings, home))
-    for entry, files, missed in entries:
+    for entry, command, files, missed in entries:
         for path in files:
-            top = repository(path)
-            if top is not None:
-                flagged.add((entry, display(path), display(top)))
-        for command, word in missed:
+            verdict = judge(path)
+            if verdict and verdict[0] == 'tracked':
+                flagged.add((entry, display(path), display(verdict[1])))
+            elif verdict:
+                unresolved.add((entry, display_text(command), f'hard link {display(path)} {HARD_LINK}'))
+        for word in missed:
             unresolved.add((entry, display_text(command), word))
     return flagged, unresolved
 
@@ -480,6 +561,8 @@ def line(item):
 
 
 def unresolved_line(item):
+    if item[2].startswith('hard link '):
+        return f'{item[0]} names a {item[2]}, in: {item[1]}'
     if item[2].startswith('unreadable '):
         return f'{item[0]} is not plain text ({item[2]}), in: {item[1]}'
     return f'{item[0]} names `{item[2]}`, a path this check cannot resolve, in: {item[1]}'
