@@ -15,14 +15,25 @@ just as one that executes it does. Two surfaces are read, as raw text:
 
 The check does not interpret shell. It never splits commands, follows a `cd`,
 models a wrapper (`timeout`, `xargs`, `exec`) or an interpreter's options, or
-tracks quotes beyond what is written below. It looks at words:
+tracks quotes beyond what is written below. It looks at words.
+
+  BEFORE ANY WORD IS FORMED the text is read the way a shell reads it in three
+  respects, at one entry point (shell_text): a backslash followed by a newline
+  (LF or CRLF) is deleted, as a shell deletes a line continuation, so
+  `/t/x.\\<newline>sh` is `/t/x.sh`; an ANSI-C string `$'...'` is replaced by
+  what it decodes to, so `\\x2f` and `\\057` read as `/`; and a NUL ends a
+  word, as exec ends an argument there. The first two are applied everywhere,
+  inside single quotes too, where a shell keeps the text: that can add a flag,
+  never hide one. A `$"..."` string is not decoded; its word starts with `$`
+  and is unresolved.
 
   A PATH WORD is a maximal run of characters other than whitespace and the
   shell operator characters ; | & ( ) < > and the backquote, that contains a
   `/`. A quote character is dropped without ending the word, so
   `"$CLAUDE_PROJECT_DIR"/x.sh` is the one word `$CLAUDE_PROJECT_DIR/x.sh`; a
-  backslash keeps the next character in the word (`with\\ space.sh`). A word of
-  the form NAME=value or --option=value is read as its value. Never
+  backslash keeps the next character in the word and is dropped
+  (`with\\ space.sh`, `x\\.sh`). Tabs and newlines separate words like
+  spaces. A word of the form NAME=value or --option=value is read as its value. Never
   considered: a word with no `/` (`echo report.sh`, `git status`, `bun run x`),
   a word starting with `-`, a URL (`scheme://`), a git object name
   `<ref>:<path>` (`git show origin/main:scripts/x.sh`), and /dev/null,
@@ -46,7 +57,11 @@ tracks quotes beyond what is written below. It looks at words:
 
   A RELATIVE word, or one that starts with a variable other than HOME
   (`"$CLAUDE_PROJECT_DIR"/x.sh`), is UNRESOLVED: this check cannot tell what it
-  names, and the remedy is an absolute path. So is a word that starts right
+  names, and the remedy is an absolute path. So is an absolute word that names
+  nothing and holds a character this check does not read: a control character
+  other than tab and newline, or a pattern a shell would expand (`*`, `?`, `[`,
+  `{`), as in `/t/*.sh` or `/t/{a,b}.sh`; and a path with a space whose next
+  words hold one (`/t/with space.s?`). So is a word that starts right
   after a `)` or a backquote and names no existing file (`$(dirname "$0")/x.sh`,
   the rest of a command substitution's output). The one exception: in a
   LaunchAgent with a `WorkingDirectory`, a relative word is resolved against it
@@ -70,7 +85,7 @@ Flagged and unresolved entries both ratchet: recorded in the baseline, printed
 as info while grandfathered, and a new one fails.
 
 What this check does not see: a path built at run time with no `/` written in
-the text (`bash "$SCRIPT"`, a glob such as `/t/*.sh`, a name read from a file);
+the text (`bash "$SCRIPT"`, a name read from a file);
 the file behind a relative path it cannot resolve (reported as unresolved, never
 ignored); and content fetched by a program it names (a script that reads another
 file, a URL it downloads).
@@ -82,15 +97,21 @@ file, a URL it downloads).
 
 Exit codes, with or without --json: 0 no new flagged or unresolved entry
 (always, for --report), 1 a new flagged or unresolved entry, a broken baseline
-or an input that could not be read, 42 no baseline recorded.
+or an input that could not be read (or a baseline that could not be recorded),
+42 no baseline recorded, 2 a usage error.
 
---json prints {"schema": 1, "mode": "check"|"report", "baseline_recorded_at",
+With --json every mode prints exactly one JSON object, errors included. It is
+{"schema": 1, "mode": "check"|"report"|"baseline", "baseline_recorded_at",
 "flagged": [{"entry", "file", "repository"}], "unresolved": [{"entry",
 "command", "word"}], "grandfathered": <count>, "error"}. "flagged" and
 "unresolved" hold the entries that are not in the baseline (every one, for
 --report, where "grandfathered" is null); "grandfathered" counts both kinds. On
 an error "flagged", "unresolved" and "grandfathered" are null: "could not look"
-is never an empty list.
+is never an empty list. Mode "baseline" (--baseline-entries) adds "action"
+("recorded", or null when nothing was written) and "baseline" (the baseline
+file's path); "flagged" and "unresolved" are everything recorded and
+"grandfathered" is null. A usage error prints mode null with the message in
+"error".
 """
 import argparse
 import datetime
@@ -117,6 +138,45 @@ DELIMITERS = set(' \t\r\n`;|&()<>')
 STANDARD_STREAMS = {'/dev/null', '/dev/stdin', '/dev/stdout', '/dev/stderr'}
 URL = re.compile(r'[A-Za-z][A-Za-z0-9+.-]*://')
 MAX_JOIN = 8
+# A backslash before a newline (LF or CRLF) is a line continuation: the shell
+# deletes both before it forms a word.
+CONTINUATION = re.compile(r'\\\r?\n')
+# ANSI-C quoting, $'...': its escapes are decoded so `\x2f` and `\057` read as `/`.
+ANSI_C = re.compile(r"\$'((?:[^'\\]|\\.)*)'", re.S)
+ANSI_C_ESCAPE = re.compile(r'\\(x[0-9A-Fa-f]{1,2}|u[0-9A-Fa-f]{1,4}|U[0-9A-Fa-f]{1,8}|[0-7]{1,3}|c.|.)', re.S)
+ANSI_C_SIMPLE = {'a': '\a', 'b': '\b', 'e': '\x1b', 'E': '\x1b', 'f': '\f', 'n': '\n', 'r': '\r',
+                 't': '\t', 'v': '\v', '\\': '\\', "'": "'", '"': '"', '?': '?'}
+# A character the check does not read inside a path word: a control character,
+# or a pattern character a shell would expand (`*`, `?`, `[`, `{`).
+UNREADABLE = re.compile(r'[\x01-\x1f\x7f*?\[{]')
+
+
+def ansi_c(match):
+    """The text a shell reads for one $'...' string."""
+    def escape(m):
+        code = m.group(1)
+        if code[0] in 'xuU' and len(code) > 1:
+            return chr(int(code[1:], 16)) if int(code[1:], 16) <= 0x10FFFF else m.group(0)
+        if code[0] in '01234567':
+            return chr(int(code, 8) & 0xFF)
+        if code[0] == 'c':
+            return chr(ord(code[1]) & 0x1F)
+        return ANSI_C_SIMPLE.get(code, m.group(0))
+    return ANSI_C_ESCAPE.sub(escape, match.group(1))
+
+
+def shell_text(text):
+    """The raw text as the scanner reads it: the one place text enters the scan.
+
+    Before any word is formed: a backslash-newline (or backslash-CRLF) pair is
+    deleted, as a shell deletes a line continuation; a $'...' string is replaced
+    by what it decodes to; and a NUL ends a word, since exec ends an argument
+    there. The first two edits are made everywhere, even inside single quotes
+    where a shell would keep the text: that can only add a flag, never hide one.
+    """
+    text = CONTINUATION.sub('', text)
+    text = ANSI_C.sub(ansi_c, text)
+    return text.replace('\0', '\n')
 
 
 def words(text):
@@ -199,7 +259,7 @@ def named_paths(text, home, cwd=None):
     text (no order, no `cd`): a pair that names an existing file counts as that
     file. Nothing else in the text changes how a word resolves.
     """
-    items = words(text)
+    items = words(shell_text(text))
     files, unresolved, folders, bare_words, i = [], [], [], [], 0
     if cwd is not None:
         folders.append(cwd)
@@ -213,21 +273,27 @@ def named_paths(text, home, cwd=None):
             i += 1
             continue
         path = absolute(word, home, cwd)
-        if path is None:
+        if path is None or (UNREADABLE.search(path) and not os.path.exists(path)):
             unresolved.append(word)
             i += 1
             continue
         # A path with a space: try the next words, joined by one space each.
-        used, k, joined = 1, i, path
+        used, k, joined, unreadable = 1, i, path, None
         while items[k][1] and k + 1 < len(items) and k - i < MAX_JOIN:
             k += 1
             joined = f'{joined} {items[k][0]}'
             if os.path.isfile(joined):
                 path, used = joined, k - i + 1
+            elif unreadable is None and UNREADABLE.search(items[k][0]):
+                unreadable = joined  # a join this check cannot read further
         if os.path.isfile(path):
             files.append(path)
         elif os.path.isdir(path):
             folders.append(path)  # never reported by itself; see the pairing below
+        elif unreadable is not None:
+            # `/t/with space.s?`: the path may go on past the space into text this
+            # check cannot read, so it is unresolved rather than ignored.
+            unresolved.append(unreadable)
         elif glued:
             # Right after `)` or a backquote, a word that names no file may continue
             # a substitution's output (`$(dirname "$0")/x.sh`): it is not absolute.
@@ -360,17 +426,26 @@ def unresolved_line(item):
     return f'{item[0]} names `{item[2]}`, a path this check cannot resolve, in: {item[1]}'
 
 
-def report(mode, recorded_at, flagged, unresolved, grandfathered, error):
+def report(mode, recorded_at, flagged, unresolved, grandfathered, error, **extra):
     print(json.dumps({
         'schema': 1, 'mode': mode, 'baseline_recorded_at': recorded_at,
         'flagged': None if flagged is None else [dict(zip(FIELDS, item)) for item in sorted(flagged)],
         'unresolved': None if unresolved is None else [dict(zip(UNRESOLVED_FIELDS, item))
                                                        for item in sorted(unresolved)],
-        'grandfathered': grandfathered, 'error': error}))
+        'grandfathered': grandfathered, 'error': error, **extra}))
+
+
+class JsonArgumentParser(argparse.ArgumentParser):
+    """With --json, a usage error is one JSON object too (exit 2)."""
+    def error(self, message):
+        if '--json' in sys.argv[1:]:
+            report(None, None, None, None, None, f'usage: {message}')
+            sys.exit(2)
+        super().error(message)
 
 
 def arguments(argv):
-    parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0], allow_abbrev=False)
+    parser = JsonArgumentParser(description=__doc__.split('\n\n')[0], allow_abbrev=False)
     parser.add_argument('--launch-agents', metavar='DIR', help='default: ~/Library/LaunchAgents')
     parser.add_argument('--settings', metavar='FILE', help='default: ~/.claude/settings.json')
     parser.add_argument('--json', action='store_true')
@@ -386,6 +461,9 @@ def arguments(argv):
 FLAGGED_NOTE = ('an edit there reaches the entry without review, whether the entry runs the file or only '
                 'reads it. Use a released copy, or `git show origin/main:<path>` into a temp file')
 UNRESOLVED_NOTE = 'this check cannot tell what it names; write it as an absolute path'
+
+
+BASELINE_PATH = None  # set by main(); named in a --baseline-entries --json error
 
 
 def main(args):
@@ -408,17 +486,24 @@ def main(args):
               'working tree, run or read (report only: no baseline read or written)')
         print(f'[info] {len(unresolved)} path word{"" if len(unresolved) == 1 else "s"} could not be resolved')
         return 0
+    global BASELINE_PATH
     baseline = paths.machine_path('state') / BASELINE_NAME
+    BASELINE_PATH = str(baseline)
     if args.baseline_entries:
         flagged, unresolved = scan(launch_agents, settings, home)
         os.umask(0o077)
         baseline.parent.mkdir(parents=True, exist_ok=True)
+        recorded_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
         with baseline.open('w' if args.force else 'x', encoding='utf-8') as stream:
-            json.dump({'recorded_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            json.dump({'recorded_at': recorded_at,
                        'entries': [dict(zip(FIELDS, item)) for item in sorted(flagged)],
                        'unresolved': [dict(zip(UNRESOLVED_FIELDS, item)) for item in sorted(unresolved)]},
                       stream, indent=2)
             stream.write('\n')
+        if args.json:
+            report('baseline', recorded_at, flagged, unresolved, None, None,
+                   action='recorded', baseline=str(baseline))
+            return 0
         print(f'[info] baseline recorded at {baseline}:')
         for item in sorted(flagged):
             print(f'  {line(item)}')
@@ -477,8 +562,13 @@ if __name__ == '__main__':
     try:
         sys.exit(main(ARGS))
     except (OSError, ValueError, json.JSONDecodeError) as exc:
-        if ARGS.json and not ARGS.baseline_entries:
-            report('report' if ARGS.report else 'check', None, None, None, None, f'working-tree entry check: {exc}')
+        if ARGS.json:
+            if ARGS.baseline_entries:
+                report('baseline', None, None, None, None, f'working-tree entry check: {exc}',
+                       action=None, baseline=BASELINE_PATH)
+            else:
+                report('report' if ARGS.report else 'check', None, None, None, None,
+                       f'working-tree entry check: {exc}')
             sys.exit(1)
         print(f'[failure] working-tree entry check: {exc}', file=sys.stderr)
         sys.exit(1)

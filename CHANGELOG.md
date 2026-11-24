@@ -42,10 +42,25 @@
   reads and writes no baseline; `--json`, `--launch-agents DIR` and `--settings
   FILE` are options. `--json` prints `{"schema": 1, "mode", "baseline_recorded_at",
   "flagged": [{"entry", "file", "repository"}], "unresolved": [{"entry", "command",
-  "word"}], "grandfathered", "error"}`, with null lists on an error.
+  "word"}], "grandfathered", "error"}`, with null lists on an error. Every mode
+  prints one JSON object under `--json`, errors included: `--baseline-entries
+  --json` prints mode `"baseline"` with `"action": "recorded"` (null when nothing
+  was written) and `"baseline"` (the file's path), and a usage error prints mode
+  null and exits 2.
+- Raw text a shell reads differently is normalised at the one place it enters the
+  scan, before any word is formed: a backslash-newline (or backslash-CRLF) line
+  continuation is deleted, so `/t/x.\<newline>sh` is `/t/x.sh`; an ANSI-C `$'...'`
+  string is decoded, so `\x2f` and `\057` read as `/`; a NUL ends a word. A
+  backslash before any other character is dropped (`x\.sh`, `with\ space.sh`), and
+  tabs and newlines separate words like spaces. An absolute word that names
+  nothing and holds a control character or a glob or brace pattern (`/t/*.sh`,
+  `/t/{a,b}.sh`) is unresolved, never ignored, and so is a `$"..."` word. The word
+  table pins each shape, and two generated properties cover the class: every
+  continuation, CRLF, escape, ANSI-C and NUL spelling of every tracked file under
+  every wrapper is flagged, and every unreadable spelling is unresolved.
 - Not seen: a path built at run time with no `/` in the text (`bash "$SCRIPT"`, a
-  glob), the file behind a relative path (reported as unresolved), and content
-  fetched by a program the entry names.
+  name read from a file), the file behind a relative path (reported as
+  unresolved), and content fetched by a program the entry names.
 
 ### Migration
 

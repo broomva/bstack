@@ -132,6 +132,23 @@ rows = [
     (f'ls {tree}', [], []),                                  # a directory alone is never reported
     ('git diff origin/main', [], ['origin/main']),          # not a file, still unresolved
     (f'a && ./b.sh | cat {T}', [T], ['./b.sh']),
+    # round 1 review of #155: raw text a shell reads differently, decided at the one entry point
+    (f'bash {tree}/x.\\\npy', [f'{tree}/x.py'], []),       # the reviewer's shape: a line continuation
+    (f'bash {tree}/x.\\\r\npy', [f'{tree}/x.py'], []),    # the same with CRLF
+    (f'bash "{tree}/tra\\\ncked.sh"', [T], []),           # inside double quotes a shell deletes it too
+    (f"bash '{tree}/x.\\\npy'", [f'{tree}/x.py'], []),     # inside single quotes a shell keeps it: flagged anyway (conservative)
+    (f'cat {tree}/with\\ space.sh', [S], []),              # a backslash before a space: one word
+    (f'bash {tree}/tracked\\.sh', [T], []),                # a backslash before another character: dropped
+    ("bash $'" + T.replace('/', '\\x2f') + "'", [T], []),  # ANSI-C quoting, hex
+    ("bash $'" + T.replace('/', '\\057') + "'", [T], []),  # ANSI-C quoting, octal
+    ("bash $'" + S.replace('/', '\\u002f') + "'", [S], []), # ANSI-C, a space in the decoded path
+    (f'bash $"{T}"', [], [f'${T}']),                         # $"..." is not decoded: unresolved
+    (f'bash {T}\0ignored', [T], []),                        # a NUL ends the word, as exec ends the argument
+    (f'bash {tree}/trac\x01ked.sh', [], [f'{tree}/trac\x01ked.sh']),  # a control character: unresolved
+    (f'bash {tree}/*.sh', [], [f'{tree}/*.sh']),             # a glob: unresolved, never ignored
+    (f'bash {tree}/{{tracked,x}}.sh', [], [f'{tree}/{{tracked,x}}.sh']),  # brace expansion: unresolved
+    (f'cd {tree}\npython3 x.py', [f'{tree}/x.py'], []),     # a newline between the directory and the bare word
+    (f'cd\t{tree}\t&&\tpython3\tx.py', [f'{tree}/x.py'], []),  # tabs
 ]
 failed = []
 for command, want_files, want_missed in rows:
@@ -172,6 +189,16 @@ wrappers = [
     'deno run {p}', 'ruby {p}', 'perl -I lib {p}', 'cat <<EOF\n{p}\nEOF', 'git -C /tmp status; {p}',
     'echo start; {p} 2>&1 | tee -a log', 'while read x; do {p} "$x"; done < list',
 ]
+
+def raw_spellings(p):
+    """The same absolute path, spelled with raw text a shell reads differently."""
+    return [p[:-2] + '\\\n' + p[-2:], p[:-2] + '\\\r\n' + p[-2:], f'"{p[:-2]}\\\n{p[-2:]}"',
+            p[:-1] + '\\' + p[-1], "$'" + p.replace('/', '\\x2f') + "'", "$'" + p.replace('/', '\\057') + "'",
+            p + '\0', p[:-2] + '\\\n' + p[-2:] + '\0']
+
+
+for target in files:
+    files[target] = files[target] + raw_spellings(files[target][0])
 generated = flagged = 0
 for target, spellings in files.items():
     real = os.path.realpath(target)
@@ -191,7 +218,9 @@ for target in (T, f'{tree}/x.py', f'{tree}/sub/inner.sh', f'{tree}/notes.md', f'
     for folder_spelling in (folder, f'"{folder}"', f"'{folder}'"):
         for shape in ('cd {d} && {w}', 'cd {d} && python3 -I {w} arg', 'cd {d}; bash {w}', 'cd {d} && exec ./x; sh {w}',
                       '(cd {d} && nohup timeout 5 node {w} &)', 'pushd {d} >/dev/null; ruby {w}; popd',
-                      'cd {d} || exit 1; cat {w} | tee -a log', 'env -C {d} perl {w}', '{w} --in {d}'):
+                      'cd {d} || exit 1; cat {w} | tee -a log', 'env -C {d} perl {w}', '{w} --in {d}',
+                      'cd {d}\npython3 {w}', 'cd\t{d}\t&&\tpython3\t{w}', 'cd {d} \\\n && python3 {w}',
+                      'cd {d}\r\n{w}', 'cd {d}\0{w}'):
             for text in (shape.format(d=folder_spelling, w=name), "bash -lc '" + shape.format(d=folder_spelling, w=name) + "'"):
                 generated += 1
                 found, _ = classify(text)
@@ -200,6 +229,21 @@ for target in (T, f'{tree}/x.py', f'{tree}/sub/inner.sh', f'{tree}/notes.md', f'
                 else:
                     failed.append(f'  property: {text!r} does not flag {target}')
 print(f'property: {flagged} of {generated} generated commands flagged')
+# Property: a path the check cannot read comes out unresolved, never ignored.
+unread = missed_count = 0
+for target, spellings in files.items():
+    p = spellings[0]
+    for unreadable in (p[:-2] + '\x01' + p[-2:], p[:-2] + '\x1b' + p[-2:], p[:-2] + '\x7f' + p[-2:],
+                       os.path.dirname(p) + '/*' + p[-3:], os.path.dirname(p) + '/[a-z]*', p[:-1] + '?'):
+        for wrapper in wrappers:
+            command = wrapper.format(p=unreadable)
+            for text in (command, f"bash -c '{command}'"):
+                unread += 1
+                if classify(text)[1]:
+                    missed_count += 1
+                else:
+                    failed.append(f'  unreadable: {text!r} was ignored')
+print(f'unreadable: {missed_count} of {unread} generated commands unresolved')
 if failed:
     print('\n'.join(failed[:40]))
     sys.exit(1)
@@ -456,6 +500,28 @@ cp "$TMP/settings.good" "$SETTINGS"
 run_doctor_verbose
 grep -Fq '[info] baselined unresolved entry is gone: claude-hook:Stop names `./doctor.sh`' "$TMP/out"
 bash "$DOCTOR" --baseline-entries --force >"$TMP/out"
+# --json in every mode: recording a baseline, refusing to overwrite one, a usage error.
+json_mode() {  # json_mode EXPECTED_EXIT PYTHON_ASSERTION ARG...
+    want="$1" assertion="$2"; shift 2
+    set +e
+    python3 -I "$ENTRIES" "$@" >"$TMP/json" 2>"$TMP/json.err"
+    rc=$?
+    set -e
+    [ "$rc" = "$want" ] || { echo "$* exited $rc, wanted $want" >&2; cat "$TMP/json" "$TMP/json.err" >&2; exit 1; }
+    [ ! -s "$TMP/json.err" ] || { echo "$* wrote to stderr" >&2; cat "$TMP/json.err" >&2; exit 1; }
+    [ "$(wc -l <"$TMP/json" | tr -d ' ')" = "1" ] || { echo "$* did not print exactly one line" >&2; cat "$TMP/json" >&2; exit 1; }
+    python3 - "$TMP/json" "$assertion" "$BASELINE" "$TREE" <<'PY_MODE'
+import json, sys
+d = json.load(open(sys.argv[1]))
+baseline, tree = sys.argv[3:]
+assert d['schema'] == 1, d
+assert eval(sys.argv[2]), (sys.argv[2], d)
+PY_MODE
+}
+json_mode 0 "d['mode'] == 'baseline' and d['action'] == 'recorded' and d['baseline'] == baseline and d['error'] is None and d['baseline_recorded_at'] == json.load(open(baseline))['recorded_at'] and d['flagged'] == [dict(entry=e['entry'], file=e['file'], repository=e['repository']) for e in json.load(open(baseline))['entries']] and d['unresolved'] == [] and d['grandfathered'] is None" --baseline-entries --force --json
+json_mode 1 "d['mode'] == 'baseline' and d['action'] is None and d['baseline'] == baseline and 'File exists' in d['error'] and d['flagged'] is None and d['unresolved'] is None" --baseline-entries --json
+json_mode 2 "d['mode'] is None and d['error'].startswith('usage: ') and d['flagged'] is None" --report --baseline-entries --json
+json_mode 2 "d['mode'] is None and 'unrecognized arguments' in d['error']" --json --no-such-option
 # An input that cannot be read is a failure, never "nothing flagged".
 printf 'not a plist' > "$AGENTS/com.broomva.broken.plist"
 json_run 1 "$unreadable and 'com.broomva.broken.plist' in d['error']"
