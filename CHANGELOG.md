@@ -5,20 +5,25 @@
 ### feat(doctor): ratchet scheduled jobs and hooks: a new or changed entry must be acknowledged (BRO-4084)
 
 - **Working-tree entry ratchet (doctor §33).** `scripts/doctor-worktree-entries.py`
-  ratchets the identity of each scheduled job and hook. For a LaunchAgent the
-  identity is the plist file name and the SHA-256 of the canonical JSON of its
-  `ProgramArguments`, `Program`, `WorkingDirectory` and `EnvironmentVariables`;
-  for a hook it is the hooks file, the event, the matcher and the SHA-256 of the
-  exact command. Whitespace is significant; nothing is normalised. Doctor fails
-  when an entry is new or its text changed, whatever the classifier says; a
-  removed entry passes and is reported. Acknowledging is
+  ratchets the identity of each WHOLE scheduled job and hook, and counts them.
+  A LaunchAgent is its plist file name and the SHA-256 of the canonical form of
+  the whole plist dictionary; a hook is its hooks file, event and matcher and the
+  SHA-256 of the canonical form of the whole hook object, whatever its `type`.
+  The canonical form is JSON with sorted keys and no added whitespace; strings are
+  kept exactly; plist dates are ISO text and plist data is hex. Nothing is
+  selected, so nothing changes unseen; reordering keys or entries changes nothing.
+  The baseline is a multiset (schema 3): doctor fails when an identity occurs more
+  often than recorded (new, changed, or one more copy), whatever the classifier
+  says; fewer is a removal, which passes and is reported. Acknowledging is
   `bstack doctor --baseline-entries --force`, which prints (and with `--json`
-  returns) every new or changed entry with its annotation and every removed one;
-  it refuses to overwrite without `--force`.
-- **Sources:** `com.broomva.*` LaunchAgents, the hooks in `~/.claude/settings.json`
-  and the hooks in `~/.codex/hooks.json` (same shape). Not read: other labels,
-  LaunchDaemons, project-level settings files, `prompt` hooks, cron. A source
-  that exists but cannot be read or parsed fails and names it.
+  returns) everything it acknowledges; it refuses to overwrite without `--force`.
+- **Sources:** `com.broomva.*` LaunchAgents, and every hook object of any type in
+  `~/.claude/settings.json` and `~/.codex/hooks.json`. Not read: other labels,
+  LaunchDaemons, project-level or managed settings files, other keys of the
+  settings file, cron. A hooks file is walked strictly (object; `hooks` object;
+  each event a list of objects with a `hooks` list, an optional `matcher` and no
+  other key; each hook an object); any other shape fails and names the file and
+  the JSON path. A plist must be a dictionary. An unreadable source fails too.
 - **The annotation is best effort and never decides.** Each entry is annotated
   `flagged` (a tracked file it names, with its repository), `unresolved` (why
   its text could not be read), or `no working-tree file found`. The annotation
@@ -37,12 +42,15 @@
   directory and a twice-mounted file system. A classifier of shell text over a
   real file system always has another such case, so the ratchet no longer
   depends on it.
-- **Tests:** a generated test records a baseline, then changes every recorded
-  entry text one character at a time (insert, delete, replace at several
-  positions, whitespace included) and adds entries: 184 of 184 changes fail and
-  name the entry. Making the ratchet pass entries annotated
-  `no working-tree file found` leaves 118 of them passing. The earlier generated
-  tests remain as tests of the annotation.
+- **Tests:** a generated test records a baseline, then makes 210 changes: one
+  character inserted, deleted or replaced at several positions in each entry
+  text (whitespace included), one more copy of each entry, each non-command hook
+  field (`type`, `timeout`, an extra key), plist keys outside the arguments
+  (`StartInterval`, `RunAtLoad`, `StandardOutPath`, `Label`, a date, data), and
+  added entries. All 210 fail and name the entry; 6 key and list reorderings
+  pass. Comparing identities as a set lets the copies pass, hashing only the
+  command lets the field changes pass, and passing entries annotated
+  `no working-tree file found` lets 118 changes pass: each fails the test.
 
 ### fix(ci): a `.control` mention followed by `:` counts (BRO-4083 follow-up)
 

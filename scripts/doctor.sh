@@ -2151,9 +2151,9 @@ fi
 # ── Working-tree entry ratchet (BRO-4084) ───────────────────────────────────
 # A scheduled job or hook runs whatever its command names; if that is a file in
 # a git working tree, an edit there runs without review. The ratchet is on the
-# identity of each entry (plist name + hash of its program, arguments, working
-# directory and environment; hooks file + event + matcher + hash of the exact
-# command): a new or changed entry fails until it is acknowledged with
+# identity of each WHOLE entry, counted (plist name + hash of the whole plist;
+# hooks file + event + matcher + hash of the whole hook object): a new or
+# changed entry, or one more copy, fails until it is acknowledged with
 # `bstack doctor --baseline-entries --force`; a removed one passes. The
 # classifier's annotation (flagged / unresolved / no working-tree file found)
 # is shown to help the review; it is best effort and never decides. Sources:

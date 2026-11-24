@@ -7,27 +7,34 @@ commit, a review or a merge. Deciding from shell text whether an entry reaches
 such a file cannot be made sound on a real file system, so the ratchet does not
 depend on it.
 
-THE RATCHET is on the identity of each entry, which no reading of its text
-changes:
-  - a LaunchAgent: the plist file name, and the SHA-256 of the canonical JSON
-    serialisation (keys sorted, values exactly as stored) of its
-    ProgramArguments, Program, WorkingDirectory and EnvironmentVariables;
-  - a hook: the hooks file, the event and matcher, and the SHA-256 of the exact
-    command string.
-Whitespace is significant; nothing is normalised. The baseline is the set of
-identities. Doctor FAILS when the machine has an entry whose identity is not in
-the baseline (new, or its text changed), whatever the annotation says. A
-removed entry passes and is reported. Nothing passes because of its class.
-Acknowledging is recording the baseline again (`bstack doctor
---baseline-entries --force` after a review); recording prints, and with --json
-returns, every new or changed entry with its annotation and every removed one.
+THE RATCHET is on the identity of each WHOLE entry, and entries are counted:
+  - a LaunchAgent: the plist file name, and the SHA-256 of the canonical form of
+    the whole plist dictionary, every key;
+  - a hook: the hooks file, the event, the matcher, and the SHA-256 of the
+    canonical form of the whole hook object, every key, whatever its `type`.
+The canonical form is JSON with keys sorted and no added whitespace; strings
+are kept exactly (nothing normalised); a plist date is {"$date": ISO 8601
+text} and plist data is {"$data": lowercase hex}. Nothing is selected, so
+nothing can change unseen; reordering keys within an entry, or entries within
+a list, changes nothing. The baseline is a multiset: each identity and how
+many times it occurs. Doctor FAILS when an identity occurs more often than the
+baseline records (a new entry, a changed one, or one more copy of an existing
+one), whatever the annotation says. Fewer is a removal: it passes and is
+reported. Nothing passes because of its class. Acknowledging is recording the
+baseline again (`bstack doctor --baseline-entries --force` after a review);
+recording prints, and with --json returns, everything it acknowledges.
 
-SOURCES read: every com.broomva.*.plist in ~/Library/LaunchAgents; the hooks of
-the user's Claude Code settings (~/.claude/settings.json); the user's Codex
-hooks file (~/.codex/hooks.json), which has the same shape. NOT read: other
-LaunchAgent labels, LaunchDaemons, project-level settings files, `prompt`-type
-hooks, cron and other schedulers. A source that exists but cannot be read or
-parsed is a failure that names it, never a pass and never an empty list.
+SOURCES read: every com.broomva.*.plist in ~/Library/LaunchAgents; every hook
+object, of any type, in the user's Claude Code settings (~/.claude/settings.json)
+and in the user's Codex hooks file (~/.codex/hooks.json). NOT read: LaunchAgents
+with other labels, LaunchDaemons, project-level or managed settings files, any
+other key of the settings file (permissions, env, ...), cron and other
+schedulers. A source that exists but cannot be read or parsed, or that has an
+unexpected shape, is a failure that names it (and the JSON path), never a pass
+and never an empty list. Accepted shapes of a hooks file: a JSON object;
+`hooks`, if present, an object; each hooks.<event> a list; each element an
+object with a `hooks` list, an optional `matcher` and no other key; each
+element of that list an object. A plist must be a dictionary.
 
 THE ANNOTATION is best effort and never decides whether doctor passes. For
 each entry it says `flagged` (a tracked file it names, and its repository),
@@ -130,15 +137,16 @@ cannot be read, a broken baseline, or a baseline that could not be recorded, 42
 no baseline recorded, 2 a usage error.
 
 With --json every mode prints exactly one JSON object, errors included:
-{"schema": 2, "mode": "check"|"report"|"baseline", "baseline_recorded_at",
-"new": [entry], "removed": [{"source", "entry", "sha256"}], "unchanged":
-<count>, "error"}, where an entry is {"source", "entry", "sha256", "command",
-"annotation": {"class", "files": [{"file", "repository"}], "reasons"}}.
---report adds "entries" (every entry; "new", "removed", "unchanged" are null).
-Recording adds "action" ("recorded", or null when nothing was written) and
-"baseline" (the file's path); its "new" and "removed" are what it acknowledged.
-On an error "new", "removed" and "unchanged" are null. A usage error prints mode
-null.
+{"schema": 3, "mode": "check"|"report"|"baseline", "baseline_recorded_at",
+"new": [entry], "removed": [{"source", "entry", "sha256", "count",
+"baseline_count"}], "unchanged": <occurrences>, "error"}, where an entry is
+{"source", "entry", "sha256", "command", "annotation": {"class", "files":
+[{"file", "repository"}], "reasons"}} and, in "new", also "count" and
+"baseline_count". --report adds "entries" (every occurrence; "new", "removed",
+"unchanged" are null). Recording adds "action" ("recorded", or null when
+nothing was written) and "baseline" (the file's path); its "new" and "removed"
+are what it acknowledged. On an error "new", "removed" and "unchanged" are
+null. A usage error prints mode null.
 """
 import argparse
 import datetime
@@ -361,7 +369,11 @@ def named_paths(text, home, cwd=None):
     fs = FileSystem()
     files, seen, folders, covered = [], set(), {}, []
 
-    def add(path, st):
+    word_start = set()  # identities reached from a start that begins a word
+
+    def add(path, st, at_word_start=True):
+        if at_word_start:
+            word_start.add(identity(st))
         if identity(st) not in seen:
             seen.add(identity(st))
             files.append(path)
@@ -372,6 +384,7 @@ def named_paths(text, home, cwd=None):
     if cwd is not None and stat_or_none(cwd) is not None:
         add_folder(cwd, os.stat(cwd))
     for index, base, rest_at in absolute_starts(text, home):
+        begins_word = index == 0 or text[index - 1] in RELATIVE_STARTS_AFTER
         rest = text[rest_at:]
         plain, kept = without_quotes(rest)
         for variant, position in ((rest, None), (plain, kept)):
@@ -379,7 +392,7 @@ def named_paths(text, home, cwd=None):
                 end = rest_at + (length if position is None else position[length - 1] + 1)
                 covered.append((index, end))
                 if stat.S_ISREG(st.st_mode):
-                    add(path, st)
+                    add(path, st, begins_word)
                 elif stat.S_ISDIR(st.st_mode) and tree_root(path) is not None:
                     add_folder(path, st)
     starts = [i for i in range(len(text))
@@ -402,6 +415,11 @@ def named_paths(text, home, cwd=None):
             continue  # part of an absolute path that names something (`/t/my dir/x.sh`)
         if piece not in unresolved:
             unresolved.append(piece)
+    # A file reached only from inside a word (`/bin/link` inside `/home/bin/linked.sh`)
+    # is kept only when it is tracked: the suffix may be a system file, which is
+    # no annotation about this entry.
+    files = [path for path in files
+             if identity(os.stat(path)) in word_start or (judge(path) or ('',))[0] == 'tracked']
     return files, unresolved
 
 
@@ -428,7 +446,25 @@ def read_entry(texts, home, cwd=None):
     return files, missed
 
 
-LAUNCHD_KEYS = ('ProgramArguments', 'Program', 'WorkingDirectory', 'EnvironmentVariables')
+def canonical(value, where):
+    """The one canonical text of a plist or JSON value: JSON with sorted keys and no
+    added whitespace. A plist date is {"$date": ISO 8601 text}, plist data is
+    {"$data": lowercase hex}; strings are kept exactly (no normalisation)."""
+    def plain(item, path):
+        if isinstance(item, dict):
+            if not all(isinstance(k, str) for k in item):
+                raise ValueError(f'cannot read {where}: a non-text key at {path}')
+            return {k: plain(v, f'{path}.{k}') for k, v in item.items()}
+        if isinstance(item, list):
+            return [plain(v, f'{path}[{i}]') for i, v in enumerate(item)]
+        if isinstance(item, (bytes, bytearray)):
+            return {'$data': bytes(item).hex()}
+        if isinstance(item, datetime.datetime):
+            return {'$date': item.isoformat()}
+        if item is None or isinstance(item, (str, int, float, bool)):
+            return item
+        raise ValueError(f'cannot read {where}: an unsupported value at {path}')
+    return json.dumps(plain(value, '$'), sort_keys=True, ensure_ascii=False, separators=(',', ':'))
 
 
 def digest(text):
@@ -439,9 +475,9 @@ def digest(text):
 def launchd_entries(folder, home):
     """(entry, command, files, missed, sha256) for each com.broomva.*.plist in ``folder``.
 
-    The identity hashes the canonical JSON serialisation of the plist's
-    ProgramArguments, Program, WorkingDirectory and EnvironmentVariables (keys
-    sorted, values exactly as stored). Any change to any of them is a new identity.
+    The identity is the plist file name and the SHA-256 of the canonical form of
+    the WHOLE plist dictionary (every key). The annotation reads Program,
+    ProgramArguments and WorkingDirectory.
     """
     try:
         with os.scandir(folder) as listing:
@@ -459,8 +495,7 @@ def launchd_entries(folder, home):
             raise ValueError(f'cannot read {plist}: {exc}') from exc
         if not isinstance(data, dict):
             raise ValueError(f'cannot read {plist}: not a dictionary')
-        canonical = json.dumps({key: data.get(key) for key in LAUNCHD_KEYS}, sort_keys=True,
-                               ensure_ascii=False, separators=(',', ':'), default=repr)
+        sha = digest(canonical(data, plist))
         cwd = data.get('WorkingDirectory')
         cwd = expand(cwd, home) if isinstance(cwd, str) and cwd else None
         cwd = cwd if cwd is not None and os.path.isabs(cwd) else None
@@ -469,16 +504,22 @@ def launchd_entries(folder, home):
         program = data.get('Program')
         strings = ([program] if isinstance(program, str) and program else []) + argv
         files, missed = read_entry(strings, home, cwd)
-        yield plist.name, shlex.join(strings), files, missed, digest(canonical)
+        yield plist.name, shlex.join(strings), files, missed, sha
 
 
 def hook_entries(settings, home):
-    """(entry, command, files, missed, sha256) for each hook command in a hooks file.
+    """(entry, command, files, missed, sha256) for each hook object in a hooks file.
 
-    Claude Code's settings.json and Codex's hooks.json share the shape
-    {"hooks": {event: [{"matcher", "hooks": [{"type": "command", "command"}]}]}}.
-    The entry is the event and matcher; the identity hashes the exact command.
-    A file that exists but cannot be read or parsed is an error naming it.
+    Claude Code's settings.json and Codex's hooks.json share one shape, walked
+    strictly; anything else is an error naming the file and the JSON path:
+      the file is a JSON object; `hooks`, if present, is an object;
+      hooks.<event> is a list;
+      hooks.<event>[i] is an object with a `hooks` list, an optional `matcher`
+        and no other key;
+      hooks.<event>[i].hooks[j] is an object (any keys, any `type`).
+    Each hook object is one entry, whatever its type. Its identity is the file,
+    the event, the matcher and the SHA-256 of the canonical form of the WHOLE
+    hook object. The annotation reads its `command` when that is a string.
     """
     try:
         data = json.loads(settings.read_text(encoding='utf-8'))
@@ -489,25 +530,40 @@ def hook_entries(settings, home):
         return
     except (OSError, ValueError) as exc:
         raise ValueError(f'cannot read {settings}: {exc}') from exc
+
+    def bad(path, what):
+        return ValueError(f'cannot read {settings}: {path} is {what}')
+
     if not isinstance(data, dict):
-        raise ValueError(f'cannot read {settings}: not a JSON object')
-    hooks = data.get('hooks')
-    if hooks is None:
+        raise bad('$', 'not an object')
+    if 'hooks' not in data:
         return
+    hooks = data['hooks']
     if not isinstance(hooks, dict):
-        raise ValueError(f'cannot read {settings}: "hooks" is not an object')
+        raise bad('hooks', 'not an object')
     for event, groups in hooks.items():
-        for group in groups if isinstance(groups, list) else []:
+        where = f'hooks.{event}'
+        if not isinstance(groups, list):
+            raise bad(where, 'not a list')
+        for g, group in enumerate(groups):
+            at = f'{where}[{g}]'
             if not isinstance(group, dict):
-                continue
+                raise bad(at, 'not an object')
+            if not isinstance(group.get('hooks'), list):
+                raise bad(f'{at}.hooks', 'missing or not a list')
+            extra = sorted(set(group) - {'hooks', 'matcher'})
+            if extra:
+                raise bad(at, f'an object with unexpected keys {extra}')
             matcher = group.get('matcher')
-            label = f'{event}' + (f'[{matcher}]' if isinstance(matcher, str) and matcher else '')
-            commands = group.get('hooks')
-            for hook in commands if isinstance(commands, list) else []:
-                command = hook.get('command') if isinstance(hook, dict) else None
-                if isinstance(command, str):
-                    named, missed = read_entry([command], home)
-                    yield label, command, named, missed, digest(command)
+            label = f'{event}' + ('' if 'matcher' not in group else
+                                  f'[{matcher}]' if isinstance(matcher, str) else f'[{canonical(matcher, settings)}]')
+            for h, hook in enumerate(group['hooks']):
+                if not isinstance(hook, dict):
+                    raise bad(f'{at}.hooks[{h}]', 'not an object')
+                command = hook.get('command')
+                named, missed = read_entry([command], home) if isinstance(command, str) else ([], [])
+                shown = command if isinstance(command, str) else canonical(hook, settings)
+                yield label, shown, named, missed, digest(canonical(hook, settings))
 
 
 TRACKED = {}  # work-tree top -> identities of the files `git ls-files` lists there, built once per process
@@ -614,6 +670,14 @@ def key(item):
     return tuple(item[field] for field in IDENTITY_FIELDS)
 
 
+def counted(items):
+    """identity -> how many times it occurs (entries are counted, not collapsed)."""
+    counts = {}
+    for item in items:
+        counts[key(item)] = counts.get(key(item), 0) + item.get('count', 1)
+    return counts
+
+
 def describe(item):
     note = item['annotation']
     if note['class'] == 'flagged':
@@ -626,21 +690,33 @@ def describe(item):
 
 
 def compare(current, saved):
-    """(new or changed entries, removed identities, unchanged count)."""
-    saved_keys = {key(item) for item in saved}
-    current_keys = {key(item) for item in current}
-    new = [item for item in current if key(item) not in saved_keys]
-    removed = [dict(zip(IDENTITY_FIELDS, k)) for k in sorted(saved_keys - current_keys)]
-    return new, removed, len(current_keys & saved_keys)
+    """(new, removed, unchanged) on counted identities.
+
+    new: one item per identity that occurs MORE often than the baseline records
+    (a new entry, a changed one, or one more copy), with "count" and
+    "baseline_count"; removed: identities that occur less often; unchanged: the
+    number of occurrences both agree on.
+    """
+    now, before = counted(current), counted(saved)
+    first = {}
+    for item in current:
+        first.setdefault(key(item), item)
+    new = [{**first[k], 'count': n, 'baseline_count': before.get(k, 0)}
+           for k, n in now.items() if n > before.get(k, 0)]
+    removed = [{**dict(zip(IDENTITY_FIELDS, k)), 'count': now.get(k, 0), 'baseline_count': n}
+               for k, n in sorted(before.items()) if n > now.get(k, 0)]
+    return new, removed, sum(min(n, before.get(k, 0)) for k, n in now.items())
 
 
 def change_kind(item, saved):
+    if item.get('baseline_count'):
+        return 'one more copy of an'
     named = {(s['source'], s['entry']) for s in saved}
     return 'changed' if (item['source'], item['entry']) in named else 'new'
 
 
 def report(mode, recorded_at, error, **fields):
-    print(json.dumps({'schema': 2, 'mode': mode, 'baseline_recorded_at': recorded_at,
+    print(json.dumps({'schema': 3, 'mode': mode, 'baseline_recorded_at': recorded_at,
                       'new': None, 'removed': None, 'unchanged': None, 'error': error, **fields}))
 
 
@@ -679,13 +755,13 @@ def load_baseline(baseline):
     with baseline.open(encoding='utf-8') as stream:
         data = json.load(stream)
     rows = data.get('entries') if isinstance(data, dict) else None
-    if (not isinstance(data, dict) or data.get('schema') != 2 or not isinstance(data.get('recorded_at'), str)
+    if (not isinstance(data, dict) or data.get('schema') != 3 or not isinstance(data.get('recorded_at'), str)
             or not isinstance(rows, list)
             or not all(isinstance(r, dict) and all(isinstance(r.get(f), str) for f in IDENTITY_FIELDS)
-                       for r in rows)):
+                       and type(r.get('count')) is int and r['count'] > 0 for r in rows)):
         raise ValueError(f'invalid baseline format in {baseline} (re-record with bstack doctor '
                          '--baseline-entries --force)')
-    return data['recorded_at'], [{f: r[f] for f in IDENTITY_FIELDS} for r in rows]
+    return data['recorded_at'], [{**{f: r[f] for f in IDENTITY_FIELDS}, 'count': r['count']} for r in rows]
 
 
 def main(args):
@@ -727,8 +803,9 @@ def main(args):
         baseline.parent.mkdir(parents=True, exist_ok=True)
         recorded_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
         with baseline.open('w' if args.force else 'x', encoding='utf-8') as stream:
-            json.dump({'schema': 2, 'recorded_at': recorded_at,
-                       'entries': [{f: item[f] for f in IDENTITY_FIELDS} for item in current]}, stream, indent=2)
+            json.dump({'schema': 3, 'recorded_at': recorded_at,
+                       'entries': [{**dict(zip(IDENTITY_FIELDS, k)), 'count': n}
+                                   for k, n in sorted(counted(current).items())]}, stream, indent=2)
             stream.write('\n')
         if args.json:
             report('baseline', recorded_at, None, new=new, removed=removed, unchanged=unchanged,
@@ -737,9 +814,9 @@ def main(args):
         print(f'[info] baseline recorded at {baseline}; acknowledged {len(new)} new or changed, '
               f'{len(removed)} removed, {unchanged} unchanged:')
         for item in new:
-            print(f'  {change_kind(item, previous)}: {describe(item)}')
+            print(f"  {change_kind(item, previous)} ({item['baseline_count']} -> {item['count']}): {describe(item)}")
         for item in removed:
-            print(f"  removed: {item['source']} {item['entry']} ({item['sha256'][:12]})")
+            print(f"  removed: {item['source']} {item['entry']} ({item['sha256'][:12]}, {item['baseline_count']} -> {item['count']})")
         return 0
     try:
         recorded_at, saved = load_baseline(baseline)
@@ -757,10 +834,12 @@ def main(args):
         report('check', recorded_at, None, new=new, removed=removed, unchanged=unchanged)
         return failed
     for item in removed:
-        print(f"[info] acknowledged entry is gone: {item['source']} {item['entry']} (baseline can be re-recorded)")
+        print(f"[info] acknowledged entry is gone: {item['source']} {item['entry']} "
+              f"({item['baseline_count']} -> {item['count']}; baseline can be re-recorded)")
     print(f'[info] {unchanged} acknowledged entr{"y" if unchanged == 1 else "ies"} unchanged')
     for item in new:
-        print(f'[failure] {change_kind(item, saved)} entry since the baseline: {describe(item)}; {ACKNOWLEDGE}')
+        print(f'[failure] {change_kind(item, saved)} entry since the baseline '
+              f"({item['baseline_count']} -> {item['count']}): {describe(item)}; {ACKNOWLEDGE}")
     return failed
 
 
