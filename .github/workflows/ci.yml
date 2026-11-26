@@ -70,6 +70,36 @@ jobs:
           cp assets/templates/policy.yaml.template .control/policy.yaml 2>/dev/null || true
           bash scripts/doctor.sh --quiet
 
+  control-readers:
+    name: control reader ratchet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The base commit and the merge base must exist for --base-ref.
+          fetch-depth: 0
+
+      - name: Ratchet code files that mention the legacy .control folder
+        # BRO-4083. A code file that mentions `.control` must already be in
+        # scripts/control_readers_baseline.json: a file may leave the list, none
+        # may join it. New code spells neither folder name and uses the generated
+        # path reader. On a pull request the PR's baseline is also compared with
+        # the base commit's, so a PR cannot add a file and widen the baseline
+        # together; a push to main has no base and runs the plain check. A
+        # mention assembled from pieces is not found (see the script's
+        # docstring). The fixture suite runs in the tests job
+        # (tests/control-readers.test.sh).
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          python3 scripts/check_control_readers.py --selftest
+          if [ -n "${BASE_SHA:-}" ]; then
+            python3 scripts/check_control_readers.py --base-ref "$BASE_SHA"
+          else
+            python3 scripts/check_control_readers.py
+          fi
+
   tests:
     name: tests/*.test.sh
     runs-on: ubuntu-latest

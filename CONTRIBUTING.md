@@ -30,6 +30,43 @@ jq -e . assets/templates/*.snippet >/dev/null   # template JSON shape
 
 CI runs the same checks via `.github/workflows/ci.yml`.
 
+## The `.control` reader ratchet
+
+The contract: the ratchet lists every code file that mentions the legacy folder
+name `.control` at all; a pull request may not add a file to that list.
+
+`scripts/check_control_readers.py` (CI job `control reader ratchet`) runs it. Files
+already listed are grandfathered in `scripts/control_readers_baseline.json`, and the
+list only shrinks. On a pull request your baseline is also compared with the base
+branch's: adding a path fails, unless the same change renames a listed file
+(`git mv`, which `git diff -M` reports as a rename). The base comparison is skipped,
+with a note, only when the base branch has no baseline file yet: the change that
+first introduces the baseline is checked against its own set only.
+
+If the check fails on your file: do not spell the folder name. Resolve the path
+through the generated path reader (`scripts/broomva_paths.py`,
+`scripts/lib/broomva-paths.sh`, `scripts/lib/broomva_paths.rs`). Writing `.broomva`
+next to it does not help; a file that names both folders is still listed. Do not
+widen the baseline.
+
+What counts as a mention: the text `.control` where the character before the dot is
+the start of the text or anything other than a letter, digit, `_`, `)` or `]` (so
+`self.control` is not one), and the character after it is `/`, a quote, a backtick,
+a `:` (as in a PATH list) or the end of the line. Which files count: tracked code files (by extension or
+name), except those under a directory named exactly `docs`, `research`, `archive`,
+`.control`, `.broomva` or `node_modules` at any depth (`scripts/mydocs/x.py`
+counts).
+
+The limits that remain:
+
+- a mention assembled from pieces (`"." + "control"`, an f-string, a variable
+  holding the name) is not found; review covers it;
+- a comment counts: reword the comment rather than baselining it.
+
+This checker counts files that mention `.control`. That is not the "unpaired
+readers" count of the sensor in `broomva/workspace`, and the two numbers do not
+compare.
+
 ## Adding a new primitive (P21+)
 
 bstack's L3 stability budget says governance changes are rare and deliberate. Before adding a new `Pn`:
