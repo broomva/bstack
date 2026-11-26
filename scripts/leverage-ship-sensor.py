@@ -451,6 +451,35 @@ def _in_window(merged_at, cutoff):
         return True  # keep on parse failure rather than silently drop
 
 
+def ship_config_signature(cfg, window):
+    """Canonical ship_signal config for m6s cache matching."""
+    c = cfg if isinstance(cfg, dict) else {}
+    tw = c.get("tier_weights") if isinstance(c.get("tier_weights"), dict) else {}
+    return {
+        "window_days": float(window),
+        "repos": sorted({str(r).strip().lower() for r in (c.get("repos") or []) if str(r).strip()}),
+        "author_allowlist": sorted({str(a).strip().lower() for a in (c.get("author_allowlist") or []) if str(a).strip()}),
+        "product_paths": str(c.get("product_paths") or DEFAULT_PRODUCT),
+        "meta_paths": str(c.get("meta_paths") or DEFAULT_META),
+        "tier_weights": {
+            "green": float(tw.get("green", 1.0)),
+            "ungated": float(tw.get("ungated", 0.5)),
+        },
+    }
+
+
+def outward_config_signature(fleet_cfg, window):
+    """Canonical fleet outward config for m7 cache matching."""
+    c = fleet_cfg if isinstance(fleet_cfg, dict) else {}
+    dr = c.get("door_receipts")
+    return {
+        "window_days": float(window),
+        "product_repos": sorted({str(r).strip().lower() for r in (c.get("product_repos") or []) if str(r).strip()}),
+        "author_allowlist": sorted({str(a).strip().lower() for a in (c.get("author_allowlist") or []) if str(a).strip()}),
+        "door_receipts": os.path.expanduser(str(dr)) if dr else os.path.expanduser(DEFAULT_DOOR_RECEIPTS),
+    }
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--workspace", default=None)
@@ -469,13 +498,6 @@ def main():
 
     workspace = resolve_workspace(args.workspace)
 
-    if args.throttle and not args.fixture:
-        try:
-            st = json.load(open(os.path.join(workspace, ".control", "leverage-ship-state.json")))
-            if time.time() - datetime.fromisoformat(st["measured_at"]).timestamp() < args.throttle:
-                return
-        except Exception:
-            pass
     fleet_cfg = {}
     if args.config_json:
         cfg = json.loads(args.config_json)
@@ -488,6 +510,20 @@ def main():
         window = args.window if args.window is not None else setpoints.get("window_days", 7)
     if args.fleet_config_json:
         fleet_cfg = json.loads(args.fleet_config_json)
+
+    ship_sig = ship_config_signature(cfg, window)
+    outward_sig = outward_config_signature(fleet_cfg, window)
+
+    if args.throttle and not args.fixture and not args.outward_fixture:
+        try:
+            with open(os.path.join(workspace, ".control", "leverage-ship-state.json")) as f:
+                st = json.load(f)
+            if (time.time() - datetime.fromisoformat(st["measured_at"]).timestamp() < args.throttle
+                    and st.get("ship_config") == ship_sig
+                    and st.get("outward_config") == outward_sig):
+                return
+        except Exception:
+            pass
 
     if args.fixture:
         prs = json.load(open(args.fixture))
@@ -515,6 +551,8 @@ def main():
         "shadow": bool(cfg.get("shadow", True)),
         "gh_ok": gh_ok,
         "repos": repos,
+        "ship_config": ship_sig,
+        "outward_config": outward_sig,
         "m6s_meta_work_ship_ratio": result["m6s_meta_work_ship_ratio"],
         "raw": result["raw"],
         "m7_outward_artifact_floor": outward["m7_outward_artifact_floor"],

@@ -14,9 +14,10 @@ Two of its questions cannot be answered from there:
       session on the host, not of one directory.
 
 This sensor reads EVERY Claude Code and Codex transcript on the host within the
-window and writes <workspace>/.control/leverage-fleet-state.json. The main sensor
-merges it (merge_fleet). Because the scan is host-wide, every checkout that runs it
-computes the same values: the verdict no longer depends on where it is run from.
+window and writes the workspace's leverage-fleet-state.json (via broomva_paths).
+The main sensor merges it (merge_fleet). Because the scan is host-wide, every
+checkout that runs it computes the same values: the verdict no longer depends on
+where it is run from.
 
 Classification is by the GIT REPO an edit lands in, never by path regex: repos are
 named in setpoints `fleet.product_repos` / `fleet.meta_repos`. A session that
@@ -116,8 +117,27 @@ def _import_yaml():
         return yaml
 
 
+_PATHS_MOD = None
+
+
+def _broomva_paths():
+    global _PATHS_MOD
+    if _PATHS_MOD is None:
+        import importlib.util
+        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "broomva_paths.py")
+        spec = importlib.util.spec_from_file_location("broomva_paths", p)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _PATHS_MOD = mod
+    return _PATHS_MOD
+
+
+def _fleet_state_path(workspace):
+    return str(_broomva_paths().repo_path("leverage_fleet_state", workspace))
+
+
 def load_config(workspace):
-    path = os.path.join(workspace, ".control", "leverage-setpoints.yaml")
+    path = str(_broomva_paths().repo_path("leverage_setpoints", workspace))
     try:
         with open(path) as f:
             sp = _import_yaml().safe_load(f) or {}
@@ -174,7 +194,7 @@ def repo_of_path(p, cwd=None):
 
 
 def edit_repo(p, cwd=None):
-    """The repo a TOOL edit landed in, or "?<abs path>" when it cannot be resolved.
+    """The repo a TOOL or SHELL edit landed in, or "?<abs path>" when it cannot be resolved.
     An unresolved edit is kept, not dropped: it may be product work in a clone or
     worktree that no longer exists, so it must not let a session read as meta-only.
     measure() discards the ones under scratch or harness folders."""
@@ -183,7 +203,9 @@ def edit_repo(p, cwd=None):
         return r
     if not p:
         return None
-    p = os.path.expanduser(str(p).strip())
+    p = os.path.expanduser(str(p).strip().strip("'\""))
+    if not p or p.startswith("/dev/"):
+        return None
     if not os.path.isabs(p):
         if not cwd:
             # A relative path with no working directory to anchor it: where it
@@ -197,13 +219,15 @@ def shell_write_repos(cmd, cwd):
     """Repos a shell command writes into: the targets of redirects, `tee` and
     `sed -i`, resolved as paths. A target that starts with `$` cannot be resolved
     without running the shell (it is usually a temp dir) and is skipped rather than
-    guessed onto the working directory. Heuristic by design; the number of sessions
-    it decides is reported separately in raw."""
+    guessed onto the working directory. Targets whose repo cannot be resolved are
+    kept as `?<path>` via edit_repo so vanished-clone writes cannot read as meta-only
+    (scratch/harness paths are filtered in measure()). Heuristic by design; the number
+    of sessions it decides is reported separately in raw."""
     out = set()
     for tgt in REDIRECT_RE.findall(cmd) + TEE_RE.findall(cmd) + SED_INPLACE_RE.findall(cmd):
         if tgt.startswith(("/dev/", "&", "$")) or not PATHLIKE_RE.search(tgt):
             continue
-        r = repo_of_path(tgt, cwd)
+        r = edit_repo(tgt, cwd)
         if r:
             out.add(r)
     return out
@@ -452,7 +476,9 @@ def measure(cfg, window_days, claude_root, codex_root, now=None):
                       and not (r.startswith("?") and under(r[1:], ignored_unrepo))}
         # every unresolved edit that survives the filter reads as one unknown repo
         tool_repos = {("<unresolved>" if r.startswith("?") else r) for r in tool_repos}
-        shell_repos = {r for _, k, r in ed if k == "shell" and r}
+        shell_repos = {r for _, k, r in ed if k == "shell" and r
+                       and not (r.startswith("?") and under(r[1:], ignored_unrepo))}
+        shell_repos = {("<unresolved>" if r.startswith("?") else r) for r in shell_repos}
         edited = any(k == "tool" for _, k, _ in ed) or bool(shell_repos)
         if edited and not scratch:
             editing += 1
@@ -567,7 +593,7 @@ def _mtime(path):
 
 
 def write_state(record, workspace):
-    state_file = os.path.join(workspace, ".control", STATE_NAME)
+    state_file = _fleet_state_path(workspace)
     d = os.path.dirname(state_file)
     os.makedirs(d, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=d, prefix=".fleet-", suffix=".tmp")
@@ -582,6 +608,24 @@ def write_state(record, workspace):
         except OSError:
             pass
         raise
+
+
+def fleet_config_signature(cfg, window):
+    """Canonical measurement config recorded alongside cached readings so readers and
+    --throttle never reuse a scan produced under a different window, repo list,
+    scratch filter, or wait cap."""
+    c = cfg if isinstance(cfg, dict) else {}
+    sp = c.get("scratch_prefixes", ["/tmp", "/private/tmp"])
+    if sp is None:
+        sp = []
+    return {
+        "window_days": float(window),
+        "product_repos": sorted({str(r).strip().lower() for r in (c.get("product_repos") or []) if str(r).strip()}),
+        "meta_repos": sorted({str(r).strip().lower() for r in (c.get("meta_repos") or []) if str(r).strip()}),
+        "external_repos": sorted({str(r).strip().lower() for r in (c.get("external_repos") or []) if str(r).strip()}),
+        "scratch_prefixes": sorted({str(x).rstrip("/") for x in sp if str(x).strip()}),
+        "wait_cap_minutes": float(c.get("wait_cap_minutes") or DEFAULT_CAP_MIN),
+    }
 
 
 def main():
@@ -600,14 +644,6 @@ def main():
     args = ap.parse_args()
 
     workspace = resolve_workspace(args.workspace)
-    if args.throttle:
-        try:
-            with open(os.path.join(workspace, ".control", STATE_NAME)) as f:
-                st = json.load(f)
-            if time.time() - datetime.fromisoformat(st["measured_at"]).timestamp() < args.throttle:
-                return
-        except Exception:
-            pass
     if args.config_json:
         cfg, window = json.loads(args.config_json), 7
     else:
@@ -615,11 +651,26 @@ def main():
     if args.window is not None:
         window = args.window
 
+    config_sig = fleet_config_signature(cfg, window)
+
+    if args.throttle:
+        try:
+            with open(_fleet_state_path(workspace)) as f:
+                st = json.load(f)
+            if (time.time() - datetime.fromisoformat(st["measured_at"]).timestamp() < args.throttle
+                    and st.get("config") == config_sig
+                    and st.get("claude_root") == args.claude_root
+                    and st.get("codex_root") == args.codex_root):
+                return
+        except Exception:
+            pass
+
     started = time.time()
     result = measure(cfg, window, args.claude_root, args.codex_root, now=args.now)
     record = {
         "measured_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "window_days": window,
+        "config": config_sig,
         "scope": "host",
         "host": os.uname().nodename if hasattr(os, "uname") else None,
         "claude_root": args.claude_root, "codex_root": args.codex_root,

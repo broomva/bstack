@@ -573,30 +573,155 @@ def context_ledger_block(files, kg_read_re, subagent_files=(), budget_s=None, st
                 "status_reason": _clip(f"{type(e).__name__}: {e}", MAX_WARNING_CHARS)}
 
 
-def merge_ship_shadow(metrics, raw, workspace, max_age_sec=172800):
+_DEFAULT_SHIP_PRODUCT = r"/(apps|core|work|freelance|crm|packages|services)/"
+_DEFAULT_SHIP_META = (
+    r"/(research|docs|\.control|\.claude|skills|scripts|bstack)/|"
+    r"/(CLAUDE|AGENTS|METALAYER)\.md$|/Makefile$"
+)
+_DEFAULT_DOOR_RECEIPTS = "~/.broomva/outward-receipts.jsonl"
+_DEFAULT_WAIT_CAP_MIN = 30.0
+
+
+def _norm_str_set(vals):
+    return sorted({str(v).strip().lower() for v in (vals or []) if str(v).strip()})
+
+
+def _ship_config_sig(setpoints, window):
+    ss = (setpoints.get("ship_signal") if isinstance(setpoints, dict) else None) or {}
+    if not isinstance(ss, dict):
+        ss = {}
+    tw = ss.get("tier_weights") if isinstance(ss.get("tier_weights"), dict) else {}
+    return {
+        "window_days": float(window),
+        "repos": _norm_str_set(ss.get("repos")),
+        "author_allowlist": _norm_str_set(ss.get("author_allowlist")),
+        "product_paths": str(ss.get("product_paths") or _DEFAULT_SHIP_PRODUCT),
+        "meta_paths": str(ss.get("meta_paths") or _DEFAULT_SHIP_META),
+        "tier_weights": {
+            "green": float(tw.get("green", 1.0)),
+            "ungated": float(tw.get("ungated", 0.5)),
+        },
+    }
+
+
+def _outward_config_sig(setpoints, window):
+    fleet = (setpoints.get("fleet") if isinstance(setpoints, dict) else None) or {}
+    if not isinstance(fleet, dict):
+        fleet = {}
+    dr = fleet.get("door_receipts")
+    return {
+        "window_days": float(window),
+        "product_repos": _norm_str_set(fleet.get("product_repos")),
+        "author_allowlist": _norm_str_set(fleet.get("author_allowlist")),
+        "door_receipts": os.path.expanduser(str(dr)) if dr else os.path.expanduser(_DEFAULT_DOOR_RECEIPTS),
+    }
+
+
+def _fleet_config_sig(setpoints, window):
+    fleet = (setpoints.get("fleet") if isinstance(setpoints, dict) else None) or {}
+    if not isinstance(fleet, dict):
+        fleet = {}
+    sp = fleet.get("scratch_prefixes", ["/tmp", "/private/tmp"])
+    if sp is None:
+        sp = []
+    return {
+        "window_days": float(window),
+        "product_repos": _norm_str_set(fleet.get("product_repos")),
+        "meta_repos": _norm_str_set(fleet.get("meta_repos")),
+        "external_repos": _norm_str_set(fleet.get("external_repos")),
+        "scratch_prefixes": sorted({str(x).rstrip("/") for x in sp if str(x).strip()}),
+        "wait_cap_minutes": float(fleet.get("wait_cap_minutes") or _DEFAULT_WAIT_CAP_MIN),
+    }
+
+
+def _window_matches(record_window, expected_window):
+    if record_window is None or expected_window is None:
+        return True
+    try:
+        return float(record_window) == float(expected_window)
+    except (TypeError, ValueError):
+        return False
+
+
+def _config_matches_ship(sd, setpoints, window):
+    if setpoints is None and window is None:
+        return True
+    eff_window = window if window is not None else (
+        setpoints.get("window_days", 7) if isinstance(setpoints, dict) else 7
+    )
+    if "ship_config" in sd:
+        return sd.get("ship_config") == _ship_config_sig(setpoints or {}, eff_window)
+    if not _window_matches(sd.get("window_days"), eff_window):
+        return False
+    ss = (setpoints.get("ship_signal") if isinstance(setpoints, dict) else None) or {}
+    if isinstance(ss, dict) and (ss.get("repos") or ss.get("author_allowlist")):
+        return False
+    return True
+
+
+def _config_matches_outward(sd, setpoints, window):
+    if setpoints is None and window is None:
+        return True
+    eff_window = window if window is not None else (
+        setpoints.get("window_days", 7) if isinstance(setpoints, dict) else 7
+    )
+    if "outward_config" in sd:
+        return sd.get("outward_config") == _outward_config_sig(setpoints or {}, eff_window)
+    o = sd.get("outward") if isinstance(sd.get("outward"), dict) else {}
+    if not _window_matches(o.get("window_days", sd.get("window_days")), eff_window):
+        return False
+    fleet = (setpoints.get("fleet") if isinstance(setpoints, dict) else None) or {}
+    if isinstance(fleet, dict) and (
+        fleet.get("product_repos") or fleet.get("author_allowlist") or fleet.get("door_receipts")
+    ):
+        return False
+    return True
+
+
+def _config_matches_fleet(fd, setpoints, window):
+    if setpoints is None and window is None:
+        return True
+    eff_window = window if window is not None else (
+        setpoints.get("window_days", 7) if isinstance(setpoints, dict) else 7
+    )
+    if "config" in fd:
+        return fd.get("config") == _fleet_config_sig(setpoints or {}, eff_window)
+    if not _window_matches(fd.get("window_days"), eff_window):
+        return False
+    fleet = (setpoints.get("fleet") if isinstance(setpoints, dict) else None) or {}
+    if isinstance(fleet, dict) and any(
+        fleet.get(k) for k in ("product_repos", "meta_repos", "external_repos", "scratch_prefixes", "wait_cap_minutes")
+    ):
+        return False
+    return True
+
+
+def merge_ship_shadow(metrics, raw, workspace, max_age_sec=172800, setpoints=None, window=None):
     """BRO-1707 SHADOW: merge the exogenous ship-signal (leverage-ship-sensor.py →
     .control/leverage-ship-state.json) as metric `m6s_meta_work_ship_ratio` if the
-    state file is fresh (<48h). metric_id() splits on the first "_" → "m6s", which has
-    NO setpoint, so evaluate() marks it `no_setpoint` and it can never become `worst`
-    or reach the SessionStart nudge. It is present only for calibration until BRO-1709
-    promotes it. Any error (missing/stale/malformed) leaves the sensor untouched."""
+    state file is fresh (<48h) and matches current setpoints/window. metric_id()
+    splits on the first "_" → "m6s", which has NO setpoint, so evaluate() marks it
+    `no_setpoint` and it can never become `worst` or reach the SessionStart nudge.
+    It is present only for calibration until BRO-1709 promotes it. Any error
+    (missing/stale/malformed/config-mismatch) leaves the sensor untouched."""
     try:
         ship_state = os.path.join(workspace, ".control", "leverage-ship-state.json")
         with open(ship_state) as f:
             sd = json.load(f)
         age = time.time() - datetime.fromisoformat(sd["measured_at"]).timestamp()
         r = sd.get("m6s_meta_work_ship_ratio")
-        if age < max_age_sec and r is not None:
+        if age < max_age_sec and r is not None and _config_matches_ship(sd, setpoints, window):
             metrics["m6s_meta_work_ship_ratio"] = r
             raw["ship_signal"] = sd.get("raw")
         # BRO-3955: m7 travels in the same file (one gh pass, one throttle). Unlike
         # m6s it HAS a live setpoint, so it is graded. See effective_m7 for when a
-        # reading may stand; when none may, the setpoint reports as `unmeasured`.
-        m7 = effective_m7(sd, age)
-        if m7 is not None:
-            metrics["m7_outward_artifact_floor"] = m7
-            raw["outward"] = sd.get("outward")
-            raw["outward_measured_at"] = sd.get("measured_at")
+        # reading may stand; when none may (or config changed), it reports `unmeasured`.
+        if _config_matches_outward(sd, setpoints, window):
+            m7 = effective_m7(sd, age)
+            if m7 is not None:
+                metrics["m7_outward_artifact_floor"] = m7
+                raw["outward"] = sd.get("outward")
+                raw["outward_measured_at"] = sd.get("measured_at")
     except Exception:
         pass
 
@@ -658,29 +783,45 @@ def clear_external(metrics, raw):
     this, a cached m7 = 1.0 survives its source going stale, null or missing and
     keeps certifying the window for up to 24 h. m6 goes back to its checkout value."""
     metrics.pop("m7_outward_artifact_floor", None)
+    metrics.pop("m6s_meta_work_ship_ratio", None)
     for k in FLEET_METRICS:
         metrics.pop(k, None)
     if raw.get("m6_scope") == "fleet":
         metrics["m6_meta_work_session_ratio"] = raw.get("m6_checkout")
-    for k in ("m6_scope", "m6_checkout", "fleet", "fleet_measured_at", "outward", "outward_measured_at"):
+    for k in ("m6_scope", "m6_checkout", "fleet", "fleet_measured_at", "outward", "outward_measured_at", "ship_signal"):
         raw.pop(k, None)
 
 
-def merge_fleet(metrics, raw, workspace, max_age_sec=172800):
+def _fleet_state_path(workspace):
+    try:
+        import importlib.util
+        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "broomva_paths.py")
+        spec = importlib.util.spec_from_file_location("broomva_paths", p)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return str(mod.repo_path("leverage_fleet_state", workspace))
+    except Exception:
+        return os.path.join(workspace, ".control", "leverage-fleet-state.json")
+
+
+def merge_fleet(metrics, raw, workspace, max_age_sec=172800, setpoints=None, window=None):
     """BRO-3955: merge the host-wide fleet scan (leverage-fleet-sensor.py ->
-    .control/leverage-fleet-state.json) if fresh (<48h).
+    leverage-fleet-state.json) if fresh (<48h) and matching current config.
 
     m6 asks what share of editing sessions touched only meta repos. Measured from
     one checkout's transcripts it saturates at 1.0 by construction, because product
     work happens in other repos and checkouts. When the fleet scan produced a value,
     it REPLACES the checkout value; the checkout value is kept in raw for comparison
     and raw.m6_scope says which one the row carries. The wait-time metrics w1-w3 are
-    merged as they are. Missing, stale or malformed state leaves everything as it was."""
+    merged as they are. Missing, stale, malformed, or config-mismatched state leaves
+    everything as it was."""
     try:
-        with open(os.path.join(workspace, ".control", "leverage-fleet-state.json")) as f:
+        with open(_fleet_state_path(workspace)) as f:
             fd = json.load(f)
         age = time.time() - datetime.fromisoformat(fd["measured_at"]).timestamp()
         if age >= max_age_sec:
+            return
+        if not _config_matches_fleet(fd, setpoints, window):
             return
         fm = fd.get("metrics") or {}
         m6 = fm.get("m6_meta_work_session_ratio")
@@ -1434,9 +1575,10 @@ def main():
                 if isinstance(st.get("metrics"), dict):
                     if not isinstance(st.get("raw"), dict):
                         st["raw"] = {}
+                    eff_window = args.window if args.window is not None else sp_now.get("window_days", 7)
                     clear_external(st["metrics"], st["raw"])
-                    merge_ship_shadow(st["metrics"], st["raw"], workspace)
-                    merge_fleet(st["metrics"], st["raw"], workspace)
+                    merge_ship_shadow(st["metrics"], st["raw"], workspace, setpoints=sp_now, window=eff_window)
+                    merge_fleet(st["metrics"], st["raw"], workspace, setpoints=sp_now, window=eff_window)
                 try:
                     st["results"], st["worst"] = evaluate(st.get("metrics") or {}, sp_now)
                 except Exception:
@@ -1491,8 +1633,8 @@ def main():
     # blind transcript read says nothing about it.
     if not sensor_is_live(raw):
         metrics = dict.fromkeys(metrics)
-    merge_ship_shadow(metrics, raw, workspace)
-    merge_fleet(metrics, raw, workspace)
+    merge_ship_shadow(metrics, raw, workspace, setpoints=setpoints, window=window)
+    merge_fleet(metrics, raw, workspace, setpoints=setpoints, window=window)
     results, worst = evaluate(metrics, setpoints)
     policy_warnings = setpoints.get("_warnings") or []
 

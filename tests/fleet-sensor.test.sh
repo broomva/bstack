@@ -337,9 +337,54 @@ J="$(run "$EMPTY" "$TMP/rv-nocwd" "$CFG")"
 eq "a relative patch with no working directory is unresolved, not dropped" "$(get "['raw']['meta_sessions']")" "0"
 eq "so the session is unclassified" "$(get "['raw']['unclassified_sessions']")" "1"
 
+echo "== round 5: unresolved shell writes are kept, not dropped =="
+mkdir -p "$TMP/r5-shell/p" "$TMP/r5-shell-scratch/p"
+python3 - "$TMP/r5-shell/p/s.jsonl" "$TMP/r5-shell-scratch/p/s.jsonl" "$TMP/meta" "$TMP/gone-product" <<'PY'
+import json, sys, time
+from datetime import datetime, timezone
+p_gone, p_tmp, meta, gone = sys.argv[1:5]
+t0 = datetime.fromtimestamp(time.time() - 600, timezone.utc).isoformat()
+t1 = datetime.fromtimestamp(time.time() - 540, timezone.utc).isoformat()
+def write_s(path, cmd):
+    rows = [
+        {"type": "assistant", "timestamp": t0, "cwd": meta, "message": {"content": [
+            {"type": "tool_use", "name": "Edit", "input": {"file_path": f"{meta}/a.md"}},
+        ]}},
+        {"type": "assistant", "timestamp": t1, "cwd": meta, "message": {"content": [
+            {"type": "tool_use", "name": "Bash", "input": {"command": cmd}},
+        ]}},
+    ]
+    with open(path, "w") as f:
+        for r in rows:
+            f.write(json.dumps(r) + "\n")
+write_s(p_gone, f"echo hi > {gone}/src/app.py")
+write_s(p_tmp, "echo hi > /tmp/throwaway.log")
+PY
+J="$(run "$TMP/r5-shell" "$EMPTY" "$CFG")"
+eq "meta Edit + shell redirect into vanished clone is not meta-only" "$(get "['raw']['meta_sessions']")" "0"
+eq "it is unclassified" "$(get "['raw']['unclassified_sessions']")" "1"
+eq "and counted under <unresolved>" "$(get "['raw']['unclassified_repos'].get('<unresolved>')")" "1"
+eq "so m6 is None rather than 1.0" "$(get "['metrics']['m6_meta_work_session_ratio']")" "None"
+J="$(run "$TMP/r5-shell" "$EMPTY" "{\"product_repos\":[\"acme/prod\"],\"meta_repos\":[\"acme/meta\"],\"scratch_prefixes\":[\"$TMP/gone-product\"]}")"
+eq "the same shell write under scratch_prefixes is ignored -> meta" "$(get "['raw']['meta_sessions']")" "1"
+CFG_DEF='{"product_repos":["acme/prod"],"meta_repos":["acme/meta"]}'
+J="$(run "$TMP/r5-shell-scratch" "$EMPTY" "$CFG_DEF")"
+eq "meta Edit + shell redirect to /tmp stays meta-only under default scratch_prefixes" "$(get "['raw']['meta_sessions']")" "1"
+eq "and has zero unclassified sessions" "$(get "['raw']['unclassified_sessions']")" "0"
+R="$(python3 -I - "$FLEET" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("f", sys.argv[1]); f = importlib.util.module_from_spec(spec); spec.loader.exec_module(f)
+print(sorted(f.shell_write_repos("echo hi > out.py", None)))
+PY
+)"
+eq "relative shell write with no cwd is unresolved" "$R" "['?out.py']"
+
 echo "== state file: written atomically, no transcript content =="
+# shellcheck source=scripts/lib/broomva-paths.sh
+. "$REPO/scripts/lib/broomva-paths.sh"
+export BROOMVA_HOME="$TMP/broomva-home"
 python3 -I "$FLEET" --workspace "$TMP" --claude-root "$CR" --codex-root "$XR" --config-json "$CFG" >/dev/null
-S="$TMP/.control/leverage-fleet-state.json"
+S="$(broomva_repo_path leverage_fleet_state "$TMP")"
 [ -f "$S" ] && ok "state written" || bad "no state file"
 tail -c1 "$S" | od -An -c | grep -q '\\n' && ok "trailing newline" || bad "no trailing newline"
 ! grep -q "SECRET-PROMPT-TEXT" "$S" && ok "no prompt text in state" || bad "prompt text leaked into state"
@@ -347,6 +392,13 @@ before="$(stat -c %Y "$S" 2>/dev/null || stat -f %m "$S")"; sleep 1
 python3 -I "$FLEET" --workspace "$TMP" --claude-root "$CR" --codex-root "$XR" --config-json "$CFG" --throttle 3600 >/dev/null
 after="$(stat -c %Y "$S" 2>/dev/null || stat -f %m "$S")"
 eq "throttle skips a fresh state" "$after" "$before"
+CFG2='{"product_repos":["acme/prod","acme/other"],"meta_repos":["acme/meta"],"scratch_prefixes":[]}'
+sleep 1
+python3 -I "$FLEET" --workspace "$TMP" --claude-root "$CR" --codex-root "$XR" --config-json "$CFG2" --throttle 3600 >/dev/null
+after_cfg="$(stat -c %Y "$S" 2>/dev/null || stat -f %m "$S")"
+[ "$after_cfg" != "$before" ] && ok "throttle recomputes when config changes" || bad "throttle kept stale config"
+J="$(cat "$S")"
+eq "updated state records the new product_repos config" "$(get "['config']['product_repos']")" "['acme/other', 'acme/prod']"
 
 echo "fleet-sensor: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
