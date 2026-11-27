@@ -394,16 +394,29 @@ else
   case "$rules_rc" in
     0) echo "  rule registry: replayed, and no row failed. Gap rows and known misses are listed above." ;;
     3) echo "  rule registry: replayed, and no row failed, but this workspace's registry lacks part of bstack's pack (listed above)." ;;
-    127) echo "  rule registry: not written and not replayed (exit 127) — see above." ;;
+    127) echo "  rule registry: exit 127 — see above." ;;
     *) echo "  rule registry: exit $rules_rc — see above. Run bootstrap again once it is fixed."
        # Said every time, not worked out here: bstack does not read or edit the policy file.
        echo "  If the output says it cannot read the hard gates: a policy file from before bstack 0.53.0"
        echo "  has no such list. Add the line \`hard: []\` under \`gates:\` in the policy file, by hand." ;;
   esac
-  if [ "$PLUGIN_PREFERRED" = "1" ] && [ "$rules_rc" != "127" ]; then
-    echo "  note: the bstack plugin is enabled, and the hooks it provides are not in a settings file:"
-    echo "  the replay did not see them (BRO-3811)."
-  fi
+  # The two notes below are about a replay, so they follow only a status a replay ends with.
+  case "$rules_rc" in
+    0|1|3)
+      if [ "$PLUGIN_PREFERRED" = "1" ]; then
+        echo "  note: the bstack plugin is enabled, and the hooks it provides are not in a settings file:"
+        echo "  the replay did not see them (BRO-3811)."
+      fi
+      # The control gate reads .control/policy.yaml. The skill's registry reads the policy file
+      # in .broomva/ when one is there. With one in each, a replay that passes does not say
+      # the two agree (BRO-4200). tests/rules-pack.test.sh holds both halves of this sentence.
+      if [ -e "$WORKSPACE_DIR/.broomva/policy.yaml" ] && [ -e "$WORKSPACE_DIR/.control/policy.yaml" ]; then
+        echo "  note: this workspace has a policy file in .broomva/ and one in .control/. The control gate"
+        echo "  enforces the \`pattern:\` lines of .control/policy.yaml, and the registry accounts for the"
+        echo "  gates of .broomva/policy.yaml. The replay says nothing of a pattern that is in only one of"
+        echo "  them. Keep one policy file, or keep the two alike (BRO-4200)."
+      fi ;;
+  esac
 fi
 
 # ─── Phase 4: bstack doctor verification ───────────────────────────────────

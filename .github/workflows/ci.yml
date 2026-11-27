@@ -117,7 +117,7 @@ jobs:
         # runner and has no skip path. The commit is pinned so a change in broomva/skills
         # cannot turn this repository red; move the pin on purpose.
         env:
-          CORRECT_SKILL_SHA: cce7544141e0b33ab1fb9c570c4174987da21516
+          CORRECT_SKILL_SHA: 54d097aefbd8612b188aba0a8863822299b21a67
         run: |
           set -euo pipefail
           git init -q "$RUNNER_TEMP/skills"

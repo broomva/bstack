@@ -16,7 +16,7 @@
 # source character for character, or when the gate has a pattern no rule quotes.
 # A pattern over command text cannot cover every way to write a command. The `known_misses`
 # cases are the ways found so far to do what a rule forbids without matching its pattern;
-# each names its ticket (BRO-4169, and BRO-4159 for the NotebookEdit one). They are
+# each names its ticket (BRO-4169, and BRO-4159 for the shell redirect into a secrets file). They are
 # examples, not a complete list.
 # Every proof here is CONSTRUCTED from the gate's own pattern. A workspace that has made
 # the mistake for real should add its own proof with where it came from.
@@ -35,8 +35,9 @@
 #   - a workspace whose path has a space in it gets hook commands that cannot run, and the
 #     replay then reports these rows as not registered (BRO-4184).
 #
-# bootstrap wires hooks two ways. Without the bstack plugin every hook below is in the
-# workspace's settings file. With the plugin, autonomous-posture-hook.sh,
+# bootstrap wires hooks two ways. Without the bstack plugin every Claude Code hook below is
+# in the workspace's settings file (the git pre-commit hook is git's, in .githooks/, on
+# both paths). With the plugin, autonomous-posture-hook.sh,
 # arc-continuation-hook.sh, leverage-sensor.py and l3-stability-pretool-hook.sh come from
 # the plugin's own hooks.json, which the rule runner does not read yet (BRO-3811): on that
 # path those hooks are outside the registry's view, and an entry here that matches nothing
@@ -231,7 +232,9 @@ rules:
     canary: {none: "replayed through the hook entry; no real-harness session has been run", ticket: BRO-4159}
 
   - id: git-pre-commit-rate-gate
-    rule: The git pre-commit hook (the L3 rate gate bootstrap installs) is proven by a replay.
+    rule: >-
+      Governance files (the L3 paths) are committed no more often than the L3 rate budget allows; the git
+      pre-commit hook bootstrap installs refuses a commit that goes over it. No replay shows this yet.
     source: ".githooks/pre-commit, installed by scripts/install-l3-stability.sh"
     level: gap
     covers_hooks: [.githooks/pre-commit]

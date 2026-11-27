@@ -28,6 +28,9 @@
 # was given an argument; 127 no copy of the skill with `--pack` was found (it says how to
 # install one), or python3 is not on PATH (it says so).
 set -uo pipefail
+# With CDPATH set, `cd` prints the directory it chose, and the two lines below would take
+# that for part of the path.
+unset CDPATH
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BSTACK_REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
