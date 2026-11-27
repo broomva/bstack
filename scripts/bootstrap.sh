@@ -10,6 +10,8 @@
 #       audit dir + L3 gates (G0/G1/G2 + rcs-parameters.toml) so the control loop is
 #       actually wired + connected, not just declared. Skip with BSTACK_SKIP_RCS=1
 #       (governance-only bootstrap). Mirrors the wizard path (onboard.sh).
+#   3.7 Rule registry: rules-registry.sh has the `correct` skill write a registry with
+#       bstack's rows (references/rules-pack.yaml) and replay it. Never aborts bootstrap.
 #   4. bstack doctor --quiet to verify the primitive contract + loop closure (§23).
 #
 # Env escapes: BSTACK_SKIP_SKILLS=1 (skip Phase 1), BSTACK_SKIP_RCS=1 (skip Phase 3.5),
@@ -410,11 +412,17 @@ else
       # The control gate reads .control/policy.yaml. The skill's registry reads the policy file
       # in .broomva/ when one is there. With one in each, a replay that passes does not say
       # the two agree (BRO-4200). tests/rules-pack.test.sh holds both halves of this sentence.
-      if [ -e "$WORKSPACE_DIR/.broomva/policy.yaml" ] && [ -e "$WORKSPACE_DIR/.control/policy.yaml" ]; then
+      # Two files: not a folder under that name, and not two names of one file.
+      new_policy="$WORKSPACE_DIR/.broomva/policy.yaml"
+      old_policy="$WORKSPACE_DIR/.control/policy.yaml"
+      if [ -f "$new_policy" ] && [ -f "$old_policy" ] && [ ! "$new_policy" -ef "$old_policy" ]; then
         echo "  note: this workspace has a policy file in .broomva/ and one in .control/. The control gate"
-        echo "  enforces the \`pattern:\` lines of .control/policy.yaml, and the registry accounts for the"
-        echo "  gates of .broomva/policy.yaml. The replay says nothing of a pattern that is in only one of"
-        echo "  them. Keep one policy file, or keep the two alike (BRO-4200)."
+        echo "  reads only .control/policy.yaml. The skill's registry reads .broomva/policy.yaml. So the"
+        echo "  replay says nothing of a pattern that is only in .control/policy.yaml, and the gate does"
+        echo "  not enforce a pattern that is only in .broomva/policy.yaml."
+        echo "  Do not remove .control/policy.yaml: the gate would then enforce none of its patterns."
+        echo "  Put every pattern the gate must enforce in .control/policy.yaml, and keep the two files"
+        echo "  alike (BRO-4200)."
       fi ;;
   esac
 fi

@@ -7,9 +7,10 @@
 # has `init --pack`: $BSTACK_TEST_CORRECT names its correct.py (CI pins one), otherwise the
 # installed skill is used. There is no skip path: without the skill the test fails.
 #
-# Every case bootstraps an empty scratch repository under a scratch HOME, so nothing is
-# written outside the test's own directory and the machine's installed plugin and skills
-# do not decide the result. bootstrap wires hooks two ways (BRO-1929): by hand, or six of
+# Every case bootstraps an empty scratch repository under a scratch HOME, so the machine's
+# installed plugin and skills do not decide the result, and the workspaces, homes and
+# logs are all in the test's own directory. (Python may leave bytecode beside the bstack
+# scripts bootstrap runs, in this checkout's scripts/__pycache__; git ignores it.) bootstrap wires hooks two ways (BRO-1929): by hand, or six of
 # them through the bstack plugin when one is installed. Both are run here: an earlier
 # version of this test ran only the way the author's machine took and passed while the
 # other failed.
@@ -17,7 +18,7 @@ set -uo pipefail
 unset CDPATH   # with it set, `cd` prints the directory it chose
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-EXPECTED_ASSERTIONS=95
+EXPECTED_ASSERTIONS=98
 PASS=0; FAIL=0; FAILED=()
 pass() { echo "  [ok] $1"; PASS=$((PASS + 1)); }
 fail() { echo "  [FAIL] $1"; FAIL=$((FAIL + 1)); FAILED+=("$1"); }
@@ -259,7 +260,7 @@ is "nothing failed" lacks "$OUT" "FAIL"
 is "the control gate is registered for Bash, Edit, MultiEdit and Write" test "$(gate_matchers "$WS")" = "Bash Edit MultiEdit Write"
 is "the policy carries gates.hard" grep -q '^  hard: \[\]$' "$(policy_of "$WS")"
 is "known misses are counted in the replay, not hidden" grep -qE 'no-catastrophic-delete +5 known miss' "$OUT"
-is "the continuation-line push is replayed as a known miss" grep -qE 'no-force-push +2 known miss' "$OUT"
+is "the two known misses of the force-push row are replayed too" grep -qE 'no-force-push +2 known miss' "$OUT"
 
 # Everything below removes something and expects a row to fail. That means nothing unless
 # the starting point is green.
@@ -397,9 +398,6 @@ replay "$WS"
 is "restored, the replay exits 0 again" test "$RC" -eq 0
 
 # ── 4. A policy file in each governance folder ───────────────────────────────
-# With one in each governance folder, a pattern in the one both prefer is refused by the
-# gate AND reported by the registry as a gate with no row; a pattern only in the other one
-# is neither.
 echo "4. a policy file in each governance folder"
 # The gate script is main's: it reads the old folder's policy file. The skill's registry
 # reads the new folder's when one is there. Nothing here makes them agree; bootstrap says
@@ -421,6 +419,11 @@ replay "$BOTH"
 is "the registry accounts for the gate in the new folder's policy file" test "$RC" -eq 1 -a "$(grep -c 'policy gate G-NEW has a pattern but no row' "$OUT")" = 1
 is "and says nothing of the gate in the old folder's" lacks "$OUT" "G-OLD"
 is "bootstrap of that workspace says the replay cannot speak for a pattern in only one of the two files" test "$(boot "$BOTH"; echo $?)$(grep -c "a policy file in $BROOMVA_REPO_DIR/ and one in $BROOMVA_REPO_LEGACY_DIR/" "$BOTH.log")" = 01
+is "and says which file the gate needs, so that nobody removes it" test "$(grep -c "reads only $BROOMVA_REPO_LEGACY_DIR/policy.yaml" "$BOTH.log")$(grep -c "Do not remove $BROOMVA_REPO_LEGACY_DIR/policy.yaml" "$BOTH.log")" = 11
+is "and says which way each file is blind: the replay to the old folder's patterns, the gate to the new folder's" test "$(grep -c "says nothing of a pattern that is only in $BROOMVA_REPO_LEGACY_DIR/policy.yaml" "$BOTH.log")$(grep -c "not enforce a pattern that is only in $BROOMVA_REPO_DIR/policy.yaml" "$BOTH.log")" = 11
+# Two names of one file are one policy file: no note.
+rm -f "$BOTH/$BROOMVA_REPO_DIR/policy.yaml" && ln -s "../$BROOMVA_REPO_LEGACY_DIR/policy.yaml" "$BOTH/$BROOMVA_REPO_DIR/policy.yaml"
+is "with the new folder's policy a link to the old folder's file, bootstrap adds no note about two" test "$(boot "$BOTH"; echo $?)$(grep -c "a policy file in $BROOMVA_REPO_DIR/ and one in $BROOMVA_REPO_LEGACY_DIR/" "$BOTH.log")" = 00
 # A known limit, pinned so the CHANGELOG's sentence about it stays true (BRO-4200): in a
 # workspace whose policy is in the new folder, bootstrap still scaffolds one in the old
 # folder, which makes it a workspace with two; the note and doctor both say so.

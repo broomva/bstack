@@ -53,9 +53,11 @@ registry: to replay one later, call the skill (`correct.py check`).
     `.control/policy.yaml`. The skill's registry reads `.broomva/policy.yaml` when one is
     there, else `.control/policy.yaml`. In a workspace with a policy file in each folder
     the gate enforces the `pattern:` lines of one and the registry's completeness check
-    accounts for the gates of the other, so a replay that passes says nothing of a pattern
-    that is in only one of them. Bootstrap says so after the phase when both files are
-    there. Bootstrap also still scaffolds `.control/policy.yaml` in a workspace whose
+    accounts for the gates of the other: the replay says nothing of a pattern that is only
+    in `.control/policy.yaml`, and the gate does not enforce a pattern that is only in
+    `.broomva/policy.yaml`. After a phase that replayed, bootstrap says so when both
+    files are there, and says which one the gate needs (`.control/policy.yaml`: removing it
+    leaves the gate with no policy patterns). Bootstrap also still scaffolds `.control/policy.yaml` in a workspace whose
     policy is in `.broomva/`, which makes it such a workspace; its doctor phase reports
     the name under both folders (BRO-4200; the scaffold and the readers predate this
     version).
