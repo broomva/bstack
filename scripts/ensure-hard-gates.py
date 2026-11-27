@@ -6,16 +6,18 @@ unreadable. bstack's policy template had no such key before 0.53.0, so `bstack b
 runs this on the workspace's policy file before it writes the rule registry. Nothing else
 runs it: `bstack rules init` and `bstack rules check` never change the policy file.
 
-What it does, and all it does: when the file parses, `gates` is a block mapping and has no
-`hard` key, it inserts `hard: []` with a comment as the first entry under `gates:`. The
+What it does, and all it does: when the file is a regular, writable file with LF line
+endings that parses, `gates` is a block mapping and has no `hard` key, it inserts
+`hard: []` with a comment as the first entry under `gates:`. The
 `gates:` line itself, with any comment on it, is kept. The new text is parsed again and
 written only when the one difference from the old document is the new empty list. It goes
 to a temporary file beside the policy, which then replaces it, with the policy's own
 permissions: a write that fails part-way leaves the policy as it was.
 
 Exit status: 0 nothing to do, or the key was added (it says so); 3 the file was left alone
-and the reason is on stderr (no `gates:` mapping, a form this script does not edit, a
-file that does not parse, PyYAML missing); 2 the file could not be read or written.
+and the reason is on stderr (a symbolic link, a read-only file, CRLF line endings, no
+`gates:` mapping, a form this script does not edit, a file that does not parse, PyYAML
+missing); 2 the file could not be read or written.
 """
 import os
 import re
@@ -39,7 +41,14 @@ def main(argv: list[str]) -> int:
     if len(argv) != 2:
         print(__doc__, file=sys.stderr)
         return 2
-    path = os.path.realpath(argv[1])  # a link is followed: the file is replaced, not the link
+    path = argv[1]
+    # A link is not followed and not replaced, and a file marked read-only is not written:
+    # the workspace's own path lookup refuses a linked policy file, and replacing a file
+    # through its directory would override the mark on it.
+    if os.path.islink(path):
+        return left_alone(path, "is a symbolic link, which this script does not follow or replace")
+    if os.path.isfile(path) and not os.access(path, os.W_OK):
+        return left_alone(path, "is marked read-only")
     if site.getusersitepackages() not in sys.path:
         sys.path.append(site.getusersitepackages())
     try:
@@ -47,13 +56,16 @@ def main(argv: list[str]) -> int:
     except ImportError:
         return left_alone(path, "PyYAML is not installed, so the file was not read")
     try:
-        # newline="": line endings are read and written as they are. A file whose `gates:` line
-        # ends in CRLF does not match the pattern below and is left alone, not converted.
+        # newline="": line endings are read as they are, so a carriage return is seen below.
         with open(path, encoding="utf-8", newline="") as handle:
             text = handle.read()
     except (OSError, UnicodeDecodeError) as exc:
         print(f"  {path}: cannot be read ({exc})", file=sys.stderr)
         return 2
+    # One carriage return anywhere and the file is left alone: the lines this script adds end
+    # in LF, and it does not put two kinds of line ending in one file.
+    if "\r" in text:
+        return left_alone(path, "has CRLF line endings, and the lines this script adds end in LF")
     try:
         before = yaml.safe_load(text)
     except yaml.YAMLError:
@@ -63,8 +75,6 @@ def main(argv: list[str]) -> int:
     if "hard" in before["gates"]:
         return 0
     # The `gates:` line is kept whole (group 0), comment included; the key goes after it.
-    # The comment may not hold a carriage return: `.` would take the \r of a CRLF ending, and
-    # LF lines would be put into a CRLF file. Such a file does not match and is left alone.
     after_text, count = re.subn(r"^gates:[ \t]*(#[^\r\n]*)?\n", lambda m: m.group(0) + ADDED, text, count=1,
                                 flags=re.M)
     if count != 1:

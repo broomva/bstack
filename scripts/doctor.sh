@@ -2186,35 +2186,31 @@ esac
 
 # ── Section 34: Rule registry (BRO-4147) ────────────────────────────────────
 # Doctor is the quick look and starts no hook: by default this section only reports whether
-# the workspace has a rule registry and whether the `correct` skill that replays it is
-# installed (scripts/rules-registry.sh status).
-#   - a registry and no skill to replay it (or one too old): a gap. Nothing can check the
-#     rules, and unknown is not green.
-#   - a registry and the skill: reported unless --quiet, with the command that replays it.
-#     Not a pass: nothing was replayed here.
-#   - no registry yet: reported unless --quiet, and not counted; bootstrap writes one.
-# With BSTACK_DOCTOR_RULES=1 the section replays the registry (rules-registry.sh verify) and
-# waits for it, however long the registry takes: a pass when no row fails, a gap when a row
-# does not hold. Rows of bstack's pack the registry lacks are listed beside a pass, unless
-# --quiet; they are a difference to read, not a gap (a workspace may keep its own rows).
+# anything is where a rule registry goes and whether a copy of the `correct` skill, which
+# replays it, was found (scripts/rules-registry.sh status). It runs nothing, so it says
+# nothing about whether the registry holds or can be replayed.
+#   - a registry and no copy of the skill: a gap. Nothing can check the rules, and unknown
+#     is not green.
+#   - a registry and a copy of the skill: reported unless --quiet, with the command that
+#     replays it. Not a pass: nothing was replayed here.
+#   - nothing there yet: reported unless --quiet, and not counted; bootstrap writes one.
+# With BSTACK_DOCTOR_RULES=1 the section replays the registry with the skill's `check`
+# (rules-registry.sh check), which never writes, and waits for it however long the registry
+# takes: a pass when no row fails, a gap when a row does not hold or the replay cannot run.
 # A replay runs the workspace's hooks, and a line of it that starts with `note:` says what
 # it could not see (the bstack plugin's own hooks); that line is repeated here.
+# Whether the registry holds all of bstack's rows is `bstack rules verify`'s to say.
 section "34. Rule registry (correct)"
 rules_rc=0
 # Without a temporary file the section still runs; only the lines it would repeat from the
 # script's output cannot be shown.
 RULES_LOG="$(mktemp 2>/dev/null)" || RULES_LOG="/dev/null"
 if [ "${BSTACK_DOCTOR_RULES:-0}" = "1" ]; then
-    BROOMVA_WORKSPACE="$WORKSPACE" bash "$BSTACK_REPO/scripts/rules-registry.sh" verify >"$RULES_LOG" 2>&1 || rules_rc=$?
+    BROOMVA_WORKSPACE="$WORKSPACE" bash "$BSTACK_REPO/scripts/rules-registry.sh" check >"$RULES_LOG" 2>&1 || rules_rc=$?
     case "$rules_rc" in
         0) ok "rule registry: replayed, no row failed" ;;
-        6) ok "rule registry: replayed, no row failed"
-           if [ "$QUIET" = "0" ]; then
-               echo "  [info] this registry lacks part of bstack's pack (references/rules-pack.yaml):"
-               grep -E '^ +(pack +|row\(s\)|hooks_not_rules)' "$RULES_LOG" | cut -c1-300
-           fi ;;
         4) [ "$QUIET" = "0" ] && echo "  [info] no rule registry in this workspace yet (bstack bootstrap writes one)" ;;
-        3) gap "the workspace has a rule registry and the correct skill that replays it is missing or too old" \
+        3) gap "the workspace has a rule registry and no copy of the correct skill, which replays it, was found" \
                "npx skills add broomva/skills --skill correct -g" ;;
         1) grep -E '^ +FAIL ' "$RULES_LOG" | cut -c1-400
            gap "rule registry: a row does not hold" "bstack rules check" ;;
@@ -2225,9 +2221,9 @@ if [ "${BSTACK_DOCTOR_RULES:-0}" = "1" ]; then
 else
     BROOMVA_WORKSPACE="$WORKSPACE" bash "$BSTACK_REPO/scripts/rules-registry.sh" status >"$RULES_LOG" 2>&1 || rules_rc=$?
     case "$rules_rc" in
-        0) [ "$QUIET" = "0" ] && echo "  [info] a rule registry is here and was not replayed (doctor starts no hook) — replay it: bstack rules verify" ;;
+        0) [ "$QUIET" = "0" ] && echo "  [info] a rule registry is in place. Doctor ran nothing and does not know whether it holds — replay it: bstack rules verify" ;;
         4) [ "$QUIET" = "0" ] && echo "  [info] no rule registry in this workspace yet (bstack bootstrap writes one)" ;;
-        3) gap "the workspace has a rule registry and the correct skill that replays it is missing or too old" \
+        3) gap "the workspace has a rule registry and no copy of the correct skill, which replays it, was found" \
                "npx skills add broomva/skills --skill correct -g" ;;
         *) tail -n 5 "$RULES_LOG"
            gap "rule registry: its state could not be read (exit $rules_rc)" "bstack rules status" ;;

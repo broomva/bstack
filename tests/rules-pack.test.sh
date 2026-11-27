@@ -16,7 +16,7 @@
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-EXPECTED_ASSERTIONS=108
+EXPECTED_ASSERTIONS=120
 PASS=0; FAIL=0; FAILED=()
 pass() { echo "  [ok] $1"; PASS=$((PASS + 1)); }
 fail() { echo "  [FAIL] $1"; FAIL=$((FAIL + 1)); FAILED+=("$1"); }
@@ -311,13 +311,13 @@ echo "4. doctor"
 rm -rf "$WS/scripts/__pycache__"
 tree_before="$(cd "$WS" && find . -path ./.git -prune -o -print | sort)"
 doctor "$WS"
-is "doctor reports the registry and does not replay it" test "$(has "$OUT" "[info] a rule registry is here and was not replayed"; echo $?)$(grep -cE '\[(ok|gap)\] rule registry' "$OUT")" = 00
+is "doctor reports the registry and does not replay it" test "$(has "$OUT" "[info] a rule registry is in place. Doctor ran nothing"; echo $?)$(grep -cE '\[(ok|gap)\] rule registry' "$OUT")" = 00
 is "and leaves the workspace as it found it" test "$(cd "$WS" && find . -path ./.git -prune -o -print | sort)" = "$tree_before"
 doctor "$WS" -- --quiet
 is "under --quiet that report is not printed" lacks "$OUT" "rule registry"
 RC=0
 HOME="$HOME_PLAIN" BSTACK_CORRECT="$CORRECT" BROOMVA_WORKSPACE="$WS" bash "$REPO/scripts/rules-registry.sh" status >"$OUT" 2>&1 || RC=$?
-is "status exits 0 for a registry with its skill, and replays nothing" test "$RC" -eq 0 -a "$(grep -cE 'PASS|FAIL|replaying' "$OUT")" = 0
+is "status exits 0 for a registry with a copy of the skill, replays nothing, and says it ran nothing" test "$RC" -eq 0 -a "$(grep -cE 'PASS|FAIL|replaying' "$OUT")" = 0 -a "$(grep -c 'nothing was read or run' "$OUT")" = 1
 # Asked to (BSTACK_DOCTOR_RULES=1), doctor replays: a pass, or a gap that names the row.
 doctor "$WS" BSTACK_DOCTOR_RULES=1
 is "asked to replay, doctor passes the section when no row fails" has "$OUT" "[ok] rule registry: replayed, no row failed"
@@ -328,6 +328,14 @@ is "and names the row" grep -qE 'FAIL +hook +no-force-push' "$OUT"
 doctor "$WS"
 is "without being asked, doctor does not see that failing row" test "$(grep -cE '\[(ok|gap)\] rule registry' "$OUT")" = 0
 cp "$TMP/gate.orig" "$GATE"
+
+# A dry run of init where a registry already is starts no hook: it says init would write no
+# file and stops. (The skill's own dry run on an existing registry is the real run.)
+rm -rf "$WS/scripts/__pycache__"
+tree_before="$(cd "$WS" && find . -path ./.git -prune -o -print | sort)"
+RC=0
+HOME="$HOME_PLAIN" BSTACK_CORRECT="$CORRECT" BROOMVA_WORKSPACE="$WS" bash "$REPO/scripts/rules-registry.sh" init --dry-run >"$OUT" 2>&1 || RC=$?
+is "init --dry-run where a registry is replays nothing and leaves the workspace as it was" test "$RC" -eq 0 -a "$(grep -cE 'PASS|FAIL|replaying' "$OUT")" = 0 -a "$(grep -c 'init would write no file here' "$OUT")" = 1 -a "$(cd "$WS" && find . -path ./.git -prune -o -print | sort)" = "$tree_before"
 
 # The registry is found where the skill finds it, whichever governance folder the policy is in.
 MOVED="$TMP/moved"; cp -R "$WS" "$MOVED"
@@ -383,7 +391,7 @@ RC=0
 HOME="$HOME_PLAIN" BSTACK_CORRECT="$CORRECT" BROOMVA_WORKSPACE="$STALE" bash "$REPO/scripts/rules-registry.sh" verify >"$OUT" 2>&1 || RC=$?
 is "verify says the same and exits 6" test "$RC" -eq 6 -a "$(grep -c 'row(s) that differ from the pack: no-catastrophic-delete' "$OUT")" = 1
 doctor "$STALE" BSTACK_DOCTOR_RULES=1
-is "doctor, asked to replay, passes and names the row that differs" test "$(has "$OUT" "[ok] rule registry: replayed, no row failed"; echo $?)$(has "$OUT" "row(s) that differ from the pack: no-catastrophic-delete"; echo $?)" = 00
+is "doctor, asked to replay, passes that registry: what it lacks of the pack is verify's to say" test "$(has "$OUT" "[ok] rule registry: replayed, no row failed"; echo $?)$(grep -c 'differ from the pack' "$OUT")" = 00
 
 # init takes --dry-run and nothing else, and settles that before it writes anything.
 ARGS="$(new_ws args)"
@@ -426,7 +434,24 @@ is "a policy with CRLF line endings is left byte for byte, with the reason (exit
 printf 'version: 1\r\ngates: # the operator wrote this comment\r\n  governed: []\r\n' >"$MIG/crlf.yaml"; cp "$MIG/crlf.yaml" "$TMP/crlf.orig"
 python3 -I "$REPO/scripts/ensure-hard-gates.py" "$MIG/crlf.yaml" >"$OUT" 2>&1; RC=$?
 is "and so is one whose gates line carries a comment (no LF lines put into a CRLF file)" test "$RC" -eq 3 -a "$(cmp -s "$MIG/crlf.yaml" "$TMP/crlf.orig"; echo $?)" = 0
+printf 'version: 1\r\ngates:\n  governed: []\r\n' >"$MIG/crlf.yaml"; cp "$MIG/crlf.yaml" "$TMP/crlf.orig"
+python3 -I "$REPO/scripts/ensure-hard-gates.py" "$MIG/crlf.yaml" >"$OUT" 2>&1; RC=$?
+is "and one with CRLF everywhere but on the gates line" test "$RC" -eq 3 -a "$(cmp -s "$MIG/crlf.yaml" "$TMP/crlf.orig"; echo $?)" = 0
 rm -f "$MIG/crlf.yaml"
+# A policy file reached through a link is not followed and not replaced (the workspace's own
+# path lookup refuses one too), and a file marked read-only is not written.
+cp "$TMP/old-policy.yaml" "$MIG/target.yaml"; ln -s target.yaml "$MIG/link.yaml"
+python3 -I "$REPO/scripts/ensure-hard-gates.py" "$MIG/link.yaml" >"$OUT" 2>&1; RC=$?
+is "a linked policy file is left alone, and so is what it points to" test "$RC" -eq 3 -a -L "$MIG/link.yaml" -a "$(cmp -s "$MIG/target.yaml" "$TMP/old-policy.yaml"; echo $?)" = 0
+rm -f "$MIG/link.yaml" "$MIG/target.yaml"
+cp "$TMP/old-policy.yaml" "$MIG/readonly.yaml"; chmod 444 "$MIG/readonly.yaml"
+python3 -I "$REPO/scripts/ensure-hard-gates.py" "$MIG/readonly.yaml" >"$OUT" 2>&1; RC=$?
+if [ "$(id -u)" = 0 ]; then
+    pass "a policy file marked read-only is left alone (not checkable as root: root may write it)"
+else
+    is "a policy file marked read-only is left alone" test "$RC" -eq 3 -a "$(cmp -s "$MIG/readonly.yaml" "$TMP/old-policy.yaml"; echo $?)" = 0
+fi
+rm -f "$MIG/readonly.yaml"
 cp "$TMP/old-policy.yaml" "$MIG/policy.yaml"; chmod 555 "$MIG"
 python3 -I "$REPO/scripts/ensure-hard-gates.py" "$MIG/policy.yaml" >"$OUT" 2>&1; RC=$?
 chmod 755 "$MIG"
@@ -505,7 +530,7 @@ is "check on a workspace with no registry exits 4" test "$RC" -eq 4
 replay "$WS" BSTACK_CORRECT=""
 is "check on a registry it cannot replay exits 3" test "$RC" -eq 3
 doctor "$WS" BSTACK_CORRECT=""
-is "doctor counts an unreplayable registry as a gap" has "$OUT" "[gap] the workspace has a rule registry and the correct skill that replays it is missing or too old"
+is "doctor counts a registry with no skill to replay it as a gap" has "$OUT" "[gap] the workspace has a rule registry and no copy of the correct skill, which replays it, was found"
 RC=0
 env -u HOME -u BSTACK_CORRECT BROOMVA_WORKSPACE="$WS" bash "$REPO/scripts/rules-registry.sh" check >"$OUT" 2>&1 || RC=$?
 is "with no HOME at all the answer is the same exit 3, not a shell error" test "$RC" -eq 3 -a "$(lacks "$OUT" "unbound variable"; echo $?)" = 0
@@ -524,6 +549,17 @@ printf '#!/usr/bin/env python3\n# has the --pack option, and crashes\nraise Syst
 CRASH="$(new_ws crash)"
 is "bootstrap exits 0 with a skill that crashes" boot "$CRASH" BSTACK_CORRECT="$TMP/crashing-correct.py"
 is "the phase reports the skill's exit status" has "$CRASH.log" "rule registry: exit 77"
+# A copy of the skill that ends with a status only this script uses (6: lacks part of the
+# pack; 4: no registry) is not believed: it is reported as a command that could not run.
+printf '#!/usr/bin/env python3\n# has the --pack option, and ends with 6\nraise SystemExit(6)\n' >"$TMP/six-correct.py"
+RC=0
+HOME="$HOME_PLAIN" BSTACK_CORRECT="$TMP/six-correct.py" BROOMVA_WORKSPACE="$WS" bash "$REPO/scripts/rules-registry.sh" verify >"$OUT" 2>&1 || RC=$?
+is "a skill that ends with 6 is not read as 'lacks part of the pack'" test "$RC" -eq 2
+replay "$WS" BSTACK_CORRECT="$TMP/six-correct.py"
+is "nor, from check, as a pass or as any of this script's own statuses" test "$RC" -eq 2
+replay "$BARE" BSTACK_CORRECT="$TMP/nowhere/correct.py"
+is "a named copy that is not there is exit 2 even where there is no registry" test "$RC" -eq 2
+
 # The skill says that the starter hook is installed BEFORE it replays, and bootstrap shows
 # the phase's output as it comes. A bootstrap stopped during the replay has therefore shown
 # it. (An earlier version captured the output and printed it when the phase returned: stop
@@ -534,20 +570,47 @@ LIVE="$(new_ws live)"; rm -f "$TMP/blocking.pid"
 ( exec env HOME="$HOME_PLAIN" PIDFILE="$TMP/blocking.pid" BSTACK_CORRECT="$TMP/blocking-correct.py" BROOMVA_WORKSPACE="$LIVE" \
     BSTACK_SKIP_SKILLS=1 bash "$REPO/scripts/bootstrap.sh" >"$LIVE.log" 2>&1 ) &
 boot_pid=$!
-for _ in $(seq 1 240); do [ -s "$TMP/blocking.pid" ] && break; python3 -c 'import time; time.sleep(0.5)'; done
+for _ in $(seq 1 240); do
+    [ -s "$TMP/blocking.pid" ] && break
+    kill -0 "$boot_pid" 2>/dev/null || break   # bootstrap ended without starting the stand-in
+    python3 -c 'import time; time.sleep(0.5)'
+done
 blocked_pid="$(cat "$TMP/blocking.pid" 2>/dev/null || echo 0)"
+case "$blocked_pid" in ''|*[!0-9]*) blocked_pid=0 ;; esac
 is "bootstrap shows what the skill says while the replay is still running" test "$blocked_pid" -gt 0 -a "$(grep -c 'the starter hook is installed (stand-in)' "$LIVE.log")" = 1
-kill -KILL "$blocked_pid" 2>/dev/null
+if [ "$blocked_pid" -gt 0 ]; then kill -KILL "$blocked_pid" 2>/dev/null || true; fi
 wait "$boot_pid"; RC=$?
 is "and when the skill is stopped, bootstrap says so and still exits 0" test "$RC" -eq 0 -a "$(grep -c 'rule registry: exit' "$LIVE.log")" = 1
-# No temporary file to capture into: the phase still runs and bootstrap still finishes.
-# A `mktemp` that fails is put first on the PATH, because what an unusable TMPDIR does to
-# the real one differs by system (macOS falls back to another directory, Linux fails).
+# Doctor's section keeps the script's output in a temporary file to repeat lines from it.
+# With no temporary file it still runs, and says the same thing. A `mktemp` that fails is put
+# first on the PATH, because what an unusable TMPDIR does to the real one differs by system
+# (macOS falls back to another directory, Linux fails).
 mkdir -p "$TMP/bin"
 printf '#!/bin/sh\nexit 1\n' >"$TMP/bin/mktemp" && chmod +x "$TMP/bin/mktemp"
-NOTMP="$(new_ws notmp)"
-is "bootstrap exits 0 when no temporary file can be made" boot "$NOTMP" PATH="$TMP/bin:$PATH"
-is "and the phase still runs and reports" has "$NOTMP.log" "rule registry: replayed, and no row failed."
+doctor "$WS" PATH="$TMP/bin:$PATH"
+is "with no temporary file doctor still reports the registry, and no shell error" test "$(has "$OUT" "[info] a rule registry is in place. Doctor ran nothing"; echo $?)$(grep -c 'No such file or directory' "$OUT")$(grep -cE '\[gap\] rule registry' "$OUT")" = 000
+doctor "$WS" PATH="$TMP/bin:$PATH" BSTACK_DOCTOR_RULES=1
+is "and, asked to replay, still passes the section" test "$(has "$OUT" "[ok] rule registry: replayed, no row failed"; echo $?)$(grep -c 'No such file or directory' "$OUT")" = 00
+
+# What is where a registry goes is the skill's to judge. Something that is not a registry
+# (a directory, a link that points nowhere) is not "no registry": the skill refuses it,
+# nothing is written, and doctor, asked to replay, counts a gap.
+ODD="$(new_ws odd)"
+mkdir -p "$ODD/$BROOMVA_REPO_LEGACY_DIR/rules.yaml"
+odd_before="$(cd "$ODD" && find . -path ./.git -prune -o -print | sort)"
+RC=0
+HOME="$HOME_PLAIN" BSTACK_CORRECT="$CORRECT" BROOMVA_WORKSPACE="$ODD" bash "$REPO/scripts/rules-registry.sh" verify >"$OUT" 2>&1 || RC=$?
+is "a directory where the registry goes is refused by the skill (exit 2), not called 'no registry'" test "$RC" -eq 2 -a "$(grep -c 'not a regular file' "$OUT")" = 1
+replay "$ODD"
+is "check on it exits 2 too" test "$RC" -eq 2
+doctor "$ODD" BSTACK_DOCTOR_RULES=1
+is "doctor, asked to replay, counts it as a gap" has "$OUT" "[gap] rule registry: the replay could not run (exit 2)"
+rmdir "$ODD/$BROOMVA_REPO_LEGACY_DIR/rules.yaml" && ln -s ../nowhere/rules.yaml "$ODD/$BROOMVA_REPO_LEGACY_DIR/rules.yaml"
+RC=0
+HOME="$HOME_PLAIN" BSTACK_CORRECT="$CORRECT" BROOMVA_WORKSPACE="$ODD" bash "$REPO/scripts/rules-registry.sh" verify >"$OUT" 2>&1 || RC=$?
+is "a link that points nowhere is refused the same way, and nothing is written through it" test "$RC" -eq 2 -a ! -e "$ODD/$BROOMVA_REPO_LEGACY_DIR/nowhere" -a "$(readlink "$ODD/$BROOMVA_REPO_LEGACY_DIR/rules.yaml")" = "../nowhere/rules.yaml"
+rm -f "$ODD/$BROOMVA_REPO_LEGACY_DIR/rules.yaml" && mkdir "$ODD/$BROOMVA_REPO_LEGACY_DIR/rules.yaml"
+is "none of that wrote to the workspace" test "$(cd "$ODD" && find . -path ./.git -prune -o -print | sort)" = "$odd_before"
 
 # Two installed copies: the one that has the pack option is used, wherever it is.
 HOME_TWO="$(new_home home-two)"

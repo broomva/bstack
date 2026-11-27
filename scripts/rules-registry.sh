@@ -7,23 +7,31 @@
 # own hooks (references/rules-pack.yaml) and does not carry a copy of the runner.
 #
 #   rules-registry.sh locate            print the path of the skill's correct.py
-#   rules-registry.sh status            say whether the workspace has a registry and whether
-#                                       the skill that replays it is installed. Replays
-#                                       nothing and starts no hook.
+#   rules-registry.sh status            say whether anything is where a registry goes and
+#                                       whether a copy of the skill was found. It runs
+#                                       nothing, so it does not say that the registry is
+#                                       well formed or that the skill can replay it.
 #   rules-registry.sh init [--dry-run]  give the workspace its registry, with bstack's rows,
 #                                       and replay it. A workspace that has a registry gets
-#                                       no file written and is replayed. --dry-run, on a
-#                                       workspace without a registry, lists what it would get.
+#                                       no file written and is replayed. --dry-run lists what
+#                                       a workspace without a registry would get; where one
+#                                       is, it says so. Either way it starts no hook.
 #   rules-registry.sh verify            a workspace that has a registry: replay it and say
 #                                       which of bstack's rows it lacks.
 #   rules-registry.sh check [OPTIONS]   replay the workspace's registry; OPTIONS go to the
 #                                       skill's `check` (--json, --only ID, --registry FILE,
-#                                       spelled out in full).
+#                                       spelled out in full). The skill's `check` never writes.
 #
-# None of these changes the policy file. `status` and `locate` write nothing. `verify`,
-# `check` and `init` on a workspace that has a registry write no file of their own, and they
-# replay: a replay runs the workspace's hooks, and a hook may write (the skill's starter
-# hook leaves scripts/__pycache__, BRO-4185).
+# None of these changes the policy file. `status` and `locate` write nothing and start
+# nothing. `verify`, `check` and `init` on a workspace that has a registry write no file of
+# their own, and they replay: a replay runs the workspace's hooks, and a hook may write (the
+# skill's starter hook leaves scripts/__pycache__, BRO-4185).
+#
+# Where the registry is, what counts as one, and whether it can be replayed are the skill's
+# to say. This script asks one question of its own, "is anything at all where a registry
+# goes?", to tell a workspace that has none (exit 4) from every other case, and hands every
+# other case to the skill. `verify` is the skill's `init` on a workspace where something is
+# there: the skill writes nothing when a registry exists and refuses anything else.
 #
 # A replay takes as long as the registry's rows take, and this script waits for it, as it
 # waits for any command: there is no time limit here. Ctrl-C stops it and the skill with it.
@@ -36,13 +44,16 @@
 #
 # Exit codes
 #   0  done, and no row failed (gap rows and known misses are listed in the output);
-#      `status`: a registry is here and the skill that replays it is installed
+#      `status`: something is where a registry goes and a copy of the skill was found
 #   1  a row did not hold
-#   2  the command could not run (a bad argument, a file that is not a registry)
-#   3  the correct skill is not installed, or the installed copy is too old for `init`
-#   4  the workspace has no rule registry
+#   2  the command could not run (a bad argument, a file that is not a registry, a skill
+#      that cannot be read or lacks what it needs)
+#   3  no copy of the correct skill was found; for `init` and `verify`, also a copy too
+#      old to have `init --pack` (`check` and `status` accept an older copy)
+#   4  nothing is where a registry goes
 #   6  `init` or `verify`: the workspace already had a registry, no row of it failed, and
 #      it lacks part of bstack's pack (the output lists what)
+#   (5 is not used.)
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -57,7 +68,7 @@ INSTALL_HINT="npx skills add broomva/skills --skill correct -g"
 # shellcheck source=scripts/lib/plugin-preference.sh
 . "$SCRIPT_DIR/lib/plugin-preference.sh"
 
-usage() { sed -n '2,45p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,56p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 has_pack_option() { grep -q -- '--pack' "$1" 2>/dev/null; }
 
@@ -67,11 +78,11 @@ locate() {
     local candidate first=""
     if [ -n "${BSTACK_CORRECT:-}" ]; then
         # A named path that is not there is an error, never a reason to fall back to another copy.
-        if [ -f "$BSTACK_CORRECT" ]; then
+        if [ -f "$BSTACK_CORRECT" ] && [ -r "$BSTACK_CORRECT" ]; then
             printf '%s\n' "$BSTACK_CORRECT"
             return 0
         fi
-        echo "rules-registry: BSTACK_CORRECT names $BSTACK_CORRECT, which is not a file" >&2
+        echo "rules-registry: BSTACK_CORRECT names $BSTACK_CORRECT, which is not a file this user can read" >&2
         return 2
     fi
     # No HOME (a bare service environment) means no installed skill to find: the same
@@ -82,7 +93,8 @@ locate() {
     # (it still replays a registry, and `init` then says it is too old).
     for candidate in "$HOME/.claude/skills/correct/scripts/correct.py" \
                      "$HOME/.agents/skills/correct/scripts/correct.py"; do
-        [ -f "$candidate" ] || continue
+        # A copy that cannot be read is not a copy: it would look like one without the option.
+        [ -f "$candidate" ] && [ -r "$candidate" ] || continue
         if has_pack_option "$candidate"; then
             printf '%s\n' "$candidate"
             return 0
@@ -93,14 +105,14 @@ locate() {
     printf '%s\n' "$first"
 }
 
-# The registry, looked for where the skill looks for it: in each governance folder, the
-# new name first. It is not tied to where the policy file is; a workspace in the middle of
-# the folder rename can have the two in different folders.
-registry_file() {
-    local dir
+# Is anything at all where a registry goes, in either governance folder? A file, a
+# directory, a link that points nowhere: all count. What it is, and which folder wins, is
+# the skill's to judge; this only tells "nothing here" from everything else.
+registry_present() {
+    local dir path
     for dir in "$BROOMVA_REPO_DIR" "$BROOMVA_REPO_LEGACY_DIR"; do
-        if [ -f "$WORKSPACE/$dir/rules.yaml" ]; then
-            printf '%s\n' "$WORKSPACE/$dir/rules.yaml"
+        path="$WORKSPACE/$dir/rules.yaml"
+        if [ -e "$path" ] || [ -L "$path" ]; then
             return 0
         fi
     done
@@ -145,6 +157,9 @@ with_pack() {
         0|1) note_unseen_sources ;;
         # The skill's 3: the registry was here before, no row failed, and it lacks part of the pack.
         3) note_unseen_sources; rc=6 ;;
+        # 4 and 6 mean something in this script and nothing in the skill: a copy that ends with
+        # one of them did not say "no registry" or "lacks part of the pack".
+        4|6) echo "rules-registry: the skill ended with status $rc, which it does not use" >&2; rc=2 ;;
     esac
     return "$rc"
 }
@@ -160,6 +175,14 @@ cmd_init() {
         esac
         shift
     done
+    # A dry run where something already is where the registry goes has nothing to list: init
+    # writes no file there. It stops here, because the skill's own dry run on a registry
+    # that exists is the real run, replay and all, and a dry run must start no hook.
+    if [ "${#dry[@]}" -gt 0 ] && registry_present; then
+        echo "something is already where the rule registry goes, so init would write no file here."
+        echo "nothing was run. \`bstack rules verify\` replays it and compares it with bstack's rows."
+        return 0
+    fi
     correct="$(skill_or_stop "no rule registry was written")" || rc=$?
     if [ "$rc" -ne 0 ]; then
         [ -z "$correct" ] || printf '%s\n' "$correct"
@@ -175,8 +198,9 @@ cmd_verify() {
         echo "rules-registry: verify takes no argument, got: $1" >&2
         return 2
     fi
-    # Only a workspace that has a registry: on one the skill's init writes nothing.
-    if ! registry_file >/dev/null; then
+    # Only a workspace where something is: there the skill's init writes no file (it replays
+    # a registry that exists and refuses anything else). Where nothing is, init would write.
+    if ! registry_present; then
         echo "this workspace has no rule registry (\`bstack bootstrap\` writes one)."
         return 4
     fi
@@ -188,25 +212,29 @@ cmd_verify() {
     with_pack "$correct"
 }
 
-# status -> 0 a registry is here and the skill that replays it is installed; 4 no registry;
-# 3 a registry and no skill (or one too old). One line on stdout. Nothing is replayed.
+# status -> 0 something is where a registry goes and a copy of the skill was found; 4 nothing
+# is there; 3 something is there and no copy of the skill. Two lines on stdout. Nothing is
+# run, so nothing is claimed about the registry's content or about whether a replay can run.
 cmd_status() {
-    local registry correct rc=0
+    local correct rc=0
     if [ $# -gt 0 ]; then
         case "$1" in -h|--help) usage; return 0 ;; esac
         echo "rules-registry: status takes no argument, got: $1" >&2
         return 2
     fi
-    if ! registry="$(registry_file)"; then
+    if ! registry_present; then
         echo "this workspace has no rule registry (\`bstack bootstrap\` writes one)."
         return 4
     fi
-    correct="$(skill_or_stop "the registry here cannot be replayed")" || rc=$?
-    if [ "$rc" -ne 0 ]; then
-        [ -z "$correct" ] || printf '%s\n' "$correct"
-        return "$rc"
+    correct="$(locate)" || rc=$?
+    if [ "$rc" -eq 3 ]; then
+        echo "something is where the rule registry goes, and no copy of the correct skill, which replays it, was found."
+        echo "install it: $INSTALL_HINT"
+        return 3
     fi
-    echo "a rule registry is here (${registry#"$WORKSPACE"/}) and the skill that replays it is installed."
+    [ "$rc" -eq 0 ] || return "$rc"
+    echo "something is where the rule registry goes, and a copy of the skill is at $correct."
+    echo "nothing was read or run: whether it is a registry that holds is what \`bstack rules verify\` says."
 }
 
 cmd_check() {
@@ -218,9 +246,11 @@ cmd_check() {
         esac
     done
     correct="$(locate)" || rc=$?
+    # A copy named with BSTACK_CORRECT that is not there is the first thing wrong.
+    [ "$rc" -ne 2 ] || return 2
     # A registry named on the command line is the skill's to find; otherwise it is looked
     # for here first, so "no registry" is told apart from "could not run".
-    if [ "$named" -eq 0 ] && ! registry_file >/dev/null; then
+    if [ "$named" -eq 0 ] && ! registry_present; then
         echo "this workspace has no rule registry (\`bstack bootstrap\` writes one)."
         return 4
     fi
@@ -231,7 +261,11 @@ cmd_check() {
     fi
     [ "$rc" -eq 0 ] || return "$rc"
     python3 -I "$correct" check --root "$WORKSPACE" "$@" || rc=$?
-    case "$rc" in 0|1) note_unseen_sources ;; esac
+    case "$rc" in
+        0|1) note_unseen_sources ;;
+        # The skill's `check` ends with 0, 1 or 2. 3, 4 and 6 mean something in this script only.
+        3|4|6) echo "rules-registry: the skill ended with status $rc, which its check does not use" >&2; rc=2 ;;
+    esac
     return "$rc"
 }
 

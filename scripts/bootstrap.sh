@@ -390,6 +390,10 @@ else
   RULES_POLICY="$( . "${BOOTSTRAP_SCRIPT_DIR}/lib/broomva-paths.sh" && broomva_repo_path policy "$WORKSPACE_DIR" 2>/dev/null )" || RULES_POLICY=""
   if [ -n "$RULES_POLICY" ] && [ -f "$RULES_POLICY" ]; then
     python3 -I "${BOOTSTRAP_SCRIPT_DIR}/ensure-hard-gates.py" "$RULES_POLICY" || true
+  else
+    # The path lookup refuses some policy files (a symbolic link among them). Then nothing
+    # was checked, and the replay below says so itself if the list is missing.
+    echo "  the policy file was not checked for a \`gates.hard\` list (no policy file this lookup accepts)."
   fi
   # The step writes straight to the terminal, as it happens. Its output is not captured to
   # be shown afterwards: the skill says that the starter hook is installed before the replay
@@ -401,7 +405,7 @@ else
     0) echo "  rule registry: replayed, and no row failed. Gap rows and known misses are listed above." ;;
     3) : ;;  # the skill is missing or too old; the script said how to install it
     6) echo "  rule registry: replayed, and no row failed, but this workspace's registry lacks part of bstack's pack (listed above)." ;;
-    *) echo "  rule registry: exit $rules_rc — see above; \`bstack rules check\` replays it." ;;
+    *) echo "  rule registry: exit $rules_rc — see above; \`bstack rules init\` runs this step again." ;;
   esac
 fi
 
