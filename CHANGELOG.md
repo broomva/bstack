@@ -53,15 +53,17 @@ registry: to replay one later, call the skill (`correct.py check`).
     `.control/policy.yaml`. The skill's registry reads `.broomva/policy.yaml` when one is
     there, else `.control/policy.yaml`. In a workspace with a policy file in each folder
     the gate enforces the `pattern:` lines of one and the registry's completeness check
-    accounts for the gates of the other: the replay says nothing of a pattern that is only
-    in `.control/policy.yaml`, and the gate does not enforce a pattern that is only in
-    `.broomva/policy.yaml`. Removing `.control/policy.yaml` leaves the gate with no policy
+    accounts for the gates of the other: completeness asks for no row for a pattern that is
+    only in `.control/policy.yaml` (a replayed case that happens to match it is still
+    refused by the gate, and its row fails), and the gate does not enforce a pattern that
+    is only in `.broomva/policy.yaml`. Removing `.control/policy.yaml` leaves the gate with no policy
     patterns. Bootstrap prints nothing about any of this; its doctor phase reports a name
     that is under both folders. Bootstrap also still scaffolds `.control/policy.yaml` in a
     workspace whose policy is in `.broomva/`, which makes it such a workspace (BRO-4200;
     the scaffold and the readers predate this version).
-  - With the bstack plugin enabled, six hooks come from the plugin's `hooks.json`, which
-    the runner does not read (BRO-3811). The replay then covers the hooks in the settings
+  - With the bstack plugin enabled, six of the hooks bootstrap would wire come from the
+    plugin's `hooks.json` (which carries other hooks of the plugin's own as well), and the
+    runner does not read that file (BRO-3811). The replay then covers the hooks in the settings
     files only, and bootstrap says so after the phase.
   - A registry that exists is never edited. Rows the pack gains in a later release are
     listed by bootstrap (the skill exits 3 when the replay passed) and are copied by hand.
