@@ -16,7 +16,7 @@
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-EXPECTED_ASSERTIONS=87
+EXPECTED_ASSERTIONS=91
 PASS=0; FAIL=0; FAILED=()
 pass() { echo "  [ok] $1"; PASS=$((PASS + 1)); }
 fail() { echo "  [FAIL] $1"; FAIL=$((FAIL + 1)); FAILED+=("$1"); }
@@ -115,6 +115,23 @@ scratch() {
     esac
     echo "  [FAIL] not a scratch repository of this test: '$1'" >&2
     exit 1
+}
+# copy_ws <from> <name>: a copy of a bootstrapped workspace whose settings name its own
+# hooks. bootstrap writes absolute hook commands, so a plain copy would still run the
+# hooks of the workspace it was copied from. Prints the copy's path.
+copy_ws() {
+    local to="$TMP/$2"
+    cp -R "$1" "$to" || exit 1
+    python3 - "$to/.claude/settings.json" "$1" "$to" <<'PY' || exit 1
+import sys
+path, old, new = sys.argv[1:]
+text = open(path, encoding="utf-8").read()
+assert old + "/" in text, "the settings file names no hook of the workspace it was copied from"
+text = text.replace(old + "/", new + "/")
+assert old + "/" not in text
+open(path, "w", encoding="utf-8").write(text)
+PY
+    echo "$to"
 }
 # boot <workspace> [VAR=value ...]: bootstrap it in full (hooks and the control loop; only
 # the skill downloads are skipped); the log is <workspace>.log.
@@ -274,16 +291,31 @@ assert len(lines) - len(kept) == 1, f"{reason!r} is on {len(lines) - len(kept)} 
 open(path, "w", encoding="utf-8").write("".join(kept))
 PY
 }
+# quoted_by <rule id> <reason>: 0 when that rule of the pack quotes the pattern the gate
+# gives that reason for. Section 0 holds the quotes to the gate as one set; this holds each
+# quote to its own rule, so two rules cannot carry each other's pattern.
+quoted_by() {
+    python3 - "$TMP/gate.orig" "$PACK" "$1" "$2" <<'PY'
+import re, sys, yaml
+gate, pack, rule_id, reason = open(sys.argv[1], encoding="utf-8").read(), yaml.safe_load(open(sys.argv[2], encoding="utf-8")), sys.argv[3], sys.argv[4]
+found = [m.group(1) for m in re.finditer(r'^\s+\(r"(.+)",\s+"([^"]+)"\),?\s*$', gate, re.M) if reason in m.group(2)]
+rules = [rule for rule in pack["rules"] if rule["id"] == rule_id]
+sys.exit(0 if len(found) == 1 and len(rules) == 1 and found[0] in re.findall(r"`([^`]+)`", rules[0]["rule"]) else 1)
+PY
+}
 # One line per pattern of the gate: its reason, then the row that replays it.
 while IFS='|' read -r reason id; do
     cp "$TMP/gate.orig" "$GATE"
     if drop "$reason"; then
         replay "$WS"
         # Exactly one row fails, of every row in the registry (the starter's, the pack's
-        # and the completeness check), and it is the one that replays this pattern.
+        # and the completeness check), it is the one that replays this pattern, and that
+        # row's rule is the one that quotes it.
         failing="$(grep -E '^ *FAIL +[a-z]+ +' "$OUT" | awk '{print $3}' | tr '\n' ' ')"
-        if [ "$RC" -eq 1 ] && [ "$failing" = "$id " ]; then
-            pass "without \"$reason\" only $id fails"
+        if [ "$RC" -eq 1 ] && [ "$failing" = "$id " ] && quoted_by "$id" "$reason"; then
+            pass "without \"$reason\" only $id fails, and $id is the rule that quotes that pattern"
+        elif [ "$RC" -eq 1 ] && [ "$failing" = "$id " ]; then
+            fail "without \"$reason\" only $id fails, but the rule $id does not quote that pattern"
         else
             fail "without \"$reason\": exit $RC, failing rows: ${failing:-none} (expected only $id)"
         fi
@@ -333,7 +365,7 @@ is "restored, the replay exits 0 again" test "$RC" -eq 0
 # gate AND reported by the registry as a gate with no row; a pattern only in the other one
 # is neither.
 echo "4. one policy file for the gate and the registry"
-BOTH="$TMP/both"; cp -R "$WS" "$BOTH"
+BOTH="$(copy_ws "$WS" both)" || exit 1
 mkdir -p "$BOTH/$BROOMVA_REPO_DIR"
 printf 'version: 1\ngates:\n  hard:\n    - id: G-NEW\n      pattern: marker-in-the-new-folder\n' >"$BOTH/$BROOMVA_REPO_DIR/policy.yaml"
 printf 'version: 1\ngates:\n  hard:\n    - id: G-OLD\n      pattern: marker-in-the-old-folder\n' >"$BOTH/$BROOMVA_REPO_LEGACY_DIR/policy.yaml"
@@ -354,6 +386,16 @@ rm -f "$BOTH/$BROOMVA_REPO_DIR/policy.yaml" && ln -s nowhere.yaml "$BOTH/$BROOMV
 is "with a dangling link in the new folder the gate enforces the old folder's pattern" test "$(gate_says "$BOTH" "echo marker-in-the-old-folder")" = 2
 replay "$BOTH"
 is "and the registry reports that gate, the same file" test "$RC" -eq 1 -a "$(grep -c 'policy gate G-OLD has a pattern but no row' "$OUT")" = 1
+# A known limit, pinned so the CHANGELOG's sentence about it stays true (BRO-4200): in a
+# workspace whose policy is in the new folder, bootstrap still scaffolds one in the old
+# folder, and its doctor phase reports the name under both. The gate and the registry read
+# the new folder's file; this case is replaced when bootstrap asks the path registry.
+MOVED="$(new_ws moved)" || exit 1
+mkdir -p "$MOVED/$BROOMVA_REPO_DIR"
+sed 's/{{WORKSPACE_NAME}}/moved/g' "$REPO/assets/templates/policy.yaml.template" >"$MOVED/$BROOMVA_REPO_DIR/policy.yaml"
+is "known limit (BRO-4200): bootstrap of a workspace with its policy in the new folder exits 0" boot "$MOVED"
+is "it scaffolds a second policy file in the old folder, and doctor reports the name under both" test -f "$MOVED/$BROOMVA_REPO_LEGACY_DIR/policy.yaml" -a "$(grep -c "names under both $BROOMVA_REPO_DIR/ and $BROOMVA_REPO_LEGACY_DIR/ in .*: policy" "$MOVED.log")" = 1
+is "the registry there is replayed against the new folder's file, and no row fails" test "$(grep -cF "keep   $BROOMVA_REPO_DIR/policy.yaml" "$MOVED.log")$(grep -c 'rule registry: replayed, and no row failed.' "$MOVED.log")" = 11
 
 # ── 5. A workspace bootstrapped before 0.53.0 ────────────────────────────────
 # Its policy file has no gates.hard list. bstack does not edit the policy file: bootstrap
@@ -395,7 +437,7 @@ is "and the registry replays" has "$OLD.log" "rule registry: replayed, and no ro
 
 # ── 6. A registry that was there before, or that an older pack wrote ─────────
 echo "6. a registry that differs from the pack"
-STALE="$TMP/stale"; cp -R "$WS" "$STALE"
+STALE="$(copy_ws "$WS" stale)" || exit 1
 python3 - "$(registry_of "$STALE")" <<'PY'
 import sys
 path = sys.argv[1]
@@ -461,6 +503,13 @@ mkdir -p "$HOME_ONE/.claude/skills/correct/scripts"
 printf '#!/usr/bin/env python3\n# has the --pack option\nprint("the only copy ran")\n' >"$HOME_ONE/.claude/skills/correct/scripts/correct.py"
 run_script "$BARE" HOME="$HOME_ONE" BSTACK_CORRECT=""
 is "a copy in the first skills directory alone is found" test "$RC" -eq 0 -a "$(grep -c 'the only copy ran' "$OUT")" = 1
+# No python3 on PATH: the script says so. (Left to the shell, `exec python3` also ends with
+# 127 and says nothing a reader of bootstrap's output can act on.)
+mkdir -p "$TMP/no-python"
+for tool in bash dirname grep; do ln -s "$(command -v "$tool")" "$TMP/no-python/$tool" || exit 1; done
+RC=0
+env HOME="$HOME_PLAIN" BSTACK_CORRECT="$CORRECT" BROOMVA_WORKSPACE="$BARE" PATH="$TMP/no-python" "$TMP/no-python/bash" "$SCRIPT" >"$OUT" 2>&1 || RC=$?
+is "without python3 on PATH the script says so and exits 127" test "$RC" -eq 127 -a "$(grep -c 'python3 is not on PATH' "$OUT")" = 1 -a ! -e "$(registry_of "$BARE")"
 RC=0
 env HOME="$HOME_PLAIN" BSTACK_CORRECT="$CORRECT" BROOMVA_WORKSPACE="$BARE" bash "$SCRIPT" --dry-run >"$OUT" 2>&1 || RC=$?
 is "the script takes no argument: exit 2, and nothing is written" test "$RC" -eq 2 -a ! -e "$(registry_of "$BARE")"

@@ -18,8 +18,8 @@ registry: to replay one later, call the skill (`correct.py check`).
   Stop hook that continues a stalled arc; BRO-4159). The gate matches regular expressions,
   so each rule says what it is for and then quotes the pattern that is all the gate enforces
   of it. Ways found so far to do what a rule forbids without matching its pattern are known
-  misses in the rows (BRO-4169); they are examples, not a complete list, and the replay
-  counts them in its output. No row is certified by a real harness session.
+  misses in the rows, each with its ticket (BRO-4169; BRO-4159 for the NotebookEdit one);
+  they are examples, not a complete list, and the replay counts them in its output. No row is certified by a real harness session.
 - **Bootstrap phase 3.7** runs `scripts/rules-registry.sh`, which finds the skill and runs
   its `correct.py init --pack references/rules-pack.yaml`, and reports the skill's exit
   status. A workspace with no registry gets one (the skill's starter rule plus the pack)
@@ -44,17 +44,27 @@ registry: to replay one later, call the skill (`correct.py check`).
   MultiEdit on a secrets file was never sent to it. Found by the replay. A MultiEdit whose
   path matches one of the gate's path patterns is refused from this version on, including
   harmless ones such as a file named `credentials-guide.md`.
-- **fix: the control gate reads the policy file every other reader prefers** (the new
-  governance folder's when one is there, a link that points nowhere not counting; else
-  the old one's). It read only the old
-  folder's, so with a policy in each it enforced one file while the registry accounted for
-  the other. A workspace with `pattern:` lines only in the old folder's policy and a policy
-  file in the new folder loses those patterns at the gate with this version's script: move
-  them. This reaches a workspace when bootstrap writes `scripts/control-gate-hook.sh`
-  there. A workspace that already has that file keeps its copy; bootstrap now says so when
-  the copy differs from this version's, and the fix arrives only when the copy is replaced.
+- **fix: the control gate reads the policy file the rule registry reads**: the new
+  governance folder's (`.broomva/policy.yaml`) when one is there, a link that points
+  nowhere not counting; else the old one's (`.control/policy.yaml`). That is the path
+  registry's rule (`scripts/broomva_paths.py`) and the `correct` skill's. The gate read
+  only the old folder's, so with a policy in each it enforced one file while the registry
+  accounted for the other. A workspace with `pattern:` lines only in the old folder's
+  policy and a policy file in the new folder loses those patterns at the gate with this
+  version's script: copy them into the new folder's file, and keep the old folder's file
+  (see the limit below). This reaches a workspace when bootstrap writes
+  `scripts/control-gate-hook.sh` there. A workspace that already has that file keeps its
+  copy; bootstrap now says so when the copy differs from this version's, and the fix
+  arrives only when the copy is replaced.
 - **`gates.hard: []` in the policy template.**
 - **Limits.**
+  - The gate is the only bstack script this version moves to the new folder's policy file.
+    `bstack doctor`, `bstack-status`, `repair.sh`, `migrate.sh`, `validate.sh`,
+    `postinstall.sh` and the L3 scripts still read `.control/policy.yaml` and nothing else,
+    and bootstrap still scaffolds `.control/policy.yaml` in a workspace whose policy is in
+    `.broomva/`; its doctor phase then reports the name under both folders. Such a
+    workspace has two policy files read by different scripts (BRO-4200; the scaffold and
+    those readers predate this version).
   - With the bstack plugin enabled, six hooks come from the plugin's `hooks.json`, which
     the runner does not read (BRO-3811). The replay then covers the hooks in the settings
     files only, and bootstrap says so after the phase.

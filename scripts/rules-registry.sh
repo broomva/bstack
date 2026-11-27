@@ -18,12 +18,15 @@
 #
 # The skill: $BSTACK_CORRECT names its correct.py outright (CI, tests, a checkout, a copy
 # installed some other way). Otherwise it is looked for in ~/.claude/skills/correct and
-# ~/.agents/skills/correct, and of two copies the one that has `init --pack` is used.
+# ~/.agents/skills/correct. A copy counts when its text holds `--pack`: that is a search of
+# the file, not a run of it, and it is how a copy from before the option is told apart. Of
+# two copies the first that counts is used.
 #
-# Exit status: the skill's own, unchanged (0 the replay passed; 1 a row did not hold; 2 it
-# could not run; 3 the workspace already had a registry, the replay passed, and the registry
-# lacks part of bstack's pack), or 127 when no copy of the skill with `init --pack` was
-# found, after saying how to install it.
+# Exit status. When the skill ran, the skill's own, unchanged: 0 the replay passed; 1 a row
+# did not hold; 2 it could not run; 3 the workspace already had a registry, the replay
+# passed, and the registry lacks part of bstack's pack. When it did not run: 2 this script
+# was given an argument; 127 no copy of the skill with `--pack` was found (it says how to
+# install one), or python3 is not on PATH (it says so).
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -70,6 +73,11 @@ if ! correct="$(find_skill)"; then
         echo "no copy of the correct skill with \`init --pack\` was found, so no rule registry was written."
     fi
     echo "install or update it, then run bootstrap again: $INSTALL_HINT"
+    exit 127
+fi
+
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "python3 is not on PATH, so the correct skill cannot run and no rule registry was written."
     exit 127
 fi
 

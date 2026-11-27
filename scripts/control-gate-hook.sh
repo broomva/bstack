@@ -27,9 +27,11 @@ set -uo pipefail
 
 INPUT="$(cat 2>/dev/null || echo '{}')"
 REPO_ROOT="${CLAUDE_PROJECT_DIR:-${BROOMVA_WORKSPACE:-$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")}}"
-# The policy file every other reader uses: the new governance folder first, then the old
-# one. The rule registry's completeness check reads it the same way; a gate that read only
-# the old folder enforced one file while the registry accounted for the other.
+# The policy file the path registry's readers (scripts/broomva_paths.py) and the rule
+# registry's completeness check read: the new governance folder's first, then the old one's.
+# A gate that read only the old folder enforced one file while the registry accounted for
+# the other. bstack's other scripts (doctor among them) still read only the old folder's
+# file (BRO-4200).
 POLICY="$REPO_ROOT/.control/policy.yaml"
 # `-e` follows a link, as the registry's reader does: a link that points nowhere is not there,
 # and the old folder's file is read.

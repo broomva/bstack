@@ -15,8 +15,9 @@
 # enforces of it; tests/rules-pack.test.sh fails when a quoted pattern is not in the gate's
 # source character for character, or when the gate has a pattern no rule quotes.
 # A pattern over command text cannot cover every way to write a command. The `known_misses`
-# cases are the ways found so far to do what a rule forbids without matching its pattern
-# (BRO-4169). They are examples, not a complete list.
+# cases are the ways found so far to do what a rule forbids without matching its pattern;
+# each names its ticket (BRO-4169, and BRO-4159 for the NotebookEdit one). They are
+# examples, not a complete list.
 # Every proof here is CONSTRUCTED from the gate's own pattern. A workspace that has made
 # the mistake for real should add its own proof with where it came from.
 #
@@ -35,9 +36,11 @@
 #     replay then reports these rows as not registered (BRO-4184).
 #
 # bootstrap wires hooks two ways. Without the bstack plugin every hook below is in the
-# workspace's settings file. With the plugin, six of them come from the plugin's own
-# hooks.json, which the rule runner does not read yet (BRO-3811): on that path those hooks
-# are outside the registry's view, and an entry here that matches nothing is harmless.
+# workspace's settings file. With the plugin, autonomous-posture-hook.sh,
+# arc-continuation-hook.sh, leverage-sensor.py and l3-stability-pretool-hook.sh come from
+# the plugin's own hooks.json, which the rule runner does not read yet (BRO-3811): on that
+# path those hooks are outside the registry's view, and an entry here that matches nothing
+# is harmless.
 pack: bstack
 registry_version: 1
 
