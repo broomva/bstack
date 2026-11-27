@@ -73,6 +73,7 @@ registry: to replay one later, call the skill (`correct.py check`).
     bootstrap. Not by doctor.
   - Besides its own patterns the gate enforces every line of the policy file of the form
     `pattern: <regex>`, under any key, and does not read a line that begins `- pattern:`.
+    It takes the rest of the line as the pattern, a trailing `# comment` included.
     The registry accounts only for patterns under `gates.hard` (BRO-4169).
   - A workspace whose path has a space in it, or a relative `BROOMVA_WORKSPACE`, gets hook
     commands that cannot run; the replay reports the gate's rows as not registered

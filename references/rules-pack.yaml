@@ -30,7 +30,8 @@
 #     `credentials`, `id_rsa.pub`, `.env.example`. The registry has no field for that
 #     (BRO-4169);
 #   - besides its own patterns the gate enforces every line of the policy file of the form
-#     `pattern: <regex>`, under any key (a line that begins `- pattern:` is not read), and
+#     `pattern: <regex>`, under any key (a line that begins `- pattern:` is not read, and
+#     the rest of the line is the pattern, a trailing `# comment` included), and
 #     the registry accounts only for the patterns under `gates.hard` (BRO-4169);
 #   - a workspace whose path has a space in it gets hook commands that cannot run, and the
 #     replay then reports these rows as not registered (BRO-4184).
