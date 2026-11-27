@@ -60,10 +60,13 @@ cache(){ cat > "$STATE_FILE" <<J
 J
 }
 # ship MEASURED_AT M7 MERGED — as the sensor writes it: a 1.0 carries its newest
-# artifact's time (here: the measurement time), a 0.0 none.
+# artifact's time (here: the measurement time), a 0.0 none, plus outward_config.
+DEF_RECEIPTS="$(python3 -c 'import os; print(os.path.expanduser("~/.config/broomva/door/receipts.jsonl"))')"
+DEF_OUTWARD_CFG="{\"window_days\":7.0,\"product_repos\":[],\"author_allowlist\":[],\"door_receipts\":\"$DEF_RECEIPTS\"}"
+DEF_FLEET_CFG='{"window_days":7.0,"product_repos":[],"meta_repos":[],"external_repos":[],"scratch_prefixes":["/private/tmp","/tmp"],"wait_cap_minutes":30.0}'
 ship(){ local la=null; [ "$2" = "1.0" ] && la="\"$1\""
-  printf '{"measured_at":"%s","m6s_meta_work_ship_ratio":null,"raw":{},"m7_outward_artifact_floor":%s,"outward":{"merged_product_prs":%s,"window_days":7,"latest_artifact_at":%s,"complete_negative_coverage":true}}\n' "$1" "$2" "$3" "$la" > "$SHIP_STATE"; }
-# a record written before latest_artifact_at / complete_negative_coverage existed
+  printf '{"measured_at":"%s","outward_config":%s,"m6s_meta_work_ship_ratio":null,"raw":{},"m7_outward_artifact_floor":%s,"outward":{"merged_product_prs":%s,"window_days":7,"latest_artifact_at":%s,"complete_negative_coverage":true}}\n' "$1" "$DEF_OUTWARD_CFG" "$2" "$3" "$la" > "$SHIP_STATE"; }
+# an unsigned legacy record (written before outward_config / latest_artifact_at existed)
 ship_legacy(){ printf '{"measured_at":"%s","m6s_meta_work_ship_ratio":null,"raw":{},"m7_outward_artifact_floor":%s,"outward":{"merged_product_prs":0}}\n' "$1" "$2" > "$SHIP_STATE"; }
 brief(){ python3 -I "$SENSOR" --workspace "$WS" --brief --cached --no-store 2>/dev/null; }
 
@@ -138,7 +141,7 @@ has "and names it" "tool_error_rate (L0)" "$B"
 echo "== an alarm is only acted on while its measurement is recent (round 2) =="
 agoiso(){ python3 -c "import datetime as d,sys;print((d.datetime.now(d.timezone.utc)-d.timedelta(hours=float(sys.argv[1]))).isoformat(timespec='seconds'))" "$1"; }
 # ship2 MEASURED_AT M7 LATEST_ARTIFACT_AT [COMPLETE_NEGATIVE_COVERAGE=true]
-ship2(){ printf '{"measured_at":"%s","m6s_meta_work_ship_ratio":null,"raw":{},"m7_outward_artifact_floor":%s,"outward":{"window_days":7,"latest_artifact_at":%s,"complete_negative_coverage":%s}}\n' "$1" "$2" "$3" "${4:-true}" > "$SHIP_STATE"; }
+ship2(){ printf '{"measured_at":"%s","outward_config":%s,"m6s_meta_work_ship_ratio":null,"raw":{},"m7_outward_artifact_floor":%s,"outward":{"window_days":7,"latest_artifact_at":%s,"complete_negative_coverage":%s}}\n' "$1" "$DEF_OUTWARD_CFG" "$2" "$3" "${4:-true}" > "$SHIP_STATE"; }
 cache; ship2 "$(agoiso 7)" 0.0 null
 B="$(brief)"
 has "a 7 h old outward-empty reading is not acted on" "UNMEASURED" "$B"
@@ -166,14 +169,15 @@ cache; ship2 "$(agoiso 1)" 1.0 '"not-a-time"'
 B="$(brief)"
 has "an unparseable artifact time is unmeasured" "UNMEASURED" "$B"
 
-echo "== review: legacy records and the cached closure =="
+echo "== review: unsigned legacy records fail closed, and cached closure recomputes =="
 cache; ship_legacy "$NOW" 0.0
 B="$(brief)"
-has "a legacy 0.0 (no coverage field) is unmeasured" "UNMEASURED" "$B"
+has "an unsigned legacy 0.0 is rejected -> unmeasured" "UNMEASURED" "$B"
 hasnt "and fires no actuator" "Corrective actuator" "$B"
 cache; ship_legacy "$NOW" 1.0
 B="$(brief)"
-has "a legacy 1.0 still holds while fresh" "All graded setpoints within target." "$B"
+has "an unsigned legacy 1.0 is rejected -> unmeasured (fail closed)" "UNMEASURED" "$B"
+hasnt "unsigned legacy 1.0 never certifies compliance" "All graded setpoints within target." "$B"
 # Stop wrote a closure with L3 NOT live; the fresh ship state now carries m7.
 cat > "$STATE_FILE" <<J
 {"measured_at":"$NOW","sessions_analyzed":2,"window_days":7,
@@ -189,7 +193,7 @@ hasnt "the cached closure is recomputed after the merge (L3 now live)" "levels n
 echo "== Stop: a fresh fleet scan replaces the one-checkout m6 =="
 ship "$NOW" 1.0 3
 cat > "$FLEET_STATE" <<J
-{"measured_at":"$NOW","metrics":{"m6_meta_work_session_ratio":0.2,"w1_agent_idle_share":0.35,
+{"measured_at":"$NOW","config":$DEF_FLEET_CFG,"metrics":{"m6_meta_work_session_ratio":0.2,"w1_agent_idle_share":0.35,
  "w2_reply_latency_p50_min":5.5,"w3_waiting_sessions_mean":1.1},
  "raw":{"transcripts_read":{"claude":10,"codex":5},"m6_tool_edits_only":0.25,"unclassified_sessions":0,"unclassified_repos":{}}}
 J
@@ -267,19 +271,19 @@ J="$(python3 -I "$SENSOR" --workspace "$WS" --transcripts "$EMPTY_GLOB" --json -
 [ "$(g "['metrics'].get('m7_outward_artifact_floor')")" = "1.0" ] && ok "matching outward_config merges m7" || bad "m7 did not merge on match"
 [ "$(g "['raw'].get('m6_scope')")" = "fleet" ] && ok "matching fleet config merges m6" || bad "fleet did not merge on match"
 
-# 1) Window change rejects both cached m7 and cached fleet m6
+# 1) Window change rejects both cached m7 and cached fleet m6 (and nulls checkout m6 fallback)
 write_cfg_setpoints 14 "acme/app" "acme/meta" "alice" "$RECEIPTS_A"
 J="$(python3 -I "$SENSOR" --workspace "$WS" --transcripts "$EMPTY_GLOB" --json --no-store 2>/dev/null)"
 [ "$(g "['metrics'].get('m7_outward_artifact_floor')")" = "None" ] && ok "window change rejects cached m7" || bad "stale-window m7 leaked"
-[ "$(g "['raw'].get('m6_scope')")" = "None" ] && ok "window change rejects cached fleet m6" || bad "stale-window fleet leaked"
+[ "$(g "['raw'].get('m6_scope')")" = "fleet_unmeasured" ] && [ "$(g "['metrics'].get('m6_meta_work_session_ratio')")" = "None" ] && ok "window change rejects cached fleet m6 and nulls checkout fallback" || bad "stale-window fleet leaked"
 B="$(brief)"
 has "cached brief drops stale-window m7 -> UNMEASURED" "UNMEASURED" "$B"
 
-# 2) product_repos change rejects both cached m7 and cached fleet m6
+# 2) product_repos change rejects both cached m7 and cached fleet m6 (and nulls checkout m6 fallback)
 write_cfg_setpoints 7 "acme/other-app" "acme/meta" "alice" "$RECEIPTS_A"
 J="$(python3 -I "$SENSOR" --workspace "$WS" --transcripts "$EMPTY_GLOB" --json --no-store 2>/dev/null)"
 [ "$(g "['metrics'].get('m7_outward_artifact_floor')")" = "None" ] && ok "product_repos change rejects cached m7" || bad "stale-repo m7 leaked"
-[ "$(g "['raw'].get('m6_scope')")" = "None" ] && ok "product_repos change rejects cached fleet m6" || bad "stale-repo fleet leaked"
+[ "$(g "['raw'].get('m6_scope')")" = "fleet_unmeasured" ] && [ "$(g "['metrics'].get('m6_meta_work_session_ratio')")" = "None" ] && ok "product_repos change rejects cached fleet m6 and nulls checkout fallback" || bad "stale-repo fleet leaked"
 
 # 3) author_allowlist change rejects cached m7 (fleet m6 does not depend on author_allowlist)
 write_cfg_setpoints 7 "acme/app" "acme/meta" "bob" "$RECEIPTS_A"
@@ -319,6 +323,83 @@ sleep 1
 python3 -I "$SHIP_SENSOR" --workspace "$WS" --throttle 3600 >/dev/null
 t_changed="$(stat -c %Y "$SHIP_STATE" 2>/dev/null || stat -f %m "$SHIP_STATE")"
 [ "$t_changed" != "$t_before" ] && ok "ship-sensor throttle recomputes when door_receipts changes" || bad "ship-sensor throttle kept stale config"
+
+echo "== round 6: default door_receipts parity, window_days null, whitespace, .broomva/, partial coverage =="
+FLEET_SENSOR="$REPO/scripts/leverage-fleet-sensor.py"
+# 6a) Default door_receipts matches between leverage-ship-sensor.py and leverage-sensor.py
+R6_OUT="$(python3 -I - "$SENSOR" "$SHIP_SENSOR" <<'PY'
+import importlib.util, sys
+def load(p):
+    sp = importlib.util.spec_from_file_location("m", p); m = importlib.util.module_from_spec(sp); sp.loader.exec_module(m); return m
+s, sh = load(sys.argv[1]), load(sys.argv[2])
+print(s._DEFAULT_DOOR_RECEIPTS == sh.DEFAULT_DOOR_RECEIPTS, s._outward_config_sig({}, 7) == sh.outward_config_signature({}, 7))
+PY
+)"
+[ "$R6_OUT" = "True True" ] && ok "default door_receipts and outward_config signature match across sensors" || bad "receipt path mismatch: $R6_OUT"
+
+# 6b) window_days: null does not crash any of the 3 CLI scripts
+cat > "$SETPOINTS" <<Y
+window_days: null
+fleet:
+  product_repos: []
+  meta_repos: []
+  author_allowlist: []
+ship_signal:
+  repos: []
+metrics: []
+Y
+python3 -I "$SENSOR" --workspace "$WS" --transcripts "$EMPTY_GLOB" --json --no-store >/dev/null && ok "leverage-sensor handles window_days: null" || bad "leverage-sensor crashed on window_days: null"
+python3 -I "$SHIP_SENSOR" --workspace "$WS" --json --no-store >/dev/null && ok "leverage-ship-sensor handles window_days: null" || bad "leverage-ship-sensor crashed on window_days: null"
+python3 -I "$FLEET_SENSOR" --workspace "$WS" --claude-root "$TMP/none" --codex-root "$TMP/none" --json --no-store >/dev/null && ok "leverage-fleet-sensor handles window_days: null" || bad "leverage-fleet-sensor crashed on window_days: null"
+
+# 6c) Whitespace in author_allowlist matches in compute_outward + invalid mergedAt fails closed + chmod 000 parent dir is unreadable
+NOSEARCH="$TMP/nosearch"; mkdir -p "$NOSEARCH"; echo "{\"at\":\"$NOW\"}" > "$NOSEARCH/r.jsonl"; chmod 000 "$NOSEARCH"
+R6_M7="$(python3 -I - "$SHIP_SENSOR" "$NOW" "$NOSEARCH/r.jsonl" <<'PY'
+import importlib.util, sys
+sp = importlib.util.spec_from_file_location("sh", sys.argv[1]); sh = importlib.util.module_from_spec(sp); sp.loader.exec_module(sh)
+now_iso, bad_path = sys.argv[2], sys.argv[3]
+# Whitespace author matches
+res_ws = sh.compute_outward({"product_repos": [" acme/app "], "author_allowlist": [" alice "]}, 7,
+    fetch=lambda r, s: [{"number": 1, "mergedAt": now_iso, "author": {"login": "Alice", "is_bot": False}}])
+# Invalid mergedAt on qualifying PR fails closed -> m7=None, complete_negative_coverage=False
+res_bad_ts = sh.compute_outward({"product_repos": ["acme/app"], "author_allowlist": ["alice"], "door_receipts": "/nonexistent-r6-file"}, 7,
+    fetch=lambda r, s: [{"number": 2, "mergedAt": "not-a-timestamp", "author": {"login": "alice", "is_bot": False}}])
+# Unsearchable receipt parent dir -> door_receipts_status=='unreadable', m7=None
+res_perm = sh.compute_outward({"product_repos": ["acme/app"], "author_allowlist": ["alice"], "door_receipts": bad_path}, 7,
+    fetch=lambda r, s: [])
+print(res_ws["m7_outward_artifact_floor"],
+      res_bad_ts["m7_outward_artifact_floor"], res_bad_ts["outward"]["unparsed_merges"], res_bad_ts["outward"]["complete_negative_coverage"],
+      res_perm["m7_outward_artifact_floor"], res_perm["outward"]["door_receipts_status"], res_perm["outward"]["complete_negative_coverage"])
+PY
+)"
+chmod 755 "$NOSEARCH"
+[ "$R6_M7" = "1.0 None 1 False None unreadable False" ] && ok "whitespace allowlist, invalid mergedAt, and unsearchable receipt path all fail closed" || bad "R6 m7 checks failed: $R6_M7"
+
+# 6d) .broomva/-only migrated workspace works across hook guard + all 3 sensors
+WS_MIG="$TMP/ws-mig"; mkdir -p "$WS_MIG/.broomva"
+cat > "$WS_MIG/.broomva/leverage-setpoints.yaml" <<Y
+window_days: 7
+fleet:
+  product_repos: ["acme/app"]
+  meta_repos: ["acme/meta"]
+  author_allowlist: ["alice"]
+  door_receipts: "$RECEIPTS_A"
+ship_signal:
+  repos: []
+metrics:
+  - {id: m7, name: outward_artifact_floor, level: L3, direction: higher_is_better, target: 1.0, alert: 0.99}
+Y
+GUARD_OUT="$(BSTACK_WORKSPACE="$WS_MIG" bash "$REPO/hooks/bstack-hook-guard.sh" echo ok-migrated)"
+[ "$GUARD_OUT" = "ok-migrated" ] && ok "bstack-hook-guard accepts .broomva/-only workspace" || bad "hook guard rejected .broomva/ workspace: $GUARD_OUT"
+python3 -I "$SHIP_SENSOR" --workspace "$WS_MIG" --outward-fixture /dev/null --json --no-store 2>/dev/null || true
+# Write ship state via broomva_paths and read it via leverage-sensor.py on the .broomva/-only workspace
+MIG_SHIP="$(broomva_repo_path leverage_ship_state "$WS_MIG")"
+mkdir -p "$(dirname "$MIG_SHIP")"
+cat > "$MIG_SHIP" <<J
+{"measured_at":"$NOW","window_days":7,"outward_config":{"window_days":7.0,"product_repos":["acme/app"],"author_allowlist":["alice"],"door_receipts":"$RECEIPTS_A"},"m6s_meta_work_ship_ratio":null,"raw":{},"m7_outward_artifact_floor":1.0,"outward":{"window_days":7,"merged_product_prs":0,"door_receipts":1,"latest_artifact_at":"$NOW","complete_negative_coverage":true}}
+J
+J="$(python3 -I "$SENSOR" --workspace "$WS_MIG" --transcripts "$EMPTY_GLOB" --json --no-store 2>/dev/null)"
+[ "$(g "['metrics'].get('m7_outward_artifact_floor')")" = "1.0" ] && ok "leverage-sensor reads .broomva/leverage-setpoints.yaml + broomva_paths ship state" || bad "migrated workspace m7 failed"
 
 echo "leverage-l3-wiring: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

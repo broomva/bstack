@@ -40,6 +40,7 @@ Usage:
 """
 import argparse
 import json
+import math
 import os
 import re
 import subprocess
@@ -122,12 +123,12 @@ def classify_prs(prs, cfg):
                    statusCheckRollup:[{conclusion}], _repo?}
     Returns {"m6s_meta_work_ship_ratio": float|None, "raw": {...}}.
     """
-    author_allow = {str(a).lower() for a in cfg.get("author_allowlist", [])}
+    author_allow = {str(a).strip().lower() for a in (cfg.get("author_allowlist") or []) if str(a).strip()}
     prod_re = re.compile(cfg.get("product_paths", DEFAULT_PRODUCT), re.IGNORECASE)
     meta_re = re.compile(cfg.get("meta_paths", DEFAULT_META), re.IGNORECASE)
     tw = cfg.get("tier_weights", {}) or {}
-    w_green = float(tw.get("green", 1.0))
-    w_ungated = float(tw.get("ungated", 0.5))
+    w_green = _safe_pos_float(tw.get("green"), 1.0)
+    w_ungated = _safe_pos_float(tw.get("ungated"), 0.5)
 
     # FAIL CLOSED: the author allowlist is the h ⟂ U-critical filter. A missing/mistyped
     # `author_allowlist` must NOT silently count every author (teammates, upstream) — that
@@ -256,8 +257,9 @@ def _repo_exists(repo, timeout=10):
 def compute(cfg, window_days, now=None):
     """Scan the repo allowlist and classify. Returns (record_fields, gh_ok)."""
     now = now or datetime.now(timezone.utc)
+    window_days = _safe_window_days(window_days)
     since_iso = (now - timedelta(days=window_days)).strftime("%Y-%m-%d")
-    repos = cfg.get("repos", []) or []
+    repos = [str(r).strip() for r in (cfg.get("repos") or []) if str(r).strip()]
     all_prs, per_repo, errors = [], [], []
     for repo in repos:
         prs = fetch_merged_prs(repo, since_iso)
@@ -333,14 +335,38 @@ def _within(v, cutoff, now):
     return d is not None and cutoff <= d <= now
 
 
+def _safe_window_days(val, default=7):
+    if isinstance(val, (int, float)) and not isinstance(val, bool) and math.isfinite(val) and val > 0:
+        return val
+    return default
+
+
+def _safe_pos_float(val, default):
+    if isinstance(val, (int, float)) and not isinstance(val, bool) and math.isfinite(val) and val > 0:
+        return float(val)
+    return float(default)
+
+
+def _repo_state_path(name, workspace, legacy_filename):
+    try:
+        import importlib.util
+        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "broomva_paths.py")
+        spec = importlib.util.spec_from_file_location("broomva_paths", p)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return str(mod.repo_path(name, workspace))
+    except Exception:
+        return os.path.join(workspace, ".control", legacy_filename)
+
+
 def count_receipts(path, cutoff, now=None):
     """(count in window, unparsed lines, status, latest in-window time). status is 'absent' when the file
-    does not exist on this host -- a door logged on another machine is not seen, and
-    saying so is the point -- and 'unreadable' when it exists but cannot be read."""
+    does not exist on this host (FileNotFoundError) -- a door logged on another machine is not seen, and
+    saying so is the point -- and 'unreadable' on any other OSError (e.g. PermissionError on an unsearchable
+    parent dir, IsADirectoryError, NotADirectoryError)."""
     now = now or datetime.now(timezone.utc)
-    p = os.path.expanduser(path or DEFAULT_DOOR_RECEIPTS)
-    if not os.path.exists(p):
-        return 0, 0, "absent", None
+    raw_path = str(path).strip() if path is not None else ""
+    p = os.path.expanduser(raw_path or DEFAULT_DOOR_RECEIPTS)
     n = unparsed = 0
     latest = None
     try:
@@ -361,6 +387,8 @@ def count_receipts(path, cutoff, now=None):
                     n += 1
                     d = _parse_ts(ts)
                     latest = d if latest is None or d > latest else latest
+    except FileNotFoundError:
+        return 0, 0, "absent", None
     except OSError:
         return 0, 0, "unreadable", None
     return n, unparsed, "read", latest
@@ -370,19 +398,21 @@ def compute_outward(fleet_cfg, window_days, now=None, fetch=None):
     """PURE given `fetch`. Returns {"m7_outward_artifact_floor": 1.0|0.0|None, "outward": raw}.
 
     1.0  at least one counted merge or receipt in the window.
-    0.0  every product repo was reachable, none had a counted merge, no receipt.
-    None not measured: no product repos or author allowlist configured, or a repo
-         was unreachable while nothing was counted (an empty window cannot be
-         certified from a partial read -- the alarm would fire on an outage)."""
+    0.0  every product repo was reachable, none had a counted merge, no receipt, and no
+         qualifying merge/receipt had an unparseable timestamp.
+    None not measured: no product repos or author allowlist configured, or a source
+         was unreadable/capped/unparseable while nothing was counted (an empty window
+         cannot be certified from a partial read -- the alarm would fire on an outage)."""
     now = now or datetime.now(timezone.utc)
     fetch = fetch or fetch_merged_light
+    window_days = _safe_window_days(window_days)
     cfg = fleet_cfg if isinstance(fleet_cfg, dict) else {}
-    repos = [str(r) for r in (cfg.get("product_repos") or [])]
-    authors = {str(a).lower() for a in (cfg.get("author_allowlist") or [])}
+    repos = [str(r).strip() for r in (cfg.get("product_repos") or []) if str(r).strip()]
+    authors = {str(a).strip().lower() for a in (cfg.get("author_allowlist") or []) if str(a).strip()}
     cutoff = now - timedelta(days=window_days)
     since_iso = cutoff.strftime("%Y-%m-%d")
     raw = {"window_days": window_days, "repos": repos, "per_repo": {}, "errors": [], "capped": [],
-           "merged_product_prs": 0, "door_receipts": 0, "door_receipts_status": None,
+           "unparsed_merges": 0, "merged_product_prs": 0, "door_receipts": 0, "door_receipts_status": None,
            "latest_artifact_at": None}
     latest = None
     if not repos or not authors:
@@ -399,12 +429,17 @@ def compute_outward(fleet_cfg, window_days, now=None, fetch=None):
             raw["capped"].append(repo)
         n = 0
         for pr in prs:
-            a = pr.get("author") or {}
-            if a.get("is_bot") or str(a.get("login", "")).lower() not in authors:
+            if not isinstance(pr, dict):
                 continue
-            if _within(pr.get("mergedAt"), cutoff, now):
+            a = pr.get("author") or {}
+            if a.get("is_bot") or str(a.get("login", "")).strip().lower() not in authors:
+                continue
+            d = _parse_ts(pr.get("mergedAt"))
+            if d is None:
+                raw["unparsed_merges"] += 1
+                continue
+            if cutoff <= d <= now:
                 n += 1
-                d = _parse_ts(pr.get("mergedAt"))
                 latest = d if latest is None or d > latest else latest
         raw["per_repo"][repo] = n
         raw["merged_product_prs"] += n
@@ -416,9 +451,9 @@ def compute_outward(fleet_cfg, window_days, now=None, fetch=None):
     # of the window, without any refresh; the main sensor ages it at read time.
     raw["latest_artifact_at"] = latest.isoformat(timespec="seconds") if latest else None
     # Proving SOMETHING shipped needs one hit; proving NOTHING did needs every source
-    # read. Recorded so a later reader can tell, when a positive ages out, whether
-    # this scan could have certified an empty window at all.
+    # read and every qualifying merge/receipt placed in time.
     raw["complete_negative_coverage"] = (not raw["errors"] and not raw["capped"]
+                                         and not raw["unparsed_merges"]
                                          and raw["door_receipts_status"] != "unreadable"
                                          and not raw["door_receipts_unparsed"])
     shipped = raw["merged_product_prs"] + raw["door_receipts"]
@@ -433,6 +468,9 @@ def compute_outward(fleet_cfg, window_days, now=None, fetch=None):
     elif raw["capped"]:
         v = None
         raw["note"] = "nothing counted but a product repo's query hit its cap — not certified either way"
+    elif raw["unparsed_merges"]:
+        v = None
+        raw["note"] = "nothing counted and some qualifying PR merges had invalid timestamps — not certified either way"
     elif raw["door_receipts_unparsed"]:
         v = None
         raw["note"] = "nothing counted and some receipt lines could not be placed in time — not certified either way"
@@ -456,14 +494,14 @@ def ship_config_signature(cfg, window):
     c = cfg if isinstance(cfg, dict) else {}
     tw = c.get("tier_weights") if isinstance(c.get("tier_weights"), dict) else {}
     return {
-        "window_days": float(window),
+        "window_days": float(_safe_window_days(window)),
         "repos": sorted({str(r).strip().lower() for r in (c.get("repos") or []) if str(r).strip()}),
         "author_allowlist": sorted({str(a).strip().lower() for a in (c.get("author_allowlist") or []) if str(a).strip()}),
         "product_paths": str(c.get("product_paths") or DEFAULT_PRODUCT),
         "meta_paths": str(c.get("meta_paths") or DEFAULT_META),
         "tier_weights": {
-            "green": float(tw.get("green", 1.0)),
-            "ungated": float(tw.get("ungated", 0.5)),
+            "green": _safe_pos_float(tw.get("green"), 1.0),
+            "ungated": _safe_pos_float(tw.get("ungated"), 0.5),
         },
     }
 
@@ -472,11 +510,12 @@ def outward_config_signature(fleet_cfg, window):
     """Canonical fleet outward config for m7 cache matching."""
     c = fleet_cfg if isinstance(fleet_cfg, dict) else {}
     dr = c.get("door_receipts")
+    dr_s = str(dr).strip() if dr is not None else ""
     return {
-        "window_days": float(window),
+        "window_days": float(_safe_window_days(window)),
         "product_repos": sorted({str(r).strip().lower() for r in (c.get("product_repos") or []) if str(r).strip()}),
         "author_allowlist": sorted({str(a).strip().lower() for a in (c.get("author_allowlist") or []) if str(a).strip()}),
-        "door_receipts": os.path.expanduser(str(dr)) if dr else os.path.expanduser(DEFAULT_DOOR_RECEIPTS),
+        "door_receipts": os.path.expanduser(dr_s) if dr_s else os.path.expanduser(DEFAULT_DOOR_RECEIPTS),
     }
 
 
@@ -497,17 +536,18 @@ def main():
     args = ap.parse_args()
 
     workspace = resolve_workspace(args.workspace)
+    ship_state_file = _repo_state_path("leverage_ship_state", workspace, "leverage-ship-state.json")
 
     fleet_cfg = {}
     if args.config_json:
         cfg = json.loads(args.config_json)
-        window = args.window if args.window is not None else 7
+        window = _safe_window_days(args.window)
     else:
-        setpoints_path = os.path.join(workspace, ".control", "leverage-setpoints.yaml")
+        setpoints_path = _repo_state_path("leverage_setpoints", workspace, "leverage-setpoints.yaml")
         setpoints = load_setpoints(setpoints_path)
         cfg = setpoints.get("ship_signal", {}) or {}
         fleet_cfg = setpoints.get("fleet", {}) or {}
-        window = args.window if args.window is not None else setpoints.get("window_days", 7)
+        window = _safe_window_days(args.window if args.window is not None else setpoints.get("window_days"))
     if args.fleet_config_json:
         fleet_cfg = json.loads(args.fleet_config_json)
 
@@ -516,7 +556,7 @@ def main():
 
     if args.throttle and not args.fixture and not args.outward_fixture:
         try:
-            with open(os.path.join(workspace, ".control", "leverage-ship-state.json")) as f:
+            with open(ship_state_file) as f:
                 st = json.load(f)
             if (time.time() - datetime.fromisoformat(st["measured_at"]).timestamp() < args.throttle
                     and st.get("ship_config") == ship_sig
@@ -560,7 +600,7 @@ def main():
     }
 
     if not args.no_store and not args.fixture and not args.outward_fixture:
-        state_file = os.path.join(workspace, ".control", "leverage-ship-state.json")
+        state_file = ship_state_file
         d = os.path.dirname(state_file)
         os.makedirs(d, exist_ok=True)
         # atomic swap — the background SessionStart writer must never expose a truncated

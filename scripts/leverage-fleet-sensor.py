@@ -61,6 +61,7 @@ import argparse
 import functools
 import glob
 import json
+import math
 import os
 import re
 import statistics
@@ -74,16 +75,49 @@ STATE_NAME = "leverage-fleet-state.json"
 DEFAULT_CAP_MIN = 30.0
 EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 PATCH_FILE_RE = re.compile(r"\*\*\* (?:Update|Add|Delete) File: ([^\n\\\"]+)")
-# A shell redirect target: `> f`, `>> f` after whitespace or a command separator
-# (so `->`, `=>` and `a>b` in heredoc bodies do not match), never `2>&1` or `>&2`.
-# Only path-like targets count (a `/` or a file extension), so `x > 0` in an inline
-# script is not a write.
-REDIRECT_RE = re.compile(r"(?:^|[\s;&|])>>?\s*([^\s;&|<>()'\"]+)")
-TEE_RE = re.compile(r"\btee\s+(?:-a\s+)?([^\s;&|<>()'\"]+)")
-PATHLIKE_RE = re.compile(r"/|\.[A-Za-z][A-Za-z0-9]{0,7}$")  # `> 0.5` is a comparison
-# `sed -i[SUFFIX] [-e] SCRIPT FILE` — the FILE is the write target.
+_SHELL_TARGET = r"""(?:"([^"\n]+)"|'([^'\n]+)'|([^\s;&|<>()'"]+))"""
+# A shell redirect target: `> f`, `>> f`, `1> f`, `1>> f` (quoted or unquoted) after
+# whitespace or a command separator (so `->`, `=>` and `a>b` do not match), never `2>&1`.
+REDIRECT_RE = re.compile(r"(?:^|[\s;&|])(?:1)?>>?\s*" + _SHELL_TARGET)
+# `tee [-a] [--] FILE` (quoted or unquoted).
+TEE_RE = re.compile(r"\btee(?:\s+(?:-[A-Za-z]+|--))*\s+" + _SHELL_TARGET)
+# GNU `sed -i[SUFFIX] SCRIPT FILE` and macOS BSD `sed -i '' SCRIPT FILE` (quoted or unquoted).
 SED_INPLACE_RE = re.compile(
-    r"\bsed\s+(?:-[A-Za-z]+\s+)*-i\S*\s+(?:-e\s+)?(?:'[^']*'|\"[^\"]*\"|\S+)\s+([^\s;&|<>()'\"]+)")
+    r"""\bsed\s+(?:-[A-Za-z]+\s+)*-i(?:\s*(?:''|"")|\S*)\s+(?:-e\s+)?(?:'[^']*'|"[^"]*"|\S+)\s+"""
+    + _SHELL_TARGET
+)
+_PURE_NUMBER_RE = re.compile(r"^\d+(?:\.\d+)?$")
+_FILENAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
+PATHLIKE_RE = re.compile(r"/|\.[A-Za-z][A-Za-z0-9]{0,7}$")  # `> 0.5` is a comparison
+
+
+def _safe_window_days(val, default=7):
+    if isinstance(val, (int, float)) and not isinstance(val, bool) and math.isfinite(val) and val > 0:
+        return val
+    return default
+
+
+def _safe_pos_float(val, default):
+    if isinstance(val, (int, float)) and not isinstance(val, bool) and math.isfinite(val) and val > 0:
+        return float(val)
+    return float(default)
+
+
+def _extract_shell_targets(pattern, cmd):
+    out = []
+    for m in pattern.finditer(cmd):
+        tgt = next((g for g in m.groups() if g is not None), "")
+        if tgt:
+            out.append(tgt)
+    return out
+
+
+def _is_write_target(tgt):
+    if not tgt or tgt.startswith(("/dev/", "&", "$", "-")):
+        return False
+    if _PURE_NUMBER_RE.match(tgt):
+        return False
+    return bool(PATHLIKE_RE.search(tgt) or _FILENAME_RE.match(tgt))
 
 
 def resolve_workspace(arg=None):
@@ -145,7 +179,7 @@ def load_config(workspace):
         print(f"[fleet-sensor] WARN could not load setpoints ({path}): {e}", file=sys.stderr)
         return {}, 7
     cfg = sp.get("fleet") if isinstance(sp, dict) else None
-    window = sp.get("window_days", 7) if isinstance(sp, dict) else 7
+    window = _safe_window_days(sp.get("window_days") if isinstance(sp, dict) else None)
     return (cfg if isinstance(cfg, dict) else {}), window
 
 
@@ -158,19 +192,47 @@ def _ts(s):
         return None
 
 
+def _ancestor_tracks_missing(anc, first_missing):
+    """True only when `anc` tracks non-submodule files under `first_missing` in git.
+    Prevents a vanished nested clone inside a meta workspace from falling through
+    to the parent meta repo."""
+    try:
+        rel = os.path.relpath(first_missing, anc)
+        if not rel or rel.startswith(".."):
+            return False
+        r = subprocess.run(["git", "-C", anc, "ls-files", "-s", "--", rel],
+                           capture_output=True, text=True, timeout=5)
+        if r.returncode != 0:
+            return False
+        for line in r.stdout.splitlines():
+            parts = line.split()
+            if parts and parts[0] != "160000":
+                return True
+        return False
+    except Exception:
+        return False
+
+
 @functools.lru_cache(maxsize=None)
 def repo_of_dir(d):
-    """owner/name of the GitHub repo containing directory d, else None. A missing
-    directory resolves through its nearest existing ancestor."""
+    """owner/name of the GitHub repo containing directory d, else None. When `d`
+    no longer exists on disk, only attribute to an existing ancestor repo if that
+    ancestor actually tracks non-submodule files under the missing path — otherwise
+    return None so a vanished nested product clone never resolves as meta."""
     if not d:
         return None
     d = os.path.abspath(d)
-    while d and d != "/" and not os.path.isdir(d):
-        d = os.path.dirname(d)
-    if not d or d == "/":
+    first_missing = None
+    cur = d
+    while cur and cur != "/" and not os.path.isdir(cur):
+        first_missing = cur
+        cur = os.path.dirname(cur)
+    if not cur or cur == "/":
+        return None
+    if first_missing is not None and not _ancestor_tracks_missing(cur, first_missing):
         return None
     try:
-        r = subprocess.run(["git", "-C", d, "remote", "get-url", "origin"],
+        r = subprocess.run(["git", "-C", cur, "remote", "get-url", "origin"],
                            capture_output=True, text=True, timeout=5)
     except Exception:
         return None
@@ -216,16 +278,20 @@ def edit_repo(p, cwd=None):
 
 
 def shell_write_repos(cmd, cwd):
-    """Repos a shell command writes into: the targets of redirects, `tee` and
-    `sed -i`, resolved as paths. A target that starts with `$` cannot be resolved
-    without running the shell (it is usually a temp dir) and is skipped rather than
-    guessed onto the working directory. Targets whose repo cannot be resolved are
-    kept as `?<path>` via edit_repo so vanished-clone writes cannot read as meta-only
-    (scratch/harness paths are filtered in measure()). Heuristic by design; the number
-    of sessions it decides is reported separately in raw."""
+    """Repos a shell command writes into: the targets of redirects (`>`, `>>`, `1>`,
+    `1>>`), `tee` (including `--`), and `sed -i` (GNU & macOS BSD `-i ''`), quoted or
+    unquoted. Targets starting with `$` cannot be resolved without running the shell
+    and are skipped. Targets whose repo cannot be resolved (including bare filenames
+    like `README` without cwd or vanished nested clones) are kept as `?<path>` via
+    edit_repo so they cannot silently read as meta-only."""
     out = set()
-    for tgt in REDIRECT_RE.findall(cmd) + TEE_RE.findall(cmd) + SED_INPLACE_RE.findall(cmd):
-        if tgt.startswith(("/dev/", "&", "$")) or not PATHLIKE_RE.search(tgt):
+    targets = (
+        _extract_shell_targets(REDIRECT_RE, cmd)
+        + _extract_shell_targets(TEE_RE, cmd)
+        + _extract_shell_targets(SED_INPLACE_RE, cmd)
+    )
+    for tgt in targets:
+        if not _is_write_target(tgt):
             continue
         r = edit_repo(tgt, cwd)
         if r:
@@ -417,13 +483,56 @@ def _pct(xs, q):
 
 # ── measurement ───────────────────────────────────────────────────────────────
 
+def _collect_jsonl(root, recursive):
+    """Collect *.jsonl files under `root` and count unreadable directories/entries.
+    Missing root (FileNotFoundError) is benign (0 files, 0 errors); permission or
+    other OSErrors count as unreadable so m6 fails closed."""
+    if not root:
+        return [], 0
+    files, errors = [], 0
+    if recursive:
+        try:
+            os.listdir(root)
+        except FileNotFoundError:
+            return [], 0
+        except OSError:
+            return [], 1
+
+        def _on_err(_e):
+            nonlocal errors
+            errors += 1
+
+        for dirpath, _dirnames, filenames in os.walk(root, onerror=_on_err):
+            for fn in filenames:
+                if fn.endswith(".jsonl"):
+                    files.append(os.path.join(dirpath, fn))
+        return files, errors
+    try:
+        entries = list(os.scandir(root))
+    except FileNotFoundError:
+        return [], 0
+    except OSError:
+        return [], 1
+    for e in entries:
+        try:
+            if not e.is_dir():
+                continue
+            for sub in os.scandir(e.path):
+                if sub.name.endswith(".jsonl") and sub.is_file():
+                    files.append(sub.path)
+        except OSError:
+            errors += 1
+    return files, errors
+
+
 def measure(cfg, window_days, claude_root, codex_root, now=None):
     now = now or time.time()
+    window_days = _safe_window_days(window_days)
     since = now - float(window_days) * 86400
-    cap = float(cfg.get("wait_cap_minutes") or DEFAULT_CAP_MIN) * 60
-    product = {str(r).lower() for r in (cfg.get("product_repos") or [])}
-    meta = {str(r).lower() for r in (cfg.get("meta_repos") or [])}
-    external = {str(r).lower() for r in (cfg.get("external_repos") or [])}
+    cap = _safe_pos_float(cfg.get("wait_cap_minutes"), DEFAULT_CAP_MIN) * 60
+    product = {str(r).strip().lower() for r in (cfg.get("product_repos") or []) if str(r).strip()}
+    meta = {str(r).strip().lower() for r in (cfg.get("meta_repos") or []) if str(r).strip()}
+    external = {str(r).strip().lower() for r in (cfg.get("external_repos") or []) if str(r).strip()}
     # Sessions started in a scratch directory are throwaway runs (scripted evals,
     # dogfood fixtures), not work: excluded from both m6 and the wait metrics.
     scratch_prefixes = tuple(str(x).rstrip("/") for x in (cfg.get("scratch_prefixes", ["/tmp", "/private/tmp"]) or ()))
@@ -434,11 +543,16 @@ def measure(cfg, window_days, claude_root, codex_root, now=None):
         os.path.join(home, d) for d in (".claude", ".codex", ".agents", ".config", ".cache"))
     under = lambda path, prefixes: any(path == x or path.startswith(x + "/") for x in prefixes)
 
+    unreadable = {"claude": 0, "codex": 0}
     files = []
     if claude_root:
-        files += [("claude", f) for f in glob.glob(os.path.join(claude_root, "*", "*.jsonl"))]
+        cf, cerr = _collect_jsonl(claude_root, recursive=False)
+        files += [("claude", f) for f in cf]
+        unreadable["claude"] += cerr
     if codex_root:
-        files += [("codex", f) for f in glob.glob(os.path.join(codex_root, "**", "*.jsonl"), recursive=True)]
+        xf, xerr = _collect_jsonl(codex_root, recursive=True)
+        files += [("codex", f) for f in xf]
+        unreadable["codex"] += xerr
     # Which file claims a shared line or turn (the two harnesses dedupe separately,
     # so their orders are independent):
     #   Claude newest first -- a resumed copy repeats the earlier lines and continues
@@ -460,6 +574,7 @@ def measure(cfg, window_days, claude_root, codex_root, now=None):
     for h, f in files:
         s = read_claude(f, seen_uuids) if h == "claude" else read_codex(f, seen_turns)
         if s is None:
+            unreadable[h] += 1
             continue
         read[h] += 1
         tt = [x for x in turns(s["events"]) if x[0] >= since]
@@ -531,7 +646,10 @@ def measure(cfg, window_days, claude_root, codex_root, now=None):
 
     working = meta_s + product_s
     configured = bool(product and meta)
-    m6 = round(meta_s / working, 4) if (configured and working) else None
+    unreadable_total = unreadable["claude"] + unreadable["codex"]
+    # An unreadable transcript could hold product edits: fail closed on m6 rather
+    # than inflating meta share to 1.0 on partial transcript coverage.
+    m6 = round(meta_s / working, 4) if (configured and working and unreadable_total == 0) else None
     w1 = round(wait_cap / (wait_cap + active), 4) if (gaps and active > 0) else None
     p50 = _pct(gaps, 0.5)
     w2 = round(p50 / 60, 2) if p50 is not None else None
@@ -539,6 +657,8 @@ def measure(cfg, window_days, claude_root, codex_root, now=None):
     notes = []
     if not configured:
         notes.append("fleet.product_repos / fleet.meta_repos not both configured — m6 not measured at fleet scope")
+    if unreadable_total > 0:
+        notes.append(f"{unreadable_total} transcript(s) unreadable — m6 failed closed to None")
     return {
         "metrics": {
             "m6_meta_work_session_ratio": m6,
@@ -548,6 +668,7 @@ def measure(cfg, window_days, claude_root, codex_root, now=None):
         },
         "raw": {
             "transcripts_read": read,
+            "unreadable_transcripts": unreadable,
             "editing_sessions": editing, "meta_sessions": meta_s, "product_sessions": product_s,
             "external_sessions": external_s,
             "unclassified_sessions": unclassified,
@@ -557,7 +678,7 @@ def measure(cfg, window_days, claude_root, codex_root, now=None):
             # sessions; when the two disagree on which side of the target m6 sits,
             # the reading is not robust and should not drive anything.
             "m6_tool_edits_only": (round(tool_meta / (tool_meta + tool_product), 4)
-                                   if configured and (tool_meta + tool_product) else None),
+                                   if configured and (tool_meta + tool_product) and unreadable_total == 0 else None),
             "interactive_sessions": len(interactive), "human_replies": len(gaps),
             "active_hours": round(active / 3600, 2),
             "wait_capped_hours": round(wait_cap / 3600, 2),
@@ -619,12 +740,12 @@ def fleet_config_signature(cfg, window):
     if sp is None:
         sp = []
     return {
-        "window_days": float(window),
+        "window_days": float(_safe_window_days(window)),
         "product_repos": sorted({str(r).strip().lower() for r in (c.get("product_repos") or []) if str(r).strip()}),
         "meta_repos": sorted({str(r).strip().lower() for r in (c.get("meta_repos") or []) if str(r).strip()}),
         "external_repos": sorted({str(r).strip().lower() for r in (c.get("external_repos") or []) if str(r).strip()}),
         "scratch_prefixes": sorted({str(x).rstrip("/") for x in sp if str(x).strip()}),
-        "wait_cap_minutes": float(c.get("wait_cap_minutes") or DEFAULT_CAP_MIN),
+        "wait_cap_minutes": _safe_pos_float(c.get("wait_cap_minutes"), DEFAULT_CAP_MIN),
     }
 
 
@@ -649,7 +770,9 @@ def main():
     else:
         cfg, window = load_config(workspace)
     if args.window is not None:
-        window = args.window
+        window = _safe_window_days(args.window)
+    else:
+        window = _safe_window_days(window)
 
     config_sig = fleet_config_signature(cfg, window)
 

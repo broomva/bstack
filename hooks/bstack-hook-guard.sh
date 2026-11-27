@@ -33,6 +33,6 @@ WORKSPACE="${BSTACK_WORKSPACE:-${BROOMVA_WORKSPACE:-$(git rev-parse --show-tople
 
 # Not a bstack-governed workspace — no-op (exit 0, no output). The wrapped hooks are
 # SessionStart/Stop only, so "no opinion" is the correct neutral result.
-[ -d "$WORKSPACE/.control" ] || exit 0
+[ -d "$WORKSPACE/.control" ] || [ -d "$WORKSPACE/.broomva" ] || exit 0
 
 exec "$@"

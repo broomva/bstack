@@ -338,27 +338,35 @@ eq "a relative patch with no working directory is unresolved, not dropped" "$(ge
 eq "so the session is unclassified" "$(get "['raw']['unclassified_sessions']")" "1"
 
 echo "== round 5: unresolved shell writes are kept, not dropped =="
+# Place default-scratch test repo outside /tmp so Ubuntu CI (where mktemp -d uses /tmp)
+# does not exclude the test meta repo's cwd under default scratch_prefixes=["/tmp","/private/tmp"].
+NONTMP_ROOT="$REPO/.tmp-fleet-test-$$"
+mkdir -p "$NONTMP_ROOT"
+trap 'rm -rf "$TMP" "$NONTMP_ROOT"' EXIT
+NONTMP_META="$NONTMP_ROOT/meta"
+git init -q "$NONTMP_META"
+git -C "$NONTMP_META" remote add origin "https://github.com/acme/meta.git"
 mkdir -p "$TMP/r5-shell/p" "$TMP/r5-shell-scratch/p"
-python3 - "$TMP/r5-shell/p/s.jsonl" "$TMP/r5-shell-scratch/p/s.jsonl" "$TMP/meta" "$TMP/gone-product" <<'PY'
+python3 - "$TMP/r5-shell/p/s.jsonl" "$TMP/r5-shell-scratch/p/s.jsonl" "$TMP/meta" "$TMP/gone-product" "$NONTMP_META" <<'PY'
 import json, sys, time
 from datetime import datetime, timezone
-p_gone, p_tmp, meta, gone = sys.argv[1:5]
+p_gone, p_tmp, meta, gone, nontmp_meta = sys.argv[1:6]
 t0 = datetime.fromtimestamp(time.time() - 600, timezone.utc).isoformat()
 t1 = datetime.fromtimestamp(time.time() - 540, timezone.utc).isoformat()
-def write_s(path, cmd):
+def write_s(path, cwd, cmd):
     rows = [
-        {"type": "assistant", "timestamp": t0, "cwd": meta, "message": {"content": [
-            {"type": "tool_use", "name": "Edit", "input": {"file_path": f"{meta}/a.md"}},
+        {"type": "assistant", "timestamp": t0, "cwd": cwd, "message": {"content": [
+            {"type": "tool_use", "name": "Edit", "input": {"file_path": f"{cwd}/a.md"}},
         ]}},
-        {"type": "assistant", "timestamp": t1, "cwd": meta, "message": {"content": [
+        {"type": "assistant", "timestamp": t1, "cwd": cwd, "message": {"content": [
             {"type": "tool_use", "name": "Bash", "input": {"command": cmd}},
         ]}},
     ]
     with open(path, "w") as f:
         for r in rows:
             f.write(json.dumps(r) + "\n")
-write_s(p_gone, f"echo hi > {gone}/src/app.py")
-write_s(p_tmp, "echo hi > /tmp/throwaway.log")
+write_s(p_gone, meta, f"echo hi > {gone}/src/app.py")
+write_s(p_tmp, nontmp_meta, "echo hi > /tmp/throwaway.log")
 PY
 J="$(run "$TMP/r5-shell" "$EMPTY" "$CFG")"
 eq "meta Edit + shell redirect into vanished clone is not meta-only" "$(get "['raw']['meta_sessions']")" "0"
@@ -378,6 +386,30 @@ print(sorted(f.shell_write_repos("echo hi > out.py", None)))
 PY
 )"
 eq "relative shell write with no cwd is unresolved" "$R" "['?out.py']"
+
+echo "== round 6: shell write variants, vanished nested clone, unreadable transcript =="
+R6_SHELL="$(python3 -I - "$FLEET" "$TMP/meta" "$TMP/gone-product" <<'PY'
+import importlib.util, sys
+sp = importlib.util.spec_from_file_location("f", sys.argv[1]); m = importlib.util.module_from_spec(sp); sp.loader.exec_module(m)
+meta, gone = sys.argv[2], sys.argv[3]
+c1 = m.shell_write_repos(f'echo hi 1> "{gone}/a.py"', meta)
+c2 = m.shell_write_repos(f"echo hi | tee -- '{gone}/b.py'", meta)
+c3 = m.shell_write_repos(f"sed -i '' 's/a/b/' \"{gone}/c.py\"", meta)
+c4 = m.shell_write_repos("echo hi > README", None)
+c5 = m.edit_repo(f"{meta}/vanished-nested-prod/src/app.py", meta)
+print(len(c1), len(c2), len(c3), sorted(c4), c5.startswith("?"))
+PY
+)"
+eq "1>, quoted redirects, tee --, macOS sed -i '', bare README, and vanished nested clone all caught" "$R6_SHELL" "1 1 1 ['?README'] True"
+
+mkdir -p "$TMP/r6-unreadable/p"
+cp "$TMP/r5-shell-scratch/p/s.jsonl" "$TMP/r6-unreadable/p/meta.jsonl"
+echo '{}' > "$TMP/r6-unreadable/p/secret.jsonl"
+chmod 000 "$TMP/r6-unreadable/p/secret.jsonl"
+J="$(run "$TMP/r6-unreadable" "$EMPTY" "$CFG_DEF")"
+chmod 644 "$TMP/r6-unreadable/p/secret.jsonl"
+eq "unreadable transcript fails closed on m6 -> None" "$(get "['metrics']['m6_meta_work_session_ratio']")" "None"
+eq "unreadable transcript count recorded" "$(get "['raw']['unreadable_transcripts']['claude']")" "1"
 
 echo "== state file: written atomically, no transcript content =="
 # shellcheck source=scripts/lib/broomva-paths.sh

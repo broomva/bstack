@@ -157,13 +157,16 @@ eq "split into 2 PRs → 2.0 (inflation, BRO-1709 normalizes)" "$(rawget "$F2" "
 
 echo "== main sensor SHADOW merge: non-actuating, never worst =="
 mkdir -p "$TMP/.control"
-python3 - "$TMP" <<'PY'
-import json,os,datetime
-tmp=os.sys.argv[1]
-now=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
-json.dump({"measured_at":now,"window_days":7,"shadow":True,"gh_ok":True,"repos":["x"],
-  "m6s_meta_work_ship_ratio":0.42,"raw":{"pr_count_counted":3}},
-  open(os.path.join(tmp,".control","leverage-ship-state.json"),"w"))
+python3 - "$TMP" "$SHIP" <<'PY'
+import importlib.util, json, os, sys, datetime
+tmp, ship_py = sys.argv[1], sys.argv[2]
+spec = importlib.util.spec_from_file_location("ship", ship_py)
+sm = importlib.util.module_from_spec(spec); spec.loader.exec_module(sm)
+now = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+json.dump({"measured_at": now, "window_days": 7, "shadow": True, "gh_ok": True, "repos": ["x"],
+  "ship_config": sm.ship_config_signature({}, 7),
+  "m6s_meta_work_ship_ratio": 0.42, "raw": {"pr_count_counted": 3}},
+  open(os.path.join(tmp, ".control", "leverage-ship-state.json"), "w"))
 PY
 OUT=$(python3 "$SENSOR" --workspace "$TMP" --window 7 --json --no-store 2>/dev/null)
 GOT=$(echo "$OUT" | python3 -c 'import json,sys;print(json.load(sys.stdin)["metrics"].get("m6s_meta_work_ship_ratio"))')
