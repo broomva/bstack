@@ -22,7 +22,8 @@ bstack.
   counts them in its output. No row is certified by a real harness session.
 - **Bootstrap phase 3.7.** A policy file from before this version gets its `gates.hard`
   list (`scripts/ensure-hard-gates.py`: one inserted key, the `gates:` line and its comment
-  kept, written through a temporary file). Then `scripts/rules-registry.sh init` calls the
+  kept, line endings kept, written through a temporary file; a file it cannot edit that
+  way is left alone with the reason). Then `scripts/rules-registry.sh init` calls the
   skill's `correct.py init --pack references/rules-pack.yaml`. A workspace with no registry
   gets one (the skill's starter rule plus the pack) and it is replayed. A workspace that
   has one gets nothing written, is replayed, and is told which rows of the pack it lacks
@@ -46,8 +47,9 @@ bstack.
   codes: 0 no row failed, 1 a row did not hold, 2 could not run, 3 skill missing or too
   old, 4 no registry, 5 out of time, 6 the registry lacks part of bstack's pack.
 - **`scripts/lib/run-with-budget.py`** bounds a command: its own process group, SIGTERM
-  then SIGKILL, and a temporary directory of its own that is removed when it ends. A
-  process that moves itself to another session is not stopped.
+  then SIGKILL, and a temporary directory of its own that is removed when it ends. When
+  the runner is itself stopped (Ctrl-C, a closed terminal) it stops the command the same
+  way first. A process that moves itself to another session is not stopped.
 - **`correct` joins the required roster** (`references/companion-skills.yaml`), both plugin
   marketplaces (`./governance/correct`), and the install check in `SKILL.md`.
 - **fix: the control gate is registered for `MultiEdit`.** The hook has handled the
@@ -58,6 +60,9 @@ bstack.
 - **fix: the control gate reads the policy file every other reader prefers** (the new
   governance folder's, else the old one's). It read only the old folder's, so with a
   policy in each it enforced one file while the registry accounted for the other.
+  This reaches a workspace when bootstrap writes `scripts/control-gate-hook.sh` there.
+  A workspace that already has that file keeps its copy; bootstrap now says so when the
+  copy differs from this version's, and the fix arrives only when the copy is replaced.
 - **`gates.hard: []` in the policy template.** The rule runner reads that list.
 - **Limits.**
   - With the bstack plugin enabled, six hooks come from the plugin's `hooks.json`, which
@@ -88,7 +93,8 @@ bstack.
   allow-all gate fails all five of the pack's hook rows. Also covered: a 0.52 policy
   brought up; a policy in each governance folder; a registry that differs from the pack; a
   registry named with `--registry`; a skill that is missing, too old, or hangs; a budget
-  that is not a finite number; no temporary file; no `HOME`. 108 assertions, counted.
+  that is not a finite number; a command stopped part-way; no temporary file; no `HOME`.
+  112 assertions, counted.
   `tests/plugin-preference.test.sh` now expects the gate under four matchers.
 
 ## 0.52.2 — 2026-11-23

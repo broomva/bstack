@@ -43,9 +43,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # The budget is the outermost thing: the script runs itself again inside it, so everything
 # below (finding the skill, reading the workspace, the skill's run) is inside the limit, and
 # a budget that is not a number stops here, before anything is read or written.
-if [ -n "${BSTACK_RULES_BUDGET_S:-}" ] && [ -z "${BSTACK_RULES_IN_BUDGET:-}" ]; then
-    BSTACK_RULES_IN_BUDGET=1 exec python3 -I "$SCRIPT_DIR/lib/run-with-budget.py" "$BSTACK_RULES_BUDGET_S" \
-        bash "${BASH_SOURCE[0]}" "$@"
+if [ -n "${BSTACK_RULES_BUDGET_S:-}" ] && [ "${BSTACK_RULES_IN_BUDGET:-}" != "$PPID:$BSTACK_RULES_BUDGET_S" ]; then
+    # The marker names the process that set it. exec keeps the pid, so the runner has this
+    # script's pid, and the runner's child is this script again with that pid as its parent:
+    # only there does the marker match. A value left in a caller's environment does not
+    # switch the budget off.
+    BSTACK_RULES_IN_BUDGET="$$:$BSTACK_RULES_BUDGET_S" exec python3 -I "$SCRIPT_DIR/lib/run-with-budget.py" \
+        "$BSTACK_RULES_BUDGET_S" bash "${BASH_SOURCE[0]}" "$@"
 fi
 
 BSTACK_REPO="$(cd "$SCRIPT_DIR/.." && pwd)"

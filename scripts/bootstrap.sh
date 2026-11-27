@@ -325,7 +325,13 @@ for hook in "${WORKSPACE_HOOKS[@]}"; do
         continue
     fi
     if [ -f "$dst" ]; then
-        echo "  [keep] scripts/$hook (existing — preserved)"
+        if cmp -s "$src" "$dst"; then
+            echo "  [keep] scripts/$hook (existing — preserved)"
+        else
+            # Never replaced: it may carry the workspace's own changes. Said, because a fix to
+            # the hook in this version does not reach a workspace that keeps an older copy.
+            echo "  [keep] scripts/$hook (existing — preserved; it differs from this bstack version's copy)"
+        fi
     elif cp "$src" "$dst" 2>/dev/null && chmod +x "$dst" 2>/dev/null; then
         echo "  [deploy] scripts/$hook ← bstack/scripts/$hook"
         deployed_hooks=$((deployed_hooks + 1))

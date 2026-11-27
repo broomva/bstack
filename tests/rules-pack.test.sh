@@ -16,7 +16,7 @@
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-EXPECTED_ASSERTIONS=108
+EXPECTED_ASSERTIONS=112
 PASS=0; FAIL=0; FAILED=()
 pass() { echo "  [ok] $1"; PASS=$((PASS + 1)); }
 fail() { echo "  [FAIL] $1"; FAIL=$((FAIL + 1)); FAILED+=("$1"); }
@@ -317,6 +317,8 @@ cp "$TMP/gate.orig" "$GATE"
 # A replay that runs out of time is neither: doctor says so and counts nothing.
 replay "$WS" BSTACK_RULES_BUDGET_S=0.2
 is "a replay cut off by its budget exits 5" test "$RC" -eq 5
+replay "$WS" BSTACK_RULES_BUDGET_S=0.2 BSTACK_RULES_IN_BUDGET=1
+is "a marker left in the caller's environment does not switch the budget off" test "$RC" -eq 5
 doctor "$WS" BSTACK_DOCTOR_RULES_BUDGET_S=0.2 -- --quiet
 is "doctor reports an unfinished replay, under --quiet too" has "$OUT" "[info] rule registry: the replay did not finish in 0.2 s"
 is "and counts it as neither a pass nor a gap" test "$(grep -cE '\[(ok|gap)\] rule registry' "$OUT")" = 0
@@ -370,7 +372,9 @@ RC=0
 HOME="$HOME_PLAIN" BSTACK_CORRECT="$CORRECT" BROOMVA_WORKSPACE="$STALE" bash "$REPO/scripts/rules-registry.sh" init >"$OUT" 2>&1 || RC=$?
 is "a registry whose row differs from the pack replays and exits 6" test "$RC" -eq 6
 is "and the row is named" has "$OUT" "row(s) that differ from the pack: no-catastrophic-delete"
+printf '# a line the workspace added\n' >>"$STALE/scripts/control-gate-hook.sh"
 is "bootstrap passes that on" test "$(boot "$STALE"; echo $?)$(has "$STALE.log" "lacks part of bstack's pack"; echo $?)" = 00
+is "bootstrap keeps a gate script the workspace changed, and says it differs" test "$(has "$STALE.log" "[keep] scripts/control-gate-hook.sh (existing — preserved; it differs from this bstack version's copy)"; echo $?)$(tail -1 "$STALE/scripts/control-gate-hook.sh")" = "0# a line the workspace added"
 RC=0
 HOME="$HOME_PLAIN" BSTACK_CORRECT="$CORRECT" BROOMVA_WORKSPACE="$STALE" bash "$REPO/scripts/rules-registry.sh" verify >"$OUT" 2>&1 || RC=$?
 is "verify says the same and exits 6" test "$RC" -eq 6 -a "$(grep -c 'row(s) that differ from the pack: no-catastrophic-delete' "$OUT")" = 1
@@ -415,6 +419,10 @@ is "the migration adds the list and keeps the operator's comment and keys" test 
 cp "$MIG/policy.yaml" "$TMP/migrated-once.yaml"
 python3 -I "$REPO/scripts/ensure-hard-gates.py" "$MIG/policy.yaml" >"$OUT" 2>&1; RC=$?
 is "a second run changes nothing" test "$RC" -eq 0 -a "$(cmp -s "$MIG/policy.yaml" "$TMP/migrated-once.yaml"; echo $?)" = 0
+printf 'version: 1\r\ngates:\r\n  governed: []\r\n' >"$MIG/crlf.yaml"; cp "$MIG/crlf.yaml" "$TMP/crlf.orig"
+python3 -I "$REPO/scripts/ensure-hard-gates.py" "$MIG/crlf.yaml" >"$OUT" 2>&1; RC=$?
+is "a policy with CRLF line endings is left byte for byte, with the reason (exit 3)" test "$RC" -eq 3 -a "$(cmp -s "$MIG/crlf.yaml" "$TMP/crlf.orig"; echo $?)" = 0
+rm -f "$MIG/crlf.yaml"
 cp "$TMP/old-policy.yaml" "$MIG/policy.yaml"; chmod 555 "$MIG"
 python3 -I "$REPO/scripts/ensure-hard-gates.py" "$MIG/policy.yaml" >"$OUT" 2>&1; RC=$?
 chmod 755 "$MIG"
@@ -518,6 +526,22 @@ is "and it did not wait for the skill" test "$(( $(date +%s) - started ))" -lt 2
 mkdir -p "$TMP/scratch-tmp"
 replay "$WS" BSTACK_RULES_BUDGET_S=1 TMPDIR="$TMP/scratch-tmp"
 is "a replay stopped by its budget leaves nothing in the temporary directory" test "$RC" -eq 5 -a -z "$(ls -A "$TMP/scratch-tmp")"
+# Stopping the command (Ctrl-C, a closed terminal) stops the replay too: it runs in a session
+# of its own, so without the runner passing the stop on it would go on in the background.
+( exec env HOME="$HOME_PLAIN" BSTACK_CORRECT="$CORRECT" BROOMVA_WORKSPACE="$WS" BSTACK_RULES_BUDGET_S=300 TMPDIR="$TMP/scratch-tmp" \
+    bash "$REPO/scripts/rules-registry.sh" check >"$OUT" 2>&1 ) &
+runner=$!
+python3 -c 'import time; time.sleep(3)'
+kill -TERM "$runner" 2>/dev/null
+wait "$runner"; RC=$?
+left=1
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    # pgrep leaves itself out; a grep over ps would count its own command line.
+    left="$(pgrep -f -- "check --root $WS" | wc -l | tr -d ' ')"
+    [ "$left" = 0 ] && break
+    python3 -c 'import time; time.sleep(1)'
+done
+is "a command that is stopped stops its replay and removes its scratch directory" test "$RC" -eq 143 -a "$left" = 0 -a -z "$(ls -A "$TMP/scratch-tmp")"
 # No temporary file to capture into: the phase still runs and bootstrap still finishes.
 # A `mktemp` that fails is put first on the PATH, because what an unusable TMPDIR does to
 # the real one differs by system (macOS falls back to another directory, Linux fails).

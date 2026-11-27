@@ -39,7 +39,7 @@ def main(argv: list[str]) -> int:
     if len(argv) != 2:
         print(__doc__, file=sys.stderr)
         return 2
-    path = argv[1]
+    path = os.path.realpath(argv[1])  # a link is followed: the file is replaced, not the link
     if site.getusersitepackages() not in sys.path:
         sys.path.append(site.getusersitepackages())
     try:
@@ -47,7 +47,9 @@ def main(argv: list[str]) -> int:
     except ImportError:
         return left_alone(path, "PyYAML is not installed, so the file was not read")
     try:
-        with open(path, encoding="utf-8") as handle:
+        # newline="": line endings are read and written as they are. A file with CRLF endings
+        # does not match the `gates:` line below and is left alone, not converted.
+        with open(path, encoding="utf-8", newline="") as handle:
             text = handle.read()
     except (OSError, UnicodeDecodeError) as exc:
         print(f"  {path}: cannot be read ({exc})", file=sys.stderr)
@@ -75,7 +77,7 @@ def main(argv: list[str]) -> int:
     try:
         mode = os.stat(path).st_mode & 0o777
         fd, tmp = tempfile.mkstemp(dir=folder, prefix=f".{os.path.basename(path)}.")
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
             handle.write(after_text)
             handle.flush()
             os.fsync(handle.fileno())
