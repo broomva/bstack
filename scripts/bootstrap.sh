@@ -13,7 +13,7 @@
 #   4. bstack doctor --quiet to verify the primitive contract + loop closure (§23).
 #
 # Env escapes: BSTACK_SKIP_SKILLS=1 (skip Phase 1), BSTACK_SKIP_RCS=1 (skip Phase 3.5),
-# BSTACK_SKIP_RULES=1 (skip Phase 3.7 and doctor §34).
+# BSTACK_SKIP_RULES=1 (skip Phase 3.7).
 set -e
 
 AGENTS_DIR="${HOME}/.agents/skills"
@@ -367,18 +367,18 @@ else
   fi
 fi
 
-# ─── Phase 3.7: rule registry (replay the hooks wired above) ───────────────
-# Phases 3 and 3.5 install hooks; this phase checks, in this workspace, that they refuse
-# what their rules say. The `correct` skill keeps a rule registry in the governance folder
-# and replays each rule against the hook entry the harness would run. bstack ships the
-# rows for its own hooks (references/rules-pack.yaml). A workspace with no registry gets
-# one and it is replayed; a workspace that has one is replayed and left unchanged, and is
-# told which of bstack's rows it lacks.
-# This phase never aborts the bootstrap, and it is bounded: the step is stopped after
-# BSTACK_BOOTSTRAP_RULES_BUDGET_S seconds (default 600). Whatever it finds is printed here
-# and again by doctor §34.
+# ─── Phase 3.7: rule registry (replay the control gate wired above) ────────
+# Phases 3 and 3.5 install hooks; this phase checks, in this workspace, that the control
+# gate refuses what its rules say. The `correct` skill keeps a rule registry in the
+# governance folder and replays each rule against the hook entry the harness would run.
+# bstack ships the rows for its own hooks (references/rules-pack.yaml). A workspace with no
+# registry gets one and it is replayed; a workspace that has one is replayed and gets no
+# file written, and is told which of bstack's rows it lacks.
+# A failure here never aborts the bootstrap; whatever the phase finds is printed. It waits
+# for the skill as bootstrap waits for every tool it calls: there is no time limit, and
+# Ctrl-C stops both.
 # The registry's starter rule comes with a hook that refuses edits on main and master.
-# Skip with BSTACK_SKIP_RULES=1 (doctor §34 is skipped by the same variable).
+# Skip with BSTACK_SKIP_RULES=1.
 echo ""
 echo "=== bstack rule registry ==="
 if [ "${BSTACK_SKIP_RULES:-0}" = "1" ]; then
@@ -392,23 +392,19 @@ else
     python3 -I "${BOOTSTRAP_SCRIPT_DIR}/ensure-hard-gates.py" "$RULES_POLICY" || true
   fi
   # The status is the script's own: its output goes to a file first, never through a pipe.
-  # Without a temporary file the output is printed as it comes. The budget covers the whole
-  # step, and a cleanup that fails does not stop bootstrap.
+  # Without a temporary file the output is printed as it comes. A cleanup that fails does
+  # not stop bootstrap.
   rules_rc=0
   if RULES_LOG="$(mktemp 2>/dev/null)"; then
-    BSTACK_RULES_BUDGET_S="${BSTACK_BOOTSTRAP_RULES_BUDGET_S:-600}" BROOMVA_WORKSPACE="$WORKSPACE_DIR" \
-      bash "${BOOTSTRAP_SCRIPT_DIR}/rules-registry.sh" init >"$RULES_LOG" 2>&1 || rules_rc=$?
+    BROOMVA_WORKSPACE="$WORKSPACE_DIR" bash "${BOOTSTRAP_SCRIPT_DIR}/rules-registry.sh" init >"$RULES_LOG" 2>&1 || rules_rc=$?
     sed 's/^/  /' "$RULES_LOG" || true
     rm -f "$RULES_LOG" || true
   else
-    BSTACK_RULES_BUDGET_S="${BSTACK_BOOTSTRAP_RULES_BUDGET_S:-600}" BROOMVA_WORKSPACE="$WORKSPACE_DIR" \
-      bash "${BOOTSTRAP_SCRIPT_DIR}/rules-registry.sh" init || rules_rc=$?
+    BROOMVA_WORKSPACE="$WORKSPACE_DIR" bash "${BOOTSTRAP_SCRIPT_DIR}/rules-registry.sh" init || rules_rc=$?
   fi
   case "$rules_rc" in
     0) echo "  rule registry: replayed, and no row failed. Gap rows and known misses are listed above." ;;
     3) : ;;  # the skill is missing or too old; the script said how to install it
-    5) echo "  rule registry: stopped after the time budget; nothing is known. If the lines above say the starter"
-       echo "  rule's hook is installed, it is active. \`bstack rules init\` finishes the setup and replays it." ;;
     6) echo "  rule registry: replayed, and no row failed, but this workspace's registry lacks part of bstack's pack (listed above)." ;;
     *) echo "  rule registry: exit $rules_rc — see above; \`bstack rules check\` replays it." ;;
   esac

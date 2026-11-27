@@ -7,50 +7,45 @@
 # own hooks (references/rules-pack.yaml) and does not carry a copy of the runner.
 #
 #   rules-registry.sh locate            print the path of the skill's correct.py
+#   rules-registry.sh status            say whether the workspace has a registry and whether
+#                                       the skill that replays it is installed. Replays
+#                                       nothing and starts no hook.
 #   rules-registry.sh init [--dry-run]  give the workspace its registry, with bstack's rows,
 #                                       and replay it. A workspace that has a registry gets
-#                                       nothing written. --dry-run lists what a workspace
-#                                       without a registry would get and writes nothing.
+#                                       no file written and is replayed. --dry-run, on a
+#                                       workspace without a registry, lists what it would get.
 #   rules-registry.sh verify            a workspace that has a registry: replay it and say
-#                                       which of bstack's rows it lacks. Writes nothing.
+#                                       which of bstack's rows it lacks.
 #   rules-registry.sh check [OPTIONS]   replay the workspace's registry; OPTIONS go to the
-#                                       skill's `check` (--json, --only ID, --registry FILE ...)
+#                                       skill's `check` (--json, --only ID, --registry FILE,
+#                                       spelled out in full).
 #
-# None of these changes the policy file. The workspace is $BROOMVA_WORKSPACE, else the
-# current directory.
+# None of these changes the policy file. `status` and `locate` write nothing. `verify`,
+# `check` and `init` on a workspace that has a registry write no file of their own, and they
+# replay: a replay runs the workspace's hooks, and a hook may write (the skill's starter
+# hook leaves scripts/__pycache__, BRO-4185).
+#
+# A replay takes as long as the registry's rows take, and this script waits for it, as it
+# waits for any command: there is no time limit here. Ctrl-C stops it and the skill with it.
+#
+# The workspace is $BROOMVA_WORKSPACE, else the current directory.
 #
 # The skill: $BSTACK_CORRECT names its correct.py outright (CI, tests, a checkout, a copy
 # installed some other way). Otherwise it is looked for in ~/.claude/skills/correct and
 # ~/.agents/skills/correct, and of two copies the one that has `init --pack` is used.
 #
-# $BSTACK_RULES_BUDGET_S, when set, is how many seconds the whole command may take
-# (scripts/lib/run-with-budget.py). bootstrap and doctor set it: a registry with many rows
-# replays for minutes, and a copy of the skill that hangs must not hang them.
-#
 # Exit codes
-#   0  done, and no row failed (gap rows and known misses are listed in the output)
+#   0  done, and no row failed (gap rows and known misses are listed in the output);
+#      `status`: a registry is here and the skill that replays it is installed
 #   1  a row did not hold
-#   2  the command could not run (a bad argument or budget, a file that is not a registry)
+#   2  the command could not run (a bad argument, a file that is not a registry)
 #   3  the correct skill is not installed, or the installed copy is too old for `init`
 #   4  the workspace has no rule registry
-#   5  the budget ran out, so nothing is known
 #   6  `init` or `verify`: the workspace already had a registry, no row of it failed, and
 #      it lacks part of bstack's pack (the output lists what)
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-# The budget is the outermost thing: the script runs itself again inside it, so everything
-# below (finding the skill, reading the workspace, the skill's run) is inside the limit, and
-# a budget that is not a number stops here, before anything is read or written.
-if [ -n "${BSTACK_RULES_BUDGET_S:-}" ] && [ "${BSTACK_RULES_IN_BUDGET:-}" != "$PPID:$BSTACK_RULES_BUDGET_S" ]; then
-    # The marker names the process that set it. exec keeps the pid, so the runner has this
-    # script's pid, and the runner's child is this script again with that pid as its parent:
-    # only there does the marker match. A value left in a caller's environment does not
-    # switch the budget off.
-    BSTACK_RULES_IN_BUDGET="$$:$BSTACK_RULES_BUDGET_S" exec python3 -I "$SCRIPT_DIR/lib/run-with-budget.py" \
-        "$BSTACK_RULES_BUDGET_S" bash "${BASH_SOURCE[0]}" "$@"
-fi
 
 BSTACK_REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 WORKSPACE="${BROOMVA_WORKSPACE:-$PWD}"
@@ -62,7 +57,7 @@ INSTALL_HINT="npx skills add broomva/skills --skill correct -g"
 # shellcheck source=scripts/lib/plugin-preference.sh
 . "$SCRIPT_DIR/lib/plugin-preference.sh"
 
-usage() { sed -n '2,39p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,45p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 has_pack_option() { grep -q -- '--pack' "$1" 2>/dev/null; }
 
@@ -193,6 +188,27 @@ cmd_verify() {
     with_pack "$correct"
 }
 
+# status -> 0 a registry is here and the skill that replays it is installed; 4 no registry;
+# 3 a registry and no skill (or one too old). One line on stdout. Nothing is replayed.
+cmd_status() {
+    local registry correct rc=0
+    if [ $# -gt 0 ]; then
+        case "$1" in -h|--help) usage; return 0 ;; esac
+        echo "rules-registry: status takes no argument, got: $1" >&2
+        return 2
+    fi
+    if ! registry="$(registry_file)"; then
+        echo "this workspace has no rule registry (\`bstack bootstrap\` writes one)."
+        return 4
+    fi
+    correct="$(skill_or_stop "the registry here cannot be replayed")" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        [ -z "$correct" ] || printf '%s\n' "$correct"
+        return "$rc"
+    fi
+    echo "a rule registry is here (${registry#"$WORKSPACE"/}) and the skill that replays it is installed."
+}
+
 cmd_check() {
     local correct rc=0 arg named=0
     for arg in "$@"; do
@@ -223,6 +239,7 @@ command="${1:-}"
 [ $# -eq 0 ] || shift
 case "$command" in
     locate)       locate ;;
+    status)       cmd_status "$@" ;;
     init)         cmd_init "$@" ;;
     verify)       cmd_verify "$@" ;;
     check)        cmd_check "$@" ;;

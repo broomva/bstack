@@ -47,8 +47,8 @@ def main(argv: list[str]) -> int:
     except ImportError:
         return left_alone(path, "PyYAML is not installed, so the file was not read")
     try:
-        # newline="": line endings are read and written as they are. A file with CRLF endings
-        # does not match the `gates:` line below and is left alone, not converted.
+        # newline="": line endings are read and written as they are. A file whose `gates:` line
+        # ends in CRLF does not match the pattern below and is left alone, not converted.
         with open(path, encoding="utf-8", newline="") as handle:
             text = handle.read()
     except (OSError, UnicodeDecodeError) as exc:
@@ -63,7 +63,10 @@ def main(argv: list[str]) -> int:
     if "hard" in before["gates"]:
         return 0
     # The `gates:` line is kept whole (group 0), comment included; the key goes after it.
-    after_text, count = re.subn(r"^gates:[ \t]*(#.*)?\n", lambda m: m.group(0) + ADDED, text, count=1, flags=re.M)
+    # The comment may not hold a carriage return: `.` would take the \r of a CRLF ending, and
+    # LF lines would be put into a CRLF file. Such a file does not match and is left alone.
+    after_text, count = re.subn(r"^gates:[ \t]*(#[^\r\n]*)?\n", lambda m: m.group(0) + ADDED, text, count=1,
+                                flags=re.M)
     if count != 1:
         return left_alone(path, "writes `gates:` in a form this script does not edit")
     try:

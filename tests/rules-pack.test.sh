@@ -16,7 +16,7 @@
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-EXPECTED_ASSERTIONS=112
+EXPECTED_ASSERTIONS=106
 PASS=0; FAIL=0; FAILED=()
 pass() { echo "  [ok] $1"; PASS=$((PASS + 1)); }
 fail() { echo "  [FAIL] $1"; FAIL=$((FAIL + 1)); FAILED+=("$1"); }
@@ -305,25 +305,29 @@ cp "$TMP/settings.orig" "$WS/.claude/settings.json"
 replay "$WS"
 is "restored, the replay exits 0 again" test "$RC" -eq 0
 
-# ── 4. doctor reports the same two states ────────────────────────────────────
+# ── 4. doctor reports, and replays only when asked ───────────────────────────
 echo "4. doctor"
+# By default doctor starts no hook: it says a registry is here and how to replay it.
+rm -rf "$WS/scripts/__pycache__"
+tree_before="$(cd "$WS" && find . -path ./.git -prune -o -print | sort)"
 doctor "$WS"
-is "doctor passes the section when no row fails" has "$OUT" "[ok] rule registry: replayed, no row failed"
+is "doctor reports the registry and does not replay it" test "$(has "$OUT" "[info] a rule registry is here and was not replayed"; echo $?)$(grep -cE '\[(ok|gap)\] rule registry' "$OUT")" = 00
+is "and leaves the workspace as it found it" test "$(cd "$WS" && find . -path ./.git -prune -o -print | sort)" = "$tree_before"
+doctor "$WS" -- --quiet
+is "under --quiet that report is not printed" lacks "$OUT" "rule registry"
+RC=0
+HOME="$HOME_PLAIN" BSTACK_CORRECT="$CORRECT" BROOMVA_WORKSPACE="$WS" bash "$REPO/scripts/rules-registry.sh" status >"$OUT" 2>&1 || RC=$?
+is "status exits 0 for a registry with its skill, and replays nothing" test "$RC" -eq 0 -a "$(grep -cE 'PASS|FAIL|replaying' "$OUT")" = 0
+# Asked to (BSTACK_DOCTOR_RULES=1), doctor replays: a pass, or a gap that names the row.
+doctor "$WS" BSTACK_DOCTOR_RULES=1
+is "asked to replay, doctor passes the section when no row fails" has "$OUT" "[ok] rule registry: replayed, no row failed"
 drop "G1: force-push"
-doctor "$WS"
-is "doctor reports a gap when a row does not hold" has "$OUT" "[gap] rule registry: a row does not hold"
+doctor "$WS" BSTACK_DOCTOR_RULES=1
+is "and reports a gap when a row does not hold" has "$OUT" "[gap] rule registry: a row does not hold"
 is "and names the row" grep -qE 'FAIL +hook +no-force-push' "$OUT"
+doctor "$WS"
+is "without being asked, doctor does not see that failing row" test "$(grep -cE '\[(ok|gap)\] rule registry' "$OUT")" = 0
 cp "$TMP/gate.orig" "$GATE"
-# A replay that runs out of time is neither: doctor says so and counts nothing.
-replay "$WS" BSTACK_RULES_BUDGET_S=0.2
-is "a replay cut off by its budget exits 5" test "$RC" -eq 5
-replay "$WS" BSTACK_RULES_BUDGET_S=0.2 BSTACK_RULES_IN_BUDGET=1
-is "a marker left in the caller's environment does not switch the budget off" test "$RC" -eq 5
-doctor "$WS" BSTACK_DOCTOR_RULES_BUDGET_S=0.2 -- --quiet
-is "doctor reports an unfinished replay, under --quiet too" has "$OUT" "[info] rule registry: the replay did not finish in 0.2 s"
-is "and counts it as neither a pass nor a gap" test "$(grep -cE '\[(ok|gap)\] rule registry' "$OUT")" = 0
-doctor "$WS" BSTACK_SKIP_RULES=1
-is "BSTACK_SKIP_RULES=1 skips the doctor replay too, and says so" test "$(has "$OUT" "[info] rule registry: BSTACK_SKIP_RULES=1, not replayed"; echo $?)$(grep -cE '\[(ok|gap)\] rule registry' "$OUT")" = 00
 
 # The registry is found where the skill finds it, whichever governance folder the policy is in.
 MOVED="$TMP/moved"; cp -R "$WS" "$MOVED"
@@ -378,8 +382,8 @@ is "bootstrap keeps a gate script the workspace changed, and says it differs" te
 RC=0
 HOME="$HOME_PLAIN" BSTACK_CORRECT="$CORRECT" BROOMVA_WORKSPACE="$STALE" bash "$REPO/scripts/rules-registry.sh" verify >"$OUT" 2>&1 || RC=$?
 is "verify says the same and exits 6" test "$RC" -eq 6 -a "$(grep -c 'row(s) that differ from the pack: no-catastrophic-delete' "$OUT")" = 1
-doctor "$STALE"
-is "doctor passes the replay and names the row that differs" test "$(has "$OUT" "[ok] rule registry: replayed, no row failed"; echo $?)$(has "$OUT" "row(s) that differ from the pack: no-catastrophic-delete"; echo $?)" = 00
+doctor "$STALE" BSTACK_DOCTOR_RULES=1
+is "doctor, asked to replay, passes and names the row that differs" test "$(has "$OUT" "[ok] rule registry: replayed, no row failed"; echo $?)$(has "$OUT" "row(s) that differ from the pack: no-catastrophic-delete"; echo $?)" = 00
 
 # init takes --dry-run and nothing else, and settles that before it writes anything.
 ARGS="$(new_ws args)"
@@ -397,14 +401,11 @@ is "the dry run names the files and the pack" test "$(grep -c 'would write' "$OU
 RC=0
 HOME="$HOME_PLAIN" BSTACK_CORRECT="$CORRECT" BROOMVA_WORKSPACE="$ARGS" bash "$REPO/scripts/rules-registry.sh" verify >"$OUT" 2>&1 || RC=$?
 after="$(cd "$ARGS" && find . -path ./.git -prune -o -print | sort)"
-is "verify on a workspace with no registry exits 4 and writes nothing (doctor runs it)" test "$RC" -eq 4 -a "$after" = "$before"
-# A budget that is not a finite number above zero stops the command before it reads anything.
-for budget in -1 0 nan inf abc; do
-    RC=0
-    HOME="$HOME_PLAIN" BSTACK_RULES_BUDGET_S="$budget" BSTACK_CORRECT="$CORRECT" BROOMVA_WORKSPACE="$ARGS" bash "$REPO/scripts/rules-registry.sh" init >"$OUT" 2>&1 || RC=$?
-    after="$(cd "$ARGS" && find . -path ./.git -prune -o -print | sort)"
-    is "a budget of '$budget' is refused with exit 2 and nothing is written" test "$RC" -eq 2 -a "$after" = "$before"
-done
+is "verify on a workspace with no registry exits 4 and writes nothing" test "$RC" -eq 4 -a "$after" = "$before"
+RC=0
+HOME="$HOME_PLAIN" BSTACK_CORRECT="$CORRECT" BROOMVA_WORKSPACE="$ARGS" bash "$REPO/scripts/rules-registry.sh" status >"$OUT" 2>&1 || RC=$?
+after="$(cd "$ARGS" && find . -path ./.git -prune -o -print | sort)"
+is "status on a workspace with no registry exits 4 and writes nothing (doctor runs it)" test "$RC" -eq 4 -a "$after" = "$before"
 # The rules commands never touch the policy file: only bootstrap gives an older one its list.
 printf 'version: 1\ngates: # the operator wrote this comment\n  governed: []\nowner: retained\n' >"$TMP/old-policy.yaml"
 mkdir -p "$ARGS/$BROOMVA_REPO_LEGACY_DIR" && cp "$TMP/old-policy.yaml" "$ARGS/$BROOMVA_REPO_LEGACY_DIR/policy.yaml"
@@ -422,6 +423,9 @@ is "a second run changes nothing" test "$RC" -eq 0 -a "$(cmp -s "$MIG/policy.yam
 printf 'version: 1\r\ngates:\r\n  governed: []\r\n' >"$MIG/crlf.yaml"; cp "$MIG/crlf.yaml" "$TMP/crlf.orig"
 python3 -I "$REPO/scripts/ensure-hard-gates.py" "$MIG/crlf.yaml" >"$OUT" 2>&1; RC=$?
 is "a policy with CRLF line endings is left byte for byte, with the reason (exit 3)" test "$RC" -eq 3 -a "$(cmp -s "$MIG/crlf.yaml" "$TMP/crlf.orig"; echo $?)" = 0
+printf 'version: 1\r\ngates: # the operator wrote this comment\r\n  governed: []\r\n' >"$MIG/crlf.yaml"; cp "$MIG/crlf.yaml" "$TMP/crlf.orig"
+python3 -I "$REPO/scripts/ensure-hard-gates.py" "$MIG/crlf.yaml" >"$OUT" 2>&1; RC=$?
+is "and so is one whose gates line carries a comment (no LF lines put into a CRLF file)" test "$RC" -eq 3 -a "$(cmp -s "$MIG/crlf.yaml" "$TMP/crlf.orig"; echo $?)" = 0
 rm -f "$MIG/crlf.yaml"
 cp "$TMP/old-policy.yaml" "$MIG/policy.yaml"; chmod 555 "$MIG"
 python3 -I "$REPO/scripts/ensure-hard-gates.py" "$MIG/policy.yaml" >"$OUT" 2>&1; RC=$?
@@ -482,8 +486,8 @@ is "bootstrap says the registry replays" has "$PLUG.log" "rule registry: replaye
 replay "$PLUG" HOME="$HOME_PLUGIN"
 is "the replay exits 0 on this path too" test "$RC" -eq 0
 is "and says what it could not see" has "$OUT" "this replay did not see them (BRO-3811)"
-doctor "$PLUG" HOME="$HOME_PLUGIN"
-is "doctor repeats that beside its pass" test "$(has "$OUT" "[ok] rule registry: replayed, no row failed"; echo $?)$(has "$OUT" "[info] the bstack plugin is enabled"; echo $?)" = 00
+doctor "$PLUG" HOME="$HOME_PLUGIN" BSTACK_DOCTOR_RULES=1
+is "doctor, asked to replay, repeats that beside its pass" test "$(has "$OUT" "[ok] rule registry: replayed, no row failed"; echo $?)$(has "$OUT" "[info] the bstack plugin is enabled"; echo $?)" = 00
 cp "$PLUG/scripts/control-gate-hook.sh" "$TMP/plug-gate.orig"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$PLUG/scripts/control-gate-hook.sh"
 replay "$PLUG" HOME="$HOME_PLUGIN"
@@ -513,35 +517,13 @@ HOME="$HOME_PLAIN" BSTACK_CORRECT="$TMP/old-correct.py" BROOMVA_WORKSPACE="$BARE
 is "a copy older than the pack option is reported, exit 3" test "$RC" -eq 3 -a "$(has "$OUT" "predates"; echo $?)" = 0
 is "and still writes no registry" test ! -e "$(registry_of "$BARE")"
 
-# ── 8. Bootstrap is never stopped or held by this phase ──────────────────────
-echo "8. the phase cannot stop or hold bootstrap"
-# A copy of the skill that never returns: the phase stops it and bootstrap goes on.
-printf '#!/usr/bin/env python3\n# has the --pack option, and hangs\nimport time\ntime.sleep(300)\n' >"$TMP/hanging-correct.py"
-HANG="$(new_ws hang)"
-started="$(date +%s)"
-is "bootstrap exits 0 with a skill that hangs" boot "$HANG" BSTACK_CORRECT="$TMP/hanging-correct.py" BSTACK_BOOTSTRAP_RULES_BUDGET_S=2
-is "the phase says it was stopped" has "$HANG.log" "rule registry: stopped after the time budget"
-is "and it did not wait for the skill" test "$(( $(date +%s) - started ))" -lt 240
-# The replay's scratch directory belongs to the budget runner and goes with it.
-mkdir -p "$TMP/scratch-tmp"
-replay "$WS" BSTACK_RULES_BUDGET_S=1 TMPDIR="$TMP/scratch-tmp"
-is "a replay stopped by its budget leaves nothing in the temporary directory" test "$RC" -eq 5 -a -z "$(ls -A "$TMP/scratch-tmp")"
-# Stopping the command (Ctrl-C, a closed terminal) stops the replay too: it runs in a session
-# of its own, so without the runner passing the stop on it would go on in the background.
-( exec env HOME="$HOME_PLAIN" BSTACK_CORRECT="$CORRECT" BROOMVA_WORKSPACE="$WS" BSTACK_RULES_BUDGET_S=300 TMPDIR="$TMP/scratch-tmp" \
-    bash "$REPO/scripts/rules-registry.sh" check >"$OUT" 2>&1 ) &
-runner=$!
-python3 -c 'import time; time.sleep(3)'
-kill -TERM "$runner" 2>/dev/null
-wait "$runner"; RC=$?
-left=1
-for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-    # pgrep leaves itself out; a grep over ps would count its own command line.
-    left="$(pgrep -f -- "check --root $WS" | wc -l | tr -d ' ')"
-    [ "$left" = 0 ] && break
-    python3 -c 'import time; time.sleep(1)'
-done
-is "a command that is stopped stops its replay and removes its scratch directory" test "$RC" -eq 143 -a "$left" = 0 -a -z "$(ls -A "$TMP/scratch-tmp")"
+# ── 8. A failure in this phase does not stop bootstrap ───────────────────────
+echo "8. the phase cannot fail bootstrap"
+# A copy of the skill that crashes: the phase reports the exit status and bootstrap goes on.
+printf '#!/usr/bin/env python3\n# has the --pack option, and crashes\nraise SystemExit(77)\n' >"$TMP/crashing-correct.py"
+CRASH="$(new_ws crash)"
+is "bootstrap exits 0 with a skill that crashes" boot "$CRASH" BSTACK_CORRECT="$TMP/crashing-correct.py"
+is "the phase reports the skill's exit status" has "$CRASH.log" "rule registry: exit 77"
 # No temporary file to capture into: the phase still runs and bootstrap still finishes.
 # A `mktemp` that fails is put first on the PATH, because what an unusable TMPDIR does to
 # the real one differs by system (macOS falls back to another directory, Linux fails).
