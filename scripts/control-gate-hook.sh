@@ -31,7 +31,9 @@ REPO_ROOT="${CLAUDE_PROJECT_DIR:-${BROOMVA_WORKSPACE:-$(git rev-parse --show-top
 # one. The rule registry's completeness check reads it the same way; a gate that read only
 # the old folder enforced one file while the registry accounted for the other.
 POLICY="$REPO_ROOT/.control/policy.yaml"
-if [ -e "$REPO_ROOT/.broomva/policy.yaml" ] || [ -L "$REPO_ROOT/.broomva/policy.yaml" ]; then
+# `-e` follows a link, as the registry's reader does: a link that points nowhere is not there,
+# and the old folder's file is read.
+if [ -e "$REPO_ROOT/.broomva/policy.yaml" ]; then
   POLICY="$REPO_ROOT/.broomva/policy.yaml"
 fi
 

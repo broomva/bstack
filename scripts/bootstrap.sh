@@ -394,7 +394,7 @@ else
   case "$rules_rc" in
     0) echo "  rule registry: replayed, and no row failed. Gap rows and known misses are listed above." ;;
     3) echo "  rule registry: replayed, and no row failed, but this workspace's registry lacks part of bstack's pack (listed above)." ;;
-    127) : ;;  # no copy of the skill; the script said how to install it
+    127) echo "  rule registry: not written and not replayed (exit 127) — see above." ;;
     *) echo "  rule registry: exit $rules_rc — see above. Run bootstrap again once it is fixed."
        # Said every time, not worked out here: bstack does not read or edit the policy file.
        echo "  If the output says it cannot read the hard gates: a policy file from before bstack 0.53.0"

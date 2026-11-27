@@ -16,14 +16,14 @@
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-EXPECTED_ASSERTIONS=81
+EXPECTED_ASSERTIONS=87
 PASS=0; FAIL=0; FAILED=()
 pass() { echo "  [ok] $1"; PASS=$((PASS + 1)); }
 fail() { echo "  [FAIL] $1"; FAIL=$((FAIL + 1)); FAILED+=("$1"); }
 # is <label> <command...>: one assertion, passed when the command succeeds.
 is() { local label="$1"; shift; if "$@"; then pass "$label"; else fail "$label"; fi; }
 has() { grep -qF -- "$2" "$1"; }
-lacks() { ! grep -qF -- "$2" "$1"; }
+lacks() { [ -f "$1" ] && ! grep -qF -- "$2" "$1"; }   # a file that is not there lacks nothing
 # row <file> <status> <id>: the replay printed that status for that row.
 row() { grep -qE "^ *$2 +[a-z]+ +$3( |\$)" "$1"; }
 
@@ -31,6 +31,9 @@ echo "── rules-pack (BRO-4147) ───────────────
 
 # Git reads no configuration from outside the test: a global hooksPath or template on the
 # machine must not decide whether a scratch repository gets its first commit.
+# Nor may a git variable of the caller redirect one: GIT_INDEX_FILE or GIT_DIR set outside
+# would make the fixtures write there. Every GIT_* variable is dropped first.
+for name in $(compgen -v | grep -E '^GIT_' || true); do unset "$name"; done
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 # Nor does a bstack switch the caller happens to have set (BSTACK_NO_PLUGIN=1 turned the
 # plugin case into the other one): every BSTACK_* and BROOMVA_* variable is dropped, bar
@@ -103,26 +106,40 @@ if ! HOME="$HOME_PLAIN" python3 -I -c 'import site, sys; sys.path.append(site.ge
     echo "  [FAIL] PyYAML is not importable under a scratch HOME, so the replay cannot run" >&2
     exit 1
 fi
+# scratch <path>: stop the whole test unless the path is a scratch repository of this run.
+# bootstrap given an empty workspace falls back to the current directory, which is the
+# checkout under test: a fixture that failed must never lead there.
+scratch() {
+    case "$1" in
+        "$TMP"/?*) [ -d "$1/.git" ] && return 0 ;;
+    esac
+    echo "  [FAIL] not a scratch repository of this test: '$1'" >&2
+    exit 1
+}
 # boot <workspace> [VAR=value ...]: bootstrap it in full (hooks and the control loop; only
 # the skill downloads are skipped); the log is <workspace>.log.
 boot() {
     local ws="$1"; shift
+    scratch "$ws"
     env HOME="$HOME_PLAIN" BSTACK_CORRECT="$CORRECT" BROOMVA_WORKSPACE="$ws" BSTACK_SKIP_SKILLS=1 "$@" \
         bash "$REPO/scripts/bootstrap.sh" >"$ws.log" 2>&1
 }
 # replay <workspace>: the skill's own `check` on it; output in $OUT, status in $RC. The
 # test asks the skill directly; bstack has no command of its own for this.
 replay() {
+    scratch "$1"
     RC=0
     env HOME="$HOME_PLAIN" python3 -I "$CORRECT" check --root "$1" >"$OUT" 2>&1 || RC=$?
 }
 # run_script <workspace> [VAR=value ...]: scripts/rules-registry.sh; output in $OUT, status in $RC.
 run_script() {
     local ws="$1"; shift
+    scratch "$ws"
     RC=0
     env HOME="$HOME_PLAIN" BSTACK_CORRECT="$CORRECT" BROOMVA_WORKSPACE="$ws" "$@" bash "$SCRIPT" >"$OUT" 2>&1 || RC=$?
 }
-tree_of() { (cd "$1" && find . -path ./.git -prune -o -print | sort); }
+# tree_of <dir>: every path outside .git, and a checksum of every file's content.
+tree_of() { (cd "$1" && find . -path ./.git -prune -o -print | sort && find . -path ./.git -prune -o -type f -exec cksum {} + | sort); }
 commit_all() {
     git -C "$1" add -A
     git -C "$1" -c user.email=t@t -c user.name=t commit -q -m "$2" >/dev/null 2>&1
@@ -192,7 +209,7 @@ is "a rule that quotes a pattern the gate does not have fails this check" test "
 
 # ── 1. A fresh bootstrap ends with a registry whose every row replays ────────
 echo "1. fresh bootstrap, every hook wired by hand (no plugin)"
-WS="$(new_ws fresh)"
+WS="$(new_ws fresh)" || exit 1
 is "bootstrap exits 0" boot "$WS"
 unwired=""
 for hook in control-gate-hook.sh role-x-intake-hook.sh conversation-bridge-hook.sh autonomous-posture-hook.sh \
@@ -331,12 +348,18 @@ is "and not the pattern in the file the registry does not read" test "$(gate_say
 replay "$BOTH"
 is "the registry reports that same gate as one with no row" test "$RC" -eq 1 -a "$(grep -c 'policy gate G-NEW has a pattern but no row' "$OUT")" = 1
 is "and says nothing of the gate in the file neither reads" lacks "$OUT" "G-OLD"
+# A link in the new folder that points nowhere is not a policy file to either of them: both
+# read the old folder's.
+rm -f "$BOTH/$BROOMVA_REPO_DIR/policy.yaml" && ln -s nowhere.yaml "$BOTH/$BROOMVA_REPO_DIR/policy.yaml"
+is "with a dangling link in the new folder the gate enforces the old folder's pattern" test "$(gate_says "$BOTH" "echo marker-in-the-old-folder")" = 2
+replay "$BOTH"
+is "and the registry reports that gate, the same file" test "$RC" -eq 1 -a "$(grep -c 'policy gate G-OLD has a pattern but no row' "$OUT")" = 1
 
 # ── 5. A workspace bootstrapped before 0.53.0 ────────────────────────────────
 # Its policy file has no gates.hard list. bstack does not edit the policy file: bootstrap
 # says which line to add, and the replay passes once the operator has added it.
 echo "5. a workspace from before 0.53.0"
-OLD="$(new_ws old)"
+OLD="$(new_ws old)" || exit 1
 is "BSTACK_SKIP_RULES=1 bootstraps without a registry" boot "$OLD" BSTACK_SKIP_RULES=1
 is "and writes none" test ! -e "$(registry_of "$OLD")"
 # Make it what 0.52 left: no gates.hard in the policy, no MultiEdit block for the gate.
@@ -394,7 +417,7 @@ echo "7. fresh bootstrap, plugin preferred"
 HOME_PLUGIN="$(new_home home-plugin)"
 mkdir -p "$HOME_PLUGIN/.agents/skills/bstack/.claude-plugin"
 printf '{"name":"bstack"}\n' >"$HOME_PLUGIN/.agents/skills/bstack/.claude-plugin/plugin.json"
-PLUG="$(new_ws plugin)"
+PLUG="$(new_ws plugin)" || exit 1
 is "bootstrap exits 0" boot "$PLUG" HOME="$HOME_PLUGIN"
 is "it took the plugin path" has "$PLUG.log" "preferring bstack@skills-dir"
 is "the plugin's hooks are not in the settings file" test "$(wired "$PLUG" arc-continuation-hook.sh; echo $?)$(wired "$PLUG" l3-stability-pretool-hook.sh; echo $?)" = 11
@@ -407,7 +430,7 @@ is "the skill's own check exits 0 on this path too" test "$RC" -eq 0
 
 # ── 8. Without a usable copy of the skill nothing is written and nothing aborts ──
 echo "8. without the correct skill"
-BARE="$(new_ws bare)"
+BARE="$(new_ws bare)" || exit 1
 bare_before="$(tree_of "$BARE")"
 run_script "$BARE" BSTACK_CORRECT=""
 is "the script exits 127 and says how to install the skill" test "$RC" -eq 127 -a "$(grep -c 'npx skills add broomva/skills --skill correct -g' "$OUT")" = 1
@@ -431,6 +454,13 @@ printf '#!/usr/bin/env python3\nprint("the older copy ran")\n' >"$HOME_TWO/.clau
 printf '#!/usr/bin/env python3\n# has the --pack option\nprint("the copy with the option ran")\n' >"$HOME_TWO/.agents/skills/correct/scripts/correct.py"
 run_script "$BARE" HOME="$HOME_TWO" BSTACK_CORRECT=""
 is "of two installed copies the one with the pack option is run" test "$RC" -eq 0 -a "$(grep -c 'the copy with the option ran' "$OUT")" = 1 -a "$(grep -c 'the older copy ran' "$OUT")" = 0
+run_script "$BARE" HOME="$HOME_TWO" BSTACK_CORRECT="$TMP/nowhere/correct.py"
+is "a named copy that is not there is not replaced by an installed one" test "$RC" -eq 127 -a "$(grep -c 'the copy with the option ran' "$OUT")" = 0
+HOME_ONE="$(new_home home-one)"
+mkdir -p "$HOME_ONE/.claude/skills/correct/scripts"
+printf '#!/usr/bin/env python3\n# has the --pack option\nprint("the only copy ran")\n' >"$HOME_ONE/.claude/skills/correct/scripts/correct.py"
+run_script "$BARE" HOME="$HOME_ONE" BSTACK_CORRECT=""
+is "a copy in the first skills directory alone is found" test "$RC" -eq 0 -a "$(grep -c 'the only copy ran' "$OUT")" = 1
 RC=0
 env HOME="$HOME_PLAIN" BSTACK_CORRECT="$CORRECT" BROOMVA_WORKSPACE="$BARE" bash "$SCRIPT" --dry-run >"$OUT" 2>&1 || RC=$?
 is "the script takes no argument: exit 2, and nothing is written" test "$RC" -eq 2 -a ! -e "$(registry_of "$BARE")"
@@ -439,31 +469,42 @@ is "the script takes no argument: exit 2, and nothing is written" test "$RC" -eq
 echo "9. the phase cannot fail bootstrap"
 # A copy of the skill that crashes: the phase reports the exit status and bootstrap goes on.
 printf '#!/usr/bin/env python3\n# has the --pack option, and crashes\nraise SystemExit(77)\n' >"$TMP/crashing-correct.py"
-CRASH="$(new_ws crash)"
+CRASH="$(new_ws crash)" || exit 1
 is "bootstrap exits 0 with a skill that crashes" boot "$CRASH" BSTACK_CORRECT="$TMP/crashing-correct.py"
 is "the phase reports the skill's exit status" has "$CRASH.log" "rule registry: exit 77"
+# 127 is also what the script returns when it finds no copy. A copy that itself ends with
+# 127 must not leave the phase silent.
+printf '#!/usr/bin/env python3\n# has the --pack option, and ends with 127\nraise SystemExit(127)\n' >"$TMP/127-correct.py"
+SILENT="$(new_ws silent)" || exit 1
+is "bootstrap exits 0 with a skill that ends with 127" boot "$SILENT" BSTACK_CORRECT="$TMP/127-correct.py"
+is "and the phase still says what happened" has "$SILENT.log" "rule registry: not written and not replayed (exit 127)"
 # The skill says that the starter hook is installed BEFORE it replays, and bootstrap shows
 # the phase's output as it comes. A bootstrap stopped during the replay has therefore shown
 # it. (An earlier version captured the output and printed it when the phase returned: stop
-# it in between and the hook was active with nothing said.) The stand-in prints the line,
-# records its pid and waits; the line must be in bootstrap's output while it still waits.
-printf '#!/usr/bin/env python3\n# has the --pack option; says the hook is installed, then waits\nimport os, time\nprint("the starter hook is installed (stand-in)", flush=True)\nopen(os.environ["PIDFILE"], "w").write(str(os.getpid()))\ntime.sleep(300)\n' >"$TMP/blocking-correct.py"
-LIVE="$(new_ws live)"; rm -f "$TMP/blocking.pid"
-( exec env HOME="$HOME_PLAIN" PIDFILE="$TMP/blocking.pid" BSTACK_CORRECT="$TMP/blocking-correct.py" BROOMVA_WORKSPACE="$LIVE" \
-    BSTACK_SKIP_SKILLS=1 bash "$REPO/scripts/bootstrap.sh" >"$LIVE.log" 2>&1 ) &
+# it in between and the hook was active with nothing said.)
+# The stand-in prints the line, records its pid, and then WAITS for a file this test creates.
+# So "the line is there while the skill is still running" is checked against a process that
+# is known to be waiting, and the stand-in ends because it is released, never because it is
+# signalled: no process id is ever sent a signal here.
+printf '#!/usr/bin/env python3\n# has the --pack option; says the hook is installed, then waits to be released\nimport os, time\nprint("the starter hook is installed (stand-in)", flush=True)\nopen(os.environ["PIDFILE"], "w").write(str(os.getpid()))\nfor _ in range(3000):\n    if os.path.exists(os.environ["RELEASE"]):\n        break\n    time.sleep(0.1)\nraise SystemExit(77)\n' >"$TMP/waiting-correct.py"
+LIVE="$(new_ws live)" || exit 1
+rm -f "$TMP/waiting.pid" "$TMP/release"
+( exec env HOME="$HOME_PLAIN" PIDFILE="$TMP/waiting.pid" RELEASE="$TMP/release" BSTACK_CORRECT="$TMP/waiting-correct.py" \
+    BROOMVA_WORKSPACE="$LIVE" BSTACK_SKIP_SKILLS=1 bash "$REPO/scripts/bootstrap.sh" >"$LIVE.log" 2>&1 ) &
 boot_pid=$!
 for _ in $(seq 1 240); do
-    [ -s "$TMP/blocking.pid" ] && break
+    [ -s "$TMP/waiting.pid" ] && break
     kill -0 "$boot_pid" 2>/dev/null || break   # bootstrap ended without starting the stand-in
     python3 -c 'import time; time.sleep(0.5)'
 done
-blocked_pid="$(cat "$TMP/blocking.pid" 2>/dev/null || echo 0)"
-case "$blocked_pid" in ''|*[!0-9]*) blocked_pid=0 ;; esac
-is "bootstrap shows what the skill says while the replay is still running" test "$blocked_pid" -gt 0 -a "$(grep -c 'the starter hook is installed (stand-in)' "$LIVE.log")" = 1
-# pid 0 is "every process in this group": never signal it.
-if [ "$blocked_pid" -gt 0 ]; then kill -KILL "$blocked_pid" 2>/dev/null || true; fi
+waiting_pid="$(cat "$TMP/waiting.pid" 2>/dev/null || echo 0)"
+case "$waiting_pid" in ''|*[!0-9]*) waiting_pid=0 ;; esac
+still_waiting=1
+if [ "$waiting_pid" -gt 0 ] && [ ! -e "$TMP/release" ] && kill -0 "$waiting_pid" 2>/dev/null; then still_waiting=0; fi
+is "bootstrap shows what the skill says while the skill is still running, unreleased" test "$still_waiting" = 0 -a "$(grep -c 'the starter hook is installed (stand-in)' "$LIVE.log")" = 1
+: >"$TMP/release"
 wait "$boot_pid"; RC=$?
-is "and when the skill is stopped, bootstrap says so and still exits 0" test "$RC" -eq 0 -a "$(grep -c 'rule registry: exit' "$LIVE.log")" = 1
+is "released, the skill ends with 77, and bootstrap reports it and still exits 0" test "$RC" -eq 0 -a "$(grep -c 'rule registry: exit 77' "$LIVE.log")" = 1
 
 is "the machine's own settings file was not touched" test "$(real_settings_sum)" = "$REAL_SETTINGS_BEFORE"
 

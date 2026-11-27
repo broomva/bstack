@@ -73,4 +73,5 @@ if ! correct="$(find_skill)"; then
     exit 127
 fi
 
-exec python3 -I "$correct" init --root "$WORKSPACE" --pack "$PACK"
+# -u: the skill's output is shown as it is written, whichever copy it is.
+exec python3 -I -u "$correct" init --root "$WORKSPACE" --pack "$PACK"

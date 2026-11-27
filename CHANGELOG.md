@@ -45,7 +45,8 @@ registry: to replay one later, call the skill (`correct.py check`).
   path matches one of the gate's path patterns is refused from this version on, including
   harmless ones such as a file named `credentials-guide.md`.
 - **fix: the control gate reads the policy file every other reader prefers** (the new
-  governance folder's when anything is there, else the old one's). It read only the old
+  governance folder's when one is there, a link that points nowhere not counting; else
+  the old one's). It read only the old
   folder's, so with a policy in each it enforced one file while the registry accounted for
   the other. A workspace with `pattern:` lines only in the old folder's policy and a policy
   file in the new folder loses those patterns at the gate with this version's script: move
@@ -93,7 +94,8 @@ registry: to replay one later, call the skill (`correct.py check`).
   of the pack's hook rows. Also covered: a policy file from before 0.53.0, before and after
   the line is added by hand; a policy in each governance folder; a registry that differs
   from the pack; a skill that is missing, too old, crashes, or is still running when its
-  first line must already be on the terminal; no `HOME`. 81 assertions, counted.
+  first line must already be on the terminal, or ends with 127 itself; a dangling link where
+  the new folder's policy goes; no `HOME`. 87 assertions, counted.
   `tests/plugin-preference.test.sh` now expects the gate under four matchers.
 
 ## 0.52.2 — 2026-11-23
