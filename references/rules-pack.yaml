@@ -13,7 +13,8 @@
 # matches regular expressions against the command text or the file path. Each `rule:` below
 # therefore says what the rule is for, and then quotes the pattern that is all the gate
 # enforces of it; tests/rules-pack.test.sh fails when a quoted pattern is not in the gate's
-# source character for character, or when the gate has a pattern no rule quotes.
+# source character for character, or when the gate has a pattern no rule quotes (the test
+# reads the gate's `r"..."` literals; a pattern written any other way is not seen).
 # A pattern over command text cannot cover every way to write a command. The `known_misses`
 # cases are the ways found so far to do what a rule forbids without matching its pattern;
 # each names its ticket (BRO-4169, and BRO-4159 for the shell redirect into a secrets file). They are

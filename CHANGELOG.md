@@ -34,13 +34,12 @@ registry: to replay one later, call the skill (`correct.py check`).
   `main` and `master`. A workspace that gets its registry from this phase has that hook
   from then on. The skill says so when the hook is written, before the replay, and
   bootstrap shows it at once.
-- **Upgrading a workspace bootstrapped before 0.53.0: one line by hand.** The rule runner
-  reads a `gates.hard` list in the policy file, and a policy file scaffolded before 0.53.0
-  has no `hard:` key under `gates:`. bstack does not edit the policy file. When that key is
-  absent, add the line `hard: []` under `gates:`. Until then the replay says it cannot read
-  the hard gates, and bootstrap points to this note. The line is for a policy file with no
-  `hard:` key and for no other: where `gates:` already has one, add no second (it would hide
-  the first), and read what the replay says about the one that is there.
+- **Upgrading a workspace bootstrapped before 0.53.0.** The rule runner reads the policy
+  file's hard gates from a `gates.hard` list, and a policy file scaffolded before 0.53.0 has
+  none. bstack does not edit the policy file, and this note prescribes no edit: what belongs
+  in the list is the policy's own gates that carry a `pattern:`, and only its owner knows
+  them. Until the policy file declares the list, the replay says it cannot read the hard
+  gates and exits 1, and bootstrap points here.
 - **`correct` joins the required roster** (`references/companion-skills.yaml`), both plugin
   marketplaces (`./governance/correct`), and the install check in `SKILL.md`.
 - **fix: the control gate is registered for `MultiEdit`.** The hook has handled the
@@ -106,7 +105,7 @@ registry: to replay one later, call the skill (`correct.py check`).
   one row of the registry fail, the one that replays it, and each rule must quote exactly
   the patterns its row replays. An allow-all gate fails all five
   of the pack's hook rows. Also covered: a policy file from before 0.53.0, before and after
-  the line is added by hand; a policy in each governance folder; a registry that differs
+  it declares its hard gates; a policy in each governance folder; a registry that differs
   from the pack; a skill that is missing, too old, crashes, or is still running when its
   first line must already be on the terminal, or ends with 127 itself; no `python3`; no
   `HOME`; `CDPATH` set. The number of assertions is asserted.

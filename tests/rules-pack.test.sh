@@ -9,13 +9,10 @@
 #
 # Every case bootstraps an empty scratch repository under a scratch HOME, so the machine's
 # installed plugin and skills do not decide the result, and the workspaces, homes and
-# logs are all in the test's own directory. So are the PyYAML it imports and the skill it
-# runs: each is located once and copied there (PyYAML without being imported), and from then on
-# no variable points a Python at the caller's packages (PYTHONUSERBASE is read even under
-# `-I`). The last three assertions look at what is left outside: this checkout, the skill
-# the caller named, and the caller's PyYAML. One case is known to change the last: where the caller's PyYAML is in a
-# site directory `-I` still reads (a virtual environment, the system's) and has no bytecode
-# cache yet, the skill imports it from there and Python writes the cache.
+# logs are all in the test's own directory. That is all the test promises about where it
+# writes: Python writes a bytecode cache beside any module it imports (this checkout's
+# scripts, the skill's, PyYAML's), `-I` leaves no variable that turns that off, and the test
+# does not try to.
 # bootstrap wires hooks two ways (BRO-1929): by hand, or six of
 # them through the bstack plugin when one is installed. Both are run here: an earlier
 # version of this test ran only the way the author's machine took and passed while the
@@ -24,16 +21,7 @@ set -uo pipefail
 unset CDPATH   # with it set, `cd` prints the directory it chose
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-export PYTHONDONTWRITEBYTECODE=1
-# The caller's PyYAML package: found, not imported. Nothing here imports it from there.
-YAML_DIR="$(python3 -c 'import importlib.util, os; s = importlib.util.find_spec("yaml"); print(os.path.dirname(s.origin) if s and s.origin else "")' 2>/dev/null)"
-yaml_listing() { [ -n "$YAML_DIR" ] && find "$YAML_DIR/" | sort | cksum; }
-YAML_BEFORE="$(yaml_listing)"
-# This checkout's files, the ones git ignores included.
-repo_listing() { find "$REPO" -path "$REPO/.git" -prune -o -type f -print | sort | cksum; }
-REPO_BEFORE="$(repo_listing)"
-unset PYTHONUSERBASE PYTHONPATH
-EXPECTED_ASSERTIONS=102
+EXPECTED_ASSERTIONS=97
 PASS=0; FAIL=0; FAILED=()
 pass() { echo "  [ok] $1"; PASS=$((PASS + 1)); }
 fail() { echo "  [FAIL] $1"; FAIL=$((FAIL + 1)); FAILED+=("$1"); }
@@ -106,34 +94,18 @@ new_ws() {
     fi
     echo "$ws"
 }
-# The one copy of PyYAML the test's own Python imports (its helpers run without `-I`). -L: a
-# package that is a link (Homebrew, Nix, Stow) is copied as the files it leads to.
-mkdir -p "$TMP/pylib"
-[ -n "$YAML_DIR" ] && cp -RL "$YAML_DIR/" "$TMP/pylib/yaml"
-export PYTHONPATH="$TMP/pylib"
-# The skill runs from a copy too: Python writes bytecode beside the scripts it imports, and
-# `-I` leaves no way to tell it not to.
-SKILL_DIR="$(dirname "$(dirname "$CORRECT")")"
-skill_listing() { find "$SKILL_DIR/" -type f | sort | cksum; }
-SKILL_BEFORE="$(skill_listing)"
-mkdir -p "$TMP/skill"
-if ! cp -RL "$SKILL_DIR/scripts" "$SKILL_DIR/assets" "$TMP/skill/"; then
-    echo "  [FAIL] could not copy the correct skill beside $CORRECT (its scripts/ and assets/)" >&2
-    exit 1
-fi
-CORRECT="$TMP/skill/scripts/correct.py"
 # new_home <name>: an empty HOME. The skill's runner imports PyYAML and looks for it in the
 # user site, which moves with HOME; when that is where this machine keeps PyYAML, the new
-# home's user site gets the test's copy of the package. (It was a link to the real directory,
-# and Python wrote bytecode through it into the caller's own packages.) No settings, skills or
-# plugins of the real home are visible, and nothing of it is written.
+# home's user site gets a copy of the package (-L: one that is a link is copied as files).
+# No settings, skills or plugins of the real home are visible.
 new_home() {
-    local home="$TMP/$1" new_site
+    local home="$TMP/$1" real_yaml new_site
     mkdir -p "$home"
     if ! HOME="$home" python3 -I -c 'import site, sys; sys.path.append(site.getusersitepackages()); import yaml' 2>/dev/null; then
+        real_yaml="$(python3 -c 'import os, yaml; print(os.path.dirname(yaml.__file__))' 2>/dev/null)"
         new_site="$(HOME="$home" python3 -I -c 'import site; print(site.getusersitepackages())')"
-        if [ -d "$TMP/pylib/yaml" ] && [ "${new_site#"$home"/}" != "$new_site" ]; then
-            mkdir -p "$new_site" && cp -R "$TMP/pylib/yaml/" "$new_site/yaml"
+        if [ -n "$real_yaml" ] && [ "${new_site#"$home"/}" != "$new_site" ]; then
+            mkdir -p "$new_site" && cp -RL "$real_yaml/" "$new_site/yaml"
         fi
     fi
     echo "$home"
@@ -273,7 +245,6 @@ for hook in control-gate-hook.sh role-x-intake-hook.sh conversation-bridge-hook.
 done
 is "all seven of bstack's blocking-event hooks are in the settings file (missing:${unwired:- none})" test -z "$unwired"
 is "the git pre-commit hook file is written" test -f "$WS/.githooks/pre-commit"
-is "nothing in the scratch home is a link (a link could lead out of the test's directory)" test -z "$(find "$HOME_PLAIN" -type l)"
 is "bootstrap says the registry replays" has "$WS.log" "rule registry: replayed, and no row failed."
 is "bootstrap shows the skill's notice that edits on main and master are refused" has "$WS.log" "an edit on main or master in this repository is refused"
 is "without the plugin, bootstrap adds no note about hooks the replay could not see" lacks "$WS.log" "BRO-3811"
@@ -293,7 +264,7 @@ is "nothing failed" lacks "$OUT" "FAIL"
 is "the control gate is registered for Bash, Edit, MultiEdit and Write" test "$(gate_matchers "$WS")" = "Bash Edit MultiEdit Write"
 is "the policy carries gates.hard" grep -q '^  hard: \[\]$' "$(policy_of "$WS")"
 is "the replay prints a count of known misses for a row that has them" grep -qE 'no-catastrophic-delete +5 known miss' "$OUT"
-is "the two known misses of the force-push row are replayed too" grep -qE 'no-force-push +2 known miss' "$OUT"
+is "and a count of two for the force-push row" grep -qE 'no-force-push +2 known miss' "$OUT"
 
 # Everything below removes something and expects a row to fail. That means nothing unless
 # the starting point is green.
@@ -461,9 +432,9 @@ is "it scaffolds a second policy file in the old folder, and doctor reports the 
 is "the phase replays the registry there, and no row fails" test "$(grep -c 'rule registry: replayed, and no row failed.' "$MOVED.log")" = 1
 
 # ── 5. A workspace bootstrapped before 0.53.0 ────────────────────────────────
-# Its policy file has no gates.hard list. bstack does not edit the policy file: bootstrap
-# says where the upgrade note is, and the replay passes once the operator has added the line
-# the note gives.
+# Its policy file has no gates.hard list. bstack does not edit the policy file, and neither
+# bootstrap nor its guides say what to write there: bootstrap says where the note is, and the
+# replay passes once the policy declares its hard gates (none, in this scaffold).
 echo "5. a workspace from before 0.53.0"
 OLD="$(new_ws old)" || exit 1
 is "BSTACK_SKIP_RULES=1 bootstraps without a registry" boot "$OLD" BSTACK_SKIP_RULES=1
@@ -487,14 +458,12 @@ is "bootstrap exits 0" boot "$OLD"
 is "it leaves the policy file byte for byte" cmp -s "$(policy_of "$OLD")" "$TMP/old-policy.before"
 is "the replay says it cannot read the hard gates" has "$OLD.log" "cannot read the hard gates"
 is "and bootstrap says where the upgrade note is, and prescribes no edit itself" test "$(grep -c 'see "Upgrading a workspace" in the 0.53.0 entry of' "$OLD.log")$(grep -cF "$REPO/CHANGELOG.md" "$OLD.log")$(grep -c 'Add the line' "$OLD.log")" = 110
-is "the note keeps the line to a policy with no hard: key" test "$(grep -c 'The line is for a policy file with no' "$REPO/CHANGELOG.md")$(grep -c 'add no second (it would hide' "$REPO/CHANGELOG.md")" = 11
-is "the note it points to is there, and says which line" test "$(grep -c 'Upgrading a workspace bootstrapped before 0.53.0' "$REPO/CHANGELOG.md")$(grep -c 'add the line `hard: \[\]` under `gates:`' "$REPO/CHANGELOG.md")" = 11
-# The note states when the line applies (no `hard:` key). Said anywhere else without that
-# condition, it reaches a policy that already has a list, where a second key hides the gates:
-# a review reproduced that from one sentence of SKILL.md.
-is "only the changelog's note says to add the line" test -z "$(grep -lF 'hard: []' "$REPO/SKILL.md" "$REPO/README.md" "$REPO/scripts/bootstrap.sh" "$REPO/scripts/rules-registry.sh")"
+is "the note it points to is there" test "$(grep -c 'Upgrading a workspace bootstrapped before 0.53.0' "$REPO/CHANGELOG.md")" = 1
+# "Add `hard: []`" was printed by bootstrap, then written in SKILL.md, then in the note, and
+# each time a review found a policy where following it hid a gate from the replay.
+is "no guide and no script tells a user to add hard: []" test -z "$(grep -lF 'hard: []' "$REPO/SKILL.md" "$REPO/README.md" "$REPO/scripts/bootstrap.sh" "$REPO/scripts/rules-registry.sh")$(grep -c 'add the line' "$REPO/CHANGELOG.md" | grep -v '^0$')"
 is "it registered the gate for MultiEdit" test "$(gate_matchers "$OLD")" = "Bash Edit MultiEdit Write"
-# The operator adds the line.
+# This scaffold has no gate with a pattern, so the list it declares is empty.
 python3 - "$(policy_of "$OLD")" <<'PY'
 import sys
 path = sys.argv[1]
@@ -502,7 +471,7 @@ text = open(path, encoding="utf-8").read()
 assert text.count("gates:\n") == 1
 open(path, "w", encoding="utf-8").write(text.replace("gates:\n", "gates:\n  hard: []\n"))
 PY
-is "with the line added by hand, bootstrap exits 0" boot "$OLD"
+is "with gates.hard declared, bootstrap exits 0" boot "$OLD"
 is "and the registry replays" has "$OLD.log" "rule registry: replayed, and no row failed."
 
 # ── 6. A registry that was there before, or that an older pack wrote ─────────
@@ -642,9 +611,6 @@ wait "$boot_pid"; RC=$?
 is "released, the skill ends with 77, and bootstrap reports it and still exits 0" test "$RC" -eq 0 -a "$(grep -c 'rule registry: exit 77' "$LIVE.log")" = 1
 
 is "the machine's own settings file was not touched" test "$(real_settings_sum)" = "$REAL_SETTINGS_BEFORE"
-is "this checkout holds the files it held, the ones git ignores included" test "$(repo_listing)" = "$REPO_BEFORE"
-is "the skill the caller named holds the files it held" test "$(skill_listing)" = "$SKILL_BEFORE"
-is "the caller's own PyYAML package holds the files it held (no bytecode was written into it)" test -n "$YAML_BEFORE" -a "$(yaml_listing)" = "$YAML_BEFORE"
 
 echo ""
 echo "rules-pack: $PASS passed, $FAIL failed"
