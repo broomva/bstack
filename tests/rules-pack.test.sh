@@ -9,12 +9,13 @@
 #
 # Every case bootstraps an empty scratch repository under a scratch HOME, so the machine's
 # installed plugin and skills do not decide the result, and the workspaces, homes and
-# logs are all in the test's own directory. So is the PyYAML it imports: the caller's copy
-# is located once, with bytecode off, and copied into the test's directory, and from then on
+# logs are all in the test's own directory. So are the PyYAML it imports and the skill it
+# runs: each is located once and copied there (PyYAML without being imported), and from then on
 # no variable points a Python at the caller's packages (PYTHONUSERBASE is read even under
-# `-I`). One case is left, and the last assertion looks for it: where the caller's PyYAML is
-# in a site directory `-I` still reads (a virtual environment, the system's) and has no
-# bytecode cache yet, the skill imports it from there and Python writes the cache.
+# `-I`). The last three assertions look at what is left outside: this checkout, the skill
+# the caller named, and the caller's PyYAML. One case is known to change the last: where the caller's PyYAML is in a
+# site directory `-I` still reads (a virtual environment, the system's) and has no bytecode
+# cache yet, the skill imports it from there and Python writes the cache.
 # bootstrap wires hooks two ways (BRO-1929): by hand, or six of
 # them through the bstack plugin when one is installed. Both are run here: an earlier
 # version of this test ran only the way the author's machine took and passed while the
@@ -24,12 +25,15 @@ unset CDPATH   # with it set, `cd` prints the directory it chose
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export PYTHONDONTWRITEBYTECODE=1
-# The caller's PyYAML package, as it is before anything here imports it.
-YAML_DIR="$(python3 -c 'import os, yaml; print(os.path.dirname(yaml.__file__))' 2>/dev/null)"
-yaml_listing() { [ -n "$YAML_DIR" ] && find "$YAML_DIR" | sort | cksum; }
+# The caller's PyYAML package: found, not imported. Nothing here imports it from there.
+YAML_DIR="$(python3 -c 'import importlib.util, os; s = importlib.util.find_spec("yaml"); print(os.path.dirname(s.origin) if s and s.origin else "")' 2>/dev/null)"
+yaml_listing() { [ -n "$YAML_DIR" ] && find "$YAML_DIR/" | sort | cksum; }
 YAML_BEFORE="$(yaml_listing)"
+# This checkout's files, the ones git ignores included.
+repo_listing() { find "$REPO" -path "$REPO/.git" -prune -o -type f -print | sort | cksum; }
+REPO_BEFORE="$(repo_listing)"
 unset PYTHONUSERBASE PYTHONPATH
-EXPECTED_ASSERTIONS=100
+EXPECTED_ASSERTIONS=102
 PASS=0; FAIL=0; FAILED=()
 pass() { echo "  [ok] $1"; PASS=$((PASS + 1)); }
 fail() { echo "  [FAIL] $1"; FAIL=$((FAIL + 1)); FAILED+=("$1"); }
@@ -102,10 +106,22 @@ new_ws() {
     fi
     echo "$ws"
 }
-# The one copy of PyYAML the test's own Python imports (its helpers run without `-I`).
+# The one copy of PyYAML the test's own Python imports (its helpers run without `-I`). -L: a
+# package that is a link (Homebrew, Nix, Stow) is copied as the files it leads to.
 mkdir -p "$TMP/pylib"
-[ -n "$YAML_DIR" ] && cp -R "$YAML_DIR" "$TMP/pylib/yaml"
+[ -n "$YAML_DIR" ] && cp -RL "$YAML_DIR/" "$TMP/pylib/yaml"
 export PYTHONPATH="$TMP/pylib"
+# The skill runs from a copy too: Python writes bytecode beside the scripts it imports, and
+# `-I` leaves no way to tell it not to.
+SKILL_DIR="$(dirname "$(dirname "$CORRECT")")"
+skill_listing() { find "$SKILL_DIR/" -type f | sort | cksum; }
+SKILL_BEFORE="$(skill_listing)"
+mkdir -p "$TMP/skill"
+if ! cp -RL "$SKILL_DIR/scripts" "$SKILL_DIR/assets" "$TMP/skill/"; then
+    echo "  [FAIL] could not copy the correct skill beside $CORRECT (its scripts/ and assets/)" >&2
+    exit 1
+fi
+CORRECT="$TMP/skill/scripts/correct.py"
 # new_home <name>: an empty HOME. The skill's runner imports PyYAML and looks for it in the
 # user site, which moves with HOME; when that is where this machine keeps PyYAML, the new
 # home's user site gets the test's copy of the package. (It was a link to the real directory,
@@ -117,7 +133,7 @@ new_home() {
     if ! HOME="$home" python3 -I -c 'import site, sys; sys.path.append(site.getusersitepackages()); import yaml' 2>/dev/null; then
         new_site="$(HOME="$home" python3 -I -c 'import site; print(site.getusersitepackages())')"
         if [ -d "$TMP/pylib/yaml" ] && [ "${new_site#"$home"/}" != "$new_site" ]; then
-            mkdir -p "$new_site" && cp -R "$TMP/pylib/yaml" "$new_site/yaml"
+            mkdir -p "$new_site" && cp -R "$TMP/pylib/yaml/" "$new_site/yaml"
         fi
     fi
     echo "$home"
@@ -519,7 +535,7 @@ is "it took the plugin path" has "$PLUG.log" "preferring bstack@skills-dir"
 is "the plugin's hooks are not in the settings file" test "$(wired "$PLUG" arc-continuation-hook.sh; echo $?)$(wired "$PLUG" l3-stability-pretool-hook.sh; echo $?)" = 11
 is "the control gate still is" wired "$PLUG" control-gate-hook.sh
 is "bootstrap says the registry replays" has "$PLUG.log" "rule registry: replayed, and no row failed."
-is "and says what the replay could not see on this path" has "$PLUG.log" "the replay did not see them (BRO-3811)"
+is "and says what a replay does not see on this path" has "$PLUG.log" "a replay does not see them (BRO-3811)"
 RC=0
 env HOME="$HOME_PLUGIN" python3 -I "$CORRECT" check --root "$PLUG" >"$OUT" 2>&1 || RC=$?
 is "the skill's own check exits 0 on this path too" test "$RC" -eq 0
@@ -626,6 +642,8 @@ wait "$boot_pid"; RC=$?
 is "released, the skill ends with 77, and bootstrap reports it and still exits 0" test "$RC" -eq 0 -a "$(grep -c 'rule registry: exit 77' "$LIVE.log")" = 1
 
 is "the machine's own settings file was not touched" test "$(real_settings_sum)" = "$REAL_SETTINGS_BEFORE"
+is "this checkout holds the files it held, the ones git ignores included" test "$(repo_listing)" = "$REPO_BEFORE"
+is "the skill the caller named holds the files it held" test "$(skill_listing)" = "$SKILL_BEFORE"
 is "the caller's own PyYAML package holds the files it held (no bytecode was written into it)" test -n "$YAML_BEFORE" -a "$(yaml_listing)" = "$YAML_BEFORE"
 
 echo ""

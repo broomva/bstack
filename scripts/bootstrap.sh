@@ -409,7 +409,7 @@ else
     0|1|3)
       if [ "$PLUGIN_PREFERRED" = "1" ]; then
         echo "  note: the bstack plugin is enabled, and the hooks it provides are not in a settings file:"
-        echo "  the replay did not see them (BRO-3811)."
+        echo "  a replay does not see them (BRO-3811)."
       fi ;;
   esac
 fi
