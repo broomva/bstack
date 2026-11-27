@@ -402,27 +402,12 @@ else
        echo "  If the output says it cannot read the hard gates: a policy file from before bstack 0.53.0"
        echo "  has no such list. Add the line \`hard: []\` under \`gates:\` in the policy file, by hand." ;;
   esac
-  # The two notes below are about a replay, so they follow only a status a replay ends with.
+  # The note below is about a replay, so it follows only a status a replay ends with.
   case "$rules_rc" in
     0|1|3)
       if [ "$PLUGIN_PREFERRED" = "1" ]; then
         echo "  note: the bstack plugin is enabled, and the hooks it provides are not in a settings file:"
         echo "  the replay did not see them (BRO-3811)."
-      fi
-      # The control gate reads .control/policy.yaml. The skill's registry reads the policy file
-      # in .broomva/ when one is there. With one in each, a replay that passes does not say
-      # the two agree (BRO-4200). tests/rules-pack.test.sh holds both halves of this sentence.
-      # Two files: not a folder under that name, and not two names of one file.
-      new_policy="$WORKSPACE_DIR/.broomva/policy.yaml"
-      old_policy="$WORKSPACE_DIR/.control/policy.yaml"
-      if [ -f "$new_policy" ] && [ -f "$old_policy" ] && [ ! "$new_policy" -ef "$old_policy" ]; then
-        echo "  note: this workspace has a policy file in .broomva/ and one in .control/. The control gate"
-        echo "  reads only .control/policy.yaml. The skill's registry reads .broomva/policy.yaml. So the"
-        echo "  replay says nothing of a pattern that is only in .control/policy.yaml, and the gate does"
-        echo "  not enforce a pattern that is only in .broomva/policy.yaml."
-        echo "  Do not remove .control/policy.yaml: the gate would then enforce none of its patterns."
-        echo "  Put every pattern the gate must enforce in .control/policy.yaml, and keep the two files"
-        echo "  alike (BRO-4200)."
       fi ;;
   esac
 fi

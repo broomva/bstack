@@ -18,7 +18,7 @@ set -uo pipefail
 unset CDPATH   # with it set, `cd` prints the directory it chose
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-EXPECTED_ASSERTIONS=98
+EXPECTED_ASSERTIONS=93
 PASS=0; FAIL=0; FAILED=()
 pass() { echo "  [ok] $1"; PASS=$((PASS + 1)); }
 fail() { echo "  [FAIL] $1"; FAIL=$((FAIL + 1)); FAILED+=("$1"); }
@@ -400,9 +400,8 @@ is "restored, the replay exits 0 again" test "$RC" -eq 0
 # ── 4. A policy file in each governance folder ───────────────────────────────
 echo "4. a policy file in each governance folder"
 # The gate script is main's: it reads the old folder's policy file. The skill's registry
-# reads the new folder's when one is there. Nothing here makes them agree; bootstrap says
-# that they may not, which is the sentence the CHANGELOG makes about it (BRO-4200).
-is "with one policy file, bootstrap adds no note about two" lacks "$WS.log" "a policy file in $BROOMVA_REPO_DIR/ and one in $BROOMVA_REPO_LEGACY_DIR/"
+# reads the new folder's when one is there. Nothing makes them agree, and bootstrap says
+# nothing about it; these cases hold the CHANGELOG's sentences about the limit (BRO-4200).
 BOTH="$(copy_ws "$WS" both)" || exit 1
 mkdir -p "$BOTH/$BROOMVA_REPO_DIR"
 printf 'version: 1\ngates:\n  hard:\n    - id: G-NEW\n      pattern: marker-in-the-new-folder\n' >"$BOTH/$BROOMVA_REPO_DIR/policy.yaml"
@@ -418,21 +417,15 @@ is "and not the pattern in the new folder's" test "$(gate_says "$BOTH" "echo mar
 replay "$BOTH"
 is "the registry accounts for the gate in the new folder's policy file" test "$RC" -eq 1 -a "$(grep -c 'policy gate G-NEW has a pattern but no row' "$OUT")" = 1
 is "and says nothing of the gate in the old folder's" lacks "$OUT" "G-OLD"
-is "bootstrap of that workspace says the replay cannot speak for a pattern in only one of the two files" test "$(boot "$BOTH"; echo $?)$(grep -c "a policy file in $BROOMVA_REPO_DIR/ and one in $BROOMVA_REPO_LEGACY_DIR/" "$BOTH.log")" = 01
-is "and says which file the gate needs, so that nobody removes it" test "$(grep -c "reads only $BROOMVA_REPO_LEGACY_DIR/policy.yaml" "$BOTH.log")$(grep -c "Do not remove $BROOMVA_REPO_LEGACY_DIR/policy.yaml" "$BOTH.log")" = 11
-is "and says which way each file is blind: the replay to the old folder's patterns, the gate to the new folder's" test "$(grep -c "says nothing of a pattern that is only in $BROOMVA_REPO_LEGACY_DIR/policy.yaml" "$BOTH.log")$(grep -c "not enforce a pattern that is only in $BROOMVA_REPO_DIR/policy.yaml" "$BOTH.log")" = 11
-# Two names of one file are one policy file: no note.
-rm -f "$BOTH/$BROOMVA_REPO_DIR/policy.yaml" && ln -s "../$BROOMVA_REPO_LEGACY_DIR/policy.yaml" "$BOTH/$BROOMVA_REPO_DIR/policy.yaml"
-is "with the new folder's policy a link to the old folder's file, bootstrap adds no note about two" test "$(boot "$BOTH"; echo $?)$(grep -c "a policy file in $BROOMVA_REPO_DIR/ and one in $BROOMVA_REPO_LEGACY_DIR/" "$BOTH.log")" = 00
 # A known limit, pinned so the CHANGELOG's sentence about it stays true (BRO-4200): in a
 # workspace whose policy is in the new folder, bootstrap still scaffolds one in the old
-# folder, which makes it a workspace with two; the note and doctor both say so.
+# folder, which makes it a workspace with two; doctor says so.
 MOVED="$(new_ws moved)" || exit 1
 mkdir -p "$MOVED/$BROOMVA_REPO_DIR"
 sed 's/{{WORKSPACE_NAME}}/moved/g' "$REPO/assets/templates/policy.yaml.template" >"$MOVED/$BROOMVA_REPO_DIR/policy.yaml"
 is "known limit (BRO-4200): bootstrap of a workspace with its policy in the new folder exits 0" boot "$MOVED"
 is "it scaffolds a second policy file in the old folder, and doctor reports the name under both" test -f "$MOVED/$BROOMVA_REPO_LEGACY_DIR/policy.yaml" -a "$(grep -c "names under both $BROOMVA_REPO_DIR/ and $BROOMVA_REPO_LEGACY_DIR/ in .*: policy" "$MOVED.log")" = 1
-is "the phase replays the registry and adds the note about two policy files" test "$(grep -c 'rule registry: replayed, and no row failed.' "$MOVED.log")$(grep -c "a policy file in $BROOMVA_REPO_DIR/ and one in $BROOMVA_REPO_LEGACY_DIR/" "$MOVED.log")" = 11
+is "the phase replays the registry there, and no row fails" test "$(grep -c 'rule registry: replayed, and no row failed.' "$MOVED.log")" = 1
 
 # ── 5. A workspace bootstrapped before 0.53.0 ────────────────────────────────
 # Its policy file has no gates.hard list. bstack does not edit the policy file: bootstrap
