@@ -1,16 +1,16 @@
 # Changelog
 
-## 0.53.0 — 2026-11-26
+## 0.53.0 — 2026-11-27
 
 ### feat(bootstrap): bootstrap ends with a rule registry that replays the control gate it wired (BRO-4147)
 
 bstack's own tests check the control gate inside the bstack repository
 (`tests/hook-python-isolation.test.sh`). Nothing checked it in the workspace it is installed
-into: doctor looked at whether hooks were wired, not at what they refuse there. The `correct`
-skill (broomva/skills) does that. It keeps a rule registry in the workspace's governance
-folder and replays each rule's proofs and controls through the hook entry the harness would
-run. bstack now calls it and ships the rows for its own hooks. No runner code is copied into
-bstack.
+into. The `correct` skill (broomva/skills) does that. It keeps a rule registry in the
+workspace's governance folder and replays each rule's proofs and controls through the hook
+entry the harness would run. Bootstrap now calls it and ships the rows for bstack's own
+hooks. No runner code is copied into bstack, and bstack adds no command of its own for the
+registry: to replay one later, call the skill (`correct.py check`).
 
 - **`references/rules-pack.yaml`** — five rows that replay `scripts/control-gate-hook.sh`,
   entries for the five hooks bootstrap wires that enforce nothing, and two `gap` rows for
@@ -20,45 +20,23 @@ bstack.
   of it. Ways found so far to do what a rule forbids without matching its pattern are known
   misses in the rows (BRO-4169); they are examples, not a complete list, and the replay
   counts them in its output. No row is certified by a real harness session.
-- **Bootstrap phase 3.7.** A policy file from before this version gets its `gates.hard`
-  list (`scripts/ensure-hard-gates.py`: one inserted key, the `gates:` line and its comment
-  kept, written through a temporary file). A file it cannot edit that way is left alone
-  with the reason: one with a carriage return anywhere in it, a symbolic link, a file
-  marked read-only, a `gates:` block in flow style. A policy file that bstack's path lookup
-  refuses (a symbolic link is one) is not looked at, and bootstrap says so. Then
-  `scripts/rules-registry.sh init` calls the skill's
-  `correct.py init --pack references/rules-pack.yaml`. A workspace with no registry gets one
-  (the skill's starter rule plus the pack) and it is replayed. A workspace that has one
-  gets no file written, is replayed, and is told which rows of the pack it lacks or holds
-  differently. A failure in the phase never aborts bootstrap. The phase's output goes to
-  the terminal as it happens, not when the phase ends. The phase waits for the skill as
-  bootstrap waits for every tool it calls; there is no time limit, and Ctrl-C stops both. Without the skill it prints the install command and writes no registry.
-  `BSTACK_SKIP_RULES=1` skips the phase.
+- **Bootstrap phase 3.7** runs `scripts/rules-registry.sh`, which finds the skill and runs
+  its `correct.py init --pack references/rules-pack.yaml`, and reports the skill's exit
+  status. A workspace with no registry gets one (the skill's starter rule plus the pack)
+  and it is replayed. A workspace that has one gets no file written, is replayed, and is
+  told which rows of the pack it lacks or holds differently. A failure in the phase never
+  aborts bootstrap. The phase's output goes to the terminal as it happens. It waits for the
+  skill as bootstrap waits for every tool it calls; there is no time limit, and Ctrl-C
+  stops both. Without a copy of the skill that has `init --pack` it prints the install
+  command and writes no registry. `BSTACK_SKIP_RULES=1` skips the phase.
 - **A new restriction.** The skill's starter rule comes with a hook that refuses edits on
   `main` and `master`. A workspace that gets its registry from this phase has that hook
   from then on. The skill says so when the hook is written, before the replay, and
-  bootstrap shows it at once, so a bootstrap stopped during the replay has shown it.
-- **Doctor §34 reports and starts no hook.** It says whether anything is where the rule
-  registry goes and whether a copy of the skill that replays it was found
-  (`scripts/rules-registry.sh status`). It reads and runs nothing, so it says nothing about
-  whether the registry holds or can be replayed: a registry with no copy of the skill is a
-  gap; a registry with one is reported (not under `--quiet`) with the command that replays
-  it, and is not a pass; nothing there is reported (not under `--quiet`) and not counted.
-  With `BSTACK_DOCTOR_RULES=1` doctor replays the registry with the skill's `check`, which
-  never writes, and waits for it: a pass when no row fails, a gap when a row does not hold
-  or the replay cannot run.
-- **`bstack rules init [--dry-run] | verify | check [options] | status | locate`.** `init`
-  settles its arguments before it reads or writes anything; `--dry-run` starts no hook,
-  with or without a registry in place. None of them changes the
-  policy file; `status` and `locate` write nothing and start nothing. `verify`, `check` and
-  `init` on a workspace that has a registry write no file of their own, and they replay: a
-  replay runs the workspace's hooks, and a hook may write (the skill's starter hook leaves
-  `scripts/__pycache__`, BRO-4185). Where the registry is, what counts as one and whether
-  it can be replayed are the skill's to say: the script only tells a workspace with nothing
-  where a registry goes (exit 4) from every other case, and hands the rest to the skill.
-  Exit codes: 0 no row failed, 1 a row did not hold, 2 could not run, 3 no copy of the
-  skill (for `init` and `verify`, also a copy too old), 4 no registry, 6 the registry
-  lacks part of bstack's pack.
+  bootstrap shows it at once.
+- **Upgrading a workspace bootstrapped before 0.53.0: one line by hand.** The rule runner
+  reads a `gates.hard` list in the policy file, and older policy files have none. bstack
+  does not edit the policy file. Add `hard: []` under `gates:`; until then the replay says
+  it cannot read the hard gates, and bootstrap repeats the instruction.
 - **`correct` joins the required roster** (`references/companion-skills.yaml`), both plugin
   marketplaces (`./governance/correct`), and the install check in `SKILL.md`.
 - **fix: the control gate is registered for `MultiEdit`.** The hook has handled the
@@ -67,38 +45,44 @@ bstack.
   path matches one of the gate's path patterns is refused from this version on, including
   harmless ones such as a file named `credentials-guide.md`.
 - **fix: the control gate reads the policy file every other reader prefers** (the new
-  governance folder's, else the old one's). It read only the old folder's, so with a
-  policy in each it enforced one file while the registry accounted for the other.
-  A workspace with `pattern:` lines only in the old folder's policy and a policy file in
-  the new folder loses those patterns at the gate with this version's script: move them.
-  This reaches a workspace when bootstrap writes `scripts/control-gate-hook.sh` there.
-  A workspace that already has that file keeps its copy; bootstrap now says so when the
-  copy differs from this version's, and the fix arrives only when the copy is replaced.
-- **`gates.hard: []` in the policy template.** The rule runner reads that list.
+  governance folder's when anything is there, else the old one's). It read only the old
+  folder's, so with a policy in each it enforced one file while the registry accounted for
+  the other. A workspace with `pattern:` lines only in the old folder's policy and a policy
+  file in the new folder loses those patterns at the gate with this version's script: move
+  them. This reaches a workspace when bootstrap writes `scripts/control-gate-hook.sh`
+  there. A workspace that already has that file keeps its copy; bootstrap now says so when
+  the copy differs from this version's, and the fix arrives only when the copy is replaced.
+- **`gates.hard: []` in the policy template.**
 - **Limits.**
   - With the bstack plugin enabled, six hooks come from the plugin's `hooks.json`, which
-    the runner does not read (BRO-3811). A replay then covers the hooks in the settings
-    files only, and says so next to its result, pass or fail.
+    the runner does not read (BRO-3811). The replay then covers the hooks in the settings
+    files only, and bootstrap says so after the phase.
   - A registry that exists is never edited. Rows the pack gains in a later release are
-    listed by bootstrap, `bstack rules init` and `bstack rules verify` (exit 6), and are
-    copied by hand. `verify` is the skill's `init` run where something already is where
-    the registry goes; the skill writes nothing there. If the registry were removed between
-    the script's look and the skill's, the skill would write a new one.
-  - bstack sets no time limit on a replay. The skill's runner limits each case it replays,
-    so a registry with many rows can still take minutes, and a copy of the skill that
-    hangs holds bootstrap until it is stopped by hand. An earlier draft of this
-    change ran the skill under a time limit in a process group of its own; review rounds 2
-    and 3 each found defects in that supervisor, and it was removed.
+    listed by bootstrap (the skill exits 3) and are copied by hand.
+  - bstack sets no time limit on the replay. The skill's runner limits each case it
+    replays, so a registry with many rows can still take minutes, and a copy of the skill
+    that hangs holds bootstrap until it is stopped by hand.
+  - `bstack doctor` does not look at the registry. A hook that stops refusing is seen by
+    the skill's `correct.py check`, by the workspace's CI if it runs that, or by the next
+    bootstrap. Not by doctor.
   - Besides its own patterns the gate enforces every line of the policy file of the form
     `pattern: <regex>`, under any key, and does not read a line that begins `- pattern:`.
     The registry accounts only for patterns under `gates.hard` (BRO-4169).
   - A workspace whose path has a space in it, or a relative `BROOMVA_WORKSPACE`, gets hook
     commands that cannot run; the replay reports the gate's rows as not registered
     (BRO-4184; it predates this version, and nothing reported it before).
+  - A replay runs the workspace's hooks, and the skill's starter hook leaves
+    `scripts/__pycache__` in the workspace (BRO-4185).
   - The skill is looked for in `~/.claude/skills/correct` and `~/.agents/skills/correct`. A
     copy installed another way (a plugin marketplace cache) is named with `BSTACK_CORRECT`.
   - `tests/rules-pack.test.sh` runs against one pinned commit of the skill
     (`.github/workflows/ci.yml`), not against whatever copy a user has installed.
+- **What an earlier draft of this change had and this one does not.** A `bstack rules`
+  command (`init`, `verify`, `check`, `status`), a doctor section that reported on or
+  replayed the registry, a script that added `gates.hard` to an older policy file, and a
+  time limit on the replay. Four review rounds found defects in each, mostly where they
+  re-derived something the skill already decides, and a continuation review asked for them
+  to be cut. What they were for is tracked in BRO-4192.
 - **Test:** `tests/rules-pack.test.sh` bootstraps scratch repositories under scratch home
   directories, with git reading no outside configuration and every `BSTACK_*` variable of
   the caller dropped, on both wiring paths (every hook by hand, and plugin preferred). The
@@ -106,14 +90,11 @@ bstack.
   replays with exit 0; a second one changes nothing in a tree that already holds the
   starter hook's `scripts/__pycache__`. Removing any one of the nine patterns makes exactly
   one row of the registry fail, the one that replays it. An allow-all gate fails all five
-  of the pack's hook rows. Also covered: a 0.52 policy brought up; a policy in each
-  governance folder; a registry that differs from the pack; a registry named with
-  `--registry`; `init` arguments, and a dry run where a registry already is; doctor with and
-  without `BSTACK_DOCTOR_RULES=1`, and with no temporary file; a directory or a dangling
-  link where the registry goes; policy files the migration must leave alone; a skill that
-  is missing, too old, crashes, or is still running when its first line must already be on
-  the terminal, or ends with a status only the script uses; no `HOME`. 120 assertions,
-  counted. `tests/plugin-preference.test.sh` now expects the gate under four matchers.
+  of the pack's hook rows. Also covered: a policy file from before 0.53.0, before and after
+  the line is added by hand; a policy in each governance folder; a registry that differs
+  from the pack; a skill that is missing, too old, crashes, or is still running when its
+  first line must already be on the terminal; no `HOME`. 81 assertions, counted.
+  `tests/plugin-preference.test.sh` now expects the gate under four matchers.
 
 ## 0.52.2 — 2026-11-23
 
