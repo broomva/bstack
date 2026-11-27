@@ -338,10 +338,9 @@ eq "a relative patch with no working directory is unresolved, not dropped" "$(ge
 eq "so the session is unclassified" "$(get "['raw']['unclassified_sessions']")" "1"
 
 echo "== round 5: unresolved shell writes are kept, not dropped =="
-# Place default-scratch test repo outside /tmp so Ubuntu CI (where mktemp -d uses /tmp)
-# does not exclude the test meta repo's cwd under default scratch_prefixes=["/tmp","/private/tmp"].
-NONTMP_ROOT="$REPO/.tmp-fleet-test-$$"
-mkdir -p "$NONTMP_ROOT"
+# Place default-scratch test repo outside /tmp even when the repo checkout itself
+# lives under /tmp (e.g. disposable review clones in /tmp).
+NONTMP_ROOT="$(mktemp -d "${HOME}/.bstack-fleet-test.XXXXXX")"
 trap 'rm -rf "$TMP" "$NONTMP_ROOT"' EXIT
 NONTMP_META="$NONTMP_ROOT/meta"
 git init -q "$NONTMP_META"
@@ -387,20 +386,41 @@ PY
 )"
 eq "relative shell write with no cwd is unresolved" "$R" "['?out.py']"
 
-echo "== round 6: shell write variants, vanished nested clone, unreadable transcript =="
-R6_SHELL="$(python3 -I - "$FLEET" "$TMP/meta" "$TMP/gone-product" <<'PY'
-import importlib.util, sys
+echo "== round 6 & 7: shell write variants, multi-target tee/sed, cd, var targets, [ab] literal pathspec, symlinks, malformed config =="
+# Add tracked file `a` in $TMP/meta to test that missing `[ab]/x` does NOT glob-match `a`
+echo "hi" > "$TMP/meta/a"
+git -C "$TMP/meta" add a
+R6_SHELL="$(python3 -I - "$FLEET" "$TMP/meta" "$TMP/prod" "$TMP/gone-product" <<'PY'
+import importlib.util, os, sys
 sp = importlib.util.spec_from_file_location("f", sys.argv[1]); m = importlib.util.module_from_spec(sp); sp.loader.exec_module(m)
-meta, gone = sys.argv[2], sys.argv[3]
-c1 = m.shell_write_repos(f'echo hi 1> "{gone}/a.py"', meta)
-c2 = m.shell_write_repos(f"echo hi | tee -- '{gone}/b.py'", meta)
-c3 = m.shell_write_repos(f"sed -i '' 's/a/b/' \"{gone}/c.py\"", meta)
-c4 = m.shell_write_repos("echo hi > README", None)
+meta, prod, gone = sys.argv[2:5]
+c1 = sorted(m.shell_write_repos(f'echo hi 1> "{gone}/a.py"', meta))
+c2 = sorted(m.shell_write_repos(f"echo hi | tee -- '{meta}/README' '{prod}/README'", meta))
+c3 = sorted(m.shell_write_repos(f"sed -i '' 's/a/b/' \"{meta}/README\" \"{prod}/README\"", meta))
+c4 = sorted(m.shell_write_repos("echo hi > README", None))
 c5 = m.edit_repo(f"{meta}/vanished-nested-prod/src/app.py", meta)
-print(len(c1), len(c2), len(c3), sorted(c4), c5.startswith("?"))
+c6 = sorted(m.shell_write_repos(f"echo hi>{prod}/README", meta))
+c7 = sorted(m.shell_write_repos(f"cd {prod} && echo hi > README", meta))
+c8 = sorted(m.shell_write_repos('echo hi > "my notes.md"', None))
+c9 = sorted(m.shell_write_repos('echo hi > "$TARGET"', meta))
+c10 = sorted(m.shell_write_repos("echo x | tee a b", "/not-existing"))
+c11 = m.edit_repo(f"{meta}/[ab]/x.py", meta)
+print(
+    c1 == [f"?{os.path.normpath(gone + '/a.py')}"],
+    c2 == ["acme/meta", "acme/prod"],
+    c3 == ["acme/meta", "acme/prod"],
+    c4 == ["?README"],
+    c5.startswith("?"),
+    c6 == ["acme/prod"],
+    c7 == ["acme/prod"],
+    c8 == ["?my notes.md"],
+    c9 == ["?$TARGET"],
+    c10 == ["?/not-existing/a", "?/not-existing/b"],
+    c11.startswith("?"),
+)
 PY
 )"
-eq "1>, quoted redirects, tee --, macOS sed -i '', bare README, and vanished nested clone all caught" "$R6_SHELL" "1 1 1 ['?README'] True"
+eq "all shell write variants (unspaced >, multi-target tee/sed, cd, quoted spaces, var target, literal [ab]) resolve accurately" "$R6_SHELL" "True True True True True True True True True True True"
 
 mkdir -p "$TMP/r6-unreadable/p"
 cp "$TMP/r5-shell-scratch/p/s.jsonl" "$TMP/r6-unreadable/p/meta.jsonl"
@@ -410,6 +430,32 @@ J="$(run "$TMP/r6-unreadable" "$EMPTY" "$CFG_DEF")"
 chmod 644 "$TMP/r6-unreadable/p/secret.jsonl"
 eq "unreadable transcript fails closed on m6 -> None" "$(get "['metrics']['m6_meta_work_session_ratio']")" "None"
 eq "unreadable transcript count recorded" "$(get "['raw']['unreadable_transcripts']['claude']")" "1"
+
+# 7a) Symlinked unreadable Codex transcript into chmod 000 dir fails closed; readable symlinked dir is discovered
+mkdir -p "$TMP/r7-codex-sym" "$TMP/r7-hidden-dir" "$TMP/r7-linked-dir"
+cp "$XR/2026/11/19/rollout-a.jsonl" "$TMP/r7-linked-dir/linked.jsonl"
+echo '{}' > "$TMP/r7-hidden-dir/secret.jsonl"
+ln -s "$TMP/r7-linked-dir" "$TMP/r7-codex-sym/linked-sub"
+J="$(run "$EMPTY" "$TMP/r7-codex-sym" "$CFG")"
+eq "readable nested symlinked Codex dir is discovered" "$(get "['raw']['transcripts_read']['codex']")" "1"
+chmod 000 "$TMP/r7-hidden-dir"
+ln -s "$TMP/r7-hidden-dir/secret.jsonl" "$TMP/r7-codex-sym/hidden.jsonl"
+J="$(run "$TMP/r5-shell-scratch" "$TMP/r7-codex-sym" "$CFG")"
+chmod 755 "$TMP/r7-hidden-dir"
+eq "symlinked unreadable Codex transcript fails closed -> m6 None" "$(get "['metrics']['m6_meta_work_session_ratio']")" "None"
+eq "unreadable Codex symlink counted" "$(get "['raw']['unreadable_transcripts']['codex']")" "1"
+
+# 7b) scratch_prefixes: [""] matches [] in both behavior and signature; malformed scratch_prefixes: 42 degrades cleanly
+J_EMPTY_STR="$(run "$TMP/r5-shell-scratch" "$EMPTY" '{"product_repos":["acme/prod"],"meta_repos":["acme/meta"],"scratch_prefixes":[""]}')"
+J_EMPTY_ARR="$(run "$TMP/r5-shell-scratch" "$EMPTY" '{"product_repos":["acme/prod"],"meta_repos":["acme/meta"],"scratch_prefixes":[]}')"
+R7_SP="$(python3 -I - "$J_EMPTY_STR" "$J_EMPTY_ARR" <<'PY'
+import json, sys
+a, b = json.loads(sys.argv[1]), json.loads(sys.argv[2])
+print(a["config"] == b["config"], a["raw"]["meta_sessions"] == b["raw"]["meta_sessions"], a["raw"]["unclassified_sessions"] == b["raw"]["unclassified_sessions"])
+PY
+)"
+eq "scratch_prefixes:[''] behaves and signs identically to []" "$R7_SP" "True True True"
+run "$EMPTY" "$EMPTY" '{"scratch_prefixes":42}' >/dev/null && ok "malformed scratch_prefixes: 42 degrades cleanly" || bad "scratch_prefixes: 42 crashed"
 
 echo "== state file: written atomically, no transcript content =="
 # shellcheck source=scripts/lib/broomva-paths.sh

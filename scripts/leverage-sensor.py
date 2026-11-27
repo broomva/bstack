@@ -313,11 +313,20 @@ def coerce_setpoints(raw, path="<setpoints>"):
     # list, None, or string here raises far from the file that caused it.
     if "window_days" in out:
         wd = out.get("window_days")
-        ok = (isinstance(wd, (int, float)) and not isinstance(wd, bool)
-              and math.isfinite(wd) and wd > 0)
+        ok = False
+        if isinstance(wd, (int, float)) and not isinstance(wd, bool):
+            try:
+                f_wd = float(wd)
+                ok = math.isfinite(f_wd) and 0 < f_wd <= _MAX_WINDOW_DAYS
+            except OverflowError:
+                ok = False
         if not ok:
-            _warn(warnings, f"setpoints.window_days {wd!r} is not a positive number "
-                            f"— using {DEGRADED_SETPOINTS['window_days']}")
+            try:
+                wd_repr = _clip(repr(wd), 60)
+            except Exception:
+                wd_repr = f"<{type(wd).__name__}>"
+            _warn(warnings, f"setpoints.window_days {wd_repr} is not a positive number "
+                            f"<= {_MAX_WINDOW_DAYS} — using {DEGRADED_SETPOINTS['window_days']}")
             out["window_days"] = DEGRADED_SETPOINTS["window_days"]
     kp = out.get("knowledge_paths")
     if kp is not None and not isinstance(kp, str):
@@ -580,22 +589,69 @@ _DEFAULT_SHIP_META = (
 )
 _DEFAULT_DOOR_RECEIPTS = "~/.config/broomva/door/receipts.jsonl"
 _DEFAULT_WAIT_CAP_MIN = 30.0
+_CACHE_SCHEMA_VERSION = 2
+_MAX_WINDOW_DAYS = 3650
+_MAX_FUTURE_SKEW_SEC = 300
 
 
 def _safe_window_days(val, default=7):
-    if isinstance(val, (int, float)) and not isinstance(val, bool) and math.isfinite(val) and val > 0:
-        return val
+    if isinstance(val, (int, float)) and not isinstance(val, bool):
+        try:
+            f = float(val)
+        except OverflowError:
+            return default
+        if math.isfinite(f) and 0 < f <= _MAX_WINDOW_DAYS:
+            return f if isinstance(val, float) else int(val)
     return default
 
 
 def _safe_pos_float(val, default):
-    if isinstance(val, (int, float)) and not isinstance(val, bool) and math.isfinite(val) and val > 0:
-        return float(val)
+    if isinstance(val, (int, float)) and not isinstance(val, bool):
+        try:
+            f = float(val)
+        except OverflowError:
+            return float(default)
+        if math.isfinite(f) and f > 0:
+            return f
+    return float(default)
+
+
+def _safe_nonneg_float(val, default):
+    if isinstance(val, (int, float)) and not isinstance(val, bool):
+        try:
+            f = float(val)
+        except OverflowError:
+            return float(default)
+        if math.isfinite(f) and f >= 0:
+            return f
     return float(default)
 
 
 def _norm_str_set(vals):
-    return sorted({str(v).strip().lower() for v in (vals or []) if str(v).strip()})
+    if not isinstance(vals, (list, tuple)):
+        return []
+    return sorted({str(v).strip().lower() for v in vals
+                   if isinstance(v, (str, int, float)) and not isinstance(v, bool) and str(v).strip()})
+
+
+def _norm_prefix_list(raw_val):
+    if not isinstance(raw_val, (list, tuple)):
+        return []
+    out = set()
+    for x in raw_val:
+        if isinstance(x, (str, int, float)) and not isinstance(x, bool):
+            s = str(x).strip().rstrip("/")
+            if s:
+                out.add(s)
+    return sorted(out)
+
+
+def _resolve_door_receipts(dr, workspace=None):
+    dr_s = dr.strip() if isinstance(dr, str) else ""
+    p = os.path.expanduser(dr_s or _DEFAULT_DOOR_RECEIPTS)
+    if not os.path.isabs(p) and workspace:
+        p = os.path.join(workspace, p)
+    return os.path.normpath(os.path.abspath(p))
 
 
 def _ship_config_sig(setpoints, window):
@@ -604,6 +660,7 @@ def _ship_config_sig(setpoints, window):
         ss = {}
     tw = ss.get("tier_weights") if isinstance(ss.get("tier_weights"), dict) else {}
     return {
+        "schema_version": _CACHE_SCHEMA_VERSION,
         "window_days": float(_safe_window_days(window)),
         "repos": _norm_str_set(ss.get("repos")),
         "author_allowlist": _norm_str_set(ss.get("author_allowlist")),
@@ -611,22 +668,21 @@ def _ship_config_sig(setpoints, window):
         "meta_paths": str(ss.get("meta_paths") or _DEFAULT_SHIP_META),
         "tier_weights": {
             "green": _safe_pos_float(tw.get("green"), 1.0),
-            "ungated": _safe_pos_float(tw.get("ungated"), 0.5),
+            "ungated": _safe_nonneg_float(tw.get("ungated"), 0.5),
         },
     }
 
 
-def _outward_config_sig(setpoints, window):
+def _outward_config_sig(setpoints, window, workspace=None):
     fleet = (setpoints.get("fleet") if isinstance(setpoints, dict) else None) or {}
     if not isinstance(fleet, dict):
         fleet = {}
-    dr = fleet.get("door_receipts")
-    dr_s = str(dr).strip() if dr is not None else ""
     return {
+        "schema_version": _CACHE_SCHEMA_VERSION,
         "window_days": float(_safe_window_days(window)),
         "product_repos": _norm_str_set(fleet.get("product_repos")),
         "author_allowlist": _norm_str_set(fleet.get("author_allowlist")),
-        "door_receipts": os.path.expanduser(dr_s) if dr_s else os.path.expanduser(_DEFAULT_DOOR_RECEIPTS),
+        "door_receipts": _resolve_door_receipts(fleet.get("door_receipts"), workspace=workspace),
     }
 
 
@@ -634,15 +690,17 @@ def _fleet_config_sig(setpoints, window):
     fleet = (setpoints.get("fleet") if isinstance(setpoints, dict) else None) or {}
     if not isinstance(fleet, dict):
         fleet = {}
-    sp = fleet.get("scratch_prefixes", ["/tmp", "/private/tmp"])
-    if sp is None:
-        sp = []
+    if "scratch_prefixes" in fleet:
+        prefixes = _norm_prefix_list(fleet.get("scratch_prefixes"))
+    else:
+        prefixes = _norm_prefix_list(["/tmp", "/private/tmp"])
     return {
+        "schema_version": _CACHE_SCHEMA_VERSION,
         "window_days": float(_safe_window_days(window)),
         "product_repos": _norm_str_set(fleet.get("product_repos")),
         "meta_repos": _norm_str_set(fleet.get("meta_repos")),
         "external_repos": _norm_str_set(fleet.get("external_repos")),
-        "scratch_prefixes": sorted({str(x).rstrip("/") for x in sp if str(x).strip()}),
+        "scratch_prefixes": prefixes,
         "wait_cap_minutes": _safe_pos_float(fleet.get("wait_cap_minutes"), _DEFAULT_WAIT_CAP_MIN),
     }
 
@@ -664,14 +722,14 @@ def _config_matches_ship(sd, setpoints, window):
     return sig == _ship_config_sig(setpoints or {}, eff_window)
 
 
-def _config_matches_outward(sd, setpoints, window):
+def _config_matches_outward(sd, setpoints, window, workspace=None):
     eff_window = _safe_window_days(
         window if window is not None else (setpoints.get("window_days") if isinstance(setpoints, dict) else None)
     )
     sig = sd.get("outward_config") if isinstance(sd, dict) else None
     if not isinstance(sig, dict):
         return False
-    return sig == _outward_config_sig(setpoints or {}, eff_window)
+    return sig == _outward_config_sig(setpoints or {}, eff_window, workspace=workspace)
 
 
 def _config_matches_fleet(fd, setpoints, window):
@@ -685,15 +743,18 @@ def _config_matches_fleet(fd, setpoints, window):
 
 
 def _repo_state_path(name, workspace, legacy_filename):
+    """Resolve a repo-scoped path via broomva_paths; never swallow LayoutError."""
+    import importlib.util
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "broomva_paths.py")
     try:
-        import importlib.util
-        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "broomva_paths.py")
         spec = importlib.util.spec_from_file_location("broomva_paths", p)
+        if spec is None or spec.loader is None:
+            raise ImportError(p)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        return str(mod.repo_path(name, workspace))
-    except Exception:
+    except (ImportError, FileNotFoundError):
         return os.path.join(workspace, ".control", legacy_filename)
+    return str(mod.repo_path(name, workspace))
 
 
 def merge_ship_shadow(metrics, raw, workspace, max_age_sec=172800, setpoints=None, window=None):
@@ -703,12 +764,15 @@ def merge_ship_shadow(metrics, raw, workspace, max_age_sec=172800, setpoints=Non
     splits on the first "_" → "m6s", which has NO setpoint, so evaluate() marks it
     `no_setpoint` and it can never become `worst` or reach the SessionStart nudge.
     It is present only for calibration until BRO-1709 promotes it. Any error
-    (missing/stale/malformed/unsigned/config-mismatch) leaves the sensor untouched."""
+    (missing/stale/malformed/unsigned/config-mismatch) leaves the sensor untouched;
+    broomva_paths.LayoutError propagates."""
+    ship_state = _repo_state_path("leverage_ship_state", workspace, "leverage-ship-state.json")
     try:
-        ship_state = _repo_state_path("leverage_ship_state", workspace, "leverage-ship-state.json")
         with open(ship_state) as f:
             sd = json.load(f)
         age = time.time() - datetime.fromisoformat(sd["measured_at"]).timestamp()
+        if age < -_MAX_FUTURE_SKEW_SEC:
+            return
         r = sd.get("m6s_meta_work_ship_ratio")
         if age < max_age_sec and r is not None and _config_matches_ship(sd, setpoints, window):
             metrics["m6s_meta_work_ship_ratio"] = r
@@ -716,7 +780,7 @@ def merge_ship_shadow(metrics, raw, workspace, max_age_sec=172800, setpoints=Non
         # BRO-3955: m7 travels in the same file (one gh pass, one throttle). Unlike
         # m6s it HAS a live setpoint, so it is graded. See effective_m7 for when a
         # reading may stand; when none may (or config changed), it reports `unmeasured`.
-        if _config_matches_outward(sd, setpoints, window):
+        if _config_matches_outward(sd, setpoints, window, workspace=workspace):
             m7 = effective_m7(sd, age)
             if m7 is not None:
                 metrics["m7_outward_artifact_floor"] = m7
@@ -742,13 +806,14 @@ def effective_m7(sd, age, now=None):
          window as of now -- positive evidence ages by its own timestamp, so it
          needs no refresh until it falls out of the window. A record from before
          latest_artifact_at existed keeps its 1.0 while the file is fresh (<48 h).
+         Future-dated timestamps beyond clock skew fail closed.
     0.0  the record found nothing (or its evidence has since aged out), its scan
          read every source (raw.complete_negative_coverage -- a scan that found a
          hit despite an outage proved something shipped, not that nothing did),
          AND the record is younger than M7_ALARM_MAX_AGE_SEC.
-    None anything else: no reading, a stale record, a partial scan, an unparseable
-         artifact time, or an alarm too old to act on."""
-    if not isinstance(sd, dict) or age is None or age >= 172800:
+    None anything else: no reading, a stale/future record, a partial scan, an
+         unparseable artifact time, or an alarm too old to act on."""
+    if not isinstance(sd, dict) or age is None or age < -_MAX_FUTURE_SKEW_SEC or age >= 172800:
         return None
     m7 = sd.get("m7_outward_artifact_floor")
     if not is_gradeable(m7):
@@ -767,6 +832,8 @@ def effective_m7(sd, age, now=None):
             latest = datetime.fromisoformat(str(o["latest_artifact_at"]).replace("Z", "+00:00")).timestamp()
         except (TypeError, ValueError):
             return None  # an artifact time that cannot be placed proves nothing either way
+        if latest > now + _MAX_FUTURE_SKEW_SEC:
+            return None  # a future-dated artifact timestamp cannot certify the window
     if latest is not None and now - latest <= window_s:
         return 1.0
     if o.get("complete_negative_coverage") is not True:
@@ -813,11 +880,12 @@ def merge_fleet(metrics, raw, workspace, max_age_sec=172800, setpoints=None, win
         raw["m6_checkout"] = metrics.get("m6_meta_work_session_ratio")
         metrics["m6_meta_work_session_ratio"] = None
         raw["m6_scope"] = "fleet_unmeasured"
+    fleet_state = _fleet_state_path(workspace)
     try:
-        with open(_fleet_state_path(workspace)) as f:
+        with open(fleet_state) as f:
             fd = json.load(f)
         age = time.time() - datetime.fromisoformat(fd["measured_at"]).timestamp()
-        if age >= max_age_sec:
+        if age < -_MAX_FUTURE_SKEW_SEC or age >= max_age_sec:
             return
         if not _config_matches_fleet(fd, setpoints, window):
             return
@@ -1141,13 +1209,16 @@ def closure_verdict(record, setpoints):
     # a fleet-scope m6 (raw.m6_scope) or a measured m7. Both are positive readings,
     # so the "positive raw evidence, never a non-null value" rule still holds.
     metrics = record.get("metrics") if isinstance(record.get("metrics"), dict) else {}
-    l3_external = (raw.get("m6_scope") == "fleet"
+    m6_scope = raw.get("m6_scope")
+    fleet_m6_cfg = _fleet_m6_configured(setpoints) or m6_scope in ("fleet", "fleet_unmeasured")
+    l3_checkout_ok = (not fleet_m6_cfg) and working > 0
+    l3_external = (m6_scope == "fleet"
                    or is_gradeable(metrics.get("m7_outward_artifact_floor")))
     level_evidence = {
         "L0": (tool_results > 0 or edits > 0),
         "L1": sessions > 0,
         "L2": sessions > 0,
-        "L3": working > 0 or l3_external,
+        "L3": l3_checkout_ok or l3_external,
     }
     levels = {}
     for r in record["results"]:
@@ -1513,7 +1584,8 @@ def main():
     if args.throttle:
         try:
             st = json.load(open(state_file))
-            if time.time() - datetime.fromisoformat(st["measured_at"]).timestamp() < args.throttle:
+            age = time.time() - datetime.fromisoformat(st["measured_at"]).timestamp()
+            if -_MAX_FUTURE_SKEW_SEC <= age < args.throttle:
                 return
         except Exception:
             pass
@@ -1521,7 +1593,8 @@ def main():
     if args.cached and not args.closure:
         try:
             st = json.load(open(state_file))
-            if time.time() - datetime.fromisoformat(st["measured_at"]).timestamp() < 86400:
+            age = time.time() - datetime.fromisoformat(st["measured_at"]).timestamp()
+            if -_MAX_FUTURE_SKEW_SEC <= age < 86400:
                 # BRO-2168: RE-GRADE the cached metrics against the CURRENT setpoints
                 # before rendering. The cache exists to skip analyze() -- the transcript
                 # scan -- but evaluate() is pure and cheap, and the stored `results` /

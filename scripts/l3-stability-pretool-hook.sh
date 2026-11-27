@@ -44,10 +44,13 @@ L3_PATHS=(
     "AGENTS.md"
     ".control/policy.yaml"
     ".control/rcs-parameters.toml"
+    ".broomva/policy.yaml"
+    ".broomva/rcs-parameters.toml"
     "METALAYER.md"
     # BRO-1707: the leverage governor's own dial + sensors are L3 — an agent must not
     # silently retune the metric that watches it (governor-edits-its-own-setpoints).
     ".control/leverage-setpoints.yaml"
+    ".broomva/leverage-setpoints.yaml"
     "scripts/leverage-sensor.py"
     "scripts/leverage-ship-sensor.py"
     # BRO-3955: the fleet scan supplies m6 and the wait-time rows, so it is part of
@@ -83,15 +86,20 @@ fi
 WORKSPACE="${BROOMVA_WORKSPACE:-$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")}"
 
 # Scope guard (BRO-1926): this hook loads globally via the bstack plugin. In a
-# non-bstack workspace (no .control/), don't create .control/audit and don't
-# surface the L3 warning — just approve. Keeps the global plugin from polluting
-# unrelated repos. Reached only for L3-file edits, so it adds no per-edit git cost.
-if [ ! -d "$WORKSPACE/.control" ]; then
+# non-bstack workspace (neither .control/ nor .broomva/), don't create audit
+# dirs and don't surface the L3 warning — just approve. Keeps the global plugin
+# from polluting unrelated repos. Reached only for L3-file edits, so it adds no
+# per-edit git cost.
+if [ ! -d "$WORKSPACE/.control" ] && [ ! -d "$WORKSPACE/.broomva" ]; then
     # Same reasoning as the non-L3 path: nothing to say, so say nothing.
     exit 0
 fi
 
-LOG_DIR="$WORKSPACE/.control/audit"
+if [ -d "$WORKSPACE/.broomva" ] && [ ! -d "$WORKSPACE/.control" ]; then
+    LOG_DIR="$WORKSPACE/.broomva/audit"
+else
+    LOG_DIR="$WORKSPACE/.control/audit"
+fi
 mkdir -p "$LOG_DIR" 2>/dev/null || true
 LOG_FILE="$LOG_DIR/l3-edits.jsonl"
 if [ -w "$(dirname "$LOG_FILE")" ] 2>/dev/null; then

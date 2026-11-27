@@ -123,12 +123,16 @@ def classify_prs(prs, cfg):
                    statusCheckRollup:[{conclusion}], _repo?}
     Returns {"m6s_meta_work_ship_ratio": float|None, "raw": {...}}.
     """
-    author_allow = {str(a).strip().lower() for a in (cfg.get("author_allowlist") or []) if str(a).strip()}
-    prod_re = re.compile(cfg.get("product_paths", DEFAULT_PRODUCT), re.IGNORECASE)
-    meta_re = re.compile(cfg.get("meta_paths", DEFAULT_META), re.IGNORECASE)
-    tw = cfg.get("tier_weights", {}) or {}
+    cfg = cfg if isinstance(cfg, dict) else {}
+    prs = prs if isinstance(prs, list) else []
+    author_allow = set(_norm_str_list(cfg.get("author_allowlist")))
+    prod_pat = cfg.get("product_paths") if isinstance(cfg.get("product_paths"), str) and cfg.get("product_paths") else DEFAULT_PRODUCT
+    meta_pat = cfg.get("meta_paths") if isinstance(cfg.get("meta_paths"), str) and cfg.get("meta_paths") else DEFAULT_META
+    prod_re = re.compile(prod_pat, re.IGNORECASE)
+    meta_re = re.compile(meta_pat, re.IGNORECASE)
+    tw = cfg.get("tier_weights") if isinstance(cfg.get("tier_weights"), dict) else {}
     w_green = _safe_pos_float(tw.get("green"), 1.0)
-    w_ungated = _safe_pos_float(tw.get("ungated"), 0.5)
+    w_ungated = _safe_nonneg_float(tw.get("ungated"), 0.5)
 
     # FAIL CLOSED: the author allowlist is the h ⟂ U-critical filter. A missing/mistyped
     # `author_allowlist` must NOT silently count every author (teammates, upstream) — that
@@ -144,8 +148,11 @@ def classify_prs(prs, cfg):
     excluded = {"bot": 0, "author": 0, "unclassifiable": 0}
     details = []
     for pr in prs:
-        author = pr.get("author") or {}
-        login = str(author.get("login", "")).lower()
+        if not isinstance(pr, dict):
+            excluded["unclassifiable"] += 1
+            continue
+        author = pr.get("author") if isinstance(pr.get("author"), dict) else {}
+        login = str(author.get("login", "")).strip().lower()
         if author.get("is_bot"):
             excluded["bot"] += 1
             continue
@@ -157,7 +164,8 @@ def classify_prs(prs, cfg):
         # shared path regexes were written for ABSOLUTE tool_use paths and anchor on
         # surrounding slashes, so normalize each to a leading-slash form before matching
         # (else "apps/x.ts" fails "/(apps|…)/" and everything reads unclassifiable).
-        files = ["/" + str(f.get("path", "")).lstrip("/") for f in (pr.get("files") or [])]
+        raw_files = pr.get("files") if isinstance(pr.get("files"), list) else []
+        files = ["/" + str(f.get("path", "")).lstrip("/") for f in raw_files if isinstance(f, dict)]
         # Mutually exclusive, PRODUCT-precedence (mirrors leverage-sensor.py's session
         # rule: `if product elif meta`). Otherwise a path matching BOTH families (e.g.
         # apps/x/docs/y.md) double-counts, tot > len(files), and shares don't sum to 1.
@@ -234,6 +242,8 @@ def fetch_merged_prs(repo, since_iso, timeout=25):
         if out.returncode != 0:
             return None
         data = json.loads(out.stdout or "[]")
+        if not isinstance(data, list) or not all(isinstance(pr, dict) for pr in data):
+            return None
         if not data and not _repo_exists(repo, timeout=10):
             return None  # empty because the repo is unreachable, not because 0 PRs
         for pr in data:
@@ -257,9 +267,10 @@ def _repo_exists(repo, timeout=10):
 def compute(cfg, window_days, now=None):
     """Scan the repo allowlist and classify. Returns (record_fields, gh_ok)."""
     now = now or datetime.now(timezone.utc)
+    cfg = cfg if isinstance(cfg, dict) else {}
     window_days = _safe_window_days(window_days)
     since_iso = (now - timedelta(days=window_days)).strftime("%Y-%m-%d")
-    repos = [str(r).strip() for r in (cfg.get("repos") or []) if str(r).strip()]
+    repos = _str_list(cfg.get("repos"))
     all_prs, per_repo, errors = [], [], []
     for repo in repos:
         prs = fetch_merged_prs(repo, since_iso)
@@ -290,6 +301,9 @@ def compute(cfg, window_days, now=None):
 # classify m6), so "product" means one thing across the loop.
 DEFAULT_DOOR_RECEIPTS = "~/.config/broomva/door/receipts.jsonl"
 RECEIPT_TS_KEYS = ("ts", "timestamp", "at", "created_at", "logged_at")
+CACHE_SCHEMA_VERSION = 2
+MAX_WINDOW_DAYS = 3650
+MAX_FUTURE_SKEW_SEC = 300
 
 
 M7_QUERY_LIMIT = 1000
@@ -298,7 +312,8 @@ M7_QUERY_LIMIT = 1000
 def fetch_merged_light(repo, since_iso, timeout=25):
     """Merged PRs with only the fields m7 needs. The m6s query asks for files and CI
     rollups and caps at 200, which a busy product repo (200+ merges a week) exceeds.
-    Returns None on any failure, never an empty list that would read as 0 merges."""
+    Returns None on any failure or malformed JSON shape, never an empty list that
+    would read as 0 merges."""
     try:
         out = subprocess.run(
             ["gh", "pr", "list", "-R", repo, "--state", "merged", "--limit", str(M7_QUERY_LIMIT),
@@ -307,6 +322,8 @@ def fetch_merged_light(repo, since_iso, timeout=25):
         if out.returncode != 0:
             return None
         data = json.loads(out.stdout or "[]")
+        if not isinstance(data, list) or not all(isinstance(item, dict) for item in data):
+            return None
         if not data and not _repo_exists(repo, timeout=10):
             return None
         return data
@@ -336,37 +353,79 @@ def _within(v, cutoff, now):
 
 
 def _safe_window_days(val, default=7):
-    if isinstance(val, (int, float)) and not isinstance(val, bool) and math.isfinite(val) and val > 0:
-        return val
+    if isinstance(val, (int, float)) and not isinstance(val, bool):
+        try:
+            f = float(val)
+        except OverflowError:
+            return default
+        if math.isfinite(f) and 0 < f <= MAX_WINDOW_DAYS:
+            return f if isinstance(val, float) else int(val)
     return default
 
 
 def _safe_pos_float(val, default):
-    if isinstance(val, (int, float)) and not isinstance(val, bool) and math.isfinite(val) and val > 0:
-        return float(val)
+    if isinstance(val, (int, float)) and not isinstance(val, bool):
+        try:
+            f = float(val)
+        except OverflowError:
+            return float(default)
+        if math.isfinite(f) and f > 0:
+            return f
     return float(default)
 
 
+def _safe_nonneg_float(val, default):
+    if isinstance(val, (int, float)) and not isinstance(val, bool):
+        try:
+            f = float(val)
+        except OverflowError:
+            return float(default)
+        if math.isfinite(f) and f >= 0:
+            return f
+    return float(default)
+
+
+def _str_list(vals):
+    if not isinstance(vals, (list, tuple)):
+        return []
+    return [str(v).strip() for v in vals
+            if isinstance(v, (str, int, float)) and not isinstance(v, bool) and str(v).strip()]
+
+
+def _norm_str_list(vals):
+    return sorted({s.lower() for s in _str_list(vals)})
+
+
+def _resolve_door_receipts(path, workspace=None):
+    raw_path = path.strip() if isinstance(path, str) else ""
+    p = os.path.expanduser(raw_path or DEFAULT_DOOR_RECEIPTS)
+    if not os.path.isabs(p) and workspace:
+        p = os.path.join(workspace, p)
+    return os.path.normpath(os.path.abspath(p))
+
+
 def _repo_state_path(name, workspace, legacy_filename):
+    """Resolve a repo-scoped path via broomva_paths; never swallow LayoutError."""
+    import importlib.util
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "broomva_paths.py")
     try:
-        import importlib.util
-        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "broomva_paths.py")
         spec = importlib.util.spec_from_file_location("broomva_paths", p)
+        if spec is None or spec.loader is None:
+            raise ImportError(p)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        return str(mod.repo_path(name, workspace))
-    except Exception:
+    except (ImportError, FileNotFoundError):
         return os.path.join(workspace, ".control", legacy_filename)
+    return str(mod.repo_path(name, workspace))
 
 
-def count_receipts(path, cutoff, now=None):
+def count_receipts(path, cutoff, now=None, workspace=None):
     """(count in window, unparsed lines, status, latest in-window time). status is 'absent' when the file
     does not exist on this host (FileNotFoundError) -- a door logged on another machine is not seen, and
     saying so is the point -- and 'unreadable' on any other OSError (e.g. PermissionError on an unsearchable
     parent dir, IsADirectoryError, NotADirectoryError)."""
     now = now or datetime.now(timezone.utc)
-    raw_path = str(path).strip() if path is not None else ""
-    p = os.path.expanduser(raw_path or DEFAULT_DOOR_RECEIPTS)
+    p = _resolve_door_receipts(path, workspace=workspace)
     n = unparsed = 0
     latest = None
     try:
@@ -394,21 +453,21 @@ def count_receipts(path, cutoff, now=None):
     return n, unparsed, "read", latest
 
 
-def compute_outward(fleet_cfg, window_days, now=None, fetch=None):
+def compute_outward(fleet_cfg, window_days, now=None, fetch=None, workspace=None):
     """PURE given `fetch`. Returns {"m7_outward_artifact_floor": 1.0|0.0|None, "outward": raw}.
 
     1.0  at least one counted merge or receipt in the window.
     0.0  every product repo was reachable, none had a counted merge, no receipt, and no
-         qualifying merge/receipt had an unparseable timestamp.
+         qualifying merge/receipt had an unparseable timestamp or malformed payload.
     None not measured: no product repos or author allowlist configured, or a source
-         was unreadable/capped/unparseable while nothing was counted (an empty window
-         cannot be certified from a partial read -- the alarm would fire on an outage)."""
+         was unreadable/malformed/capped/unparseable while nothing was counted (an empty
+         window cannot be certified from a partial read -- the alarm would fire on an outage)."""
     now = now or datetime.now(timezone.utc)
     fetch = fetch or fetch_merged_light
     window_days = _safe_window_days(window_days)
     cfg = fleet_cfg if isinstance(fleet_cfg, dict) else {}
-    repos = [str(r).strip() for r in (cfg.get("product_repos") or []) if str(r).strip()]
-    authors = {str(a).strip().lower() for a in (cfg.get("author_allowlist") or []) if str(a).strip()}
+    repos = _str_list(cfg.get("product_repos"))
+    authors = set(_norm_str_list(cfg.get("author_allowlist")))
     cutoff = now - timedelta(days=window_days)
     since_iso = cutoff.strftime("%Y-%m-%d")
     raw = {"window_days": window_days, "repos": repos, "per_repo": {}, "errors": [], "capped": [],
@@ -420,7 +479,7 @@ def compute_outward(fleet_cfg, window_days, now=None, fetch=None):
         return {"m7_outward_artifact_floor": None, "outward": raw}
     for repo in repos:
         prs = fetch(repo, since_iso)
-        if prs is None:
+        if not isinstance(prs, list):
             raw["errors"].append(repo)
             continue
         if len(prs) >= M7_QUERY_LIMIT:
@@ -428,10 +487,16 @@ def compute_outward(fleet_cfg, window_days, now=None, fetch=None):
             # prove a shipment but never that there was none.
             raw["capped"].append(repo)
         n = 0
+        malformed = False
         for pr in prs:
             if not isinstance(pr, dict):
+                malformed = True
                 continue
-            a = pr.get("author") or {}
+            raw_author = pr.get("author")
+            if raw_author is not None and not isinstance(raw_author, dict):
+                malformed = True
+                continue
+            a = raw_author or {}
             if a.get("is_bot") or str(a.get("login", "")).strip().lower() not in authors:
                 continue
             d = _parse_ts(pr.get("mergedAt"))
@@ -441,10 +506,13 @@ def compute_outward(fleet_cfg, window_days, now=None, fetch=None):
             if cutoff <= d <= now:
                 n += 1
                 latest = d if latest is None or d > latest else latest
+        if malformed:
+            raw["errors"].append(repo)
         raw["per_repo"][repo] = n
         raw["merged_product_prs"] += n
     (raw["door_receipts"], raw["door_receipts_unparsed"],
-     raw["door_receipts_status"], r_latest) = count_receipts(cfg.get("door_receipts"), cutoff, now)
+     raw["door_receipts_status"], r_latest) = count_receipts(
+        cfg.get("door_receipts"), cutoff, now, workspace=workspace)
     if r_latest is not None and (latest is None or r_latest > latest):
         latest = r_latest
     # When the newest counted artifact landed. A 1.0 stays true until this ages out
@@ -494,28 +562,28 @@ def ship_config_signature(cfg, window):
     c = cfg if isinstance(cfg, dict) else {}
     tw = c.get("tier_weights") if isinstance(c.get("tier_weights"), dict) else {}
     return {
+        "schema_version": CACHE_SCHEMA_VERSION,
         "window_days": float(_safe_window_days(window)),
-        "repos": sorted({str(r).strip().lower() for r in (c.get("repos") or []) if str(r).strip()}),
-        "author_allowlist": sorted({str(a).strip().lower() for a in (c.get("author_allowlist") or []) if str(a).strip()}),
+        "repos": _norm_str_list(c.get("repos")),
+        "author_allowlist": _norm_str_list(c.get("author_allowlist")),
         "product_paths": str(c.get("product_paths") or DEFAULT_PRODUCT),
         "meta_paths": str(c.get("meta_paths") or DEFAULT_META),
         "tier_weights": {
             "green": _safe_pos_float(tw.get("green"), 1.0),
-            "ungated": _safe_pos_float(tw.get("ungated"), 0.5),
+            "ungated": _safe_nonneg_float(tw.get("ungated"), 0.5),
         },
     }
 
 
-def outward_config_signature(fleet_cfg, window):
+def outward_config_signature(fleet_cfg, window, workspace=None):
     """Canonical fleet outward config for m7 cache matching."""
     c = fleet_cfg if isinstance(fleet_cfg, dict) else {}
-    dr = c.get("door_receipts")
-    dr_s = str(dr).strip() if dr is not None else ""
     return {
+        "schema_version": CACHE_SCHEMA_VERSION,
         "window_days": float(_safe_window_days(window)),
-        "product_repos": sorted({str(r).strip().lower() for r in (c.get("product_repos") or []) if str(r).strip()}),
-        "author_allowlist": sorted({str(a).strip().lower() for a in (c.get("author_allowlist") or []) if str(a).strip()}),
-        "door_receipts": os.path.expanduser(dr_s) if dr_s else os.path.expanduser(DEFAULT_DOOR_RECEIPTS),
+        "product_repos": _norm_str_list(c.get("product_repos")),
+        "author_allowlist": _norm_str_list(c.get("author_allowlist")),
+        "door_receipts": _resolve_door_receipts(c.get("door_receipts"), workspace=workspace),
     }
 
 
@@ -545,20 +613,24 @@ def main():
     else:
         setpoints_path = _repo_state_path("leverage_setpoints", workspace, "leverage-setpoints.yaml")
         setpoints = load_setpoints(setpoints_path)
-        cfg = setpoints.get("ship_signal", {}) or {}
-        fleet_cfg = setpoints.get("fleet", {}) or {}
-        window = _safe_window_days(args.window if args.window is not None else setpoints.get("window_days"))
+        sp_dict = setpoints if isinstance(setpoints, dict) else {}
+        cfg = sp_dict.get("ship_signal") if isinstance(sp_dict.get("ship_signal"), dict) else {}
+        fleet_cfg = sp_dict.get("fleet") if isinstance(sp_dict.get("fleet"), dict) else {}
+        window = _safe_window_days(args.window if args.window is not None else sp_dict.get("window_days"))
     if args.fleet_config_json:
         fleet_cfg = json.loads(args.fleet_config_json)
+    cfg = cfg if isinstance(cfg, dict) else {}
+    fleet_cfg = fleet_cfg if isinstance(fleet_cfg, dict) else {}
 
     ship_sig = ship_config_signature(cfg, window)
-    outward_sig = outward_config_signature(fleet_cfg, window)
+    outward_sig = outward_config_signature(fleet_cfg, window, workspace=workspace)
 
     if args.throttle and not args.fixture and not args.outward_fixture:
         try:
             with open(ship_state_file) as f:
                 st = json.load(f)
-            if (time.time() - datetime.fromisoformat(st["measured_at"]).timestamp() < args.throttle
+            age = time.time() - datetime.fromisoformat(st["measured_at"]).timestamp()
+            if (-MAX_FUTURE_SKEW_SEC <= age < args.throttle
                     and st.get("ship_config") == ship_sig
                     and st.get("outward_config") == outward_sig):
                 return
@@ -574,16 +646,17 @@ def main():
         result, gh_ok, repos = {"m6s_meta_work_ship_ratio": None, "raw": {}}, True, []
     else:
         result, gh_ok = compute(cfg, window)
-        repos = cfg.get("repos", [])
+        repos = _str_list(cfg.get("repos"))
 
     if args.outward_fixture:
         with open(args.outward_fixture) as f:
             fx = json.load(f)
-        outward = compute_outward(fleet_cfg, window, fetch=lambda repo, _since: fx.get(repo))
+        fx_dict = fx if isinstance(fx, dict) else {}
+        outward = compute_outward(fleet_cfg, window, fetch=lambda repo, _since: fx_dict.get(repo), workspace=workspace)
     elif args.fixture:
         outward = {"m7_outward_artifact_floor": None, "outward": {"note": "not computed in --fixture mode"}}
     else:
-        outward = compute_outward(fleet_cfg, window)
+        outward = compute_outward(fleet_cfg, window, workspace=workspace)
 
     record = {
         "measured_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),

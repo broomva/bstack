@@ -73,51 +73,299 @@ from datetime import datetime, timezone
 
 STATE_NAME = "leverage-fleet-state.json"
 DEFAULT_CAP_MIN = 30.0
+CACHE_SCHEMA_VERSION = 2
+MAX_WINDOW_DAYS = 3650
+MAX_FUTURE_SKEW_SEC = 300
 EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 PATCH_FILE_RE = re.compile(r"\*\*\* (?:Update|Add|Delete) File: ([^\n\\\"]+)")
-_SHELL_TARGET = r"""(?:"([^"\n]+)"|'([^'\n]+)'|([^\s;&|<>()'"]+))"""
-# A shell redirect target: `> f`, `>> f`, `1> f`, `1>> f` (quoted or unquoted) after
-# whitespace or a command separator (so `->`, `=>` and `a>b` do not match), never `2>&1`.
-REDIRECT_RE = re.compile(r"(?:^|[\s;&|])(?:1)?>>?\s*" + _SHELL_TARGET)
-# `tee [-a] [--] FILE` (quoted or unquoted).
-TEE_RE = re.compile(r"\btee(?:\s+(?:-[A-Za-z]+|--))*\s+" + _SHELL_TARGET)
-# GNU `sed -i[SUFFIX] SCRIPT FILE` and macOS BSD `sed -i '' SCRIPT FILE` (quoted or unquoted).
-SED_INPLACE_RE = re.compile(
-    r"""\bsed\s+(?:-[A-Za-z]+\s+)*-i(?:\s*(?:''|"")|\S*)\s+(?:-e\s+)?(?:'[^']*'|"[^"]*"|\S+)\s+"""
-    + _SHELL_TARGET
-)
 _PURE_NUMBER_RE = re.compile(r"^\d+(?:\.\d+)?$")
-_FILENAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
+_FILENAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_. -]*$")
 PATHLIKE_RE = re.compile(r"/|\.[A-Za-z][A-Za-z0-9]{0,7}$")  # `> 0.5` is a comparison
+_VAR_EXP_RE = re.compile(r"[$`]")
 
 
 def _safe_window_days(val, default=7):
-    if isinstance(val, (int, float)) and not isinstance(val, bool) and math.isfinite(val) and val > 0:
-        return val
+    if isinstance(val, (int, float)) and not isinstance(val, bool):
+        try:
+            f = float(val)
+        except OverflowError:
+            return default
+        if math.isfinite(f) and 0 < f <= MAX_WINDOW_DAYS:
+            return f if isinstance(val, float) else int(val)
     return default
 
 
 def _safe_pos_float(val, default):
-    if isinstance(val, (int, float)) and not isinstance(val, bool) and math.isfinite(val) and val > 0:
-        return float(val)
+    if isinstance(val, (int, float)) and not isinstance(val, bool):
+        try:
+            f = float(val)
+        except OverflowError:
+            return float(default)
+        if math.isfinite(f) and f > 0:
+            return f
     return float(default)
 
 
-def _extract_shell_targets(pattern, cmd):
-    out = []
-    for m in pattern.finditer(cmd):
-        tgt = next((g for g in m.groups() if g is not None), "")
-        if tgt:
-            out.append(tgt)
-    return out
+def _norm_str_list(vals):
+    if not isinstance(vals, (list, tuple)):
+        return []
+    return sorted({str(v).strip().lower() for v in vals
+                   if isinstance(v, (str, int, float)) and not isinstance(v, bool) and str(v).strip()})
+
+
+def _norm_prefixes(raw_val):
+    if not isinstance(raw_val, (list, tuple)):
+        return []
+    out = set()
+    for x in raw_val:
+        if isinstance(x, (str, int, float)) and not isinstance(x, bool):
+            s = str(x).strip().rstrip("/")
+            if s:
+                out.add(s)
+    return sorted(out)
 
 
 def _is_write_target(tgt):
-    if not tgt or tgt.startswith(("/dev/", "&", "$", "-")):
+    if not tgt or tgt.startswith(("/dev/", "&", "-")):
         return False
     if _PURE_NUMBER_RE.match(tgt):
         return False
+    if _VAR_EXP_RE.search(tgt):
+        return True
     return bool(PATHLIKE_RE.search(tgt) or _FILENAME_RE.match(tgt))
+
+
+def _split_shell_segments(cmd):
+    """Split a shell command into (sep_before, segment) pairs respecting quotes and escapes."""
+    segs = []
+    buf = []
+    sep = ""
+    i = 0
+    n = len(cmd)
+    quote = None
+    while i < n:
+        ch = cmd[i]
+        if quote:
+            buf.append(ch)
+            if ch == "\\" and quote == '"' and i + 1 < n:
+                i += 1
+                buf.append(cmd[i])
+            elif ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch == "\\" and i + 1 < n:
+            buf.append(ch)
+            i += 1
+            buf.append(cmd[i])
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            buf.append(ch)
+            i += 1
+            continue
+        if cmd[i:i + 2] in ("&&", "||"):
+            segs.append((sep, "".join(buf)))
+            buf = []
+            sep = cmd[i:i + 2]
+            i += 2
+            continue
+        if ch in (";", "|", "\n"):
+            segs.append((sep, "".join(buf)))
+            buf = []
+            sep = ch
+            i += 1
+            continue
+        buf.append(ch)
+        i += 1
+    if buf:
+        segs.append((sep, "".join(buf)))
+    return segs
+
+
+def _tokenize_shell_segment(seg):
+    """Tokenize one command segment into (words, redirect_targets).
+    Handles unspaced redirects (`echo hi>/product/README`), fd 1 redirects (`1>`),
+    clobber (`>|`), quoted filenames with spaces, and skips `2>`, `&>`, `>&`, `->`, `=>`."""
+    words = []
+    redirs = []
+    i = 0
+    n = len(seg)
+
+    def read_word(start):
+        j = start
+        chars = []
+        had_quote = False
+        q = None
+        while j < n:
+            c = seg[j]
+            if q:
+                if c == "\\" and q == '"' and j + 1 < n:
+                    j += 1
+                    chars.append(seg[j])
+                elif c == q:
+                    q = None
+                else:
+                    chars.append(c)
+                j += 1
+                continue
+            if c.isspace() or c in (">", "<", "(", ")"):
+                break
+            if c == "\\" and j + 1 < n:
+                j += 1
+                chars.append(seg[j])
+                j += 1
+                continue
+            if c in ("'", '"'):
+                q = c
+                had_quote = True
+                j += 1
+                continue
+            chars.append(c)
+            j += 1
+        return "".join(chars), j, had_quote
+
+    while i < n:
+        c = seg[i]
+        if c.isspace() or c in ("(", ")"):
+            i += 1
+            continue
+        # Output redirections: >, >>, >|, 1>, 1>>, 1>|, 2>, &>, >&
+        if c == ">":
+            prev = seg[i - 1] if i > 0 else ""
+            if prev in ("-", "=", "<"):
+                i += 1
+                continue
+            # Check for >& (fd dup) vs > / >> / >|
+            j = i + 1
+            if j < n and seg[j] == "&":
+                # skip fd dup target
+                j += 1
+                while j < n and seg[j].isspace():
+                    j += 1
+                _, i, _ = read_word(j)
+                continue
+            if j < n and seg[j] in (">", "|"):
+                j += 1
+            while j < n and seg[j].isspace():
+                j += 1
+            tgt, i, _ = read_word(j)
+            if tgt:
+                redirs.append(tgt)
+            continue
+        if c == "<":
+            j = i + 1
+            if j < n and seg[j] in ("<", ">", "&"):
+                j += 1
+            while j < n and seg[j].isspace():
+                j += 1
+            _, i, _ = read_word(j)
+            continue
+        w, j, had_q = read_word(i)
+        # Check if this bare word is a file descriptor prefix right before `>` (e.g. `1>` or `2>` or `&>`)
+        if not had_q and j < n and seg[j] == ">" and w in ("1", "2", "&"):
+            k = j + 1
+            is_dup = k < n and seg[k] == "&"
+            if k < n and seg[k] in (">", "|", "&"):
+                k += 1
+            while k < n and seg[k].isspace():
+                k += 1
+            tgt, i, _ = read_word(k)
+            if w == "1" and not is_dup and tgt:
+                redirs.append(tgt)
+            continue
+        if w or had_q:
+            words.append((w, had_q))
+        i = j
+    return words, redirs
+
+
+def _extract_cmd_write_targets(words):
+    """Extract ALL file targets written by `tee` or `sed -i` in a tokenized segment."""
+    if not words:
+        return []
+    # Skip leading env assignments (FOO=bar) and wrappers (env, command, sudo)
+    idx = 0
+    while idx < len(words):
+        w, hq = words[idx]
+        if not hq and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", w):
+            idx += 1
+            continue
+        base = os.path.basename(w)
+        if base in ("env", "command", "sudo"):
+            idx += 1
+            while idx < len(words) and words[idx][0].startswith("-"):
+                idx += 1
+            continue
+        break
+    if idx >= len(words):
+        return []
+    cmd_name = os.path.basename(words[idx][0])
+    args = words[idx + 1:]
+    if cmd_name == "tee":
+        targets = []
+        after_dd = False
+        for w, hq in args:
+            if not after_dd and not hq and w == "--":
+                after_dd = True
+                continue
+            if not after_dd and not hq and w.startswith("-") and w != "-":
+                continue
+            if w and w != "-":
+                targets.append(w)
+        return targets
+    if cmd_name == "sed":
+        in_place = False
+        has_script = False
+        pos = []
+        after_dd = False
+        k = 0
+        while k < len(args):
+            w, hq = args[k]
+            if not after_dd and not hq and w == "--":
+                after_dd = True
+                k += 1
+                continue
+            if not after_dd and not hq and w.startswith("-") and w != "-":
+                if w == "-i":
+                    in_place = True
+                    # macOS BSD `sed -i ''` passes an explicit empty suffix token
+                    if k + 1 < len(args) and args[k + 1][0] == "" and args[k + 1][1]:
+                        k += 2
+                        continue
+                elif w.startswith("-i") or w == "--in-place" or w.startswith("--in-place="):
+                    in_place = True
+                elif w in ("-e", "-f", "--expression", "--file"):
+                    has_script = True
+                    k += 2
+                    continue
+                elif w.startswith(("-e", "-f", "--expression=", "--file=")):
+                    has_script = True
+                k += 1
+                continue
+            pos.append(w)
+            k += 1
+        if not in_place:
+            return []
+        files = pos if has_script else pos[1:]
+        return [f for f in files if f]
+    return []
+
+
+def _extract_cd_target(words):
+    """If segment is `cd [flags] <dir>`, return `<dir>`, else None."""
+    if not words or words[0][0] != "cd":
+        return None
+    after_dd = False
+    for w, hq in words[1:]:
+        if not after_dd and not hq and w == "--":
+            after_dd = True
+            continue
+        if not after_dd and not hq and w.startswith("-") and w != "-":
+            continue
+        return w
+    return None
 
 
 def resolve_workspace(arg=None):
@@ -195,12 +443,13 @@ def _ts(s):
 def _ancestor_tracks_missing(anc, first_missing):
     """True only when `anc` tracks non-submodule files under `first_missing` in git.
     Prevents a vanished nested clone inside a meta workspace from falling through
-    to the parent meta repo."""
+    to the parent meta repo. Uses --literal-pathspecs so directory names with glob
+    characters like `[ab]` cannot match sibling tracked files."""
     try:
         rel = os.path.relpath(first_missing, anc)
         if not rel or rel.startswith(".."):
             return False
-        r = subprocess.run(["git", "-C", anc, "ls-files", "-s", "--", rel],
+        r = subprocess.run(["git", "--literal-pathspecs", "-C", anc, "ls-files", "-s", "--", rel],
                            capture_output=True, text=True, timeout=5)
         if r.returncode != 0:
             return False
@@ -278,24 +527,41 @@ def edit_repo(p, cwd=None):
 
 
 def shell_write_repos(cmd, cwd):
-    """Repos a shell command writes into: the targets of redirects (`>`, `>>`, `1>`,
-    `1>>`), `tee` (including `--`), and `sed -i` (GNU & macOS BSD `-i ''`), quoted or
-    unquoted. Targets starting with `$` cannot be resolved without running the shell
-    and are skipped. Targets whose repo cannot be resolved (including bare filenames
-    like `README` without cwd or vanished nested clones) are kept as `?<path>` via
-    edit_repo so they cannot silently read as meta-only."""
+    """Repos a shell command writes into: redirections (`>`, `>>`, `>|`, `1>`, `1>>`,
+    even without leading space), ALL targets of `tee` (including `--`), and ALL file
+    targets of `sed -i` (GNU & macOS BSD `-i ''`), with per-segment `cd` tracking.
+    Targets containing shell variables (`$TARGET`, `$DIR/file`) or unresolvable paths
+    are emitted as `?<path>` so a mixed session is never misclassified as meta-only."""
+    if not isinstance(cmd, str) or not cmd.strip():
+        return set()
     out = set()
-    targets = (
-        _extract_shell_targets(REDIRECT_RE, cmd)
-        + _extract_shell_targets(TEE_RE, cmd)
-        + _extract_shell_targets(SED_INPLACE_RE, cmd)
-    )
-    for tgt in targets:
-        if not _is_write_target(tgt):
-            continue
-        r = edit_repo(tgt, cwd)
-        if r:
-            out.add(r)
+    cur_cwd = cwd
+    for sep, seg in _split_shell_segments(cmd):
+        # A pipeline subshell or `||` branch shouldn't inherit an earlier failed cd blindly,
+        # while sequential `;`, `&&`, `\n` carry `cd` forward.
+        words, redirs = _tokenize_shell_segment(seg)
+        cd_tgt = _extract_cd_target(words)
+        if cd_tgt is not None and sep != "|":
+            if _VAR_EXP_RE.search(cd_tgt) or cd_tgt == "-":
+                cur_cwd = None
+            else:
+                expanded = os.path.expanduser(cd_tgt)
+                if os.path.isabs(expanded):
+                    cur_cwd = os.path.normpath(expanded)
+                elif cur_cwd:
+                    cur_cwd = os.path.normpath(os.path.join(cur_cwd, expanded))
+                else:
+                    cur_cwd = None
+        targets = redirs + _extract_cmd_write_targets(words)
+        for tgt in targets:
+            if not _is_write_target(tgt):
+                continue
+            if _VAR_EXP_RE.search(tgt):
+                out.add("?" + tgt)
+                continue
+            r = edit_repo(tgt, cur_cwd)
+            if r:
+                out.add(r)
     return out
 
 
@@ -486,26 +752,42 @@ def _pct(xs, q):
 def _collect_jsonl(root, recursive):
     """Collect *.jsonl files under `root` and count unreadable directories/entries.
     Missing root (FileNotFoundError) is benign (0 files, 0 errors); permission or
-    other OSErrors count as unreadable so m6 fails closed."""
+    other OSErrors count as unreadable so m6 fails closed. Follows readable
+    directory symlinks with an inode cycle guard so symlinked session roots work."""
     if not root:
         return [], 0
     files, errors = [], 0
     if recursive:
         try:
-            os.listdir(root)
+            st0 = os.stat(root)
         except FileNotFoundError:
             return [], 0
         except OSError:
             return [], 1
-
-        def _on_err(_e):
-            nonlocal errors
-            errors += 1
-
-        for dirpath, _dirnames, filenames in os.walk(root, onerror=_on_err):
-            for fn in filenames:
-                if fn.endswith(".jsonl"):
-                    files.append(os.path.join(dirpath, fn))
+        visited = {(st0.st_dev, st0.st_ino)}
+        stack = [root]
+        while stack:
+            cur = stack.pop()
+            try:
+                with os.scandir(cur) as it:
+                    entries = list(it)
+            except OSError:
+                errors += 1
+                continue
+            for e in entries:
+                try:
+                    st = os.stat(e.path)  # follows symlinks; raises on dangling/unsearchable target
+                except OSError:
+                    if e.name.endswith(".jsonl") or e.is_symlink():
+                        errors += 1
+                    continue
+                if os.path.isdir(e.path):
+                    key = (st.st_dev, st.st_ino)
+                    if key not in visited:
+                        visited.add(key)
+                        stack.append(e.path)
+                elif e.name.endswith(".jsonl"):
+                    files.append(e.path)
         return files, errors
     try:
         entries = list(os.scandir(root))
@@ -518,24 +800,33 @@ def _collect_jsonl(root, recursive):
             if not e.is_dir():
                 continue
             for sub in os.scandir(e.path):
-                if sub.name.endswith(".jsonl") and sub.is_file():
-                    files.append(sub.path)
+                try:
+                    if sub.name.endswith(".jsonl"):
+                        os.stat(sub.path)  # fail closed on unreadable symlink targets
+                        if sub.is_file():
+                            files.append(sub.path)
+                except OSError:
+                    errors += 1
         except OSError:
             errors += 1
     return files, errors
 
 
 def measure(cfg, window_days, claude_root, codex_root, now=None):
+    cfg = cfg if isinstance(cfg, dict) else {}
     now = now or time.time()
     window_days = _safe_window_days(window_days)
     since = now - float(window_days) * 86400
     cap = _safe_pos_float(cfg.get("wait_cap_minutes"), DEFAULT_CAP_MIN) * 60
-    product = {str(r).strip().lower() for r in (cfg.get("product_repos") or []) if str(r).strip()}
-    meta = {str(r).strip().lower() for r in (cfg.get("meta_repos") or []) if str(r).strip()}
-    external = {str(r).strip().lower() for r in (cfg.get("external_repos") or []) if str(r).strip()}
+    product = set(_norm_str_list(cfg.get("product_repos")))
+    meta = set(_norm_str_list(cfg.get("meta_repos")))
+    external = set(_norm_str_list(cfg.get("external_repos")))
     # Sessions started in a scratch directory are throwaway runs (scripted evals,
     # dogfood fixtures), not work: excluded from both m6 and the wait metrics.
-    scratch_prefixes = tuple(str(x).rstrip("/") for x in (cfg.get("scratch_prefixes", ["/tmp", "/private/tmp"]) or ()))
+    if "scratch_prefixes" in cfg:
+        scratch_prefixes = tuple(_norm_prefixes(cfg.get("scratch_prefixes")))
+    else:
+        scratch_prefixes = tuple(_norm_prefixes(["/tmp", "/private/tmp"]))
     # Edits outside any repo that are not work toward one: scratch, and the agent
     # harnesses' own homes (memory, settings). Anything else unresolved is kept.
     home = os.path.expanduser("~")
@@ -562,7 +853,16 @@ def measure(cfg, window_days, claude_root, codex_root, now=None):
     #     PARENT's turns, and the parent must claim them. Modification time is the
     #     wrong clock here: a parent records the end of its turn after the child
     #     returns, so the parent's file is usually the NEWER one.
-    files = [(h, f) for h, f in files if _mtime(f) >= since]
+    kept_files = []
+    for h, f in files:
+        try:
+            mt = os.path.getmtime(f)
+        except OSError:
+            unreadable[h] += 1
+            continue
+        if mt >= since:
+            kept_files.append((h, f))
+    files = kept_files
     files.sort(key=lambda hf: _codex_created(hf[1]) if hf[0] == "codex" else -_mtime(hf[1]))
 
     seen_uuids, seen_turns = set(), set()
@@ -736,15 +1036,17 @@ def fleet_config_signature(cfg, window):
     --throttle never reuse a scan produced under a different window, repo list,
     scratch filter, or wait cap."""
     c = cfg if isinstance(cfg, dict) else {}
-    sp = c.get("scratch_prefixes", ["/tmp", "/private/tmp"])
-    if sp is None:
-        sp = []
+    if "scratch_prefixes" in c:
+        prefixes = _norm_prefixes(c.get("scratch_prefixes"))
+    else:
+        prefixes = _norm_prefixes(["/tmp", "/private/tmp"])
     return {
+        "schema_version": CACHE_SCHEMA_VERSION,
         "window_days": float(_safe_window_days(window)),
-        "product_repos": sorted({str(r).strip().lower() for r in (c.get("product_repos") or []) if str(r).strip()}),
-        "meta_repos": sorted({str(r).strip().lower() for r in (c.get("meta_repos") or []) if str(r).strip()}),
-        "external_repos": sorted({str(r).strip().lower() for r in (c.get("external_repos") or []) if str(r).strip()}),
-        "scratch_prefixes": sorted({str(x).rstrip("/") for x in sp if str(x).strip()}),
+        "product_repos": _norm_str_list(c.get("product_repos")),
+        "meta_repos": _norm_str_list(c.get("meta_repos")),
+        "external_repos": _norm_str_list(c.get("external_repos")),
+        "scratch_prefixes": prefixes,
         "wait_cap_minutes": _safe_pos_float(c.get("wait_cap_minutes"), DEFAULT_CAP_MIN),
     }
 
@@ -765,10 +1067,12 @@ def main():
     args = ap.parse_args()
 
     workspace = resolve_workspace(args.workspace)
+    fleet_state_file = _fleet_state_path(workspace)
     if args.config_json:
         cfg, window = json.loads(args.config_json), 7
     else:
         cfg, window = load_config(workspace)
+    cfg = cfg if isinstance(cfg, dict) else {}
     if args.window is not None:
         window = _safe_window_days(args.window)
     else:
@@ -778,9 +1082,10 @@ def main():
 
     if args.throttle:
         try:
-            with open(_fleet_state_path(workspace)) as f:
+            with open(fleet_state_file) as f:
                 st = json.load(f)
-            if (time.time() - datetime.fromisoformat(st["measured_at"]).timestamp() < args.throttle
+            age = time.time() - datetime.fromisoformat(st["measured_at"]).timestamp()
+            if (-MAX_FUTURE_SKEW_SEC <= age < args.throttle
                     and st.get("config") == config_sig
                     and st.get("claude_root") == args.claude_root
                     and st.get("codex_root") == args.codex_root):

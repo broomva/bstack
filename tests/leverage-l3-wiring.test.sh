@@ -61,9 +61,9 @@ J
 }
 # ship MEASURED_AT M7 MERGED — as the sensor writes it: a 1.0 carries its newest
 # artifact's time (here: the measurement time), a 0.0 none, plus outward_config.
-DEF_RECEIPTS="$(python3 -c 'import os; print(os.path.expanduser("~/.config/broomva/door/receipts.jsonl"))')"
-DEF_OUTWARD_CFG="{\"window_days\":7.0,\"product_repos\":[],\"author_allowlist\":[],\"door_receipts\":\"$DEF_RECEIPTS\"}"
-DEF_FLEET_CFG='{"window_days":7.0,"product_repos":[],"meta_repos":[],"external_repos":[],"scratch_prefixes":["/private/tmp","/tmp"],"wait_cap_minutes":30.0}'
+DEF_RECEIPTS="$(python3 -c 'import os; print(os.path.normpath(os.path.abspath(os.path.expanduser("~/.config/broomva/door/receipts.jsonl"))))')"
+DEF_OUTWARD_CFG="{\"schema_version\":2,\"window_days\":7.0,\"product_repos\":[],\"author_allowlist\":[],\"door_receipts\":\"$DEF_RECEIPTS\"}"
+DEF_FLEET_CFG='{"schema_version":2,"window_days":7.0,"product_repos":[],"meta_repos":[],"external_repos":[],"scratch_prefixes":["/private/tmp","/tmp"],"wait_cap_minutes":30.0}'
 ship(){ local la=null; [ "$2" = "1.0" ] && la="\"$1\""
   printf '{"measured_at":"%s","outward_config":%s,"m6s_meta_work_ship_ratio":null,"raw":{},"m7_outward_artifact_floor":%s,"outward":{"merged_product_prs":%s,"window_days":7,"latest_artifact_at":%s,"complete_negative_coverage":true}}\n' "$1" "$DEF_OUTWARD_CFG" "$2" "$3" "$la" > "$SHIP_STATE"; }
 # an unsigned legacy record (written before outward_config / latest_artifact_at existed)
@@ -253,7 +253,7 @@ Y
 write_cfg_setpoints 7 "acme/app" "acme/meta" "alice" "$RECEIPTS_A"
 cat > "$SHIP_STATE" <<J
 {"measured_at":"$NOW","window_days":7,"shadow":true,"gh_ok":true,"repos":[],
- "outward_config":{"window_days":7.0,"product_repos":["acme/app"],"author_allowlist":["alice"],"door_receipts":"$RECEIPTS_A"},
+ "outward_config":{"schema_version":2,"window_days":7.0,"product_repos":["acme/app"],"author_allowlist":["alice"],"door_receipts":"$RECEIPTS_A"},
  "m6s_meta_work_ship_ratio":null,"raw":{},
  "m7_outward_artifact_floor":1.0,
  "outward":{"window_days":7,"merged_product_prs":1,"door_receipts":1,
@@ -261,7 +261,7 @@ cat > "$SHIP_STATE" <<J
 J
 cat > "$FLEET_STATE" <<J
 {"measured_at":"$NOW","window_days":7,
- "config":{"window_days":7.0,"product_repos":["acme/app"],"meta_repos":["acme/meta"],
+ "config":{"schema_version":2,"window_days":7.0,"product_repos":["acme/app"],"meta_repos":["acme/meta"],
    "external_repos":[],"scratch_prefixes":["/private/tmp","/tmp"],"wait_cap_minutes":30.0},
  "metrics":{"m6_meta_work_session_ratio":0.25,"w1_agent_idle_share":0.2},
  "raw":{"transcripts_read":{"claude":2,"codex":0},"unclassified_sessions":0,"unclassified_repos":{}}}
@@ -375,8 +375,23 @@ PY
 chmod 755 "$NOSEARCH"
 [ "$R6_M7" = "1.0 None 1 False None unreadable False" ] && ok "whitespace allowlist, invalid mergedAt, and unsearchable receipt path all fail closed" || bad "R6 m7 checks failed: $R6_M7"
 
-# 6d) .broomva/-only migrated workspace works across hook guard + all 3 sensors
+# 6d) .broomva/-only migrated workspace works across hook guard + all 3 real producer CLIs
 WS_MIG="$TMP/ws-mig"; mkdir -p "$WS_MIG/.broomva"
+MIG_META="$TMP/mig-meta"; MIG_PROD="$TMP/mig-prod"
+mkdir -p "$MIG_META" "$MIG_PROD"
+git init -q "$MIG_META" && git -C "$MIG_META" remote add origin "https://github.com/acme/meta.git"
+git init -q "$MIG_PROD" && git -C "$MIG_PROD" remote add origin "https://github.com/acme/app.git"
+MIG_CR="$TMP/mig-claude"; mkdir -p "$MIG_CR/p"
+python3 -I - "$MIG_CR/p/s.jsonl" "$MIG_PROD" <<'PY'
+import json, sys, time
+from datetime import datetime, timezone
+p, prod = sys.argv[1], sys.argv[2]
+t0 = datetime.fromtimestamp(time.time() - 300, timezone.utc).isoformat()
+with open(p, "w") as f:
+    f.write(json.dumps({"type": "assistant", "timestamp": t0, "cwd": prod, "message": {"content": [
+        {"type": "tool_use", "name": "Edit", "input": {"file_path": f"{prod}/app.py"}}
+    ]}}) + "\n")
+PY
 cat > "$WS_MIG/.broomva/leverage-setpoints.yaml" <<Y
 window_days: 7
 fleet:
@@ -384,22 +399,183 @@ fleet:
   meta_repos: ["acme/meta"]
   author_allowlist: ["alice"]
   door_receipts: "$RECEIPTS_A"
+  scratch_prefixes: []
 ship_signal:
   repos: []
 metrics:
+  - {id: m6, name: meta_work_session_ratio, level: L3, direction: lower_is_better, target: 0.5, alert: 0.8}
   - {id: m7, name: outward_artifact_floor, level: L3, direction: higher_is_better, target: 1.0, alert: 0.99}
 Y
 GUARD_OUT="$(BSTACK_WORKSPACE="$WS_MIG" bash "$REPO/hooks/bstack-hook-guard.sh" echo ok-migrated)"
 [ "$GUARD_OUT" = "ok-migrated" ] && ok "bstack-hook-guard accepts .broomva/-only workspace" || bad "hook guard rejected .broomva/ workspace: $GUARD_OUT"
-python3 -I "$SHIP_SENSOR" --workspace "$WS_MIG" --outward-fixture /dev/null --json --no-store 2>/dev/null || true
-# Write ship state via broomva_paths and read it via leverage-sensor.py on the .broomva/-only workspace
+# Run real leverage-ship-sensor.py (with real outward-fixture JSON) and store its real output at broomva_paths location
+MIG_FX="$TMP/mig-fx.json"; echo '{"acme/app":[]}' > "$MIG_FX"
+MIG_SHIP_JSON="$(python3 -I "$SHIP_SENSOR" --workspace "$WS_MIG" --outward-fixture "$MIG_FX" --json --no-store)" \
+  && ok "leverage-ship-sensor runs cleanly in .broomva/-only workspace" || bad "leverage-ship-sensor failed in .broomva/ workspace"
 MIG_SHIP="$(broomva_repo_path leverage_ship_state "$WS_MIG")"
 mkdir -p "$(dirname "$MIG_SHIP")"
-cat > "$MIG_SHIP" <<J
-{"measured_at":"$NOW","window_days":7,"outward_config":{"window_days":7.0,"product_repos":["acme/app"],"author_allowlist":["alice"],"door_receipts":"$RECEIPTS_A"},"m6s_meta_work_ship_ratio":null,"raw":{},"m7_outward_artifact_floor":1.0,"outward":{"window_days":7,"merged_product_prs":0,"door_receipts":1,"latest_artifact_at":"$NOW","complete_negative_coverage":true}}
-J
+printf '%s\n' "$MIG_SHIP_JSON" > "$MIG_SHIP"
+# Run real leverage-fleet-sensor.py storing directly into the .broomva/-only workspace
+python3 -I "$FLEET_SENSOR" --workspace "$WS_MIG" --claude-root "$MIG_CR" --codex-root "$TMP/none" --json >/dev/null \
+  && ok "leverage-fleet-sensor runs and stores cleanly in .broomva/-only workspace" || bad "leverage-fleet-sensor failed in .broomva/ workspace"
+MIG_FLEET="$(broomva_repo_path leverage_fleet_state "$WS_MIG")"
+[ -f "$MIG_FLEET" ] && ok "leverage-fleet-sensor wrote state to broomva_paths target" || bad "missing $MIG_FLEET"
 J="$(python3 -I "$SENSOR" --workspace "$WS_MIG" --transcripts "$EMPTY_GLOB" --json --no-store 2>/dev/null)"
-[ "$(g "['metrics'].get('m7_outward_artifact_floor')")" = "1.0" ] && ok "leverage-sensor reads .broomva/leverage-setpoints.yaml + broomva_paths ship state" || bad "migrated workspace m7 failed"
+[ "$(g "['metrics'].get('m7_outward_artifact_floor')")" = "1.0" ] && ok "leverage-sensor reads real ship state in .broomva/ workspace" || bad "migrated workspace m7 failed"
+[ "$(g "['raw'].get('m6_scope')")" = "fleet" ] && [ "$(g "['metrics'].get('m6_meta_work_session_ratio')")" = "0.0" ] \
+  && ok "leverage-sensor reads real fleet state in .broomva/ workspace" || bad "migrated workspace fleet failed"
+
+echo "== round 7: symlink LayoutError, schema_version, closure L3, malformed inputs, relative receipts, numeric bounds, future ts, hook .broomva/ =="
+# 7a) Symlinked repo state root must raise LayoutError and write ZERO files in all 3 sensors
+SYM_OUT="$TMP/sym-outside"; SYM_WS="$TMP/sym-ws"
+mkdir -p "$SYM_OUT" "$SYM_WS"
+SYM_DIR="$(dirname "$(broomva_repo_path leverage_setpoints "$SYM_WS")")"
+ln -s "$SYM_OUT" "$SYM_DIR"
+R7_SYM="$(python3 -I - "$SENSOR" "$SHIP_SENSOR" "$FLEET_SENSOR" "$SYM_WS" "$EMPTY_GLOB" "$TMP/none" <<'PY'
+import subprocess, sys
+s, sh, fl, ws, eg, none = sys.argv[1:7]
+rc1 = subprocess.run([sys.executable, "-I", s, "--workspace", ws, "--transcripts", eg, "--json"], capture_output=True).returncode
+rc2 = subprocess.run([sys.executable, "-I", sh, "--workspace", ws, "--json"], capture_output=True).returncode
+rc3 = subprocess.run([sys.executable, "-I", fl, "--workspace", ws, "--claude-root", none, "--codex-root", none, "--json"], capture_output=True).returncode
+print(rc1 != 0, rc2 != 0, rc3 != 0)
+PY
+)"
+SYM_FILES="$(ls -A "$SYM_OUT" | wc -l | tr -d ' ')"
+[ "$R7_SYM" = "True True True" ] && [ "$SYM_FILES" = "0" ] \
+  && ok "symlinked state root fails closed with LayoutError and writes zero files across all 3 sensors" \
+  || bad "symlinked state root leaked: rc=$R7_SYM files=$SYM_FILES"
+
+# 7b) Pre-hardening cache (no schema_version) is rejected by leverage-sensor and by producer --throttle
+write_cfg_setpoints 7 "acme/app" "acme/meta" "alice" "$RECEIPTS_A"
+cat > "$SHIP_STATE" <<J
+{"measured_at":"$NOW","window_days":7,"outward_config":{"window_days":7.0,"product_repos":["acme/app"],"author_allowlist":["alice"],"door_receipts":"$RECEIPTS_A"},
+ "m6s_meta_work_ship_ratio":null,"raw":{},"m7_outward_artifact_floor":0.0,
+ "outward":{"window_days":7,"merged_product_prs":0,"door_receipts":0,"latest_artifact_at":null,"complete_negative_coverage":true}}
+J
+cat > "$FLEET_STATE" <<J
+{"measured_at":"$NOW","window_days":7,"config":{"window_days":7.0,"product_repos":["acme/app"],"meta_repos":["acme/meta"],"external_repos":[],"scratch_prefixes":["/private/tmp","/tmp"],"wait_cap_minutes":30.0},
+ "metrics":{"m6_meta_work_session_ratio":1.0},"raw":{"transcripts_read":{"claude":1,"codex":0}}}
+J
+J="$(python3 -I "$SENSOR" --workspace "$WS" --transcripts "$EMPTY_GLOB" --json --no-store 2>/dev/null)"
+[ "$(g "['metrics'].get('m7_outward_artifact_floor')")" = "None" ] && [ "$(g "['metrics'].get('m6_meta_work_session_ratio')")" = "None" ] \
+  && ok "pre-hardening caches without schema_version=2 are rejected" || bad "pre-hardening cache accepted"
+
+# 7c) Closure verdict must NOT certify L3.live=True from checkout counts when m6_scope=fleet_unmeasured
+rm -f "$SHIP_STATE" "$FLEET_STATE"
+LOCAL_TR="$TMP/local-meta-tr"; mkdir -p "$LOCAL_TR"
+python3 -I - "$LOCAL_TR/s.jsonl" "$WS" <<'PY'
+import json, sys, time
+from datetime import datetime, timezone
+p, ws = sys.argv[1], sys.argv[2]
+t0 = datetime.fromtimestamp(time.time() - 120, timezone.utc).isoformat()
+rows = [
+    {"type": "user", "timestamp": t0, "message": {"content": "edit scripts"}},
+    {"type": "assistant", "timestamp": t0, "message": {"content": [
+        {"type": "tool_use", "id": "t1", "name": "Edit", "input": {"file_path": f"{ws}/scripts/a.py"}}
+    ]}},
+    {"type": "user", "timestamp": t0, "message": {"content": [
+        {"type": "tool_result", "tool_use_id": "t1", "content": "ok"}
+    ]}},
+]
+with open(p, "w") as f:
+    for r in rows: f.write(json.dumps(r) + "\n")
+PY
+J="$(python3 -I "$SENSOR" --workspace "$WS" --transcripts "$LOCAL_TR/*.jsonl" --json --no-store 2>/dev/null)"
+[ "$(g "['raw'].get('m6_scope')")" = "fleet_unmeasured" ] \
+  && [ "$(g "['closure']['levels']['L3']['live']")" = "False" ] \
+  && [ "$(g "['closure']['closed']")" = "False" ] \
+  && ok "closure_verdict refuses L3.live=True when fleet m6 is unmeasured despite local checkout sessions" \
+  || bad "closure_verdict falsely certified L3: scope=$(g "['raw'].get('m6_scope')") L3=$(g "['closure']['levels']['L3']['live']")"
+
+# 7d) Malformed outward fetch shapes, scalar YAML lists, non-dict author/tier_weights, explicit ungated=0.0, future-dated m7
+R7_M7="$(python3 -I - "$SHIP_SENSOR" "$SENSOR" "$NOW" <<'PY'
+import importlib.util, sys
+from datetime import datetime, timedelta, timezone
+def load(p):
+    sp = importlib.util.spec_from_file_location("m", p); m = importlib.util.module_from_spec(sp); sp.loader.exec_module(m); return m
+sh, s = load(sys.argv[1]), load(sys.argv[2])
+now_iso = sys.argv[3]
+# Dict response and list with non-dict item fail closed -> m7=None, complete_negative_coverage=False
+r_dict = sh.compute_outward({"product_repos": ["acme/app"], "author_allowlist": ["alice"], "door_receipts": "/nonexistent-r7"}, 7,
+    fetch=lambda r, si: {"error": "invalid shape"})
+r_elem = sh.compute_outward({"product_repos": ["acme/app"], "author_allowlist": ["alice"], "door_receipts": "/nonexistent-r7"}, 7,
+    fetch=lambda r, si: ["invalid element"])
+r_auth_str = sh.compute_outward({"product_repos": ["acme/app"], "author_allowlist": ["alice"], "door_receipts": "/nonexistent-r7"}, 7,
+    fetch=lambda r, si: [{"number": 1, "mergedAt": now_iso, "author": "alice"}])
+# Scalar author_allowlist: "alice" must NOT iterate chars
+r_scalar = sh.compute_outward({"product_repos": ["acme/app"], "author_allowlist": "alice", "door_receipts": "/nonexistent-r7"}, 7,
+    fetch=lambda r, si: [])
+# Malformed tier_weights: "bad" must not crash classify_prs; explicit ungated: 0.0 must score 0.0 (not 0.5)
+r_bad_tw = sh.classify_prs([{"number": 1, "author": {"login": "a"}, "files": [{"path": "apps/x.ts"}], "statusCheckRollup": []}],
+    {"tier_weights": "bad", "author_allowlist": ["a"]})
+r_zero_ug = sh.classify_prs([{"number": 1, "author": {"login": "a"}, "files": [{"path": "apps/x.ts"}], "statusCheckRollup": []}],
+    {"tier_weights": {"green": 1.0, "ungated": 0.0}, "author_allowlist": ["a"]})
+# Future-dated cached artifact (>5m ahead) must fail closed in effective_m7
+fut = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(timespec="seconds")
+m7_fut = s.effective_m7({"m7_outward_artifact_floor": 1.0, "outward": {"window_days": 7, "latest_artifact_at": fut, "complete_negative_coverage": True}}, 10)
+print(r_dict["m7_outward_artifact_floor"], r_dict["outward"]["complete_negative_coverage"],
+      r_elem["m7_outward_artifact_floor"], r_elem["outward"]["complete_negative_coverage"],
+      r_auth_str["m7_outward_artifact_floor"], r_auth_str["outward"]["complete_negative_coverage"],
+      r_scalar["m7_outward_artifact_floor"],
+      r_bad_tw["raw"]["product_ship"], r_zero_ug["raw"]["product_ship"],
+      m7_fut)
+PY
+)"
+[ "$R7_M7" = "None False None False None False None 0.5 0.0 None" ] \
+  && ok "malformed fetch/author/tier_weights, scalar allowlist, explicit ungated=0.0, and future-dated m7 all handled cleanly" \
+  || bad "R7 outward/ship edge cases failed: $R7_M7"
+
+# 7e) Relative door_receipts resolves against --workspace from two different cwds with identical signature & value
+REL_WS="$TMP/rel-ws"; OTHER_CWD="$TMP/other-cwd"
+mkdir -p "$REL_WS/.broomva" "$OTHER_CWD"
+echo "{\"at\":\"$NOW\",\"kind\":\"deploy\"}" > "$REL_WS/door.jsonl"
+cat > "$REL_WS/.broomva/leverage-setpoints.yaml" <<Y
+window_days: 7
+fleet:
+  product_repos: ["acme/app"]
+  author_allowlist: ["alice"]
+  door_receipts: "door.jsonl"
+Y
+REL_FX="$TMP/rel-fx.json"; echo '{"acme/app":[]}' > "$REL_FX"
+REL_A="$(cd "$REL_WS" && python3 -I "$SHIP_SENSOR" --workspace "$REL_WS" --outward-fixture "$REL_FX" --json --no-store)"
+REL_B="$(cd "$OTHER_CWD" && python3 -I "$SHIP_SENSOR" --workspace "$REL_WS" --outward-fixture "$REL_FX" --json --no-store)"
+R7_REL="$(python3 -I - "$REL_A" "$REL_B" <<'PY'
+import json, sys
+a, b = json.loads(sys.argv[1]), json.loads(sys.argv[2])
+print(a["m7_outward_artifact_floor"] == 1.0, b["m7_outward_artifact_floor"] == 1.0,
+      a["outward_config"] == b["outward_config"])
+PY
+)"
+[ "$R7_REL" = "True True True" ] \
+  && ok "relative door_receipts resolves against --workspace consistently across cwds" \
+  || bad "relative door_receipts drifted across cwds: $R7_REL"
+
+# 7f) Huge window_days (10^20 and 401-digit YAML integer) degrades cleanly without crashing or dropping metrics
+HUGE_INT="1$(python3 -c 'print("0"*400)')"
+cat > "$SETPOINTS" <<Y
+window_days: $HUGE_INT
+fleet:
+  product_repos: []
+  meta_repos: []
+  author_allowlist: []
+ship_signal:
+  repos: []
+metrics:
+  - {id: m2, name: tool_error_rate, level: L1, direction: lower_is_better, target: 0.05, alert: 0.15}
+Y
+R7_HUGE="$(python3 -I "$SENSOR" --workspace "$WS" --transcripts "$EMPTY_GLOB" --json --no-store 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["window_days"], any(r.get("key")=="m2_tool_error_rate" and r.get("target")==0.05 for r in d["results"]))')"
+python3 -I "$SHIP_SENSOR" --workspace "$WS" --json --no-store >/dev/null && SHIP_HUGE=ok || SHIP_HUGE=fail
+python3 -I "$FLEET_SENSOR" --workspace "$WS" --claude-root "$TMP/none" --codex-root "$TMP/none" --json --no-store >/dev/null && FLEET_HUGE=ok || FLEET_HUGE=fail
+[ "$R7_HUGE" = "7 True" ] && [ "$SHIP_HUGE" = "ok" ] && [ "$FLEET_HUGE" = "ok" ] \
+  && ok "401-digit window_days degrades to 7 without crashing or discarding policy metrics" \
+  || bad "huge window_days failed: sensor=$R7_HUGE ship=$SHIP_HUGE fleet=$FLEET_HUGE"
+
+# 7g) l3-stability-pretool-hook.sh warns on .broomva/leverage-setpoints.yaml and leverage-fleet-sensor.py in a .broomva/-only workspace
+L3_HOOK="$REPO/scripts/l3-stability-pretool-hook.sh"
+H_MIG_1="$(BROOMVA_WORKSPACE="$WS_MIG" bash "$L3_HOOK" <<< "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$WS_MIG/.broomva/leverage-setpoints.yaml\"}}")"
+H_MIG_2="$(BROOMVA_WORKSPACE="$WS_MIG" bash "$L3_HOOK" <<< "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$WS_MIG/scripts/leverage-fleet-sensor.py\"}}")"
+has "l3 hook warns on .broomva/leverage-setpoints.yaml in migrated workspace" "L3" "$H_MIG_1"
+has "l3 hook warns on leverage-fleet-sensor.py in migrated workspace" "L3" "$H_MIG_2"
 
 echo "leverage-l3-wiring: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
