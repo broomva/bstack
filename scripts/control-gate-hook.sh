@@ -17,15 +17,21 @@
 #   G2  no committing/writing secrets (.env, credentials, keys, .pem)
 #   G3  no catastrophic deletes (rm -rf /, rm -rf ~) / hard reset to remote
 #
-# Self-contained: the canonical patterns are embedded; extra Bash deny-patterns
-# in .control/policy.yaml under gates.hard[].pattern are merged in automatically.
+# Self-contained: the canonical patterns are embedded. Extra Bash deny-patterns come from
+# the policy file (.broomva/policy.yaml, else .control/policy.yaml): every line of it of
+# the form `pattern: <regex>` is merged in, wherever it is. A line that begins with
+# `- pattern:` is not read; write `- id: ...` first and `pattern:` on its own line (BRO-4169).
 # Portable: resolves the workspace via $CLAUDE_PROJECT_DIR / $BROOMVA_WORKSPACE / git.
 
 set -uo pipefail
 
 INPUT="$(cat 2>/dev/null || echo '{}')"
 REPO_ROOT="${CLAUDE_PROJECT_DIR:-${BROOMVA_WORKSPACE:-$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")}}"
+# The policy file every other reader uses: the new governance folder first, then the old
+# one. The rule registry's completeness check reads it the same way; a gate that read only
+# the old folder enforced one file while the registry accounted for the other.
 POLICY="$REPO_ROOT/.control/policy.yaml"
+[ -f "$REPO_ROOT/.broomva/policy.yaml" ] && POLICY="$REPO_ROOT/.broomva/policy.yaml"
 
 command -v python3 >/dev/null 2>&1 || exit 0  # cannot evaluate -> allow (fail-open, non-blocking)
 

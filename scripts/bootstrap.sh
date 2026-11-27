@@ -379,14 +379,21 @@ if [ "${BSTACK_SKIP_RULES:-0}" = "1" ]; then
   echo "BSTACK_SKIP_RULES=1 — skipping the rule registry."
   echo "(Run \`bstack rules init\` later to write and replay it.)"
 else
+  # An older policy file gets its `gates.hard` list first (the rule runner reads it). This
+  # is bootstrap's own step, announced on its own line; `bstack rules` never edits the policy.
+  RULES_POLICY="$( . "${BOOTSTRAP_SCRIPT_DIR}/lib/broomva-paths.sh" && broomva_repo_path policy "$WORKSPACE_DIR" 2>/dev/null )" || RULES_POLICY=""
+  if [ -n "$RULES_POLICY" ] && [ -f "$RULES_POLICY" ]; then
+    python3 -I "${BOOTSTRAP_SCRIPT_DIR}/ensure-hard-gates.py" "$RULES_POLICY" || true
+  fi
   # The status is the script's own: its output goes to a file first, never through a pipe.
-  # Without a temporary file (an unusable TMPDIR) the output is printed as it comes.
+  # Without a temporary file the output is printed as it comes. The budget covers the whole
+  # step, and a cleanup that fails does not stop bootstrap.
   rules_rc=0
   if RULES_LOG="$(mktemp 2>/dev/null)"; then
     BSTACK_RULES_BUDGET_S="${BSTACK_BOOTSTRAP_RULES_BUDGET_S:-600}" BROOMVA_WORKSPACE="$WORKSPACE_DIR" \
       bash "${BOOTSTRAP_SCRIPT_DIR}/rules-registry.sh" init >"$RULES_LOG" 2>&1 || rules_rc=$?
     sed 's/^/  /' "$RULES_LOG" || true
-    rm -f "$RULES_LOG"
+    rm -f "$RULES_LOG" || true
   else
     BSTACK_RULES_BUDGET_S="${BSTACK_BOOTSTRAP_RULES_BUDGET_S:-600}" BROOMVA_WORKSPACE="$WORKSPACE_DIR" \
       bash "${BOOTSTRAP_SCRIPT_DIR}/rules-registry.sh" init || rules_rc=$?
@@ -394,7 +401,8 @@ else
   case "$rules_rc" in
     0) echo "  rule registry: replayed, and no row failed. Gap rows and known misses are listed above." ;;
     3) : ;;  # the skill is missing or too old; the script said how to install it
-    5) echo "  rule registry: stopped after the time budget; nothing is known. \`bstack rules check\` replays it." ;;
+    5) echo "  rule registry: stopped after the time budget; nothing is known. If the lines above say the starter"
+       echo "  rule's hook is installed, it is active. \`bstack rules init\` finishes the setup and replays it." ;;
     6) echo "  rule registry: replayed, and no row failed, but this workspace's registry lacks part of bstack's pack (listed above)." ;;
     *) echo "  rule registry: exit $rules_rc — see above; \`bstack rules check\` replays it." ;;
   esac

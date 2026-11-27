@@ -6,30 +6,48 @@
 # controls through the hook entry the harness would run. bstack ships the rows for its
 # own hooks (references/rules-pack.yaml) and does not carry a copy of the runner.
 #
-#   rules-registry.sh locate   print the path of the skill's correct.py
-#   rules-registry.sh init     give the workspace its registry, with bstack's rows; then replay
-#   rules-registry.sh check    replay the workspace's registry
+#   rules-registry.sh locate            print the path of the skill's correct.py
+#   rules-registry.sh init [--dry-run]  give the workspace its registry, with bstack's rows,
+#                                       and replay it. A workspace that has a registry gets
+#                                       nothing written. --dry-run lists what a workspace
+#                                       without a registry would get and writes nothing.
+#   rules-registry.sh verify            a workspace that has a registry: replay it and say
+#                                       which of bstack's rows it lacks. Writes nothing.
+#   rules-registry.sh check [OPTIONS]   replay the workspace's registry; OPTIONS go to the
+#                                       skill's `check` (--json, --only ID, --registry FILE ...)
 #
-# The workspace is $BROOMVA_WORKSPACE, else the current directory.
-# $BSTACK_CORRECT names correct.py outright (CI, tests, a checkout); otherwise the
-# installed skill is used, and of two installed copies the one that has `init --pack`.
+# None of these changes the policy file. The workspace is $BROOMVA_WORKSPACE, else the
+# current directory.
 #
-# $BSTACK_RULES_BUDGET_S, when set, is how many seconds `init` or `check` may take. bootstrap
-# and doctor set it: a registry with many rows replays for minutes, and a copy of the skill
-# that hangs must not hang them.
+# The skill: $BSTACK_CORRECT names its correct.py outright (CI, tests, a checkout, a copy
+# installed some other way). Otherwise it is looked for in ~/.claude/skills/correct and
+# ~/.agents/skills/correct, and of two copies the one that has `init --pack` is used.
+#
+# $BSTACK_RULES_BUDGET_S, when set, is how many seconds the whole command may take
+# (scripts/lib/run-with-budget.py). bootstrap and doctor set it: a registry with many rows
+# replays for minutes, and a copy of the skill that hangs must not hang them.
 #
 # Exit codes
 #   0  done, and no row failed (gap rows and known misses are listed in the output)
 #   1  a row did not hold
-#   2  the command could not run
+#   2  the command could not run (a bad argument or budget, a file that is not a registry)
 #   3  the correct skill is not installed, or the installed copy is too old for `init`
 #   4  the workspace has no rule registry
 #   5  the budget ran out, so nothing is known
-#   6  `init`: the workspace already had a registry, it replays, and it lacks part of
-#      bstack's pack (the output lists what)
+#   6  `init` or `verify`: the workspace already had a registry, no row of it failed, and
+#      it lacks part of bstack's pack (the output lists what)
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# The budget is the outermost thing: the script runs itself again inside it, so everything
+# below (finding the skill, reading the workspace, the skill's run) is inside the limit, and
+# a budget that is not a number stops here, before anything is read or written.
+if [ -n "${BSTACK_RULES_BUDGET_S:-}" ] && [ -z "${BSTACK_RULES_IN_BUDGET:-}" ]; then
+    BSTACK_RULES_IN_BUDGET=1 exec python3 -I "$SCRIPT_DIR/lib/run-with-budget.py" "$BSTACK_RULES_BUDGET_S" \
+        bash "${BASH_SOURCE[0]}" "$@"
+fi
+
 BSTACK_REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 WORKSPACE="${BROOMVA_WORKSPACE:-$PWD}"
 PACK="$BSTACK_REPO/references/rules-pack.yaml"
@@ -39,6 +57,8 @@ INSTALL_HINT="npx skills add broomva/skills --skill correct -g"
 . "$SCRIPT_DIR/lib/broomva-paths.sh"
 # shellcheck source=scripts/lib/plugin-preference.sh
 . "$SCRIPT_DIR/lib/plugin-preference.sh"
+
+usage() { sed -n '2,39p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 has_pack_option() { grep -q -- '--pack' "$1" 2>/dev/null; }
 
@@ -74,11 +94,6 @@ locate() {
     printf '%s\n' "$first"
 }
 
-# The policy file, or nothing when the workspace has none.
-policy_file() {
-    broomva_repo_path policy "$WORKSPACE" 2>/dev/null || true
-}
-
 # The registry, looked for where the skill looks for it: in each governance folder, the
 # new name first. It is not tied to where the policy file is; a workspace in the middle of
 # the folder rename can have the two in different folders.
@@ -93,130 +108,99 @@ registry_file() {
     return 1
 }
 
-# The rule runner reads the policy's `gates.hard` list and treats a policy without one as
-# unreadable. bstack's policy template had no such key before 0.53.0, so a workspace
-# bootstrapped earlier gets an empty list added under `gates:`. The file is parsed to decide
-# and parsed again to confirm: the write happens only when the one difference is the new
-# empty list. Anything else (no `gates:` mapping, a `gates:` written in flow style, a file
-# that does not parse) is left alone and reported, and the replay then says what is missing.
-ensure_hard_gates() {
-    local policy
-    policy="$(policy_file)"
-    [ -n "$policy" ] && [ -f "$policy" ] || return 0
-    python3 -I - "$policy" <<'PYEOF'
-import re, site, sys
-if site.getusersitepackages() not in sys.path:
-    sys.path.append(site.getusersitepackages())
-try:
-    import yaml
-except ImportError:
-    sys.exit(0)  # the replay reports the missing PyYAML itself
-path = sys.argv[1]
-text = open(path, encoding="utf-8").read()
-def note(why):
-    print(f"  {path}: {why}; add `hard: []` under `gates:` by hand", file=sys.stderr)
-    sys.exit(0)
-try:
-    before = yaml.safe_load(text)
-except yaml.YAMLError:
-    note("does not parse as YAML")
-if not isinstance(before, dict) or not isinstance(before.get("gates"), dict):
-    note("has no `gates:` mapping")
-if "hard" in before["gates"]:
-    sys.exit(0)
-added = ("gates:\n"
-         "  # Hard gates the rule registry must account for: a gate with a `pattern` needs a row\n"
-         "  # that proves it (`policy_gate:`). Added by bstack; the control gate's own patterns are\n"
-         "  # embedded in scripts/control-gate-hook.sh and replayed by references/rules-pack.yaml.\n"
-         "  hard: []\n")
-after_text, count = re.subn(r"^gates:[ \t]*(#.*)?\n", lambda _m: added, text, count=1, flags=re.M)
-if count != 1:
-    note("writes `gates:` in a form this script does not edit")
-try:
-    after = yaml.safe_load(after_text)
-except yaml.YAMLError:
-    note("would not parse with the key added")
-expected = dict(before, gates=dict(before["gates"], hard=[]))
-if after != expected:
-    note("would change more than `gates.hard` with the key added")
-open(path, "w", encoding="utf-8").write(after_text)
-print(f"  added `gates.hard: []` to {path}")
-PYEOF
-}
-
-# run_correct CORRECT ARGS... -> the skill's exit status, or 5 when $BSTACK_RULES_BUDGET_S
-# ran out. With a budget the skill runs in its own process group, and the whole group is
-# stopped when the time is up, so no hook under replay is left running.
-run_correct() {
-    local correct="$1"; shift
-    if [ -z "${BSTACK_RULES_BUDGET_S:-}" ]; then
-        python3 -I "$correct" "$@"
-        return
-    fi
-    python3 -I - "$BSTACK_RULES_BUDGET_S" "$correct" "$@" <<'PYEOF'
-import os, signal, subprocess, sys
-try:
-    budget = float(sys.argv[1])
-    if not budget > 0:
-        raise ValueError
-except ValueError:
-    print(f"rules-registry: BSTACK_RULES_BUDGET_S must be a number of seconds above 0, got {sys.argv[1]!r}", file=sys.stderr)
-    sys.exit(2)
-proc = subprocess.Popen([sys.executable, "-I", *sys.argv[2:]], start_new_session=True)
-try:
-    sys.exit(proc.wait(timeout=budget))
-except subprocess.TimeoutExpired:
-    try:
-        os.killpg(proc.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-    proc.wait()
-    print(f"the rule registry step did not finish within {budget:g} s, so nothing is known about the registry.")
-    sys.exit(5)
-PYEOF
-}
-
-# What a passing replay did not look at, said next to it. The runner reads settings files;
-# hooks that the bstack plugin provides are in the plugin's own hooks.json, which it does
-# not read yet (BRO-3811).
+# What a replay did not look at, said next to its result whatever the result. The runner
+# reads settings files; hooks that the bstack plugin provides are in the plugin's own
+# hooks.json, which it does not read yet (BRO-3811). One line, on stderr: `check --json`
+# and `--markdown` own stdout, and doctor repeats lines that start with `note:`.
 note_unseen_sources() {
     [ -n "${HOME:-}" ] || return 0
     if bstack_plugin_enabled 2>/dev/null; then
-        # On stderr: `check --json` and `--markdown` own stdout.
-        echo "note: the bstack plugin is enabled here. The hooks it provides are not in a settings file," >&2
-        echo "      so this replay did not see them (BRO-3811); it covers the hooks in the settings files." >&2
+        echo "note: the bstack plugin is enabled, and the hooks it provides are not in a settings file: this replay did not see them (BRO-3811)" >&2
     fi
 }
 
-cmd_init() {
+# skill_or_stop WHAT -> the path of correct.py on stdout, or the reason on stdout and 3 / 2.
+skill_or_stop() {
     local correct rc=0
     correct="$(locate)" || rc=$?
     if [ "$rc" -eq 3 ]; then
-        echo "the correct skill is not installed, so no rule registry was written."
-        echo "install it, then run bootstrap again: $INSTALL_HINT"
+        echo "the correct skill is not installed, so $1."
+        echo "install it: $INSTALL_HINT"
         return 3
     fi
     [ "$rc" -eq 0 ] || return "$rc"
     # `init --pack` arrived with the pack format; an older copy of the skill refuses the option.
     if ! has_pack_option "$correct"; then
-        echo "the installed correct skill ($correct) predates \`init --pack\`, so no rule registry was written."
-        echo "update it, then run bootstrap again: $INSTALL_HINT"
+        echo "the installed correct skill ($correct) predates \`init --pack\`, so $1."
+        echo "update it: $INSTALL_HINT"
         return 3
     fi
-    ensure_hard_gates || return 2
-    run_correct "$correct" init --root "$WORKSPACE" --pack "$PACK" || rc=$?
+    printf '%s\n' "$correct"
+}
+
+# with_pack CORRECT [--dry-run] -> the skill's `init --pack`, its 3 mapped to 6.
+with_pack() {
+    local correct="$1" rc=0; shift
+    python3 -I "$correct" init --root "$WORKSPACE" --pack "$PACK" "$@" || rc=$?
     case "$rc" in
-        0) note_unseen_sources ;;
-        # The skill's 3: the registry was here before, replays, and lacks part of the pack.
+        0|1) note_unseen_sources ;;
+        # The skill's 3: the registry was here before, no row failed, and it lacks part of the pack.
         3) note_unseen_sources; rc=6 ;;
     esac
     return "$rc"
 }
 
-cmd_check() {
+cmd_init() {
+    local correct rc=0 dry=()
+    # Arguments are settled before anything is read or written: this command installs a hook.
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --dry-run) dry=(--dry-run) ;;
+            -h|--help) usage; return 0 ;;
+            *) echo "rules-registry: init takes --dry-run and nothing else, got: $1" >&2; return 2 ;;
+        esac
+        shift
+    done
+    correct="$(skill_or_stop "no rule registry was written")" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        [ -z "$correct" ] || printf '%s\n' "$correct"
+        return "$rc"
+    fi
+    with_pack "$correct" ${dry[@]+"${dry[@]}"}
+}
+
+cmd_verify() {
     local correct rc=0
-    correct="$(locate)" || rc=$?
+    if [ $# -gt 0 ]; then
+        case "$1" in -h|--help) usage; return 0 ;; esac
+        echo "rules-registry: verify takes no argument, got: $1" >&2
+        return 2
+    fi
+    # Only a workspace that has a registry: on one the skill's init writes nothing.
     if ! registry_file >/dev/null; then
+        echo "this workspace has no rule registry (\`bstack bootstrap\` writes one)."
+        return 4
+    fi
+    correct="$(skill_or_stop "the registry here was not replayed")" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        [ -z "$correct" ] || printf '%s\n' "$correct"
+        return "$rc"
+    fi
+    with_pack "$correct"
+}
+
+cmd_check() {
+    local correct rc=0 arg named=0
+    for arg in "$@"; do
+        case "$arg" in
+            -h|--help) usage; return 0 ;;
+            --registry|--registry=*) named=1 ;;
+        esac
+    done
+    correct="$(locate)" || rc=$?
+    # A registry named on the command line is the skill's to find; otherwise it is looked
+    # for here first, so "no registry" is told apart from "could not run".
+    if [ "$named" -eq 0 ] && ! registry_file >/dev/null; then
         echo "this workspace has no rule registry (\`bstack bootstrap\` writes one)."
         return 4
     fi
@@ -226,17 +210,18 @@ cmd_check() {
         return 3
     fi
     [ "$rc" -eq 0 ] || return "$rc"
-    run_correct "$correct" check --root "$WORKSPACE" "$@" || rc=$?
-    [ "$rc" -ne 0 ] || note_unseen_sources
+    python3 -I "$correct" check --root "$WORKSPACE" "$@" || rc=$?
+    case "$rc" in 0|1) note_unseen_sources ;; esac
     return "$rc"
 }
 
-case "${1:-}" in
-    locate) locate ;;
-    init)   cmd_init ;;
-    check)  shift; cmd_check "$@" ;;
-    *)
-        sed -n '2,29p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
-        exit 2
-        ;;
+command="${1:-}"
+[ $# -eq 0 ] || shift
+case "$command" in
+    locate)       locate ;;
+    init)         cmd_init "$@" ;;
+    verify)       cmd_verify "$@" ;;
+    check)        cmd_check "$@" ;;
+    -h|--help|help) usage ;;
+    *)            usage >&2; exit 2 ;;
 esac

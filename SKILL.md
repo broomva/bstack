@@ -161,7 +161,7 @@ If the preamble printed `ONBOARDING: bstack not yet initialized`: jump to the **
 # ─── Skill roster check ──────────────────────────────────────
 AGENTS_DIR="${HOME}/.agents/skills"
 CLAUDE_DIR="${HOME}/.claude/skills"
-ROSTER=(autonomous cross-review agentic-control-kernel control-metalayer-loop harness-engineering-playbook p9 agent-consciousness knowledge-graph-memory prompt-library symphony symphony-forge autoany deep-dive-research-orchestrator skills skills-showcase arcan-glass next-forge alkosto-wait-optimizer content-creation finance-substrate seo-llmeo brand-icons pre-mortem braindump morning-briefing drift-check strategy-critique stakeholder-update decision-log weekly-review role-x)
+ROSTER=(autonomous cross-review agentic-control-kernel control-metalayer-loop harness-engineering-playbook p9 agent-consciousness knowledge-graph-memory prompt-library symphony symphony-forge autoany deep-dive-research-orchestrator skills skills-showcase arcan-glass next-forge alkosto-wait-optimizer content-creation finance-substrate seo-llmeo brand-icons pre-mortem braindump morning-briefing drift-check strategy-critique stakeholder-update decision-log weekly-review role-x correct)
 INSTALLED=0; MISSING=()
 for s in "${ROSTER[@]}"; do
   if [ -d "$AGENTS_DIR/$s" ] || [ -d "$CLAUDE_DIR/$s" ]; then
@@ -170,11 +170,11 @@ for s in "${ROSTER[@]}"; do
     MISSING+=("$s")
   fi
 done
-echo "bstack: $INSTALLED/${#ROSTER[@]} skills installed (30 total)"
+echo "bstack: $INSTALLED/${#ROSTER[@]} skills of this list installed"
 [ ${#MISSING[@]} -gt 0 ] && echo "Missing: ${MISSING[*]}"
 ```
 
-Report the count. If all 30 present, say "bstack fully installed." If any missing, list them and offer the `bootstrap` command.
+Report the count. If none is missing, say "bstack fully installed." If any is missing, list them and offer the `bootstrap` command. (The list above is a snapshot; `references/companion-skills.yaml` is the roster, and `bstack skills status` reads it.)
 
 After skill check, run the harness validation:
 
@@ -264,7 +264,7 @@ Future sessions inspect this for state. `bootstrap_status: failed` is captured t
    - `.claude/settings.json` (P1, P2, P7 hook wiring)
 3. Adds `make` targets to existing Makefile (or creates one): `bstack-check`, `control-audit`, `janitor`, `bstack-primitive-lint` (G-L3-1), `bstack-rule-of-three` (G-L3-2), `bstack-l3-trust` (combined L3 gates)
 4. Installs pre-commit hook (`.githooks/pre-commit`) via `git config core.hooksPath .githooks`
-   - Then **replays the hooks it wired**: `scripts/rules-registry.sh init` calls the `correct` skill, which writes a rule registry in the governance folder (its starter rule plus bstack's rows, `references/rules-pack.yaml`) and runs every proof and control through the hook entry the harness would run. The starter rule's hook refuses edits on `main` and `master` from then on. A workspace that already has a registry is replayed, left unchanged, and told which of bstack's rows it lacks. `bstack rules check` replays it by hand; doctor §34 replays it on every run within a time budget. With the bstack plugin enabled the replay does not see the plugin's own hooks (BRO-3811). Skip with `BSTACK_SKIP_RULES=1`
+   - Then **replays the control gate it wired**: `scripts/rules-registry.sh init` calls the `correct` skill, which writes a rule registry in the governance folder (its starter rule plus bstack's rows, `references/rules-pack.yaml`) and runs every proof and control through the hook entry the harness would run. The starter rule's hook refuses edits on `main` and `master` from then on. A workspace that already has a registry is replayed, left unchanged, and told which of bstack's rows it lacks. `bstack rules check` replays it by hand; doctor §34 replays it on every run within a time budget. Two of bstack's enforcing hooks have gap rows and are not replayed, and with the bstack plugin enabled the replay does not see the plugin's own hooks (BRO-3811). Skip with `BSTACK_SKIP_RULES=1`
 5. Runs `bstack doctor` to verify primitive contract compliance + `make bstack-l3-trust` to verify L3 gates pass
 6. Reports a *bootstrap receipt* — what was installed, what was scaffolded, what was already present
 7. **Recommends invoking `/autonomous` for the user's next substantive work unit** — the substrate is installed; the canonical mode is ready to engage

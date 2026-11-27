@@ -10,21 +10,29 @@
 # repository on every change.
 #
 # What a row proves is what its proofs and controls replay, and no more. The control gate
-# matches a few regular expressions against the command text or the file path, so each
-# `rule:` below names the spellings it refuses, and each spelling known to get past it is a
-# `known_misses` case (BRO-4169). Every proof here is CONSTRUCTED from the gate's own
-# pattern. A workspace that has made the mistake for real should add its own proof with
-# where it came from.
+# matches regular expressions against the command text or the file path. Each `rule:` below
+# therefore says what the rule is for, and then quotes the pattern that is all the gate
+# enforces of it; tests/rules-pack.test.sh fails when a quoted pattern is not in the gate's
+# source character for character, or when the gate has a pattern no rule quotes.
+# A pattern over command text cannot cover every way to write a command. The `known_misses`
+# cases are the ways found so far to do what a rule forbids without matching its pattern
+# (BRO-4169). They are examples, not a complete list.
+# Every proof here is CONSTRUCTED from the gate's own pattern. A workspace that has made
+# the mistake for real should add its own proof with where it came from.
 #
 # What the pack does not prove is recorded, not hidden:
 #   - the git pre-commit rate gate and the Stop hook that continues a stalled arc are `gap`
 #     rows (BRO-4159);
 #   - no row is certified by a real harness session (`canary: {none ...}`, BRO-4159);
-#   - the gate also refuses some harmless inputs (a command that only prints `--no-verify`,
-#     a path that merely contains `credentials`, `id_rsa.pub`, `.env.example`), and the
-#     registry has no field for that (BRO-4169);
-#   - the gate enforces every `pattern:` line in the policy file, wherever it is, and the
-#     registry accounts only for those under `gates.hard` (BRO-4169).
+#   - the patterns also match harmless inputs, for example a command that only prints
+#     `--no-verify`, a hard reset to a branch called `original`, a path that merely contains
+#     `credentials`, `id_rsa.pub`, `.env.example`. The registry has no field for that
+#     (BRO-4169);
+#   - besides its own patterns the gate enforces every line of the policy file of the form
+#     `pattern: <regex>`, under any key (a line that begins `- pattern:` is not read), and
+#     the registry accounts only for the patterns under `gates.hard` (BRO-4169);
+#   - a workspace whose path has a space in it gets hook commands that cannot run, and the
+#     replay then reports these rows as not registered (BRO-4184).
 #
 # bootstrap wires hooks two ways. Without the bstack plugin every hook below is in the
 # workspace's settings file. With the plugin, six of them come from the plugin's own
@@ -43,7 +51,10 @@ hooks_not_rules:
 
 rules:
   - id: no-force-push
-    rule: A Bash command with `git push` and `--force`, `--force-with-lease` or `-f` is refused; a force-push rewrites history other sessions have already fetched.
+    rule: >-
+      Never force-push; it rewrites history other sessions have already fetched. The gate
+      enforces this as far as one regular expression goes, and no further: it refuses a Bash
+      command whose text matches `git\s+push\b.*(--force\b|--force-with-lease\b|\s-f\b)`.
     source: "bstack P2 control gate, G1 (scripts/control-gate-hook.sh)"
     level: hook
     runs_in: [harness]
@@ -67,10 +78,16 @@ rules:
       - from: "the `+` refspec forces a push with no flag for the gate to match (P20 review of bstack#156)"
         ticket: BRO-4169
         event: {tool_name: Bash, tool_input: {command: "git push origin +main"}}
+      - from: "the flag on a continuation line: `.` in the pattern does not cross a newline (P20 round 2 of bstack#156)"
+        ticket: BRO-4169
+        event: {tool_name: Bash, tool_input: {command: "git push \\\n--force origin main"}}
     canary: {none: "replayed through the hook entry; no real-harness session has been run", ticket: BRO-4159}
 
   - id: no-catastrophic-delete
-    rule: A Bash command that runs `rm -rf` on `/`, `~` or `$HOME`, spelled exactly so, is refused.
+    rule: >-
+      Never recursively delete the filesystem root or the home directory. The gate enforces
+      this as far as one regular expression goes, and no further: it refuses a Bash command
+      whose text matches `\brm\s+-rf\s+(/|~|\$HOME)(\s|$)`.
     source: "bstack P2 control gate, G3 (scripts/control-gate-hook.sh)"
     level: hook
     runs_in: [harness]
@@ -111,7 +128,10 @@ rules:
     canary: {none: "replayed through the hook entry; no real-harness session has been run", ticket: BRO-4159}
 
   - id: no-hard-reset-to-remote
-    rule: A Bash command with `git reset --hard` followed by the word `origin` is refused; a hard reset to the remote discards local work without a trace.
+    rule: >-
+      Never hard-reset a branch to its remote; it discards local work without a trace. The
+      gate enforces this as far as one regular expression goes, and no further: it refuses a
+      Bash command whose text matches `\bgit\s+reset\s+--hard\b.*origin`.
     source: "bstack P2 control gate, G3 (scripts/control-gate-hook.sh)"
     level: hook
     runs_in: [harness]
@@ -137,7 +157,10 @@ rules:
     canary: {none: "replayed through the hook entry; no real-harness session has been run", ticket: BRO-4159}
 
   - id: no-hook-bypass
-    rule: A Bash command whose text contains `--no-verify` is refused; the pre-commit hooks are the commit half of the gates.
+    rule: >-
+      Never skip the pre-commit hooks; they are the commit half of the gates. The gate
+      enforces this as far as one regular expression goes, and no further: it refuses a Bash
+      command whose text matches `--no-verify\b`.
     source: "bstack P2 control gate, G2 (scripts/control-gate-hook.sh)"
     level: hook
     runs_in: [harness]
@@ -161,7 +184,10 @@ rules:
     canary: {none: "replayed through the hook entry; no real-harness session has been run", ticket: BRO-4159}
 
   - id: no-secret-file-write
-    rule: A Write, Edit or MultiEdit is refused when its path is `.env` or a dotted variant, contains `credentials`, is `id_rsa`, or ends in `.pem` or `.key`.
+    rule: >-
+      Never write a secrets file with a file tool. The gate enforces this as far as five
+      regular expressions go, and no further: it refuses a Write, Edit or MultiEdit whose path
+      matches `(^|/)\.env(\.|$)`, `credentials`, `(^|/)id_rsa\b`, `\.pem$` or `\.key$`.
     source: "bstack P2 control gate, G2 path rules (scripts/control-gate-hook.sh)"
     level: hook
     runs_in: [harness]

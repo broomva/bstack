@@ -47,8 +47,9 @@ Orchestration:
                                   in ONE worktree, from a roster (≥ 0.40.0).
 
 Rules:
-  rules init|check|locate         The rule registry: write it with bstack's rows and
-                                  replay it (the `correct` skill does the replay; ≥ 0.53.0).
+  rules init|verify|check|locate  The rule registry: write it with bstack's rows, replay
+                                  it, compare it with bstack's rows (the `correct` skill
+                                  does the replay; ≥ 0.53.0).
 
 Observability:
   metrics collect|observe         Setpoint measurement pipeline (≥ 0.4.0).

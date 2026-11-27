@@ -16,7 +16,7 @@
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-EXPECTED_ASSERTIONS=77
+EXPECTED_ASSERTIONS=108
 PASS=0; FAIL=0; FAILED=()
 pass() { echo "  [ok] $1"; PASS=$((PASS + 1)); }
 fail() { echo "  [FAIL] $1"; FAIL=$((FAIL + 1)); FAILED+=("$1"); }
@@ -32,6 +32,12 @@ echo "── rules-pack (BRO-4147) ───────────────
 # Git reads no configuration from outside the test: a global hooksPath or template on the
 # machine must not decide whether a scratch repository gets its first commit.
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+# Nor does a bstack switch the caller happens to have set (BSTACK_NO_PLUGIN=1 turned the
+# plugin case into the other one): every BSTACK_* and BROOMVA_* variable is dropped, bar
+# the one that names the skill for this test. Each case sets what it needs.
+for name in $(compgen -v | grep -E '^(BSTACK_|BROOMVA_)' || true); do
+    [ "$name" = BSTACK_TEST_CORRECT ] || unset "$name"
+done
 REAL_SETTINGS="${HOME:-/nonexistent}/.claude/settings.json"
 real_settings_sum() { if [ -f "$REAL_SETTINGS" ]; then cksum <"$REAL_SETTINGS"; else echo none; fi; }
 REAL_SETTINGS_BEFORE="$(real_settings_sum)"
@@ -74,7 +80,9 @@ new_ws() {
 }
 # new_home <name>: an empty HOME. The skill's runner imports PyYAML and looks for it in the
 # user site, which moves with HOME; when that is where this machine keeps PyYAML, the new
-# home's user site is a link to the real one. Nothing else of the real home is visible.
+# home's user site is a link to the real one. That directory of installed Python packages
+# is the one thing of the real home a case can reach, and through the link it is the real
+# one, not a copy. No settings, skills or plugins of the real home are visible.
 new_home() {
     local home="$TMP/$1" real_site new_site
     mkdir -p "$home"
@@ -133,6 +141,46 @@ PY
 HOOK_ROWS="$(pack_ids hook)"
 GAP_ROWS="$(pack_ids gap)"
 
+# ── 0. Each rule quotes the pattern the gate enforces, character for character ──
+# A rule that says more than its pattern does is the defect two review rounds found in
+# this pack. The rules now quote the patterns; this holds the quotes to the gate's source.
+echo "0. the rules quote the gate's patterns"
+# quotes_match <gate script> <pack> <expected number of gate patterns>: 0 when every
+# pattern of the gate is quoted by a hook rule of the pack and every quote is a pattern of
+# the gate; else 1 with the differences on stdout.
+quotes_match() {
+    python3 - "$1" "$2" "$3" <<'PY'
+import re, sys, yaml
+gate, pack, expected = open(sys.argv[1], encoding="utf-8").read(), yaml.safe_load(open(sys.argv[2], encoding="utf-8")), int(sys.argv[3])
+patterns = re.findall(r'^\s+\(r"(.+)",\s+"G\d: [^"]+"\),?\s*$', gate, re.M)
+quoted = [q for rule in pack["rules"] if rule["level"] == "hook" for q in re.findall(r"`([^`]+)`", rule["rule"])]
+problems = []
+if len(patterns) != expected:
+    problems.append(f"the gate has {len(patterns)} pattern(s) this test can read, {expected} expected")
+problems += [f"the gate enforces {p!r} and no rule quotes it" for p in patterns if p not in quoted]
+problems += [f"a rule quotes {q!r}, which is not a pattern of the gate" for q in quoted if q not in patterns]
+print("\n".join(problems))
+sys.exit(1 if problems else 0)
+PY
+}
+quotes_match "$REPO/scripts/control-gate-hook.sh" "$PACK" 9 >"$OUT" 2>&1; RC=$?
+[ "$RC" -eq 0 ] || cat "$OUT"
+is "all nine patterns of the gate are quoted by the rules, and nothing else is" test "$RC" -eq 0
+# The check can fail: a gate whose pattern changed, and a pack that quotes a pattern the gate lacks.
+python3 - "$REPO/scripts/control-gate-hook.sh" "$TMP/gate-changed.sh" "$PACK" "$TMP/pack-changed.yaml" <<'PY'
+import sys
+gate = open(sys.argv[1], encoding="utf-8").read()
+assert gate.count(r'r"\.pem$"') == 1
+open(sys.argv[2], "w", encoding="utf-8").write(gate.replace(r'r"\.pem$"', r'r"\.pem"'))
+pack = open(sys.argv[3], encoding="utf-8").read()
+assert pack.count("`credentials`, `(^|/)id_rsa") == 1
+open(sys.argv[4], "w", encoding="utf-8").write(pack.replace("`credentials`, `(^|/)id_rsa", "`credentials\\.json$`, `(^|/)id_rsa"))
+PY
+quotes_match "$TMP/gate-changed.sh" "$PACK" 9 >"$OUT" 2>&1; RC=$?
+is "a pattern changed in the gate and not in the pack fails this check" test "$RC" -eq 1 -a "$(grep -c 'no rule quotes it' "$OUT")" = 1
+quotes_match "$REPO/scripts/control-gate-hook.sh" "$TMP/pack-changed.yaml" 9 >"$OUT" 2>&1; RC=$?
+is "a rule that quotes a pattern the gate does not have fails this check" test "$RC" -eq 1 -a "$(grep -c 'is not a pattern of the gate' "$OUT")" = 1
+
 # ── 1. A fresh bootstrap ends with a registry whose every row replays ────────
 echo "1. fresh bootstrap, every hook wired by hand (no plugin)"
 WS="$(new_ws fresh)"
@@ -158,9 +206,19 @@ is "each gap row is reported as a gap, not as a pass (missing:${missing:- none})
 is "the starter row replays too" row "$OUT" PASS branch-first
 is "every blocking hook and git hook is accounted for" row "$OUT" PASS registry-completeness
 is "nothing failed" lacks "$OUT" "FAIL"
-is "the control gate runs on MultiEdit" grep -q '"matcher": "MultiEdit"' "$WS/.claude/settings.json"
+# gate_matchers <workspace>: the matchers of the blocks that run the control gate, sorted.
+gate_matchers() {
+    python3 - "$1/.claude/settings.json" <<'PY'
+import json, sys
+blocks = json.load(open(sys.argv[1])).get("hooks", {}).get("PreToolUse", [])
+print(" ".join(sorted(b.get("matcher", "") for b in blocks
+                      if any("control-gate-hook.sh" in h.get("command", "") for h in b.get("hooks", [])))))
+PY
+}
+is "the control gate is registered for Bash, Edit, MultiEdit and Write" test "$(gate_matchers "$WS")" = "Bash Edit MultiEdit Write"
 is "the policy carries gates.hard" grep -q '^  hard: \[\]$' "$(policy_of "$WS")"
 is "known misses are counted in the replay, not hidden" grep -qE 'no-catastrophic-delete +5 known miss' "$OUT"
+is "the continuation-line push is replayed as a known miss" grep -qE 'no-force-push +2 known miss' "$OUT"
 is "without the plugin the replay adds no note about unseen hooks" lacks "$OUT" "BRO-3811"
 
 # Everything below removes something and expects a row to fail. That means nothing unless
@@ -269,7 +327,35 @@ is "BSTACK_SKIP_RULES=1 skips the doctor replay too, and says so" test "$(has "$
 MOVED="$TMP/moved"; cp -R "$WS" "$MOVED"
 mkdir -p "$MOVED/$BROOMVA_REPO_DIR" && mv "$(policy_of "$MOVED")" "$MOVED/$BROOMVA_REPO_DIR/policy.yaml"
 replay "$MOVED"
-is "a policy file in the other governance folder does not hide the registry" test "$RC" -ne 4
+is "a policy file in the other governance folder does not hide the registry: the replay still exits 0" test "$RC" -eq 0
+
+# A registry named on the command line is the skill's to find, not this script's.
+NAMED="$TMP/named"; cp -R "$WS" "$NAMED"
+mv "$(registry_of "$NAMED")" "$NAMED/alternate-rules.yaml"
+RC=0
+HOME="$HOME_PLAIN" BSTACK_CORRECT="$CORRECT" BROOMVA_WORKSPACE="$NAMED" bash "$REPO/scripts/rules-registry.sh" check --registry "$NAMED/alternate-rules.yaml" >"$OUT" 2>&1 || RC=$?
+is "check --registry FILE replays the named registry" test "$RC" -eq 0 -a "$(grep -cE '^ *PASS +hook +no-force-push' "$OUT")" = 1
+replay "$NAMED"
+is "and without the option that workspace has no registry (exit 4)" test "$RC" -eq 4
+
+# The gate and the registry read the same policy file. With one in each governance folder,
+# a pattern in the one both prefer is refused by the gate AND reported by the registry as a
+# gate with no row; a pattern only in the other one is neither.
+BOTH="$TMP/both"; cp -R "$WS" "$BOTH"
+mkdir -p "$BOTH/$BROOMVA_REPO_DIR"
+printf 'version: 1\ngates:\n  hard:\n    - id: G-NEW\n      pattern: marker-in-the-new-folder\n' >"$BOTH/$BROOMVA_REPO_DIR/policy.yaml"
+printf 'version: 1\ngates:\n  hard:\n    - id: G-OLD\n      pattern: marker-in-the-old-folder\n' >"$BOTH/$BROOMVA_REPO_LEGACY_DIR/policy.yaml"
+# gate_says <workspace> <command text>: the gate's exit status for that Bash command.
+gate_says() {
+    printf '{"tool_name": "Bash", "tool_input": {"command": "%s"}}' "$2" \
+        | CLAUDE_PROJECT_DIR="$1" bash "$1/scripts/control-gate-hook.sh" >/dev/null 2>&1
+    echo $?
+}
+is "the gate enforces the pattern in the policy file the registry reads" test "$(gate_says "$BOTH" "echo marker-in-the-new-folder")" = 2
+is "and not the pattern in the file the registry does not read" test "$(gate_says "$BOTH" "echo marker-in-the-old-folder")" = 0
+replay "$BOTH"
+is "the registry reports that same gate as one with no row" test "$RC" -eq 1 -a "$(grep -c 'policy gate G-NEW has a pattern but no row' "$OUT")" = 1
+is "and says nothing of the gate in the file neither reads" lacks "$OUT" "G-OLD"
 
 # A registry that was there before, or that an older pack wrote, is told what it lacks.
 STALE="$TMP/stale"; cp -R "$WS" "$STALE"
@@ -277,14 +363,66 @@ python3 - "$(registry_of "$STALE")" <<'PY'
 import sys
 path = sys.argv[1]
 text = open(path, encoding="utf-8").read()
-assert text.count("spelled exactly so") == 1
-open(path, "w", encoding="utf-8").write(text.replace("spelled exactly so", "as an older pack worded it"))
+assert text.count("Never recursively delete") == 1, text.count("Never recursively delete")
+open(path, "w", encoding="utf-8").write(text.replace("Never recursively delete", "Do not recursively delete"))
 PY
 RC=0
 HOME="$HOME_PLAIN" BSTACK_CORRECT="$CORRECT" BROOMVA_WORKSPACE="$STALE" bash "$REPO/scripts/rules-registry.sh" init >"$OUT" 2>&1 || RC=$?
 is "a registry whose row differs from the pack replays and exits 6" test "$RC" -eq 6
 is "and the row is named" has "$OUT" "row(s) that differ from the pack: no-catastrophic-delete"
 is "bootstrap passes that on" test "$(boot "$STALE"; echo $?)$(has "$STALE.log" "lacks part of bstack's pack"; echo $?)" = 00
+RC=0
+HOME="$HOME_PLAIN" BSTACK_CORRECT="$CORRECT" BROOMVA_WORKSPACE="$STALE" bash "$REPO/scripts/rules-registry.sh" verify >"$OUT" 2>&1 || RC=$?
+is "verify says the same and exits 6" test "$RC" -eq 6 -a "$(grep -c 'row(s) that differ from the pack: no-catastrophic-delete' "$OUT")" = 1
+doctor "$STALE"
+is "doctor passes the replay and names the row that differs" test "$(has "$OUT" "[ok] rule registry: replayed, no row failed"; echo $?)$(has "$OUT" "row(s) that differ from the pack: no-catastrophic-delete"; echo $?)" = 00
+
+# init takes --dry-run and nothing else, and settles that before it writes anything.
+ARGS="$(new_ws args)"
+before="$(cd "$ARGS" && find . -path ./.git -prune -o -print | sort)"
+for arg in --help --dry-run --force --registry; do
+    RC=0
+    HOME="$HOME_PLAIN" BSTACK_CORRECT="$CORRECT" BROOMVA_WORKSPACE="$ARGS" bash "$REPO/scripts/rules-registry.sh" init "$arg" >"$OUT" 2>&1 || RC=$?
+    case "$arg" in --help|--dry-run) want=0 ;; *) want=2 ;; esac
+    after="$(cd "$ARGS" && find . -path ./.git -prune -o -print | sort)"
+    is "init $arg exits $want and writes nothing" test "$RC" -eq "$want" -a "$after" = "$before"
+done
+RC=0
+HOME="$HOME_PLAIN" BSTACK_CORRECT="$CORRECT" BROOMVA_WORKSPACE="$ARGS" bash "$REPO/scripts/rules-registry.sh" init --dry-run >"$OUT" 2>&1 || RC=$?
+is "the dry run names the files and the pack" test "$(grep -c 'would write' "$OUT")" -ge 1 -a "$(grep -c 'pack   bstack' "$OUT")" = 1
+RC=0
+HOME="$HOME_PLAIN" BSTACK_CORRECT="$CORRECT" BROOMVA_WORKSPACE="$ARGS" bash "$REPO/scripts/rules-registry.sh" verify >"$OUT" 2>&1 || RC=$?
+after="$(cd "$ARGS" && find . -path ./.git -prune -o -print | sort)"
+is "verify on a workspace with no registry exits 4 and writes nothing (doctor runs it)" test "$RC" -eq 4 -a "$after" = "$before"
+# A budget that is not a finite number above zero stops the command before it reads anything.
+for budget in -1 0 nan inf abc; do
+    RC=0
+    HOME="$HOME_PLAIN" BSTACK_RULES_BUDGET_S="$budget" BSTACK_CORRECT="$CORRECT" BROOMVA_WORKSPACE="$ARGS" bash "$REPO/scripts/rules-registry.sh" init >"$OUT" 2>&1 || RC=$?
+    after="$(cd "$ARGS" && find . -path ./.git -prune -o -print | sort)"
+    is "a budget of '$budget' is refused with exit 2 and nothing is written" test "$RC" -eq 2 -a "$after" = "$before"
+done
+# The rules commands never touch the policy file: only bootstrap gives an older one its list.
+printf 'version: 1\ngates: # the operator wrote this comment\n  governed: []\nowner: retained\n' >"$TMP/old-policy.yaml"
+mkdir -p "$ARGS/$BROOMVA_REPO_LEGACY_DIR" && cp "$TMP/old-policy.yaml" "$ARGS/$BROOMVA_REPO_LEGACY_DIR/policy.yaml"
+HOME="$HOME_PLAIN" BSTACK_CORRECT="$CORRECT" BROOMVA_WORKSPACE="$ARGS" bash "$REPO/scripts/rules-registry.sh" init >"$OUT" 2>&1
+is "init leaves an older policy file byte for byte" cmp -s "$ARGS/$BROOMVA_REPO_LEGACY_DIR/policy.yaml" "$TMP/old-policy.yaml"
+
+# The policy migration bootstrap runs: the comment on the gates line stays, and a write
+# that cannot finish leaves the file as it was.
+MIG="$TMP/migrate"; mkdir -p "$MIG"; cp "$TMP/old-policy.yaml" "$MIG/policy.yaml"
+python3 -I "$REPO/scripts/ensure-hard-gates.py" "$MIG/policy.yaml" >"$OUT" 2>&1; RC=$?
+is "the migration adds the list and keeps the operator's comment and keys" test "$RC" -eq 0 -a "$(grep -c '^gates: # the operator wrote this comment$' "$MIG/policy.yaml")" = 1 -a "$(grep -c '^  hard: \[\]$' "$MIG/policy.yaml")" = 1 -a "$(grep -c '^owner: retained$' "$MIG/policy.yaml")" = 1
+cp "$MIG/policy.yaml" "$TMP/migrated-once.yaml"
+python3 -I "$REPO/scripts/ensure-hard-gates.py" "$MIG/policy.yaml" >"$OUT" 2>&1; RC=$?
+is "a second run changes nothing" test "$RC" -eq 0 -a "$(cmp -s "$MIG/policy.yaml" "$TMP/migrated-once.yaml"; echo $?)" = 0
+cp "$TMP/old-policy.yaml" "$MIG/policy.yaml"; chmod 555 "$MIG"
+python3 -I "$REPO/scripts/ensure-hard-gates.py" "$MIG/policy.yaml" >"$OUT" 2>&1; RC=$?
+chmod 755 "$MIG"
+if [ "$(id -u)" = 0 ]; then
+    pass "a migration that cannot write leaves the policy as it was (not checkable as root: root writes anywhere)"
+else
+    is "a migration that cannot write leaves the policy as it was" test "$RC" -eq 2 -a "$(cmp -s "$MIG/policy.yaml" "$TMP/old-policy.yaml"; echo $?)" = 0 -a "$(ls -A "$MIG" | wc -l | tr -d ' ')" = 1
+fi
 
 # ── 5. A workspace bootstrapped before 0.53.0 is brought up ──────────────────
 echo "5. a workspace from before 0.53.0"
@@ -307,21 +445,19 @@ json.dump(doc, open(settings, "w"), indent=2)
 PY
 is "bootstrap exits 0" boot "$OLD"
 is "it added gates.hard to the policy" grep -q '^  hard: \[\]$' "$(policy_of "$OLD")"
-is "it registered the gate for MultiEdit" grep -q '"matcher": "MultiEdit"' "$OLD/.claude/settings.json"
+is "it registered the gate for MultiEdit" test "$(gate_matchers "$OLD")" = "Bash Edit MultiEdit Write"
 replay "$OLD"
 is "and the replay exits 0" test "$RC" -eq 0
 
 # A policy whose `gates:` this script does not edit is left byte for byte, and said so.
-FLOW="$(new_ws flow)"
-mkdir -p "$(dirname "$(policy_of "$OLD")" | sed "s|^$OLD|$FLOW|")"
-FLOW_POLICY="$(policy_of "$OLD" | sed "s|^$OLD|$FLOW|")"
+FLOW="$TMP/flow"; mkdir -p "$FLOW"
+FLOW_POLICY="$FLOW/policy.yaml"
 printf 'version: 1\ngates: {governed: []}\n' >"$FLOW_POLICY"
 cp "$FLOW_POLICY" "$TMP/flow.orig"
-RC=0
-HOME="$HOME_PLAIN" BSTACK_CORRECT="$CORRECT" BROOMVA_WORKSPACE="$FLOW" bash "$REPO/scripts/rules-registry.sh" init >"$OUT" 2>&1 || RC=$?
+python3 -I "$REPO/scripts/ensure-hard-gates.py" "$FLOW_POLICY" >"$OUT" 2>&1; RC=$?
 is "a flow-style gates block is not rewritten" cmp -s "$FLOW_POLICY" "$TMP/flow.orig"
 is "and the script says to add the key by hand" has "$OUT" "add \`hard: []\` under \`gates:\` by hand"
-is "and init does not report success" test "$RC" -ne 0
+is "and it exits 3: left alone, for a reason it gave" test "$RC" -eq 3
 
 # ── 6. With the bstack plugin installed, the plugin's hooks are not wired by hand ──
 echo "6. fresh bootstrap, plugin preferred"
@@ -337,6 +473,14 @@ is "the control gate still is" wired "$PLUG" control-gate-hook.sh
 is "bootstrap says the registry replays" has "$PLUG.log" "rule registry: replayed, and no row failed."
 replay "$PLUG" HOME="$HOME_PLUGIN"
 is "the replay exits 0 on this path too" test "$RC" -eq 0
+is "and says what it could not see" has "$OUT" "this replay did not see them (BRO-3811)"
+doctor "$PLUG" HOME="$HOME_PLUGIN"
+is "doctor repeats that beside its pass" test "$(has "$OUT" "[ok] rule registry: replayed, no row failed"; echo $?)$(has "$OUT" "[info] the bstack plugin is enabled"; echo $?)" = 00
+cp "$PLUG/scripts/control-gate-hook.sh" "$TMP/plug-gate.orig"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$PLUG/scripts/control-gate-hook.sh"
+replay "$PLUG" HOME="$HOME_PLUGIN"
+is "a failing replay on this path still says what it could not see" test "$RC" -eq 1 -a "$(grep -c 'this replay did not see them (BRO-3811)' "$OUT")" = 1
+cp "$TMP/plug-gate.orig" "$PLUG/scripts/control-gate-hook.sh"
 
 # ── 7. Without the skill nothing is written and nothing aborts ───────────────
 echo "7. without the correct skill"
@@ -349,7 +493,7 @@ is "check on a workspace with no registry exits 4" test "$RC" -eq 4
 replay "$WS" BSTACK_CORRECT=""
 is "check on a registry it cannot replay exits 3" test "$RC" -eq 3
 doctor "$WS" BSTACK_CORRECT=""
-is "doctor counts an unreplayable registry as a gap" has "$OUT" "[gap] the workspace has a rule registry and the correct skill that replays it is not installed"
+is "doctor counts an unreplayable registry as a gap" has "$OUT" "[gap] the workspace has a rule registry and the correct skill that replays it is missing or too old"
 RC=0
 env -u HOME -u BSTACK_CORRECT BROOMVA_WORKSPACE="$WS" bash "$REPO/scripts/rules-registry.sh" check >"$OUT" 2>&1 || RC=$?
 is "with no HOME at all the answer is the same exit 3, not a shell error" test "$RC" -eq 3 -a "$(lacks "$OUT" "unbound variable"; echo $?)" = 0
@@ -370,6 +514,10 @@ started="$(date +%s)"
 is "bootstrap exits 0 with a skill that hangs" boot "$HANG" BSTACK_CORRECT="$TMP/hanging-correct.py" BSTACK_BOOTSTRAP_RULES_BUDGET_S=2
 is "the phase says it was stopped" has "$HANG.log" "rule registry: stopped after the time budget"
 is "and it did not wait for the skill" test "$(( $(date +%s) - started ))" -lt 240
+# The replay's scratch directory belongs to the budget runner and goes with it.
+mkdir -p "$TMP/scratch-tmp"
+replay "$WS" BSTACK_RULES_BUDGET_S=1 TMPDIR="$TMP/scratch-tmp"
+is "a replay stopped by its budget leaves nothing in the temporary directory" test "$RC" -eq 5 -a -z "$(ls -A "$TMP/scratch-tmp")"
 # No temporary file to capture into: the phase still runs and bootstrap still finishes.
 # A `mktemp` that fails is put first on the PATH, because what an unusable TMPDIR does to
 # the real one differs by system (macOS falls back to another directory, Linux fails).
