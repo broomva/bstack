@@ -2185,33 +2185,41 @@ case "$_tree_status" in
 esac
 
 # ── Section 34: Rule registry (BRO-4147) ────────────────────────────────────
-# The hooks above are installed; this asks whether they refuse what they are for. The
+# The hooks above are installed; this asks whether they refuse what their rules say. The
 # `correct` skill replays the workspace's rule registry (scripts/rules-registry.sh).
-# A registry that replays is a pass; one with a row that does not hold, or one that cannot
-# be replayed because the skill is missing, is a gap (unknown is not green). A workspace
-# with no registry yet is reported and not counted: bootstrap writes one.
-# The replay gets BSTACK_DOCTOR_RULES_BUDGET_S seconds (default 60). A registry with many
-# rows replays for minutes; doctor then says that it did not finish, counts nothing, and
-# points at the full replay. That line prints under --quiet too: it is not a pass.
+#   - no row failed: a pass (gap rows and known misses are the registry's own record).
+#   - a row does not hold, or a registry exists and the skill that replays it is missing:
+#     a gap (unknown is not green).
+#   - no registry yet: reported unless --quiet, and not counted; bootstrap writes one.
+#   - the replay ran out of BSTACK_DOCTOR_RULES_BUDGET_S seconds (default 60; a registry
+#     with many rows replays for minutes): reported under --quiet too, and not counted.
+#     It is neither a pass nor a gap.
+#   - BSTACK_SKIP_RULES=1: skipped, and said so.
 section "34. Rule registry (correct)"
-RULES_LOG="$(mktemp)"
-rules_rc=0
-RULES_BUDGET="${BSTACK_DOCTOR_RULES_BUDGET_S:-60}"
-BSTACK_RULES_BUDGET_S="$RULES_BUDGET" BROOMVA_WORKSPACE="$WORKSPACE" \
-    bash "$BSTACK_REPO/scripts/rules-registry.sh" check >"$RULES_LOG" 2>&1 || rules_rc=$?
-case "$rules_rc" in
-    5) echo "  [info] rule registry: the replay did not finish in ${RULES_BUDGET} s, so it is neither a pass nor a gap here"
-       echo "         → run it whole: bstack rules check   (or raise BSTACK_DOCTOR_RULES_BUDGET_S)" ;;
-    0) ok "rule registry: every row replays" ;;
-    4) [ "$QUIET" = "0" ] && echo "  [info] no rule registry in this workspace yet (bstack bootstrap writes one)" ;;
-    3) gap "the workspace has a rule registry and the correct skill that replays it is not installed" \
-           "npx skills add broomva/skills --skill correct -g" ;;
-    1) grep -E '^ +FAIL ' "$RULES_LOG" | cut -c1-400
-       gap "rule registry: a row does not hold" "bstack rules check" ;;
-    *) tail -n 5 "$RULES_LOG"
-       gap "rule registry: the replay could not run (exit $rules_rc)" "bstack rules check" ;;
-esac
-rm -f "$RULES_LOG"
+if [ "${BSTACK_SKIP_RULES:-0}" = "1" ]; then
+    echo "  [info] rule registry: BSTACK_SKIP_RULES=1, not replayed"
+else
+    rules_rc=0
+    RULES_BUDGET="${BSTACK_DOCTOR_RULES_BUDGET_S:-60}"
+    # Without a temporary file (an unusable TMPDIR) the replay still runs; only the lines
+    # that name a failing row cannot be repeated here.
+    RULES_LOG="$(mktemp 2>/dev/null)" || RULES_LOG="/dev/null"
+    BSTACK_RULES_BUDGET_S="$RULES_BUDGET" BROOMVA_WORKSPACE="$WORKSPACE" \
+        bash "$BSTACK_REPO/scripts/rules-registry.sh" check >"$RULES_LOG" 2>&1 || rules_rc=$?
+    case "$rules_rc" in
+        0) ok "rule registry: replayed, no row failed" ;;
+        4) [ "$QUIET" = "0" ] && echo "  [info] no rule registry in this workspace yet (bstack bootstrap writes one)" ;;
+        5) echo "  [info] rule registry: the replay did not finish in ${RULES_BUDGET} s, so it is neither a pass nor a gap here"
+           echo "         → run it whole: bstack rules check   (or raise BSTACK_DOCTOR_RULES_BUDGET_S)" ;;
+        3) gap "the workspace has a rule registry and the correct skill that replays it is not installed" \
+               "npx skills add broomva/skills --skill correct -g" ;;
+        1) grep -E '^ +FAIL ' "$RULES_LOG" | cut -c1-400
+           gap "rule registry: a row does not hold" "bstack rules check" ;;
+        *) tail -n 5 "$RULES_LOG"
+           gap "rule registry: the replay could not run (exit $rules_rc)" "bstack rules check" ;;
+    esac
+    [ "$RULES_LOG" = "/dev/null" ] || rm -f "$RULES_LOG"
+fi
 
 # ── summary ─────────────────────────────────────────────────────────────────
 echo ""

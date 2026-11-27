@@ -2,33 +2,43 @@
 
 ## 0.53.0 — 2026-11-26
 
-### feat(bootstrap): the hooks bootstrap installs are proven by a rule registry (BRO-4147)
+### feat(bootstrap): bootstrap ends with a rule registry that replays the hooks it wired (BRO-4147)
 
-Bootstrap installed hooks and doctor checked that they were wired. Nothing checked that
-they refuse what they are for. The `correct` skill (broomva/skills) does that: it keeps a
-rule registry beside the policy file and replays each rule's proofs and controls through
-the hook entry the harness would run. bstack now calls it and ships the rows for its own
-hooks. No runner code is copied into bstack.
+bstack's own tests check the control gate inside the bstack repository
+(`tests/hook-python-isolation.test.sh`). Nothing checked it in the workspace it is installed
+into: doctor looked at whether hooks were wired, not at what they refuse there. The `correct`
+skill (broomva/skills) does that. It keeps a rule registry in the workspace's governance
+folder and replays each rule's proofs and controls through the hook entry the harness would
+run. bstack now calls it and ships the rows for its own hooks. No runner code is copied into
+bstack.
 
-- **`references/rules-pack.yaml`** — the rows that prove `scripts/control-gate-hook.sh`:
-  force-push, catastrophic delete, hard reset to remote, hook bypass, and writes to a
-  secrets file through Write, Edit and MultiEdit. Every proof is constructed from the
-  gate's own pattern. What is not proven is written down in the pack and tracked in
-  BRO-4159: the git pre-commit rate gate is a `gap` row, a shell redirect into a secrets
-  file is a known miss, and no row is certified by a real harness session.
+- **`references/rules-pack.yaml`** — five rows that replay `scripts/control-gate-hook.sh`
+  (force-push, catastrophic delete, hard reset to `origin`, `--no-verify`, writes to a
+  secrets file through Write, Edit and MultiEdit), and entries for the five hooks bootstrap
+  wires that enforce nothing. Each rule names the spellings the gate refuses. The gate
+  matches regular expressions, so spellings that get past it are recorded as known misses
+  in the rows (BRO-4169), the replay counts them, and the registry says so in its output.
+  Two hooks have `gap` rows and no replay: the git pre-commit rate gate and the Stop hook
+  that continues a stalled arc (BRO-4159). No row is certified by a real harness session.
 - **Bootstrap phase 3.7** runs `scripts/rules-registry.sh init`, which calls the skill's
-  `correct.py init --pack references/rules-pack.yaml`: a workspace with no registry gets
-  one (the skill's starter rule plus the pack) and it is replayed; a workspace that has
-  one is replayed and left as it is. The phase never aborts bootstrap. Without the skill
-  it prints the install command. Skip it with `BSTACK_SKIP_RULES=1`.
-  The starter rule refuses edits on `main` and `master`.
-- **Doctor §34** replays the registry: a pass when every row holds, a gap when a row does
-  not hold or when a registry exists and the skill that replays it is missing. A workspace
-  with no registry is reported and not counted. The replay gets
+  `correct.py init --pack references/rules-pack.yaml`. A workspace with no registry gets one
+  (the skill's starter rule plus the pack) and it is replayed. A workspace that has one is
+  replayed and left unchanged, and is told which rows of the pack it lacks or holds
+  differently. The phase never aborts bootstrap and is stopped after
+  `BSTACK_BOOTSTRAP_RULES_BUDGET_S` seconds (default 600). Without the skill it prints the
+  install command and writes no registry. `BSTACK_SKIP_RULES=1` skips it and doctor §34.
+- **A new restriction.** The starter rule comes with a hook that refuses edits on `main`
+  and `master`. A bootstrapped workspace has that hook from this version on, whether or
+  not its first replay passes.
+- **Doctor §34** replays the registry: a pass when no row fails, a gap when a row does not
+  hold or when a registry exists and the skill that replays it is missing. A workspace
+  with no registry is reported (not under `--quiet`) and not counted. The replay gets
   `BSTACK_DOCTOR_RULES_BUDGET_S` seconds (default 60) and is stopped with its whole
   process group when they run out; doctor then prints that it did not finish, under
   `--quiet` too, and counts neither a pass nor a gap.
-- **`bstack rules init|check|locate`** runs the same script by hand.
+- **`bstack rules init|check|locate`** runs the same script by hand. Exit codes: 0 no row
+  failed, 1 a row did not hold, 2 could not run, 3 skill missing or too old, 4 no registry,
+  5 out of time, 6 the registry lacks part of bstack's pack.
 - **`correct` joins the required roster** (`references/companion-skills.yaml`) and both
   plugin marketplaces (`./governance/correct`).
 - **fix: the control gate is registered for `MultiEdit`.** The hook has handled the
@@ -37,17 +47,25 @@ hooks. No runner code is copied into bstack.
 - **`gates.hard: []` in the policy template**, and added to an existing policy that lacks
   it (the edit is parsed before and after, and skipped with a message when it would
   change anything else). The rule runner reads that list.
-- **Limits.** The pack is added only to a registry that `init` writes. A workspace that
-  already had a registry keeps it unchanged; copy the rows from the pack by hand, and the
-  replay names each hook that no row owns until then. `tests/rules-pack.test.sh` runs
-  against one pinned commit of the skill (`.github/workflows/ci.yml`), not against
-  whatever copy a user has installed.
-- **Test:** `tests/rules-pack.test.sh` bootstraps scratch repositories: a fresh one replays
-  with exit 0; a second bootstrap changes nothing; removing any one pattern from the gate
-  fails exactly the row that proves it; an allow-all gate fails every row; a gate not
-  registered for MultiEdit fails the secrets row; a 0.52 workspace is brought up; without
-  the skill nothing is written and bootstrap still exits 0. 52 assertions, counted.
-  `tests/plugin-preference.test.sh` now expects the gate under four matchers.
+- **Limits.**
+  - With the bstack plugin enabled, six hooks come from the plugin's `hooks.json`, which
+    the runner does not read (BRO-3811). The replay then covers the hooks in the settings
+    files only, and says so next to its result.
+  - A registry that exists is never edited. Rows the pack gains in a later release are
+    listed by `bstack rules init` (exit 6) and by bootstrap, and are copied by hand.
+  - The gate enforces every `pattern:` line of the policy file, and the registry accounts
+    only for those under `gates.hard` (BRO-4169).
+  - `tests/rules-pack.test.sh` runs against one pinned commit of the skill
+    (`.github/workflows/ci.yml`), not against whatever copy a user has installed.
+- **Test:** `tests/rules-pack.test.sh` bootstraps scratch repositories under scratch home
+  directories, with git reading no outside configuration, on both wiring paths (every
+  hook by hand, and plugin preferred). A fresh bootstrap replays with exit 0 and a second
+  one changes nothing. Removing any one of the gate's nine patterns makes exactly one row
+  of the registry fail, the one that replays it. An allow-all gate fails all five of the
+  pack's hook rows. Also covered: a 0.52 workspace brought up, a registry that differs from
+  the pack, a skill that is missing, too old, or hangs, no temporary file to write to, and no `HOME`.
+  77 assertions, counted. `tests/plugin-preference.test.sh` now expects the gate under
+  four matchers.
 
 ## 0.52.2 — 2026-11-23
 

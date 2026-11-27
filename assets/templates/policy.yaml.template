@@ -225,9 +225,11 @@ setpoints:
 
 gates:
   # Hard gates the rule registry must account for: a gate with a `pattern` needs a row
-  # that proves it (`policy_gate:`), and the control gate merges each `pattern` into what it
-  # refuses on Bash. The control gate's own patterns are embedded in
-  # scripts/control-gate-hook.sh and proven by bstack's references/rules-pack.yaml.
+  # that replays it (`policy_gate:`). The control gate refuses a Bash command that matches
+  # ANY `pattern:` line in this file, here or under another key; the registry accounts only
+  # for the ones in this list, so keep patterns here (BRO-4169). The gate's own patterns are
+  # embedded in scripts/control-gate-hook.sh and replayed by bstack's
+  # references/rules-pack.yaml.
   hard: []
 
   governed:

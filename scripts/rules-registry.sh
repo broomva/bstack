@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # rules-registry.sh — bstack's bridge to the `correct` skill (BRO-4147).
 #
-# bstack installs hooks. The `correct` skill (broomva/skills) proves them: it keeps a
-# rule registry beside the policy file and replays each rule's proofs and controls
-# through the hook entry the harness would run. bstack ships the rows for its own hooks
-# (references/rules-pack.yaml) and does not carry a copy of the runner.
+# bstack installs hooks. The `correct` skill (broomva/skills) replays them: it keeps a
+# rule registry in the workspace's governance folder and runs each rule's proofs and
+# controls through the hook entry the harness would run. bstack ships the rows for its
+# own hooks (references/rules-pack.yaml) and does not carry a copy of the runner.
 #
 #   rules-registry.sh locate   print the path of the skill's correct.py
 #   rules-registry.sh init     give the workspace its registry, with bstack's rows; then replay
@@ -12,14 +12,21 @@
 #
 # The workspace is $BROOMVA_WORKSPACE, else the current directory.
 # $BSTACK_CORRECT names correct.py outright (CI, tests, a checkout); otherwise the
-# installed skill is used.
+# installed skill is used, and of two installed copies the one that has `init --pack`.
 #
-# $BSTACK_RULES_BUDGET_S, when set, is how many seconds `check` may take (doctor sets it:
-# a registry with many rows replays for minutes, and doctor is the quick look).
+# $BSTACK_RULES_BUDGET_S, when set, is how many seconds `init` or `check` may take. bootstrap
+# and doctor set it: a registry with many rows replays for minutes, and a copy of the skill
+# that hangs must not hang them.
 #
-# Exit codes: 0 done and every row held; 1 a row did not hold; 2 the command could not
-# run; 3 the correct skill is not installed (or too old for `init`); 4 the workspace has no
-# rule registry; 5 `check` did not finish within the budget, so nothing is known.
+# Exit codes
+#   0  done, and no row failed (gap rows and known misses are listed in the output)
+#   1  a row did not hold
+#   2  the command could not run
+#   3  the correct skill is not installed, or the installed copy is too old for `init`
+#   4  the workspace has no rule registry
+#   5  the budget ran out, so nothing is known
+#   6  `init`: the workspace already had a registry, it replays, and it lacks part of
+#      bstack's pack (the output lists what)
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -30,9 +37,15 @@ INSTALL_HINT="npx skills add broomva/skills --skill correct -g"
 
 # shellcheck source=scripts/lib/broomva-paths.sh
 . "$SCRIPT_DIR/lib/broomva-paths.sh"
+# shellcheck source=scripts/lib/plugin-preference.sh
+. "$SCRIPT_DIR/lib/plugin-preference.sh"
 
+has_pack_option() { grep -q -- '--pack' "$1" 2>/dev/null; }
+
+# locate -> the path of correct.py on stdout. 2 when a named copy is not a file, 3 when no
+# copy is installed.
 locate() {
-    local candidate
+    local candidate first=""
     if [ -n "${BSTACK_CORRECT:-}" ]; then
         # A named path that is not there is an error, never a reason to fall back to another copy.
         if [ -f "$BSTACK_CORRECT" ]; then
@@ -42,19 +55,42 @@ locate() {
         echo "rules-registry: BSTACK_CORRECT names $BSTACK_CORRECT, which is not a file" >&2
         return 2
     fi
+    # No HOME (a bare service environment) means no installed skill to find: the same
+    # answer as a home without it, never an unbound-variable stop.
+    [ -n "${HOME:-}" ] || return 3
+    # Two harnesses keep their own copy of a skill and one can lag. The copy that has
+    # `init --pack` wins wherever it is; an older one is used only when it is all there is
+    # (it still replays a registry, and `init` then says it is too old).
     for candidate in "$HOME/.claude/skills/correct/scripts/correct.py" \
                      "$HOME/.agents/skills/correct/scripts/correct.py"; do
-        if [ -f "$candidate" ]; then
+        [ -f "$candidate" ] || continue
+        if has_pack_option "$candidate"; then
             printf '%s\n' "$candidate"
             return 0
         fi
+        [ -n "$first" ] || first="$candidate"
     done
-    return 3
+    [ -n "$first" ] || return 3
+    printf '%s\n' "$first"
 }
 
 # The policy file, or nothing when the workspace has none.
 policy_file() {
     broomva_repo_path policy "$WORKSPACE" 2>/dev/null || true
+}
+
+# The registry, looked for where the skill looks for it: in each governance folder, the
+# new name first. It is not tied to where the policy file is; a workspace in the middle of
+# the folder rename can have the two in different folders.
+registry_file() {
+    local dir
+    for dir in "$BROOMVA_REPO_DIR" "$BROOMVA_REPO_LEGACY_DIR"; do
+        if [ -f "$WORKSPACE/$dir/rules.yaml" ]; then
+            printf '%s\n' "$WORKSPACE/$dir/rules.yaml"
+            return 0
+        fi
+    done
+    return 1
 }
 
 # The rule runner reads the policy's `gates.hard` list and treats a policy without one as
@@ -91,7 +127,7 @@ if "hard" in before["gates"]:
 added = ("gates:\n"
          "  # Hard gates the rule registry must account for: a gate with a `pattern` needs a row\n"
          "  # that proves it (`policy_gate:`). Added by bstack; the control gate's own patterns are\n"
-         "  # embedded in scripts/control-gate-hook.sh and proven by references/rules-pack.yaml.\n"
+         "  # embedded in scripts/control-gate-hook.sh and replayed by references/rules-pack.yaml.\n"
          "  hard: []\n")
 after_text, count = re.subn(r"^gates:[ \t]*(#.*)?\n", lambda _m: added, text, count=1, flags=re.M)
 if count != 1:
@@ -108,6 +144,50 @@ print(f"  added `gates.hard: []` to {path}")
 PYEOF
 }
 
+# run_correct CORRECT ARGS... -> the skill's exit status, or 5 when $BSTACK_RULES_BUDGET_S
+# ran out. With a budget the skill runs in its own process group, and the whole group is
+# stopped when the time is up, so no hook under replay is left running.
+run_correct() {
+    local correct="$1"; shift
+    if [ -z "${BSTACK_RULES_BUDGET_S:-}" ]; then
+        python3 -I "$correct" "$@"
+        return
+    fi
+    python3 -I - "$BSTACK_RULES_BUDGET_S" "$correct" "$@" <<'PYEOF'
+import os, signal, subprocess, sys
+try:
+    budget = float(sys.argv[1])
+    if not budget > 0:
+        raise ValueError
+except ValueError:
+    print(f"rules-registry: BSTACK_RULES_BUDGET_S must be a number of seconds above 0, got {sys.argv[1]!r}", file=sys.stderr)
+    sys.exit(2)
+proc = subprocess.Popen([sys.executable, "-I", *sys.argv[2:]], start_new_session=True)
+try:
+    sys.exit(proc.wait(timeout=budget))
+except subprocess.TimeoutExpired:
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    proc.wait()
+    print(f"the rule registry step did not finish within {budget:g} s, so nothing is known about the registry.")
+    sys.exit(5)
+PYEOF
+}
+
+# What a passing replay did not look at, said next to it. The runner reads settings files;
+# hooks that the bstack plugin provides are in the plugin's own hooks.json, which it does
+# not read yet (BRO-3811).
+note_unseen_sources() {
+    [ -n "${HOME:-}" ] || return 0
+    if bstack_plugin_enabled 2>/dev/null; then
+        # On stderr: `check --json` and `--markdown` own stdout.
+        echo "note: the bstack plugin is enabled here. The hooks it provides are not in a settings file," >&2
+        echo "      so this replay did not see them (BRO-3811); it covers the hooks in the settings files." >&2
+    fi
+}
+
 cmd_init() {
     local correct rc=0
     correct="$(locate)" || rc=$?
@@ -118,20 +198,25 @@ cmd_init() {
     fi
     [ "$rc" -eq 0 ] || return "$rc"
     # `init --pack` arrived with the pack format; an older copy of the skill refuses the option.
-    if ! grep -q -- '--pack' "$correct"; then
+    if ! has_pack_option "$correct"; then
         echo "the installed correct skill ($correct) predates \`init --pack\`, so no rule registry was written."
         echo "update it, then run bootstrap again: $INSTALL_HINT"
         return 3
     fi
     ensure_hard_gates || return 2
-    python3 -I "$correct" init --root "$WORKSPACE" --pack "$PACK"
+    run_correct "$correct" init --root "$WORKSPACE" --pack "$PACK" || rc=$?
+    case "$rc" in
+        0) note_unseen_sources ;;
+        # The skill's 3: the registry was here before, replays, and lacks part of the pack.
+        3) note_unseen_sources; rc=6 ;;
+    esac
+    return "$rc"
 }
 
 cmd_check() {
-    local correct rc=0 policy
+    local correct rc=0
     correct="$(locate)" || rc=$?
-    policy="$(policy_file)"
-    if [ -z "$policy" ] || [ ! -f "$(dirname "$policy")/rules.yaml" ]; then
+    if ! registry_file >/dev/null; then
         echo "this workspace has no rule registry (\`bstack bootstrap\` writes one)."
         return 4
     fi
@@ -141,35 +226,9 @@ cmd_check() {
         return 3
     fi
     [ "$rc" -eq 0 ] || return "$rc"
-    if [ -z "${BSTACK_RULES_BUDGET_S:-}" ]; then
-        python3 -I "$correct" check --root "$WORKSPACE" "$@"
-        return
-    fi
-    # With a budget: the replay runs in its own process group, and the whole group is
-    # stopped when the time is up, so no hook under replay is left running.
-    python3 -I - "$BSTACK_RULES_BUDGET_S" "$correct" "$WORKSPACE" "$@" <<'PYEOF'
-import os, signal, subprocess, sys
-try:
-    budget = float(sys.argv[1])
-    if not budget > 0:
-        raise ValueError
-except ValueError:
-    print(f"rules-registry: BSTACK_RULES_BUDGET_S must be a number of seconds above 0, got {sys.argv[1]!r}", file=sys.stderr)
-    sys.exit(2)
-correct, workspace, rest = sys.argv[2], sys.argv[3], sys.argv[4:]
-proc = subprocess.Popen([sys.executable, "-I", correct, "check", "--root", workspace, *rest],
-                        start_new_session=True)
-try:
-    sys.exit(proc.wait(timeout=budget))
-except subprocess.TimeoutExpired:
-    try:
-        os.killpg(proc.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-    proc.wait()
-    print(f"the replay did not finish within {budget:g} s, so nothing is known about the registry.")
-    sys.exit(5)
-PYEOF
+    run_correct "$correct" check --root "$WORKSPACE" "$@" || rc=$?
+    [ "$rc" -ne 0 ] || note_unseen_sources
+    return "$rc"
 }
 
 case "${1:-}" in
@@ -177,7 +236,7 @@ case "${1:-}" in
     init)   cmd_init ;;
     check)  shift; cmd_check "$@" ;;
     *)
-        sed -n '2,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+        sed -n '2,29p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
         exit 2
         ;;
 esac

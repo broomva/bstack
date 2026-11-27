@@ -13,7 +13,7 @@
 #   4. bstack doctor --quiet to verify the primitive contract + loop closure (§23).
 #
 # Env escapes: BSTACK_SKIP_SKILLS=1 (skip Phase 1), BSTACK_SKIP_RCS=1 (skip Phase 3.5),
-# BSTACK_SKIP_RULES=1 (skip Phase 3.7).
+# BSTACK_SKIP_RULES=1 (skip Phase 3.7 and doctor §34).
 set -e
 
 AGENTS_DIR="${HOME}/.agents/skills"
@@ -361,15 +361,18 @@ else
   fi
 fi
 
-# ─── Phase 3.7: rule registry (prove the hooks wired above) ────────────────
-# Phases 3 and 3.5 install hooks; nothing so far shows that they refuse what they are
-# for. The `correct` skill keeps a rule registry beside the policy file and replays each
-# rule against the hook entry the harness would run. bstack ships the rows for its own
-# hooks (references/rules-pack.yaml). This phase gives the workspace that registry and
-# replays it. It never aborts the bootstrap: without the skill it says how to install it,
-# and a row that does not hold is reported here and again by doctor §34.
-# The registry's starter rule refuses edits on main and master (work on a branch).
-# Skip with BSTACK_SKIP_RULES=1.
+# ─── Phase 3.7: rule registry (replay the hooks wired above) ───────────────
+# Phases 3 and 3.5 install hooks; this phase checks, in this workspace, that they refuse
+# what their rules say. The `correct` skill keeps a rule registry in the governance folder
+# and replays each rule against the hook entry the harness would run. bstack ships the
+# rows for its own hooks (references/rules-pack.yaml). A workspace with no registry gets
+# one and it is replayed; a workspace that has one is replayed and left unchanged, and is
+# told which of bstack's rows it lacks.
+# This phase never aborts the bootstrap, and it is bounded: the step is stopped after
+# BSTACK_BOOTSTRAP_RULES_BUDGET_S seconds (default 600). Whatever it finds is printed here
+# and again by doctor §34.
+# The registry's starter rule comes with a hook that refuses edits on main and master.
+# Skip with BSTACK_SKIP_RULES=1 (doctor §34 is skipped by the same variable).
 echo ""
 echo "=== bstack rule registry ==="
 if [ "${BSTACK_SKIP_RULES:-0}" = "1" ]; then
@@ -377,14 +380,22 @@ if [ "${BSTACK_SKIP_RULES:-0}" = "1" ]; then
   echo "(Run \`bstack rules init\` later to write and replay it.)"
 else
   # The status is the script's own: its output goes to a file first, never through a pipe.
-  RULES_LOG="$(mktemp)"
+  # Without a temporary file (an unusable TMPDIR) the output is printed as it comes.
   rules_rc=0
-  BROOMVA_WORKSPACE="$WORKSPACE_DIR" bash "${BOOTSTRAP_SCRIPT_DIR}/rules-registry.sh" init >"$RULES_LOG" 2>&1 || rules_rc=$?
-  sed 's/^/  /' "$RULES_LOG"
-  rm -f "$RULES_LOG"
+  if RULES_LOG="$(mktemp 2>/dev/null)"; then
+    BSTACK_RULES_BUDGET_S="${BSTACK_BOOTSTRAP_RULES_BUDGET_S:-600}" BROOMVA_WORKSPACE="$WORKSPACE_DIR" \
+      bash "${BOOTSTRAP_SCRIPT_DIR}/rules-registry.sh" init >"$RULES_LOG" 2>&1 || rules_rc=$?
+    sed 's/^/  /' "$RULES_LOG" || true
+    rm -f "$RULES_LOG"
+  else
+    BSTACK_RULES_BUDGET_S="${BSTACK_BOOTSTRAP_RULES_BUDGET_S:-600}" BROOMVA_WORKSPACE="$WORKSPACE_DIR" \
+      bash "${BOOTSTRAP_SCRIPT_DIR}/rules-registry.sh" init || rules_rc=$?
+  fi
   case "$rules_rc" in
-    0) echo "  rule registry: every row replays." ;;
-    3) : ;;  # the skill is not installed; the script said how to install it
+    0) echo "  rule registry: replayed, and no row failed. Gap rows and known misses are listed above." ;;
+    3) : ;;  # the skill is missing or too old; the script said how to install it
+    5) echo "  rule registry: stopped after the time budget; nothing is known. \`bstack rules check\` replays it." ;;
+    6) echo "  rule registry: replayed, and no row failed, but this workspace's registry lacks part of bstack's pack (listed above)." ;;
     *) echo "  rule registry: exit $rules_rc — see above; \`bstack rules check\` replays it." ;;
   esac
 fi
