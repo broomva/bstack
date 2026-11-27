@@ -18,7 +18,7 @@ set -uo pipefail
 unset CDPATH   # with it set, `cd` prints the directory it chose
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-EXPECTED_ASSERTIONS=96
+EXPECTED_ASSERTIONS=98
 PASS=0; FAIL=0; FAILED=()
 pass() { echo "  [ok] $1"; PASS=$((PASS + 1)); }
 fail() { echo "  [FAIL] $1"; FAIL=$((FAIL + 1)); FAILED+=("$1"); }
@@ -93,16 +93,19 @@ new_ws() {
 }
 # new_home <name>: an empty HOME. The skill's runner imports PyYAML and looks for it in the
 # user site, which moves with HOME; when that is where this machine keeps PyYAML, the new
-# home's user site is a link to the real one. That directory of installed Python packages
-# is the one thing of the real home a case can reach, and through the link it is the real
-# one, not a copy. No settings, skills or plugins of the real home are visible.
+# home's user site gets a copy of the package. (It was a link to the real directory, and
+# Python wrote bytecode through it into the caller's own packages.) No settings, skills or
+# plugins of the real home are visible, and nothing of it is written.
 new_home() {
-    local home="$TMP/$1" real_site new_site
+    local home="$TMP/$1" real_yaml new_site
     mkdir -p "$home"
     if ! HOME="$home" python3 -I -c 'import site, sys; sys.path.append(site.getusersitepackages()); import yaml' 2>/dev/null; then
-        real_site="$(python3 -c 'import site; print(site.getusersitepackages())')"
-        new_site="$(HOME="$home" python3 -c 'import site; print(site.getusersitepackages())')"
-        mkdir -p "$(dirname "$new_site")" && ln -s "$real_site" "$new_site"
+        real_yaml="$(python3 -c 'import os, yaml; print(os.path.dirname(yaml.__file__))' 2>/dev/null)"
+        # -I: where the skill's runner looks, whatever PYTHONUSERBASE the caller has set.
+        new_site="$(HOME="$home" python3 -I -c 'import site; print(site.getusersitepackages())')"
+        if [ -n "$real_yaml" ] && [ "${new_site#"$home"/}" != "$new_site" ]; then
+            mkdir -p "$new_site" && cp -R "$real_yaml" "$new_site/yaml"
+        fi
     fi
     echo "$home"
 }
@@ -240,7 +243,8 @@ for hook in control-gate-hook.sh role-x-intake-hook.sh conversation-bridge-hook.
     wired "$WS" "$hook" || unwired="$unwired $hook"
 done
 is "all seven of bstack's blocking-event hooks are in the settings file (missing:${unwired:- none})" test -z "$unwired"
-is "the git pre-commit hook is installed" test -f "$WS/.githooks/pre-commit"
+is "the git pre-commit hook file is written" test -f "$WS/.githooks/pre-commit"
+is "nothing in the scratch home is a link (a link could lead out of the test's directory)" test -z "$(find "$HOME_PLAIN" -type l)"
 is "bootstrap says the registry replays" has "$WS.log" "rule registry: replayed, and no row failed."
 is "bootstrap shows the skill's notice that edits on main and master are refused" has "$WS.log" "an edit on main or master in this repository is refused"
 is "without the plugin, bootstrap adds no note about hooks the replay could not see" lacks "$WS.log" "BRO-3811"
@@ -277,7 +281,7 @@ fi
 echo "2. second bootstrap"
 commit_all "$WS" bootstrapped
 is "bootstrap exits 0 again" boot "$WS"
-is "the tree is unchanged" test -z "$(git -C "$WS" status --porcelain)"
+is "git sees no change in the tree (files git ignores are not looked at)" test -z "$(git -C "$WS" status --porcelain)"
 is "it says the registry is kept" has "$WS.log" "already has a registry"
 is "and still replays it" has "$WS.log" "rule registry: replayed, and no row failed."
 is "the registry holds the whole pack, and bootstrap shows the skill saying so" has "$WS.log" "pack   bstack: all 7 row(s) are in this registry"
@@ -429,7 +433,8 @@ is "the phase replays the registry there, and no row fails" test "$(grep -c 'rul
 
 # ── 5. A workspace bootstrapped before 0.53.0 ────────────────────────────────
 # Its policy file has no gates.hard list. bstack does not edit the policy file: bootstrap
-# says which line to add, and the replay passes once the operator has added it.
+# says where the upgrade note is, and the replay passes once the operator has added the line
+# the note gives.
 echo "5. a workspace from before 0.53.0"
 OLD="$(new_ws old)" || exit 1
 is "BSTACK_SKIP_RULES=1 bootstraps without a registry" boot "$OLD" BSTACK_SKIP_RULES=1
@@ -454,6 +459,10 @@ is "it leaves the policy file byte for byte" cmp -s "$(policy_of "$OLD")" "$TMP/
 is "the replay says it cannot read the hard gates" has "$OLD.log" "cannot read the hard gates"
 is "and bootstrap says where the upgrade note is, and prescribes no edit itself" test "$(grep -c 'see "Upgrading a workspace" in the 0.53.0 entry of' "$OLD.log")$(grep -cF "$REPO/CHANGELOG.md" "$OLD.log")$(grep -c 'Add the line' "$OLD.log")" = 110
 is "the note it points to is there, and says which line" test "$(grep -c 'Upgrading a workspace bootstrapped before 0.53.0' "$REPO/CHANGELOG.md")$(grep -c 'add the line `hard: \[\]` under `gates:`' "$REPO/CHANGELOG.md")" = 11
+# The note states when the line applies (no `hard:` key). Said anywhere else without that
+# condition, it reaches a policy that already has a list, where a second key hides the gates:
+# a review reproduced that from one sentence of SKILL.md.
+is "only the changelog's note says to add the line" test -z "$(grep -lF 'hard: []' "$REPO/SKILL.md" "$REPO/README.md" "$REPO/scripts/bootstrap.sh" "$REPO/scripts/rules-registry.sh")"
 is "it registered the gate for MultiEdit" test "$(gate_matchers "$OLD")" = "Bash Edit MultiEdit Write"
 # The operator adds the line.
 python3 - "$(policy_of "$OLD")" <<'PY'
