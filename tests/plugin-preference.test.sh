@@ -187,17 +187,18 @@ ms = sorted({b.get("matcher","") for b in d.get("hooks", {}).get("PreToolUse", [
 print(" ".join(ms))
 PYX
 }
-# 8. preferred path preserves all 3 matchers
-if [ "$(control_gate_matchers "$S5")" = "Bash Edit Write" ]; then
-    assert_pass "bootstrap(preferred): control-gate wired under all 3 matchers (Bash/Edit/Write)"
+# 8. preferred path preserves all 4 matchers (MultiEdit since 0.53.0: the hook handled the
+#    tool and no block sent it there; references/rules-pack.yaml proves each one)
+if [ "$(control_gate_matchers "$S5")" = "Bash Edit MultiEdit Write" ]; then
+    assert_pass "bootstrap(preferred): control-gate wired under all 4 matchers (Bash/Edit/MultiEdit/Write)"
 else
-    assert_fail "bootstrap(preferred): control-gate matchers = '$(control_gate_matchers "$S5")' (want 'Bash Edit Write')"
+    assert_fail "bootstrap(preferred): control-gate matchers = '$(control_gate_matchers "$S5")' (want 'Bash Edit MultiEdit Write')"
 fi
-# 9. fallback path preserves all 3 matchers
-if [ "$(control_gate_matchers "$S7")" = "Bash Edit Write" ]; then
-    assert_pass "bootstrap(fallback): control-gate wired under all 3 matchers (Bash/Edit/Write)"
+# 9. fallback path preserves all 4 matchers
+if [ "$(control_gate_matchers "$S7")" = "Bash Edit MultiEdit Write" ]; then
+    assert_pass "bootstrap(fallback): control-gate wired under all 4 matchers (Bash/Edit/MultiEdit/Write)"
 else
-    assert_fail "bootstrap(fallback): control-gate matchers = '$(control_gate_matchers "$S7")' (want 'Bash Edit Write')"
+    assert_fail "bootstrap(fallback): control-gate matchers = '$(control_gate_matchers "$S7")' (want 'Bash Edit MultiEdit Write')"
 fi
 
 # 10. BSTACK_NO_PLUGIN=1 with a manifest present + plugin already enabled →

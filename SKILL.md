@@ -264,6 +264,7 @@ Future sessions inspect this for state. `bootstrap_status: failed` is captured t
    - `.claude/settings.json` (P1, P2, P7 hook wiring)
 3. Adds `make` targets to existing Makefile (or creates one): `bstack-check`, `control-audit`, `janitor`, `bstack-primitive-lint` (G-L3-1), `bstack-rule-of-three` (G-L3-2), `bstack-l3-trust` (combined L3 gates)
 4. Installs pre-commit hook (`.githooks/pre-commit`) via `git config core.hooksPath .githooks`
+   - Then **proves the hooks it wired**: `scripts/rules-registry.sh init` calls the `correct` skill, which writes a rule registry beside the policy file (its starter rule plus bstack's rows, `references/rules-pack.yaml`) and replays every proof and control through the hook entry the harness would run. A workspace that already has a registry is replayed and left unchanged. `bstack rules check` replays it by hand; doctor §34 replays it on every run. Skip with `BSTACK_SKIP_RULES=1`
 5. Runs `bstack doctor` to verify primitive contract compliance + `make bstack-l3-trust` to verify L3 gates pass
 6. Reports a *bootstrap receipt* — what was installed, what was scaffolded, what was already present
 7. **Recommends invoking `/autonomous` for the user's next substantive work unit** — the substrate is installed; the canonical mode is ready to engage

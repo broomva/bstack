@@ -46,6 +46,10 @@ Orchestration:
   fleet up|status|list|down       P19 fleet dispatch — N coordinating peers
                                   in ONE worktree, from a roster (≥ 0.40.0).
 
+Rules:
+  rules init|check|locate         The rule registry: write it with bstack's rows and
+                                  replay it (the `correct` skill does the replay; ≥ 0.53.0).
+
 Observability:
   metrics collect|observe         Setpoint measurement pipeline (≥ 0.4.0).
   status [--json|--setpoint X]    Substrate health summary (≥ 0.5.0).
@@ -392,6 +396,7 @@ case "$cmd" in
     update-check)           exec "$BIN_DIR/bstack-update-check" "$@" ;;
     wave)                   exec "$BIN_DIR/bstack-wave" "$@" ;;
     fleet)                  exec "$BIN_DIR/bstack-fleet" "$@" ;;
+    rules)                  exec bash "$SCRIPTS_DIR/rules-registry.sh" "$@" ;;
     metrics)                exec "$BIN_DIR/bstack-metrics" "$@" ;;
     status)                 exec "$BIN_DIR/bstack-status" "$@" ;;
     skills)                 exec "$BIN_DIR/bstack-skills" "$@" ;;

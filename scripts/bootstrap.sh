@@ -12,7 +12,8 @@
 #       (governance-only bootstrap). Mirrors the wizard path (onboard.sh).
 #   4. bstack doctor --quiet to verify the primitive contract + loop closure (§23).
 #
-# Env escapes: BSTACK_SKIP_SKILLS=1 (skip Phase 1), BSTACK_SKIP_RCS=1 (skip Phase 3.5).
+# Env escapes: BSTACK_SKIP_SKILLS=1 (skip Phase 1), BSTACK_SKIP_RCS=1 (skip Phase 3.5),
+# BSTACK_SKIP_RULES=1 (skip Phase 3.7).
 set -e
 
 AGENTS_DIR="${HOME}/.agents/skills"
@@ -358,6 +359,34 @@ else
     # caught downstream by doctor §23 + the canary's audit-dir/marker assertions.
     BROOMVA_WORKSPACE="$WORKSPACE_DIR" bash "$RCS_INSTALLER" 2>&1 | sed 's/^/  /' || true
   fi
+fi
+
+# ─── Phase 3.7: rule registry (prove the hooks wired above) ────────────────
+# Phases 3 and 3.5 install hooks; nothing so far shows that they refuse what they are
+# for. The `correct` skill keeps a rule registry beside the policy file and replays each
+# rule against the hook entry the harness would run. bstack ships the rows for its own
+# hooks (references/rules-pack.yaml). This phase gives the workspace that registry and
+# replays it. It never aborts the bootstrap: without the skill it says how to install it,
+# and a row that does not hold is reported here and again by doctor §34.
+# The registry's starter rule refuses edits on main and master (work on a branch).
+# Skip with BSTACK_SKIP_RULES=1.
+echo ""
+echo "=== bstack rule registry ==="
+if [ "${BSTACK_SKIP_RULES:-0}" = "1" ]; then
+  echo "BSTACK_SKIP_RULES=1 — skipping the rule registry."
+  echo "(Run \`bstack rules init\` later to write and replay it.)"
+else
+  # The status is the script's own: its output goes to a file first, never through a pipe.
+  RULES_LOG="$(mktemp)"
+  rules_rc=0
+  BROOMVA_WORKSPACE="$WORKSPACE_DIR" bash "${BOOTSTRAP_SCRIPT_DIR}/rules-registry.sh" init >"$RULES_LOG" 2>&1 || rules_rc=$?
+  sed 's/^/  /' "$RULES_LOG"
+  rm -f "$RULES_LOG"
+  case "$rules_rc" in
+    0) echo "  rule registry: every row replays." ;;
+    3) : ;;  # the skill is not installed; the script said how to install it
+    *) echo "  rule registry: exit $rules_rc — see above; \`bstack rules check\` replays it." ;;
+  esac
 fi
 
 # ─── Phase 4: bstack doctor verification ───────────────────────────────────

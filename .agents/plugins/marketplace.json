@@ -17,6 +17,7 @@
         "./orchestration/autonomous",
         "./governance/cross-review",
         "./governance/dogfood",
+        "./governance/correct",
         "./orchestration/role-x",
         "./governance/agentic-control-kernel",
         "./governance/harness-engineering-playbook",

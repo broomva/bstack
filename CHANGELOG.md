@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.53.0 — 2026-11-26
+
+### feat(bootstrap): the hooks bootstrap installs are proven by a rule registry (BRO-4147)
+
+Bootstrap installed hooks and doctor checked that they were wired. Nothing checked that
+they refuse what they are for. The `correct` skill (broomva/skills) does that: it keeps a
+rule registry beside the policy file and replays each rule's proofs and controls through
+the hook entry the harness would run. bstack now calls it and ships the rows for its own
+hooks. No runner code is copied into bstack.
+
+- **`references/rules-pack.yaml`** — the rows that prove `scripts/control-gate-hook.sh`:
+  force-push, catastrophic delete, hard reset to remote, hook bypass, and writes to a
+  secrets file through Write, Edit and MultiEdit. Every proof is constructed from the
+  gate's own pattern. What is not proven is written down in the pack and tracked in
+  BRO-4159: the git pre-commit rate gate is a `gap` row, a shell redirect into a secrets
+  file is a known miss, and no row is certified by a real harness session.
+- **Bootstrap phase 3.7** runs `scripts/rules-registry.sh init`, which calls the skill's
+  `correct.py init --pack references/rules-pack.yaml`: a workspace with no registry gets
+  one (the skill's starter rule plus the pack) and it is replayed; a workspace that has
+  one is replayed and left as it is. The phase never aborts bootstrap. Without the skill
+  it prints the install command. Skip it with `BSTACK_SKIP_RULES=1`.
+  The starter rule refuses edits on `main` and `master`.
+- **Doctor §34** replays the registry: a pass when every row holds, a gap when a row does
+  not hold or when a registry exists and the skill that replays it is missing. A workspace
+  with no registry is reported and not counted. The replay gets
+  `BSTACK_DOCTOR_RULES_BUDGET_S` seconds (default 60) and is stopped with its whole
+  process group when they run out; doctor then prints that it did not finish, under
+  `--quiet` too, and counts neither a pass nor a gap.
+- **`bstack rules init|check|locate`** runs the same script by hand.
+- **`correct` joins the required roster** (`references/companion-skills.yaml`) and both
+  plugin marketplaces (`./governance/correct`).
+- **fix: the control gate is registered for `MultiEdit`.** The hook has handled the
+  tool, and the settings snippet registered it for `Bash`, `Write` and `Edit` only, so a
+  MultiEdit on a secrets file was never sent to it. Found by the replay.
+- **`gates.hard: []` in the policy template**, and added to an existing policy that lacks
+  it (the edit is parsed before and after, and skipped with a message when it would
+  change anything else). The rule runner reads that list.
+- **Limits.** The pack is added only to a registry that `init` writes. A workspace that
+  already had a registry keeps it unchanged; copy the rows from the pack by hand, and the
+  replay names each hook that no row owns until then. `tests/rules-pack.test.sh` runs
+  against one pinned commit of the skill (`.github/workflows/ci.yml`), not against
+  whatever copy a user has installed.
+- **Test:** `tests/rules-pack.test.sh` bootstraps scratch repositories: a fresh one replays
+  with exit 0; a second bootstrap changes nothing; removing any one pattern from the gate
+  fails exactly the row that proves it; an allow-all gate fails every row; a gate not
+  registered for MultiEdit fails the secrets row; a 0.52 workspace is brought up; without
+  the skill nothing is written and bootstrap still exits 0. 52 assertions, counted.
+  `tests/plugin-preference.test.sh` now expects the gate under four matchers.
+
 ## 0.52.2 — 2026-11-23
 
 ### feat(doctor): ratchet scheduled jobs and hooks: a new or changed entry must be acknowledged (BRO-4084)

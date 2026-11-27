@@ -1,0 +1,153 @@
+# bstack rules pack: the registry rows that prove the hooks `bstack bootstrap` installs.
+#
+# Read by the `correct` skill (broomva/skills): `correct.py init --pack <this file>` adds
+# these rows to the rule registry it writes, and `correct.py check` then replays each proof
+# and control through the hook entry the harness would run. bootstrap runs both.
+#
+# bstack owns these rows because bstack owns the hooks: a change to
+# scripts/control-gate-hook.sh that changes what it refuses changes a row here in the same
+# commit, and tests/rules-pack.test.sh replays the pack against a freshly bootstrapped
+# repository on every change.
+#
+# Every proof here is CONSTRUCTED from the gate's own pattern. A workspace that has made
+# the mistake for real should add its own proof with where it came from.
+#
+# What the pack does not prove is recorded, not hidden (BRO-4159): the git pre-commit rate
+# gate is a `gap` row, a shell write to a secrets file is a known miss, and no row is
+# certified by a real harness session (`canary: {none ...}`).
+pack: bstack
+registry_version: 1
+
+# Hooks bootstrap registers on an event that could block, which enforce no rule.
+hooks_not_rules:
+  role-x-intake-hook.sh: "UserPromptSubmit lens routing (P17); it adds context and always exits 0, since exit 2 would erase the prompt"
+  conversation-bridge-hook.sh: "Stop/Notification capture of the session (P1); always exits 0"
+
+rules:
+  - id: no-force-push
+    rule: Never force-push; it rewrites history other sessions have already fetched.
+    source: "bstack P2 control gate, G1 (scripts/control-gate-hook.sh)"
+    level: hook
+    runs_in: [harness]
+    enforcer:
+      path: scripts/control-gate-hook.sh
+      registered: {event: PreToolUse, tools: [Bash], scope: project}
+    proofs:
+      - from: G1, constructed
+        event: {tool_name: Bash, tool_input: {command: "git push --force origin main"}}
+        expect_reason: "G1: force-push"
+      - from: G1, the short flag, constructed
+        event: {tool_name: Bash, tool_input: {command: "git push -f origin feat/x"}}
+        expect_reason: "G1: force-push"
+      - from: G1, the lease form, constructed
+        event: {tool_name: Bash, tool_input: {command: "git push --force-with-lease origin feat/x"}}
+        expect_reason: "G1: force-push"
+    controls:
+      - why: the same push without the flag
+        event: {tool_name: Bash, tool_input: {command: "git push origin feat/x"}}
+    canary: {none: "replayed through the hook entry; no real-harness session has been run", ticket: BRO-4159}
+
+  - id: no-catastrophic-delete
+    rule: Never recursively delete the filesystem root or the home directory.
+    source: "bstack P2 control gate, G3 (scripts/control-gate-hook.sh)"
+    level: hook
+    runs_in: [harness]
+    enforcer:
+      path: scripts/control-gate-hook.sh
+      registered: {event: PreToolUse, tools: [Bash], scope: project}
+    proofs:
+      - from: G3, the root, constructed
+        event: {tool_name: Bash, tool_input: {command: "rm -rf /"}}
+        expect_reason: "G3: catastrophic recursive delete"
+      - from: G3, the home directory, constructed
+        event: {tool_name: Bash, tool_input: {command: "rm -rf ~"}}
+        expect_reason: "G3: catastrophic recursive delete"
+      - from: G3, the home variable, constructed
+        event: {tool_name: Bash, tool_input: {command: "rm -rf $HOME"}}
+        expect_reason: "G3: catastrophic recursive delete"
+    controls:
+      - why: the same command on a build directory
+        event: {tool_name: Bash, tool_input: {command: "rm -rf ./build"}}
+    canary: {none: "replayed through the hook entry; no real-harness session has been run", ticket: BRO-4159}
+
+  - id: no-hard-reset-to-remote
+    rule: Never hard-reset a branch to its remote; it discards local work without a trace.
+    source: "bstack P2 control gate, G3 (scripts/control-gate-hook.sh)"
+    level: hook
+    runs_in: [harness]
+    enforcer:
+      path: scripts/control-gate-hook.sh
+      registered: {event: PreToolUse, tools: [Bash], scope: project}
+    proofs:
+      - from: G3, constructed
+        event: {tool_name: Bash, tool_input: {command: "git reset --hard origin/main"}}
+        expect_reason: "G3: hard reset to remote"
+    controls:
+      - why: the same reset in its soft form, which keeps the work
+        event: {tool_name: Bash, tool_input: {command: "git reset --soft origin/main"}}
+    canary: {none: "replayed through the hook entry; no real-harness session has been run", ticket: BRO-4159}
+
+  - id: no-hook-bypass
+    rule: Never skip the pre-commit hooks; they are the commit half of the gates.
+    source: "bstack P2 control gate, G2 (scripts/control-gate-hook.sh)"
+    level: hook
+    runs_in: [harness]
+    enforcer:
+      path: scripts/control-gate-hook.sh
+      registered: {event: PreToolUse, tools: [Bash], scope: project}
+    proofs:
+      - from: G2, constructed
+        event: {tool_name: Bash, tool_input: {command: "git commit --no-verify -m wip"}}
+        expect_reason: "G2: bypassing pre-commit hooks"
+    controls:
+      - why: the same commit with the hooks left on
+        event: {tool_name: Bash, tool_input: {command: "git commit -m wip"}}
+    canary: {none: "replayed through the hook entry; no real-harness session has been run", ticket: BRO-4159}
+
+  - id: no-secret-file-write
+    rule: Never write a secrets file (.env and its dotted variants, credentials, private keys, .pem, .key).
+    source: "bstack P2 control gate, G2 path rules (scripts/control-gate-hook.sh)"
+    level: hook
+    runs_in: [harness]
+    enforcer:
+      path: scripts/control-gate-hook.sh
+      registered: {event: PreToolUse, tools: [Write, Edit, MultiEdit], scope: project}
+    proofs:
+      - from: G2, a .env file through Write, constructed
+        event: {tool_name: Write, tool_input: {file_path: "{scratch}/app/.env", content: "TOKEN=x"}}
+        expect_reason: "G2: writing a .env secret file"
+      - from: G2, a dotted variant through Edit, constructed
+        event: {tool_name: Edit, tool_input: {file_path: "{scratch}/app/.env.production", old_string: a, new_string: b}}
+        expect_reason: "G2: writing a .env secret file"
+      - from: G2, a private key through MultiEdit, constructed
+        event: {tool_name: MultiEdit, tool_input: {file_path: "{scratch}/app/deploy.pem", edits: [{old_string: a, new_string: b}]}}
+        expect_reason: "G2: writing a .pem key"
+      - from: G2, a credentials file through Write, constructed
+        event: {tool_name: Write, tool_input: {file_path: "{scratch}/app/credentials.json", content: "{}"}}
+        expect_reason: "G2: writing a credentials file"
+      - from: G2, a private SSH key through Write, constructed
+        event: {tool_name: Write, tool_input: {file_path: "{scratch}/app/id_rsa", content: "x"}}
+        expect_reason: "G2: writing a private SSH key"
+      - from: G2, a .key file through Write, constructed
+        event: {tool_name: Write, tool_input: {file_path: "{scratch}/app/server.key", content: "x"}}
+        expect_reason: "G2: writing a .key file"
+    controls:
+      - why: an ordinary file in the same directory
+        event: {tool_name: Write, tool_input: {file_path: "{scratch}/app/README.md", content: "x"}}
+      - why: a file whose name only starts like the secrets file (.envrc is direnv's, not a secret store)
+        event: {tool_name: Write, tool_input: {file_path: "{scratch}/app/.envrc", content: "x"}}
+    known_misses:
+      - from: "the gate reads a file path, so a shell redirect into the same file is not seen (BRO-4159)"
+        ticket: BRO-4159
+        event: {tool_name: Bash, tool_input: {command: "printf 'TOKEN=x' > .env"}}
+    canary: {none: "replayed through the hook entry; no real-harness session has been run", ticket: BRO-4159}
+
+  - id: git-pre-commit-rate-gate
+    rule: The git pre-commit hook (the L3 rate gate bootstrap installs) is proven by a replay.
+    source: ".githooks/pre-commit, installed by scripts/install-l3-stability.sh"
+    level: gap
+    covers_hooks: [.githooks/pre-commit]
+    ticket: BRO-4159
+    target:
+      level: hook
+      mechanism: "run .githooks/pre-commit in a scratch repository whose L3 mutation rate is over the budget, and in one under it"

@@ -112,6 +112,19 @@ jobs:
         # frontmatter test exercises both paths via SKILL_FM_NO_YAML.
         run: python3 -m pip install --quiet PyYAML jsonschema
 
+      - name: Fetch the correct skill at a pinned commit
+        # tests/rules-pack.test.sh replays references/rules-pack.yaml through the skill's
+        # runner and has no skip path. The commit is pinned so a change in broomva/skills
+        # cannot turn this repository red; move the pin on purpose.
+        env:
+          CORRECT_SKILL_SHA: 69736b5af1fa2910f5b90331de5f445ace45c5c1
+        run: |
+          set -euo pipefail
+          git init -q "$RUNNER_TEMP/skills"
+          git -C "$RUNNER_TEMP/skills" fetch -q --depth 1 https://github.com/broomva/skills "$CORRECT_SKILL_SHA"
+          git -C "$RUNNER_TEMP/skills" checkout -q FETCH_HEAD
+          echo "BSTACK_TEST_CORRECT=$RUNNER_TEMP/skills/skills/governance/correct/scripts/correct.py" >> "$GITHUB_ENV"
+
       - name: Run all tests/*.test.sh
         env:
           # Lets roster-monorepo-sync.test.sh run its remote resolution check
