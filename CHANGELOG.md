@@ -38,9 +38,9 @@ registry: to replay one later, call the skill (`correct.py check`).
   reads a `gates.hard` list in the policy file, and a policy file scaffolded before 0.53.0
   has no `hard:` key under `gates:`. bstack does not edit the policy file. When that key is
   absent, add the line `hard: []` under `gates:`. Until then the replay says it cannot read
-  the hard gates, and bootstrap points to this note. A `hard:` key that is already there and
-  is not a list (the replay says `gates.hard is not a list`) is another case: rewrite it as
-  a list of its entries. A second `hard:` key added beside it would hide them.
+  the hard gates, and bootstrap points to this note. The line is for a policy file with no
+  `hard:` key and for no other: where `gates:` already has one, add no second (it would hide
+  the first), and read what the replay says about the one that is there.
 - **`correct` joins the required roster** (`references/companion-skills.yaml`), both plugin
   marketplaces (`./governance/correct`), and the install check in `SKILL.md`.
 - **fix: the control gate is registered for `MultiEdit`.** The hook has handled the

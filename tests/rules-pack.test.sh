@@ -9,8 +9,13 @@
 #
 # Every case bootstraps an empty scratch repository under a scratch HOME, so the machine's
 # installed plugin and skills do not decide the result, and the workspaces, homes and
-# logs are all in the test's own directory. (Python may leave bytecode beside the bstack
-# scripts bootstrap runs, in this checkout's scripts/__pycache__; git ignores it.) bootstrap wires hooks two ways (BRO-1929): by hand, or six of
+# logs are all in the test's own directory. So is the PyYAML it imports: the caller's copy
+# is located once, with bytecode off, and copied into the test's directory, and from then on
+# no variable points a Python at the caller's packages (PYTHONUSERBASE is read even under
+# `-I`). One case is left, and the last assertion looks for it: where the caller's PyYAML is
+# in a site directory `-I` still reads (a virtual environment, the system's) and has no
+# bytecode cache yet, the skill imports it from there and Python writes the cache.
+# bootstrap wires hooks two ways (BRO-1929): by hand, or six of
 # them through the bstack plugin when one is installed. Both are run here: an earlier
 # version of this test ran only the way the author's machine took and passed while the
 # other failed.
@@ -18,7 +23,13 @@ set -uo pipefail
 unset CDPATH   # with it set, `cd` prints the directory it chose
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-EXPECTED_ASSERTIONS=98
+export PYTHONDONTWRITEBYTECODE=1
+# The caller's PyYAML package, as it is before anything here imports it.
+YAML_DIR="$(python3 -c 'import os, yaml; print(os.path.dirname(yaml.__file__))' 2>/dev/null)"
+yaml_listing() { [ -n "$YAML_DIR" ] && find "$YAML_DIR" | sort | cksum; }
+YAML_BEFORE="$(yaml_listing)"
+unset PYTHONUSERBASE PYTHONPATH
+EXPECTED_ASSERTIONS=100
 PASS=0; FAIL=0; FAILED=()
 pass() { echo "  [ok] $1"; PASS=$((PASS + 1)); }
 fail() { echo "  [FAIL] $1"; FAIL=$((FAIL + 1)); FAILED+=("$1"); }
@@ -91,20 +102,22 @@ new_ws() {
     fi
     echo "$ws"
 }
+# The one copy of PyYAML the test's own Python imports (its helpers run without `-I`).
+mkdir -p "$TMP/pylib"
+[ -n "$YAML_DIR" ] && cp -R "$YAML_DIR" "$TMP/pylib/yaml"
+export PYTHONPATH="$TMP/pylib"
 # new_home <name>: an empty HOME. The skill's runner imports PyYAML and looks for it in the
 # user site, which moves with HOME; when that is where this machine keeps PyYAML, the new
-# home's user site gets a copy of the package. (It was a link to the real directory, and
-# Python wrote bytecode through it into the caller's own packages.) No settings, skills or
+# home's user site gets the test's copy of the package. (It was a link to the real directory,
+# and Python wrote bytecode through it into the caller's own packages.) No settings, skills or
 # plugins of the real home are visible, and nothing of it is written.
 new_home() {
-    local home="$TMP/$1" real_yaml new_site
+    local home="$TMP/$1" new_site
     mkdir -p "$home"
     if ! HOME="$home" python3 -I -c 'import site, sys; sys.path.append(site.getusersitepackages()); import yaml' 2>/dev/null; then
-        real_yaml="$(python3 -c 'import os, yaml; print(os.path.dirname(yaml.__file__))' 2>/dev/null)"
-        # -I: where the skill's runner looks, whatever PYTHONUSERBASE the caller has set.
         new_site="$(HOME="$home" python3 -I -c 'import site; print(site.getusersitepackages())')"
-        if [ -n "$real_yaml" ] && [ "${new_site#"$home"/}" != "$new_site" ]; then
-            mkdir -p "$new_site" && cp -R "$real_yaml" "$new_site/yaml"
+        if [ -d "$TMP/pylib/yaml" ] && [ "${new_site#"$home"/}" != "$new_site" ]; then
+            mkdir -p "$new_site" && cp -R "$TMP/pylib/yaml" "$new_site/yaml"
         fi
     fi
     echo "$home"
@@ -263,7 +276,7 @@ is "every blocking hook and git hook is accounted for" row "$OUT" PASS registry-
 is "nothing failed" lacks "$OUT" "FAIL"
 is "the control gate is registered for Bash, Edit, MultiEdit and Write" test "$(gate_matchers "$WS")" = "Bash Edit MultiEdit Write"
 is "the policy carries gates.hard" grep -q '^  hard: \[\]$' "$(policy_of "$WS")"
-is "known misses are counted in the replay, not hidden" grep -qE 'no-catastrophic-delete +5 known miss' "$OUT"
+is "the replay prints a count of known misses for a row that has them" grep -qE 'no-catastrophic-delete +5 known miss' "$OUT"
 is "the two known misses of the force-push row are replayed too" grep -qE 'no-force-push +2 known miss' "$OUT"
 
 # Everything below removes something and expects a row to fail. That means nothing unless
@@ -458,6 +471,7 @@ is "bootstrap exits 0" boot "$OLD"
 is "it leaves the policy file byte for byte" cmp -s "$(policy_of "$OLD")" "$TMP/old-policy.before"
 is "the replay says it cannot read the hard gates" has "$OLD.log" "cannot read the hard gates"
 is "and bootstrap says where the upgrade note is, and prescribes no edit itself" test "$(grep -c 'see "Upgrading a workspace" in the 0.53.0 entry of' "$OLD.log")$(grep -cF "$REPO/CHANGELOG.md" "$OLD.log")$(grep -c 'Add the line' "$OLD.log")" = 110
+is "the note keeps the line to a policy with no hard: key" test "$(grep -c 'The line is for a policy file with no' "$REPO/CHANGELOG.md")$(grep -c 'add no second (it would hide' "$REPO/CHANGELOG.md")" = 11
 is "the note it points to is there, and says which line" test "$(grep -c 'Upgrading a workspace bootstrapped before 0.53.0' "$REPO/CHANGELOG.md")$(grep -c 'add the line `hard: \[\]` under `gates:`' "$REPO/CHANGELOG.md")" = 11
 # The note states when the line applies (no `hard:` key). Said anywhere else without that
 # condition, it reaches a policy that already has a list, where a second key hides the gates:
@@ -612,6 +626,7 @@ wait "$boot_pid"; RC=$?
 is "released, the skill ends with 77, and bootstrap reports it and still exits 0" test "$RC" -eq 0 -a "$(grep -c 'rule registry: exit 77' "$LIVE.log")" = 1
 
 is "the machine's own settings file was not touched" test "$(real_settings_sum)" = "$REAL_SETTINGS_BEFORE"
+is "the caller's own PyYAML package holds the files it held (no bytecode was written into it)" test -n "$YAML_BEFORE" -a "$(yaml_listing)" = "$YAML_BEFORE"
 
 echo ""
 echo "rules-pack: $PASS passed, $FAIL failed"

@@ -22,8 +22,8 @@
 # the file, not a run of it, and it is how a copy from before the option is told apart. Of
 # two copies the first that counts is used.
 #
-# Exit status. When the skill ran, the skill's own, unchanged: 0 the replay passed; 1 a row
-# did not hold; 2 it could not run; 3 the workspace already had a registry, the replay
+# Exit status. When the skill ran, the skill's own, unchanged: 0 the replay passed; 1 it
+# did not (a row did not hold, or the registry has no rules); 2 it could not run; 3 the workspace already had a registry, the replay
 # passed, and the registry lacks part of bstack's pack. When it did not run: 2 this script
 # was given an argument; 127 no copy of the skill with `--pack` was found (it says how to
 # install one), or python3 is not on PATH (it says so).

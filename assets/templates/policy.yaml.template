@@ -225,7 +225,9 @@ setpoints:
 
 gates:
   # Hard gates the rule registry must account for: a gate with a `pattern` needs a row
-  # that replays it (`policy_gate:`). The control gate refuses a Bash command that matches
+  # that names it (`policy_gate: <id>`). The registry's completeness check looks for that
+  # reference and no further; that the row replays the pattern is for its proofs to show.
+  # The control gate refuses a Bash command that matches
   # any line of this file of the form `pattern: <regex>`, here or under another key; the
   # registry accounts only for the ones in this list, so keep patterns here. Write an entry
   # as `- id: G-X` with `pattern: ...` on the next line: the gate does not read a line that
