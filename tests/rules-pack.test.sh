@@ -18,7 +18,7 @@ set -uo pipefail
 unset CDPATH   # with it set, `cd` prints the directory it chose
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-EXPECTED_ASSERTIONS=93
+EXPECTED_ASSERTIONS=96
 PASS=0; FAIL=0; FAILED=()
 pass() { echo "  [ok] $1"; PASS=$((PASS + 1)); }
 fail() { echo "  [FAIL] $1"; FAIL=$((FAIL + 1)); FAILED+=("$1"); }
@@ -452,7 +452,8 @@ cp "$(policy_of "$OLD")" "$TMP/old-policy.before"
 is "bootstrap exits 0" boot "$OLD"
 is "it leaves the policy file byte for byte" cmp -s "$(policy_of "$OLD")" "$TMP/old-policy.before"
 is "the replay says it cannot read the hard gates" has "$OLD.log" "cannot read the hard gates"
-is "and bootstrap says which line to add" has "$OLD.log" "Add the line \`hard: []\` under \`gates:\` in the policy file"
+is "and bootstrap says where the upgrade note is, and prescribes no edit itself" test "$(grep -c 'see "Upgrading a workspace" in the 0.53.0 entry of' "$OLD.log")$(grep -cF "$REPO/CHANGELOG.md" "$OLD.log")$(grep -c 'Add the line' "$OLD.log")" = 110
+is "the note it points to is there, and says which line" test "$(grep -c 'Upgrading a workspace bootstrapped before 0.53.0' "$REPO/CHANGELOG.md")$(grep -c 'add the line `hard: \[\]` under `gates:`' "$REPO/CHANGELOG.md")" = 11
 is "it registered the gate for MultiEdit" test "$(gate_matchers "$OLD")" = "Bash Edit MultiEdit Write"
 # The operator adds the line.
 python3 - "$(policy_of "$OLD")" <<'PY'
@@ -516,6 +517,7 @@ env -u HOME -u BSTACK_CORRECT BROOMVA_WORKSPACE="$BARE" bash "$SCRIPT" >"$OUT" 2
 is "with no HOME at all the answer is the same, not a shell error" test "$RC" -eq 127 -a "$(grep -c 'unbound variable' "$OUT")" = 0
 run_script "$BARE" BSTACK_CORRECT="$TMP/nowhere/correct.py"
 is "a named copy that is not there is not replaced by another: exit 127, and it is named" test "$RC" -eq 127 -a "$(grep -cF "BSTACK_CORRECT names $TMP/nowhere/correct.py" "$OUT")" = 1
+is "and the script still says how to install the skill" test "$(grep -c 'npx skills add broomva/skills --skill correct -g' "$OUT")" = 1
 printf '#!/usr/bin/env python3\nprint("an older copy")\n' >"$TMP/old-correct.py"
 run_script "$BARE" BSTACK_CORRECT="$TMP/old-correct.py"
 is "a copy without the pack option is not run" test "$RC" -eq 127 -a "$(grep -c 'an older copy' "$OUT")" = 0
@@ -554,6 +556,9 @@ is "without python3 on PATH the script says so and exits 127" test "$RC" -eq 127
 RC=0
 env HOME="$HOME_PLAIN" BSTACK_CORRECT="$CORRECT" BROOMVA_WORKSPACE="$BARE" bash "$SCRIPT" --dry-run >"$OUT" 2>&1 || RC=$?
 is "the script takes no argument: exit 2, and nothing is written" test "$RC" -eq 2 -a ! -e "$(registry_of "$BARE")"
+RC=0
+env HOME="$HOME_PLAIN" BSTACK_CORRECT="$CORRECT" BROOMVA_WORKSPACE="$BARE" bash "$SCRIPT" --unexpected >"$OUT" 2>&1 || RC=$?
+is "whatever the argument is" test "$RC" -eq 2 -a ! -e "$(registry_of "$BARE")"
 
 # ── 9. A failure in this phase does not stop bootstrap, and its output is live ──
 echo "9. the phase cannot fail bootstrap"

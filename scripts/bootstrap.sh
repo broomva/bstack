@@ -398,9 +398,11 @@ else
     3) echo "  rule registry: replayed, and no row failed, but this workspace's registry lacks part of bstack's pack (listed above)." ;;
     127) echo "  rule registry: exit 127 — see above." ;;
     *) echo "  rule registry: exit $rules_rc — see above. Run bootstrap again once it is fixed."
-       # Said every time, not worked out here: bstack does not read or edit the policy file.
-       echo "  If the output says it cannot read the hard gates: a policy file from before bstack 0.53.0"
-       echo "  has no such list. Add the line \`hard: []\` under \`gates:\` in the policy file, by hand." ;;
+       # bstack does not read or edit the policy file, and this phase prescribes no edit: an
+       # instruction printed here cannot know which case it is in. The one known cause on an
+       # upgrade is written up where it can be exact, and this line says where.
+       echo "  A workspace bootstrapped before bstack 0.53.0: see \"Upgrading a workspace\" in the 0.53.0 entry of"
+       echo "  $SKILL_ROOT/CHANGELOG.md." ;;
   esac
   # The note below is about a replay, so it follows only a status a replay ends with.
   case "$rules_rc" in

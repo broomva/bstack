@@ -2,7 +2,7 @@
 
 28 curated skills across 7 layers. The Broomva Stack.
 
-> **Canonical *installable* roster:** [`references/companion-skills.yaml`](companion-skills.yaml) — the 61 bstack-native skills, all in the **broomva/skills** monorepo (validated by `tests/roster-monorepo-sync.test.sh`). Install path-independently: `npx skills add broomva/skills --skill <name>`. **This doc is a broader human catalog**: it also documents ecosystem *products* (e.g. symphony, autoany, next-forge) that are not installable bstack skills, so it intentionally lists more than the YAML. For what is installable, the YAML is authoritative.
+> **Canonical *installable* roster:** [`references/companion-skills.yaml`](companion-skills.yaml) — the bstack-native skills, all in the **broomva/skills** monorepo (validated by `tests/roster-monorepo-sync.test.sh`). Install path-independently: `npx skills add broomva/skills --skill <name>`. **This doc is a broader human catalog**: it also documents ecosystem *products* (e.g. symphony, autoany, next-forge) that are not installable bstack skills, so it intentionally lists more than the YAML. For what is installable, the YAML is authoritative.
 
 ## Publishing standard (skill layout) — installability + consolidation
 

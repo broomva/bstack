@@ -35,9 +35,12 @@ registry: to replay one later, call the skill (`correct.py check`).
   from then on. The skill says so when the hook is written, before the replay, and
   bootstrap shows it at once.
 - **Upgrading a workspace bootstrapped before 0.53.0: one line by hand.** The rule runner
-  reads a `gates.hard` list in the policy file, and older policy files have none. bstack
-  does not edit the policy file. Add `hard: []` under `gates:`; until then the replay says
-  it cannot read the hard gates, and bootstrap repeats the instruction.
+  reads a `gates.hard` list in the policy file, and a policy file scaffolded before 0.53.0
+  has no `hard:` key under `gates:`. bstack does not edit the policy file. When that key is
+  absent, add the line `hard: []` under `gates:`. Until then the replay says it cannot read
+  the hard gates, and bootstrap points to this note. A `hard:` key that is already there and
+  is not a list (the replay says `gates.hard is not a list`) is another case: rewrite it as
+  a list of its entries. A second `hard:` key added beside it would hide them.
 - **`correct` joins the required roster** (`references/companion-skills.yaml`), both plugin
   marketplaces (`./governance/correct`), and the install check in `SKILL.md`.
 - **fix: the control gate is registered for `MultiEdit`.** The hook has handled the
@@ -54,9 +57,8 @@ registry: to replay one later, call the skill (`correct.py check`).
     there, else `.control/policy.yaml`. In a workspace with a policy file in each folder
     the gate enforces the `pattern:` lines of one and the registry's completeness check
     accounts for the gates of the other: completeness asks for no row for a pattern that is
-    only in `.control/policy.yaml` (a replayed case that happens to match it is still
-    refused by the gate, and its row fails), and the gate does not enforce a pattern that
-    is only in `.broomva/policy.yaml`. Removing `.control/policy.yaml` leaves the gate with no policy
+    only in `.control/policy.yaml`, and the gate does not enforce a pattern that is only
+    in `.broomva/policy.yaml`. Removing `.control/policy.yaml` leaves the gate with no policy
     patterns. Bootstrap prints nothing about any of this; its doctor phase reports a name
     that is under both folders. Bootstrap also still scaffolds `.control/policy.yaml` in a
     workspace whose policy is in `.broomva/`, which makes it such a workspace (BRO-4200;
