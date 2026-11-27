@@ -28,13 +28,14 @@ bstack.
   `correct.py init --pack references/rules-pack.yaml`. A workspace with no registry gets one
   (the skill's starter rule plus the pack) and it is replayed. A workspace that has one
   gets no file written, is replayed, and is told which rows of the pack it lacks or holds
-  differently. A failure in the phase never aborts bootstrap. The phase waits for the skill
-  as bootstrap waits for every tool it calls; there is no time limit, and Ctrl-C stops
-  both. Without the skill it prints the install command and writes no registry.
+  differently. A failure in the phase never aborts bootstrap. The phase's output goes to
+  the terminal as it happens, not when the phase ends. The phase waits for the skill as
+  bootstrap waits for every tool it calls; there is no time limit, and Ctrl-C stops both. Without the skill it prints the install command and writes no registry.
   `BSTACK_SKIP_RULES=1` skips the phase.
 - **A new restriction.** The skill's starter rule comes with a hook that refuses edits on
   `main` and `master`. A workspace that gets its registry from this phase has that hook
-  from then on, and the skill says so when the hook is written, before the replay.
+  from then on. The skill says so when the hook is written, before the replay, and
+  bootstrap shows it at once, so a bootstrap stopped during the replay has shown it.
 - **Doctor §34 reports and starts no hook.** It says whether the workspace has a rule
   registry and whether the skill that replays it is installed
   (`scripts/rules-registry.sh status`): a registry with no skill, or one too old, is a gap;
@@ -98,8 +99,8 @@ bstack.
   of the pack's hook rows. Also covered: a 0.52 policy brought up; a policy in each
   governance folder; a registry that differs from the pack; a registry named with
   `--registry`; `init` arguments; doctor with and without `BSTACK_DOCTOR_RULES=1`; a skill
-  that is missing, too old, or crashes; no temporary file; no `HOME`. 106 assertions,
-  counted. `tests/plugin-preference.test.sh` now expects the gate under four matchers.
+  that is missing, too old, crashes, or is still running when its first line must already
+  be on the terminal; no temporary file; no `HOME`. 108 assertions, counted. `tests/plugin-preference.test.sh` now expects the gate under four matchers.
 
 ## 0.52.2 — 2026-11-23
 

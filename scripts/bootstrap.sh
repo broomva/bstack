@@ -391,17 +391,12 @@ else
   if [ -n "$RULES_POLICY" ] && [ -f "$RULES_POLICY" ]; then
     python3 -I "${BOOTSTRAP_SCRIPT_DIR}/ensure-hard-gates.py" "$RULES_POLICY" || true
   fi
-  # The status is the script's own: its output goes to a file first, never through a pipe.
-  # Without a temporary file the output is printed as it comes. A cleanup that fails does
-  # not stop bootstrap.
+  # The step writes straight to the terminal, as it happens. Its output is not captured to
+  # be shown afterwards: the skill says that the starter hook is installed before the replay
+  # starts, and a bootstrap that is stopped during the replay must already have shown that.
+  # The status is the script's own; there is no pipe to take it from.
   rules_rc=0
-  if RULES_LOG="$(mktemp 2>/dev/null)"; then
-    BROOMVA_WORKSPACE="$WORKSPACE_DIR" bash "${BOOTSTRAP_SCRIPT_DIR}/rules-registry.sh" init >"$RULES_LOG" 2>&1 || rules_rc=$?
-    sed 's/^/  /' "$RULES_LOG" || true
-    rm -f "$RULES_LOG" || true
-  else
-    BROOMVA_WORKSPACE="$WORKSPACE_DIR" bash "${BOOTSTRAP_SCRIPT_DIR}/rules-registry.sh" init || rules_rc=$?
-  fi
+  BROOMVA_WORKSPACE="$WORKSPACE_DIR" bash "${BOOTSTRAP_SCRIPT_DIR}/rules-registry.sh" init || rules_rc=$?
   case "$rules_rc" in
     0) echo "  rule registry: replayed, and no row failed. Gap rows and known misses are listed above." ;;
     3) : ;;  # the skill is missing or too old; the script said how to install it

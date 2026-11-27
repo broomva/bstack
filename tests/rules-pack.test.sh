@@ -16,7 +16,7 @@
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-EXPECTED_ASSERTIONS=106
+EXPECTED_ASSERTIONS=108
 PASS=0; FAIL=0; FAILED=()
 pass() { echo "  [ok] $1"; PASS=$((PASS + 1)); }
 fail() { echo "  [FAIL] $1"; FAIL=$((FAIL + 1)); FAILED+=("$1"); }
@@ -524,6 +524,22 @@ printf '#!/usr/bin/env python3\n# has the --pack option, and crashes\nraise Syst
 CRASH="$(new_ws crash)"
 is "bootstrap exits 0 with a skill that crashes" boot "$CRASH" BSTACK_CORRECT="$TMP/crashing-correct.py"
 is "the phase reports the skill's exit status" has "$CRASH.log" "rule registry: exit 77"
+# The skill says that the starter hook is installed BEFORE it replays, and bootstrap shows
+# the phase's output as it comes. A bootstrap stopped during the replay has therefore shown
+# it. (An earlier version captured the output and printed it when the phase returned: stop
+# it in between and the hook was active with nothing said.) The stand-in prints the line,
+# records its pid and waits; the line must be in bootstrap's output while it still waits.
+printf '#!/usr/bin/env python3\n# has the --pack option; says the hook is installed, then waits\nimport os, time\nprint("the starter hook is installed (stand-in)", flush=True)\nopen(os.environ["PIDFILE"], "w").write(str(os.getpid()))\ntime.sleep(300)\n' >"$TMP/blocking-correct.py"
+LIVE="$(new_ws live)"; rm -f "$TMP/blocking.pid"
+( exec env HOME="$HOME_PLAIN" PIDFILE="$TMP/blocking.pid" BSTACK_CORRECT="$TMP/blocking-correct.py" BROOMVA_WORKSPACE="$LIVE" \
+    BSTACK_SKIP_SKILLS=1 bash "$REPO/scripts/bootstrap.sh" >"$LIVE.log" 2>&1 ) &
+boot_pid=$!
+for _ in $(seq 1 240); do [ -s "$TMP/blocking.pid" ] && break; python3 -c 'import time; time.sleep(0.5)'; done
+blocked_pid="$(cat "$TMP/blocking.pid" 2>/dev/null || echo 0)"
+is "bootstrap shows what the skill says while the replay is still running" test "$blocked_pid" -gt 0 -a "$(grep -c 'the starter hook is installed (stand-in)' "$LIVE.log")" = 1
+kill -KILL "$blocked_pid" 2>/dev/null
+wait "$boot_pid"; RC=$?
+is "and when the skill is stopped, bootstrap says so and still exits 0" test "$RC" -eq 0 -a "$(grep -c 'rule registry: exit' "$LIVE.log")" = 1
 # No temporary file to capture into: the phase still runs and bootstrap still finishes.
 # A `mktemp` that fails is put first on the PATH, because what an unusable TMPDIR does to
 # the real one differs by system (macOS falls back to another directory, Linux fails).
