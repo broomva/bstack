@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # bstack/scripts/compute-budget-status.sh — Multi-layer RCS health reader.
 #
-# Reads all four audit logs (.control/audit/l[0-3]-*.jsonl) plus the
+# Reads all four audit logs (l[0-3]-*.jsonl) plus the
 # canonical parameters.toml, computes per-layer observed metrics over each
 # layer's τ_a window, compares against paper-cited setpoints, and emits a
 # composite verdict.
@@ -24,7 +24,7 @@
 # Trend mode (v0.19.0+):
 #   - WITHOUT --trend: point-in-time composite-ω + per-layer verdicts.
 #   - WITH --trend: appends current snapshot to
-#       .control/audit/composite-omega-history.jsonl
+#       composite-omega-history.jsonl in the audit directory
 #     then computes a least-squares linear fit over the last 7d window:
 #       - slope (omega per second)
 #       - last value
@@ -60,14 +60,24 @@ for arg in "$@"; do
     esac
 done
 
-# Locate parameters config
-CONFIG=""
-if [ -f "$WORKSPACE/.control/rcs-parameters.toml" ]; then
-    CONFIG="$WORKSPACE/.control/rcs-parameters.toml"
-elif [ -f "$WORKSPACE/research/rcs/data/parameters.toml" ]; then
-    CONFIG="$WORKSPACE/research/rcs/data/parameters.toml"
-else
-    CONFIG="$BSTACK_REPO/assets/templates/rcs-parameters.toml.template"
+# Resolve runtime audit and authored parameters through the shared layout.
+source "$BSTACK_REPO/scripts/lib/broomva-paths.sh" || exit 2
+CONFIG="$(broomva_repo_path rcs_parameters "$WORKSPACE")" &&
+AUDIT_DIR="$(broomva_repo_path audit "$WORKSPACE")" || {
+    echo "compute-budget-status: cannot resolve workspace layout" >&2
+    exit 2
+}
+if { [ -e "$CONFIG" ] && [ ! -f "$CONFIG" ]; } ||
+   { [ -e "$AUDIT_DIR" ] && [ ! -d "$AUDIT_DIR" ]; }; then
+    echo "compute-budget-status: invalid parameters file or audit directory" >&2
+    exit 2
+fi
+if [ ! -f "$CONFIG" ]; then
+    if [ -f "$WORKSPACE/research/rcs/data/parameters.toml" ]; then
+        CONFIG="$WORKSPACE/research/rcs/data/parameters.toml"
+    else
+        CONFIG="$BSTACK_REPO/assets/templates/rcs-parameters.toml.template"
+    fi
 fi
 
 if [ ! -f "$CONFIG" ]; then
@@ -80,8 +90,9 @@ if ! command -v python3 >/dev/null 2>&1; then
     exit 3
 fi
 
-python3 - "$CONFIG" "$WORKSPACE" "$FORMAT" "$TREND" <<'PYEOF'
+python3 - "$CONFIG" "$WORKSPACE" "$FORMAT" "$TREND" "$AUDIT_DIR" <<'PYEOF'
 import sys, json, time, math
+from datetime import datetime
 from pathlib import Path
 
 try:
@@ -100,7 +111,7 @@ with open(config_path, "rb") as f:
 level_params = {lvl["id"]: lvl for lvl in params.get("levels", [])}
 cached_lambda = params.get("derived", {}).get("lambda", {})
 
-audit_dir = Path(workspace) / ".control" / "audit"
+audit_dir = Path(sys.argv[5])
 now_ms = int(time.time() * 1000)
 
 def read_jsonl(path):
@@ -122,8 +133,15 @@ def read_jsonl(path):
     return rows
 
 def in_window(row, window_ms, now=now_ms):
-    ts = row.get("ts", 0)
-    return ts >= (now - window_ms)
+    ts = row.get("ts") if isinstance(row, dict) else None
+    if isinstance(ts, str):
+        try:
+            stamp = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            ts = stamp.timestamp() * 1000 if stamp.tzinfo is not None else None
+        except (ValueError, OverflowError, OSError):
+            return False
+    return (isinstance(ts, (int, float)) and not isinstance(ts, bool)
+            and now - window_ms <= ts <= now)
 
 def percentile(values, p):
     if not values:

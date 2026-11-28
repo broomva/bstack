@@ -64,6 +64,7 @@ import json
 import math
 import os
 import re
+import shlex
 import statistics
 import subprocess
 import sys
@@ -73,7 +74,7 @@ from datetime import datetime, timezone
 
 STATE_NAME = "leverage-fleet-state.json"
 DEFAULT_CAP_MIN = 30.0
-CACHE_SCHEMA_VERSION = 2
+CACHE_SCHEMA_VERSION = 3
 MAX_WINDOW_DAYS = 3650
 MAX_FUTURE_SKEW_SEC = 300
 EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
@@ -82,6 +83,7 @@ _PURE_NUMBER_RE = re.compile(r"^\d+(?:\.\d+)?$")
 _FILENAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_. -]*$")
 PATHLIKE_RE = re.compile(r"/|\.[A-Za-z][A-Za-z0-9]{0,7}$")  # `> 0.5` is a comparison
 _VAR_EXP_RE = re.compile(r"[$`]")
+_HEREDOC_RE = re.compile(r"""<<(-?)[ \t]*((?:[^ \t\n;|&<>()"'\\]|\\[^\n]|"[^"\n]*"|'[^'\n]*')+)""")
 
 
 def _safe_window_days(val, default=7):
@@ -136,13 +138,14 @@ def _is_write_target(tgt):
 
 
 def _split_shell_segments(cmd):
-    """Split a shell command into (sep_before, segment) pairs respecting quotes and escapes."""
+    """Split commands with subshell markers; skip heredoc data, not the command's redirects."""
     segs = []
     buf = []
     sep = ""
     i = 0
     n = len(cmd)
     quote = None
+    heredocs = []
     while i < n:
         ch = cmd[i]
         if quote:
@@ -165,17 +168,54 @@ def _split_shell_segments(cmd):
             buf.append(ch)
             i += 1
             continue
+        if cmd.startswith("<<<", i):
+            buf.append("<<<")
+            i += 3
+            continue
+        if cmd.startswith("<<", i):
+            match = _HEREDOC_RE.match(cmd, i)
+            if match:
+                word = match[2]
+                delimiter = shlex.split(word)[0]
+                heredocs.append((delimiter, bool(match[1]), word != delimiter))
+                buf.append(match[0])
+                i = match.end()
+                continue
+        if cmd.startswith(">|", i):
+            buf.append(">|")
+            i += 2
+            continue
         if cmd[i:i + 2] in ("&&", "||"):
             segs.append((sep, "".join(buf)))
             buf = []
             sep = cmd[i:i + 2]
             i += 2
             continue
+        if ch in "()":
+            if buf:
+                segs.append((sep, "".join(buf)))
+                buf = []
+            segs.append((ch, ""))
+            sep = ""
+            i += 1
+            continue
         if ch in (";", "|", "\n"):
             segs.append((sep, "".join(buf)))
             buf = []
             sep = ch
             i += 1
+            if ch == "\n" and heredocs:
+                for delimiter, strip_tabs, quoted in heredocs:
+                    while i < n:
+                        end = cmd.find("\n", i)
+                        end = n if end < 0 else end
+                        line = cmd[i:end]
+                        i = min(n, end + 1)
+                        if (line.lstrip("\t") if strip_tabs else line) == delimiter:
+                            break
+                        if not quoted and ("$(" in line or "\x60" in line):
+                            segs.append(("?", ""))
+                heredocs.clear()
             continue
         buf.append(ch)
         i += 1
@@ -187,7 +227,7 @@ def _split_shell_segments(cmd):
 def _tokenize_shell_segment(seg):
     """Tokenize one command segment into (words, redirect_targets).
     Handles unspaced redirects (`echo hi>/product/README`), fd 1 redirects (`1>`),
-    clobber (`>|`), quoted filenames with spaces, and skips `2>`, `&>`, `>&`, `->`, `=>`."""
+    clobber, file descriptor prefixes and quoted filenames. Ignores descriptor duplication."""
     words = []
     redirs = []
     i = 0
@@ -257,14 +297,17 @@ def _tokenize_shell_segment(seg):
         if c == "<":
             j = i + 1
             if j < n and seg[j] in ("<", ">", "&"):
+                operator = seg[j]
                 j += 1
+                if operator == "<" and j < n and seg[j] in ("-", "<"):
+                    j += 1
             while j < n and seg[j].isspace():
                 j += 1
             _, i, _ = read_word(j)
             continue
         w, j, had_q = read_word(i)
         # Check if this bare word is a file descriptor prefix right before `>` (e.g. `1>` or `2>` or `&>`)
-        if not had_q and j < n and seg[j] == ">" and w in ("1", "2", "&"):
+        if not had_q and j < n and seg[j] == ">" and ((w.isascii() and w.isdigit()) or w == "&"):
             k = j + 1
             is_dup = k < n and seg[k] == "&"
             if k < n and seg[k] in (">", "|", "&"):
@@ -272,7 +315,7 @@ def _tokenize_shell_segment(seg):
             while k < n and seg[k].isspace():
                 k += 1
             tgt, i, _ = read_word(k)
-            if w == "1" and not is_dup and tgt:
+            if not is_dup and tgt:
                 redirs.append(tgt)
             continue
         if w or had_q:
@@ -536,24 +579,21 @@ def shell_write_repos(cmd, cwd):
         return set()
     out = set()
     cur_cwd = cwd
-    for sep, seg in _split_shell_segments(cmd):
-        # A pipeline subshell or `||` branch shouldn't inherit an earlier failed cd blindly,
-        # while sequential `;`, `&&`, `\n` carry `cd` forward.
+    scopes = []
+    segments = _split_shell_segments(cmd)
+    for i, (sep, seg) in enumerate(segments):
+        if sep == "(":
+            scopes.append(cur_cwd)
+            continue
+        if sep == ")":
+            cur_cwd = scopes.pop() if scopes else None
+            continue
+        if sep == "?":
+            out.add("?heredoc expansion")
+            continue
         words, redirs = _tokenize_shell_segment(seg)
-        cd_tgt = _extract_cd_target(words)
-        if cd_tgt is not None and sep != "|":
-            if _VAR_EXP_RE.search(cd_tgt) or cd_tgt == "-":
-                cur_cwd = None
-            else:
-                expanded = os.path.expanduser(cd_tgt)
-                if os.path.isabs(expanded):
-                    cur_cwd = os.path.normpath(expanded)
-                elif cur_cwd:
-                    cur_cwd = os.path.normpath(os.path.join(cur_cwd, expanded))
-                else:
-                    cur_cwd = None
-        targets = redirs + _extract_cmd_write_targets(words)
-        for tgt in targets:
+        # Bash opens redirects before executing the command, including cd.
+        for tgt in redirs + _extract_cmd_write_targets(words):
             if not _is_write_target(tgt):
                 continue
             if _VAR_EXP_RE.search(tgt):
@@ -562,6 +602,18 @@ def shell_write_repos(cmd, cwd):
             r = edit_repo(tgt, cur_cwd)
             if r:
                 out.add(r)
+        following = segments[i + 1][0] if i + 1 < len(segments) else ""
+        cd_tgt = _extract_cd_target(words)
+        if cd_tgt is None or sep == "|" or following in ("|", "||"):
+            continue
+        if _VAR_EXP_RE.search(cd_tgt) or cd_tgt == "-":
+            cur_cwd = None
+            continue
+        expanded = os.path.expanduser(cd_tgt)
+        if os.path.isabs(expanded):
+            cur_cwd = os.path.normpath(expanded)
+        elif cur_cwd:
+            cur_cwd = os.path.normpath(os.path.join(cur_cwd, expanded))
     return out
 
 
@@ -579,7 +631,7 @@ def read_claude(path, seen_uuids):
     repo|None)] each stamped with its own line's time, so the window applies to the
     edit and not to the session; meta: cwd/entry."""
     ev, edits = [], []
-    cwd = entry = None
+    cwd = edit_cwd = entry = None
     try:
         fh = open(path, errors="ignore")
     except OSError:
@@ -597,7 +649,10 @@ def read_claude(path, seen_uuids):
                 if u in seen_uuids:
                     continue
                 seen_uuids.add(u)
-            cwd = cwd or o.get("cwd")
+            row_cwd = o.get("cwd")
+            if isinstance(row_cwd, str) and os.path.isabs(row_cwd):
+                edit_cwd = row_cwd
+                cwd = cwd or row_cwd
             entry = entry or o.get("entrypoint")
             t = _ts(o.get("timestamp"))
             typ = o.get("type")
@@ -625,9 +680,9 @@ def read_claude(path, seen_uuids):
                     inp = it.get("input") if isinstance(it.get("input"), dict) else {}
                     name = it.get("name")
                     if name in EDIT_TOOLS:
-                        edits.append((t, "tool", edit_repo(inp.get("file_path") or inp.get("notebook_path"), cwd)))
+                        edits.append((t, "tool", edit_repo(inp.get("file_path") or inp.get("notebook_path"), edit_cwd)))
                     elif name == "Bash":
-                        edits += [(t, "shell", r) for r in shell_write_repos(str(inp.get("command", "")), cwd)]
+                        edits += [(t, "shell", r) for r in shell_write_repos(inp.get("command"), edit_cwd)]
     return {"events": ev, "edits": edits, "cwd": cwd, "entry": entry}
 
 
@@ -756,12 +811,13 @@ def _collect_jsonl(root, recursive):
     directory symlinks with an inode cycle guard so symlinked session roots work."""
     if not root:
         return [], 0
+    root = os.path.normpath(root)
     files, errors = [], 0
     if recursive:
         try:
             st0 = os.stat(root)
         except FileNotFoundError:
-            return [], 0
+            return [], int(os.path.islink(root))
         except OSError:
             return [], 1
         visited = {(st0.st_dev, st0.st_ino)}
@@ -792,11 +848,13 @@ def _collect_jsonl(root, recursive):
     try:
         entries = list(os.scandir(root))
     except FileNotFoundError:
-        return [], 0
+        return [], int(os.path.islink(root))
     except OSError:
         return [], 1
     for e in entries:
         try:
+            if e.is_symlink():
+                os.stat(e.path)  # count dangling project directories as unreadable
             if not e.is_dir():
                 continue
             for sub in os.scandir(e.path):
@@ -951,7 +1009,7 @@ def measure(cfg, window_days, claude_root, codex_root, now=None):
     # than inflating meta share to 1.0 on partial transcript coverage.
     m6 = round(meta_s / working, 4) if (configured and working and unreadable_total == 0) else None
     w1 = round(wait_cap / (wait_cap + active), 4) if (gaps and active > 0) else None
-    p50 = _pct(gaps, 0.5)
+    p50 = statistics.median(gaps) if gaps else None
     w2 = round(p50 / 60, 2) if p50 is not None else None
     w3 = round(weighted / waiting, 3) if waiting > 0 else None
     notes = []

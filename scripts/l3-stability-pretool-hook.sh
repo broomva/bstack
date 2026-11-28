@@ -84,25 +84,21 @@ fi
 
 # Log the event for audit
 WORKSPACE="${BROOMVA_WORKSPACE:-$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit 0
+source "$SCRIPT_DIR/lib/broomva-paths.sh" || exit 0
 
 # Scope guard (BRO-1926): this hook loads globally via the bstack plugin. In a
-# non-bstack workspace (neither .control/ nor .broomva/), don't create audit
-# dirs and don't surface the L3 warning — just approve. Keeps the global plugin
-# from polluting unrelated repos. Reached only for L3-file edits, so it adds no
-# per-edit git cost.
-if [ ! -d "$WORKSPACE/.control" ] && [ ! -d "$WORKSPACE/.broomva" ]; then
-    # Same reasoning as the non-L3 path: nothing to say, so say nothing.
+# non-bstack workspace, skip audit and warnings. Only inspect paths on L3 edits.
+LOG_DIR="$(broomva_repo_path audit "$WORKSPACE")" || {
+    echo "l3-stability: cannot resolve audit path" >&2
     exit 0
-fi
-
-if [ -d "$WORKSPACE/.broomva" ] && [ ! -d "$WORKSPACE/.control" ]; then
-    LOG_DIR="$WORKSPACE/.broomva/audit"
-else
-    LOG_DIR="$WORKSPACE/.control/audit"
+}
+if [ ! -d "$WORKSPACE/$BROOMVA_REPO_LEGACY_DIR" ] && [ ! -d "$WORKSPACE/$BROOMVA_REPO_DIR" ]; then
+    exit 0
 fi
 mkdir -p "$LOG_DIR" 2>/dev/null || true
 LOG_FILE="$LOG_DIR/l3-edits.jsonl"
-if [ -w "$(dirname "$LOG_FILE")" ] 2>/dev/null; then
+if [ -w "$LOG_DIR" ] && _broomva_ok "$LOG_FILE" 1 && [ ! -d "$LOG_FILE" ]; then
     # tool_name must be a bare JSON string VALUE (e.g. "Edit"). The prior grep
     # captured the whole `"tool_name":"Edit"` pair and re-embedded it under %s,
     # producing malformed `"tool_name":"tool_name":"Edit"` (BRO-1707 fix).

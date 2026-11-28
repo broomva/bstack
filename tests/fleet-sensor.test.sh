@@ -457,6 +457,67 @@ PY
 eq "scratch_prefixes:[''] behaves and signs identically to []" "$R7_SP" "True True True"
 run "$EMPTY" "$EMPTY" '{"scratch_prefixes":42}' >/dev/null && ok "malformed scratch_prefixes: 42 degrades cleanly" || bad "scratch_prefixes: 42 crashed"
 
+echo "== round 8: shell scope, redirections, per-row cwd, median, and dangling roots =="
+R8="$(python3 -I - "$FLEET" "$TMP" <<'PY'
+import importlib.util, json, os, shlex, sys, time
+from datetime import datetime, timezone
+from pathlib import Path
+
+spec = importlib.util.spec_from_file_location("fleet_sensor", sys.argv[1])
+sensor = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sensor)
+root = Path(sys.argv[2])
+meta, prod = root / "meta", root / "prod"
+quoted_meta = shlex.quote(str(meta))
+cases = [
+    (f"(cd {quoted_meta} && echo hi > README); echo hi > README", {"acme/meta", "acme/prod"}),
+    (f"(cd {quoted_meta}); echo hi > README", {"acme/prod"}),
+    (f"cd {quoted_meta} > README", {"acme/prod"}),
+    (f"cd {quoted_meta} | tee README", {"acme/prod"}),
+    ("echo hi >| README", {"acme/prod"}),
+    ("echo hi 2>README 3>>other.txt", {"acme/prod"}),
+    ("echo hi 2>&1", set()),
+    (f"cat > {quoted_meta}/README <<'END'\necho > README\nEND", {"acme/meta"}),
+    (f"cat <<-'END' > {quoted_meta}/README\n\techo > README\n\tEND\necho > README", {"acme/meta", "acme/prod"}),
+]
+for cmd, expected in cases:
+    assert sensor.shell_write_repos(cmd, str(prod)) == expected, cmd
+
+now = time.time()
+project = root / "r8-claude" / "p"
+project.mkdir(parents=True)
+path = project / "session.jsonl"
+def row(offset, kind, cwd, content):
+    ts = datetime.fromtimestamp(now + offset, timezone.utc).isoformat()
+    return {"timestamp": ts, "type": kind, "cwd": str(cwd), "message": {"content": content}}
+def tool(name, **args):
+    return {"type": "tool_use", "name": name, "input": args}
+rows = [
+    row(-660, "user", meta, "edit"),
+    row(-650, "assistant", meta, [tool("Edit", file_path="README")]),
+    row(-590, "user", meta, "continue"),
+    row(-580, "assistant", prod, [tool("Bash", command="echo hi > README")]),
+    row(-40, "user", prod, "finish"),
+    row(-30, "assistant", prod, []),
+]
+path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+cfg = {"meta_repos": ["acme/meta"], "product_repos": ["acme/prod"], "scratch_prefixes": []}
+result = sensor.measure(cfg, 7, str(project.parent), None, now)
+assert result["raw"]["product_sessions"] == 1, result["raw"]
+assert result["metrics"]["w2_reply_latency_p50_min"] == 5.0, result["metrics"]
+
+broken = project.parent / "broken"
+broken.symlink_to(root / "absent")
+assert sensor._collect_jsonl(str(broken), False) == ([], 1)
+assert sensor._collect_jsonl(str(broken), True) == ([], 1)
+result = sensor.measure(cfg, 7, str(project.parent), None, now)
+assert result["raw"]["unreadable_transcripts"]["claude"] == 1, result["raw"]
+assert result["metrics"]["m6_meta_work_session_ratio"] is None, result["metrics"]
+print("ok")
+PY
+)"
+eq "shell writes, Claude row cwd, even median, and dangling discovery roots hold" "$R8" "ok"
+
 echo "== state file: written atomically, no transcript content =="
 # shellcheck source=scripts/lib/broomva-paths.sh
 . "$REPO/scripts/lib/broomva-paths.sh"

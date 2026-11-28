@@ -62,8 +62,8 @@ J
 # ship MEASURED_AT M7 MERGED — as the sensor writes it: a 1.0 carries its newest
 # artifact's time (here: the measurement time), a 0.0 none, plus outward_config.
 DEF_RECEIPTS="$(python3 -c 'import os; print(os.path.normpath(os.path.abspath(os.path.expanduser("~/.config/broomva/door/receipts.jsonl"))))')"
-DEF_OUTWARD_CFG="{\"schema_version\":2,\"window_days\":7.0,\"product_repos\":[],\"author_allowlist\":[],\"door_receipts\":\"$DEF_RECEIPTS\"}"
-DEF_FLEET_CFG='{"schema_version":2,"window_days":7.0,"product_repos":[],"meta_repos":[],"external_repos":[],"scratch_prefixes":["/private/tmp","/tmp"],"wait_cap_minutes":30.0}'
+DEF_OUTWARD_CFG="{\"schema_version\":3,\"window_days\":7.0,\"product_repos\":[],\"author_allowlist\":[],\"door_receipts\":\"$DEF_RECEIPTS\"}"
+DEF_FLEET_CFG='{"schema_version":3,"window_days":7.0,"product_repos":[],"meta_repos":[],"external_repos":[],"scratch_prefixes":["/private/tmp","/tmp"],"wait_cap_minutes":30.0}'
 ship(){ local la=null; [ "$2" = "1.0" ] && la="\"$1\""
   printf '{"measured_at":"%s","outward_config":%s,"m6s_meta_work_ship_ratio":null,"raw":{},"m7_outward_artifact_floor":%s,"outward":{"merged_product_prs":%s,"window_days":7,"latest_artifact_at":%s,"complete_negative_coverage":true}}\n' "$1" "$DEF_OUTWARD_CFG" "$2" "$3" "$la" > "$SHIP_STATE"; }
 # an unsigned legacy record (written before outward_config / latest_artifact_at existed)
@@ -253,7 +253,7 @@ Y
 write_cfg_setpoints 7 "acme/app" "acme/meta" "alice" "$RECEIPTS_A"
 cat > "$SHIP_STATE" <<J
 {"measured_at":"$NOW","window_days":7,"shadow":true,"gh_ok":true,"repos":[],
- "outward_config":{"schema_version":2,"window_days":7.0,"product_repos":["acme/app"],"author_allowlist":["alice"],"door_receipts":"$RECEIPTS_A"},
+ "outward_config":{"schema_version":3,"window_days":7.0,"product_repos":["acme/app"],"author_allowlist":["alice"],"door_receipts":"$RECEIPTS_A"},
  "m6s_meta_work_ship_ratio":null,"raw":{},
  "m7_outward_artifact_floor":1.0,
  "outward":{"window_days":7,"merged_product_prs":1,"door_receipts":1,
@@ -261,7 +261,7 @@ cat > "$SHIP_STATE" <<J
 J
 cat > "$FLEET_STATE" <<J
 {"measured_at":"$NOW","window_days":7,
- "config":{"schema_version":2,"window_days":7.0,"product_repos":["acme/app"],"meta_repos":["acme/meta"],
+ "config":{"schema_version":3,"window_days":7.0,"product_repos":["acme/app"],"meta_repos":["acme/meta"],
    "external_repos":[],"scratch_prefixes":["/private/tmp","/tmp"],"wait_cap_minutes":30.0},
  "metrics":{"m6_meta_work_session_ratio":0.25,"w1_agent_idle_share":0.2},
  "raw":{"transcripts_read":{"claude":2,"codex":0},"unclassified_sessions":0,"unclassified_repos":{}}}
@@ -458,7 +458,7 @@ cat > "$FLEET_STATE" <<J
 J
 J="$(python3 -I "$SENSOR" --workspace "$WS" --transcripts "$EMPTY_GLOB" --json --no-store 2>/dev/null)"
 [ "$(g "['metrics'].get('m7_outward_artifact_floor')")" = "None" ] && [ "$(g "['metrics'].get('m6_meta_work_session_ratio')")" = "None" ] \
-  && ok "pre-hardening caches without schema_version=2 are rejected" || bad "pre-hardening cache accepted"
+  && ok "unversioned caches are rejected" || bad "unversioned cache accepted"
 
 # 7c) Closure verdict must NOT certify L3.live=True from checkout counts when m6_scope=fleet_unmeasured
 rm -f "$SHIP_STATE" "$FLEET_STATE"
@@ -576,6 +576,63 @@ H_MIG_1="$(BROOMVA_WORKSPACE="$WS_MIG" bash "$L3_HOOK" <<< "{\"tool_name\":\"Edi
 H_MIG_2="$(BROOMVA_WORKSPACE="$WS_MIG" bash "$L3_HOOK" <<< "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$WS_MIG/scripts/leverage-fleet-sensor.py\"}}")"
 has "l3 hook warns on .broomva/leverage-setpoints.yaml in migrated workspace" "L3" "$H_MIG_1"
 has "l3 hook warns on leverage-fleet-sensor.py in migrated workspace" "L3" "$H_MIG_2"
+
+echo "== round 8: migrated audit parity and fail-closed outward evidence =="
+BUDGET="$REPO/scripts/compute-budget-status.sh"
+AUDIT="$(broomva_repo_path audit "$WS_MIG")"
+BUDGET_RC=0
+BUDGET_JSON="$(bash "$BUDGET" --workspace="$WS_MIG" --json)" || BUDGET_RC=$?
+[ "$BUDGET_RC" -eq 1 ] && [ "$(wc -l < "$AUDIT/l3-edits.jsonl" | tr -d ' ')" = 2 ] &&
+  jq -e '.layers[] | select(.id == "L3") | .observed.l3_edits_in_window == 2 and .verdict == "unstable"' \
+    <<< "$BUDGET_JSON" >/dev/null \
+  && ok "budget reader counts both L3 events at the registered audit path" || bad "migrated audit parity failed"
+
+H_REJECT="$(BROOMVA_WORKSPACE="$SYM_WS" bash "$L3_HOOK" \
+  <<< "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$SYM_DIR/leverage-setpoints.yaml\"}}" 2>&1)"
+BUDGET_RC=0
+B_REJECT="$(bash "$BUDGET" --workspace="$SYM_WS" --trend 2>&1)" || BUDGET_RC=$?
+[ "$BUDGET_RC" -eq 2 ] && [ -z "$(ls -A "$SYM_OUT")" ] \
+  && ok "hook and budget report refuse a symlinked workspace layout without writing" \
+  || bad "symlinked audit layout accepted: $H_REJECT; $B_REJECT"
+
+R8_M7="$(python3 -I - "$SHIP_SENSOR" "$SENSOR" "$TMP" <<'PY'
+import importlib.util, json, sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+def load(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+ship, reader = load("ship", sys.argv[1]), load("reader", sys.argv[2])
+now = datetime.now(timezone.utc)
+recent = (now - timedelta(minutes=1)).isoformat()
+future = (now + timedelta(hours=1)).isoformat()
+receipt = Path(sys.argv[3]) / "future-receipts.jsonl"
+cfg = {"product_repos": ["acme/app"], "author_allowlist": ["alice"], "door_receipts": str(receipt)}
+for row in [
+    {"mergedAt": recent},
+    {"mergedAt": recent, "author": {"login": ["alice"]}},
+    {"mergedAt": future, "author": {"login": "alice"}},
+]:
+    result = ship.compute_outward(cfg, 7, now=now, fetch=lambda *_: [row])
+    assert result["m7_outward_artifact_floor"] is None, result
+    assert not result["outward"]["complete_negative_coverage"], result
+
+receipt.write_text(json.dumps({"ts": future}) + "\n")
+result = ship.compute_outward(cfg, 7, now=now, fetch=lambda *_: [])
+assert result["m7_outward_artifact_floor"] is None, result
+sig = ship.outward_config_signature(cfg, 7)
+assert reader._config_matches_outward({"outward_config": sig}, {"fleet": cfg}, 7)
+assert not reader._config_matches_outward({"outward_config": dict(sig, schema_version=2)}, {"fleet": cfg}, 7)
+assert reader.effective_m7({"m7_outward_artifact_floor": 1.0, "outward": {}}, 10) is None
+print("ok")
+PY
+)"
+[ "$R8_M7" = ok ] && ok "malformed or future evidence and old positive caches fail closed" \
+  || bad "invalid outward evidence was accepted"
 
 echo "leverage-l3-wiring: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

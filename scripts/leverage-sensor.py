@@ -589,7 +589,7 @@ _DEFAULT_SHIP_META = (
 )
 _DEFAULT_DOOR_RECEIPTS = "~/.config/broomva/door/receipts.jsonl"
 _DEFAULT_WAIT_CAP_MIN = 30.0
-_CACHE_SCHEMA_VERSION = 2
+_CACHE_SCHEMA_VERSION = 3
 _MAX_WINDOW_DAYS = 3650
 _MAX_FUTURE_SKEW_SEC = 300
 
@@ -804,9 +804,8 @@ def effective_m7(sd, age, now=None):
 
     1.0  the newest counted artifact (raw.latest_artifact_at) is still inside the
          window as of now -- positive evidence ages by its own timestamp, so it
-         needs no refresh until it falls out of the window. A record from before
-         latest_artifact_at existed keeps its 1.0 while the file is fresh (<48 h).
-         Future-dated timestamps beyond clock skew fail closed.
+         needs no refresh until it falls out of the window. Missing or
+         future-dated artifact timestamps cannot certify a positive.
     0.0  the record found nothing (or its evidence has since aged out), its scan
          read every source (raw.complete_negative_coverage -- a scan that found a
          hit despite an outage proved something shipped, not that nothing did),
@@ -816,23 +815,20 @@ def effective_m7(sd, age, now=None):
     if not isinstance(sd, dict) or age is None or age < -_MAX_FUTURE_SKEW_SEC or age >= 172800:
         return None
     m7 = sd.get("m7_outward_artifact_floor")
-    if not is_gradeable(m7):
+    if not is_gradeable(m7) or m7 not in (0.0, 1.0):
         return None
     o = sd.get("outward") if isinstance(sd.get("outward"), dict) else {}
     window_s = float(_safe_window_days(o.get("window_days"))) * 86400
     now = now or time.time()
-    if "latest_artifact_at" not in o:
-        # A record from before latest_artifact_at existed: it cannot be aged, so its
-        # 1.0 stands while the file is fresh. It also predates
-        # complete_negative_coverage, so its 0.0 cannot show it read every source.
-        return 1.0 if float(m7) >= 1.0 else None
+    if "latest_artifact_at" not in o or (o["latest_artifact_at"] is None) != (m7 == 0.0):
+        return None
     latest = None
     if o.get("latest_artifact_at") is not None:
         try:
             latest = datetime.fromisoformat(str(o["latest_artifact_at"]).replace("Z", "+00:00")).timestamp()
         except (TypeError, ValueError):
             return None  # an artifact time that cannot be placed proves nothing either way
-        if latest > now + _MAX_FUTURE_SKEW_SEC:
+        if latest > now:
             return None  # a future-dated artifact timestamp cannot certify the window
     if latest is not None and now - latest <= window_s:
         return 1.0

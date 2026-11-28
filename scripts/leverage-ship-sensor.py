@@ -301,7 +301,7 @@ def compute(cfg, window_days, now=None):
 # classify m6), so "product" means one thing across the loop.
 DEFAULT_DOOR_RECEIPTS = "~/.config/broomva/door/receipts.jsonl"
 RECEIPT_TS_KEYS = ("ts", "timestamp", "at", "created_at", "logged_at")
-CACHE_SCHEMA_VERSION = 2
+CACHE_SCHEMA_VERSION = 3
 MAX_WINDOW_DAYS = 3650
 MAX_FUTURE_SKEW_SEC = 300
 
@@ -345,11 +345,6 @@ def _parse_ts(v):
         return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
     except (ValueError, OverflowError, OSError):
         return None
-
-
-def _within(v, cutoff, now):
-    d = _parse_ts(v)
-    return d is not None and cutoff <= d <= now
 
 
 def _safe_window_days(val, default=7):
@@ -440,11 +435,11 @@ def count_receipts(path, cutoff, now=None, workspace=None):
                     continue
                 ts = next((o[k] for k in RECEIPT_TS_KEYS if o.get(k) is not None), None) \
                     if isinstance(o, dict) else None
-                if _parse_ts(ts) is None:
+                d = _parse_ts(ts)
+                if d is None or d > now:
                     unparsed += 1
-                elif _within(ts, cutoff, now):
+                elif d >= cutoff:
                     n += 1
-                    d = _parse_ts(ts)
                     latest = d if latest is None or d > latest else latest
     except FileNotFoundError:
         return 0, 0, "absent", None
@@ -492,18 +487,24 @@ def compute_outward(fleet_cfg, window_days, now=None, fetch=None, workspace=None
             if not isinstance(pr, dict):
                 malformed = True
                 continue
-            raw_author = pr.get("author")
-            if raw_author is not None and not isinstance(raw_author, dict):
+            author = pr.get("author")
+            if not isinstance(author, dict):
                 malformed = True
                 continue
-            a = raw_author or {}
-            if a.get("is_bot") or str(a.get("login", "")).strip().lower() not in authors:
+            is_bot = author.get("is_bot", False)
+            login = author.get("login")
+            if is_bot is True:
+                continue
+            if not isinstance(is_bot, bool) or not isinstance(login, str) or not login.strip():
+                malformed = True
+                continue
+            if login.strip().lower() not in authors:
                 continue
             d = _parse_ts(pr.get("mergedAt"))
-            if d is None:
+            if d is None or d > now:
                 raw["unparsed_merges"] += 1
                 continue
-            if cutoff <= d <= now:
+            if cutoff <= d:
                 n += 1
                 latest = d if latest is None or d > latest else latest
         if malformed:
