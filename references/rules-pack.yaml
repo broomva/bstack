@@ -1,0 +1,256 @@
+# bstack rules pack: the registry rows for the hooks `bstack bootstrap` installs.
+#
+# Read by the `correct` skill (broomva/skills): `correct.py init --pack <this file>` adds
+# these rows to the rule registry it writes, and `correct.py check` then replays each proof
+# and control through the hook entry the harness would run. bootstrap runs both.
+#
+# bstack owns these rows because bstack owns the hooks: a change to
+# scripts/control-gate-hook.sh that changes what it refuses changes a row here in the same
+# commit, and tests/rules-pack.test.sh replays the pack against a freshly bootstrapped
+# repository on every change.
+#
+# What a row proves is what its proofs and controls replay, and no more. The control gate
+# matches regular expressions against the command text or the file path. Each `rule:` below
+# therefore says what the rule is for, and then quotes the pattern that is all the gate
+# enforces of it; tests/rules-pack.test.sh fails when a quoted pattern is not in the gate's
+# source character for character, or when the gate has a pattern no rule quotes (the test
+# reads the gate's `r"..."` literals; a pattern written any other way is not seen).
+# A pattern over command text cannot cover every way to write a command. The `known_misses`
+# cases are the ways found so far to do what a rule forbids without matching its pattern;
+# each names its ticket (BRO-4169, and BRO-4159 for the shell redirect into a secrets file). They are
+# examples, not a complete list.
+# Every proof here is CONSTRUCTED from the gate's own pattern. A workspace that has made
+# the mistake for real should add its own proof with where it came from.
+#
+# What the pack does not prove is recorded, not hidden:
+#   - the git pre-commit rate gate and the Stop hook that continues a stalled arc are `gap`
+#     rows (BRO-4159);
+#   - no row is certified by a real harness session (`canary: {none ...}`, BRO-4159);
+#   - the patterns also match harmless inputs, for example a command that only prints
+#     `--no-verify`, a hard reset to a branch called `original`, a path that merely contains
+#     `credentials`, `id_rsa.pub`, `.env.example`. The registry has no field for that
+#     (BRO-4169);
+#   - besides its own patterns the gate enforces every line of the policy file of the form
+#     `pattern: <regex>`, under any key (a line that begins `- pattern:` is not read, and
+#     the rest of the line is the pattern, a trailing `# comment` included), and
+#     the registry accounts only for the patterns under `gates.hard` (BRO-4169);
+#   - a workspace whose path has a space in it gets hook commands that cannot run, and the
+#     replay then reports these rows as not registered (BRO-4184).
+#
+# bootstrap wires hooks two ways. Without the bstack plugin every Claude Code hook below is
+# in the workspace's settings file (the git pre-commit hook is git's, in .githooks/, on
+# both paths). With the plugin, autonomous-posture-hook.sh,
+# arc-continuation-hook.sh, leverage-sensor.py and l3-stability-pretool-hook.sh come from
+# the plugin's own hooks.json, which the rule runner does not read yet (BRO-3811): on that
+# path those hooks are outside the registry's view, and an entry here that matches nothing
+# is harmless.
+pack: bstack
+registry_version: 1
+
+# Hooks bootstrap registers on an event that could block, which enforce no rule.
+hooks_not_rules:
+  role-x-intake-hook.sh: "UserPromptSubmit lens routing (P17); it adds context and always exits 0, since exit 2 would erase the prompt"
+  conversation-bridge-hook.sh: "Stop/Notification capture of the session (P1); always exits 0"
+  autonomous-posture-hook.sh: "UserPromptSubmit posture line for an active arc (P19); its output is added context and it always exits 0"
+  leverage-sensor.py: "Stop-time sensor of the self-improvement loop; it reads transcripts and writes metrics, and never answers with a decision"
+  l3-stability-pretool-hook.sh: "PreToolUse warning on an L3 path (gate G0); it answers approve with a reason or says nothing, and never blocks"
+
+rules:
+  - id: no-force-push
+    rule: >-
+      Never force-push; it rewrites history other sessions have already fetched. The gate
+      enforces this as far as one regular expression goes, and no further: it refuses a Bash
+      command whose text matches `git\s+push\b.*(--force\b|--force-with-lease\b|\s-f\b)`.
+    source: "bstack P2 control gate, G1 (scripts/control-gate-hook.sh)"
+    level: hook
+    runs_in: [harness]
+    enforcer:
+      path: scripts/control-gate-hook.sh
+      registered: {event: PreToolUse, tools: [Bash], scope: project}
+    proofs:
+      - from: G1, constructed
+        event: {tool_name: Bash, tool_input: {command: "git push --force origin main"}}
+        expect_reason: "G1: force-push"
+      - from: G1, the short flag, constructed
+        event: {tool_name: Bash, tool_input: {command: "git push -f origin feat/x"}}
+        expect_reason: "G1: force-push"
+      - from: G1, the lease form, constructed
+        event: {tool_name: Bash, tool_input: {command: "git push --force-with-lease origin feat/x"}}
+        expect_reason: "G1: force-push"
+    controls:
+      - why: the same push without the flag
+        event: {tool_name: Bash, tool_input: {command: "git push origin feat/x"}}
+    known_misses:
+      - from: "the `+` refspec forces a push with no flag for the gate to match (P20 review of bstack#156)"
+        ticket: BRO-4169
+        event: {tool_name: Bash, tool_input: {command: "git push origin +main"}}
+      - from: "the flag on a continuation line: `.` in the pattern does not cross a newline (P20 round 2 of bstack#156)"
+        ticket: BRO-4169
+        event: {tool_name: Bash, tool_input: {command: "git push \\\n--force origin main"}}
+    canary: {none: "replayed through the hook entry; no real-harness session has been run", ticket: BRO-4159}
+
+  - id: no-catastrophic-delete
+    rule: >-
+      Never recursively delete the filesystem root or the home directory. The gate enforces
+      this as far as one regular expression goes, and no further: it refuses a Bash command
+      whose text matches `\brm\s+-rf\s+(/|~|\$HOME)(\s|$)`.
+    source: "bstack P2 control gate, G3 (scripts/control-gate-hook.sh)"
+    level: hook
+    runs_in: [harness]
+    enforcer:
+      path: scripts/control-gate-hook.sh
+      registered: {event: PreToolUse, tools: [Bash], scope: project}
+    proofs:
+      - from: G3, the root, constructed
+        event: {tool_name: Bash, tool_input: {command: "rm -rf /"}}
+        expect_reason: "G3: catastrophic recursive delete"
+      - from: G3, the home directory, constructed
+        event: {tool_name: Bash, tool_input: {command: "rm -rf ~"}}
+        expect_reason: "G3: catastrophic recursive delete"
+      - from: G3, the home variable, constructed
+        event: {tool_name: Bash, tool_input: {command: "rm -rf $HOME"}}
+        expect_reason: "G3: catastrophic recursive delete"
+    controls:
+      - why: the same command on a build directory
+        event: {tool_name: Bash, tool_input: {command: "rm -rf ./build"}}
+      - why: the same command on a directory under the home directory
+        event: {tool_name: Bash, tool_input: {command: "rm -rf ~/scratch/build"}}
+    known_misses:
+      - from: "the flags in the other order (P20 review of bstack#156)"
+        ticket: BRO-4169
+        event: {tool_name: Bash, tool_input: {command: "rm -fr /"}}
+      - from: "the flags given apart"
+        ticket: BRO-4169
+        event: {tool_name: Bash, tool_input: {command: "rm -r -f ~"}}
+      - from: "the home directory with a trailing slash"
+        ticket: BRO-4169
+        event: {tool_name: Bash, tool_input: {command: "rm -rf ~/"}}
+      - from: "everything under the root, by glob"
+        ticket: BRO-4169
+        event: {tool_name: Bash, tool_input: {command: "rm -rf /*"}}
+      - from: "the home variable in quotes"
+        ticket: BRO-4169
+        event: {tool_name: Bash, tool_input: {command: "rm -rf \"$HOME\""}}
+    canary: {none: "replayed through the hook entry; no real-harness session has been run", ticket: BRO-4159}
+
+  - id: no-hard-reset-to-remote
+    rule: >-
+      Never hard-reset a branch to its remote; it discards local work without a trace. The
+      gate enforces this as far as one regular expression goes, and no further: it refuses a
+      Bash command whose text matches `\bgit\s+reset\s+--hard\b.*origin`.
+    source: "bstack P2 control gate, G3 (scripts/control-gate-hook.sh)"
+    level: hook
+    runs_in: [harness]
+    enforcer:
+      path: scripts/control-gate-hook.sh
+      registered: {event: PreToolUse, tools: [Bash], scope: project}
+    proofs:
+      - from: G3, constructed
+        event: {tool_name: Bash, tool_input: {command: "git reset --hard origin/main"}}
+        expect_reason: "G3: hard reset to remote"
+    controls:
+      - why: the same reset in its soft form, which keeps the work
+        event: {tool_name: Bash, tool_input: {command: "git reset --soft origin/main"}}
+      - why: a hard reset to a local commit
+        event: {tool_name: Bash, tool_input: {command: "git reset --hard HEAD~1"}}
+    known_misses:
+      - from: "a remote with any other name (P20 review of bstack#156)"
+        ticket: BRO-4169
+        event: {tool_name: Bash, tool_input: {command: "git reset --hard upstream/main"}}
+      - from: "the upstream shorthand"
+        ticket: BRO-4169
+        event: {tool_name: Bash, tool_input: {command: "git reset --hard @{u}"}}
+    canary: {none: "replayed through the hook entry; no real-harness session has been run", ticket: BRO-4159}
+
+  - id: no-hook-bypass
+    rule: >-
+      Never skip the pre-commit hooks; they are the commit half of the gates. The gate
+      enforces this as far as one regular expression goes, and no further: it refuses a Bash
+      command whose text matches `--no-verify\b`.
+    source: "bstack P2 control gate, G2 (scripts/control-gate-hook.sh)"
+    level: hook
+    runs_in: [harness]
+    enforcer:
+      path: scripts/control-gate-hook.sh
+      registered: {event: PreToolUse, tools: [Bash], scope: project}
+    proofs:
+      - from: G2, constructed
+        event: {tool_name: Bash, tool_input: {command: "git commit --no-verify -m wip"}}
+        expect_reason: "G2: bypassing pre-commit hooks"
+    controls:
+      - why: the same commit with the hooks left on
+        event: {tool_name: Bash, tool_input: {command: "git commit -m wip"}}
+    known_misses:
+      - from: "the short flag (P20 review of bstack#156)"
+        ticket: BRO-4169
+        event: {tool_name: Bash, tool_input: {command: "git commit -n -m wip"}}
+      - from: "pointing git at no hooks directory for one command"
+        ticket: BRO-4169
+        event: {tool_name: Bash, tool_input: {command: "git -c core.hooksPath=/dev/null commit -m wip"}}
+    canary: {none: "replayed through the hook entry; no real-harness session has been run", ticket: BRO-4159}
+
+  - id: no-secret-file-write
+    rule: >-
+      Never write a secrets file with a file tool. The gate enforces this as far as five
+      regular expressions go, and no further: it refuses a Write, Edit or MultiEdit whose path
+      matches `(^|/)\.env(\.|$)`, `credentials`, `(^|/)id_rsa\b`, `\.pem$` or `\.key$`.
+    source: "bstack P2 control gate, G2 path rules (scripts/control-gate-hook.sh)"
+    level: hook
+    runs_in: [harness]
+    enforcer:
+      path: scripts/control-gate-hook.sh
+      registered: {event: PreToolUse, tools: [Write, Edit, MultiEdit], scope: project}
+    proofs:
+      - from: G2, a .env file through Write, constructed
+        event: {tool_name: Write, tool_input: {file_path: "{scratch}/app/.env", content: "TOKEN=x"}}
+        expect_reason: "G2: writing a .env secret file"
+      - from: G2, a dotted variant through Edit, constructed
+        event: {tool_name: Edit, tool_input: {file_path: "{scratch}/app/.env.production", old_string: a, new_string: b}}
+        expect_reason: "G2: writing a .env secret file"
+      - from: G2, a private key through MultiEdit, constructed
+        event: {tool_name: MultiEdit, tool_input: {file_path: "{scratch}/app/deploy.pem", edits: [{old_string: a, new_string: b}]}}
+        expect_reason: "G2: writing a .pem key"
+      - from: G2, a credentials file through Write, constructed
+        event: {tool_name: Write, tool_input: {file_path: "{scratch}/app/credentials.json", content: "{}"}}
+        expect_reason: "G2: writing a credentials file"
+      - from: G2, a private SSH key through Write, constructed
+        event: {tool_name: Write, tool_input: {file_path: "{scratch}/app/id_rsa", content: "x"}}
+        expect_reason: "G2: writing a private SSH key"
+      - from: G2, a .key file through Write, constructed
+        event: {tool_name: Write, tool_input: {file_path: "{scratch}/app/server.key", content: "x"}}
+        expect_reason: "G2: writing a .key file"
+    controls:
+      - why: an ordinary file in the same directory
+        event: {tool_name: Write, tool_input: {file_path: "{scratch}/app/README.md", content: "x"}}
+      - why: a file whose name only starts like the secrets file (.envrc is direnv's, not a secret store)
+        event: {tool_name: Write, tool_input: {file_path: "{scratch}/app/.envrc", content: "x"}}
+    known_misses:
+      - from: "the gate reads a file path, so a shell redirect into the same file is not seen (BRO-4159)"
+        ticket: BRO-4159
+        event: {tool_name: Bash, tool_input: {command: "printf 'TOKEN=x' > .env"}}
+      - from: "a private key of another type (P20 review of bstack#156)"
+        ticket: BRO-4169
+        event: {tool_name: Write, tool_input: {file_path: "{scratch}/app/id_ed25519", content: "x"}}
+    canary: {none: "replayed through the hook entry; no real-harness session has been run", ticket: BRO-4159}
+
+  - id: git-pre-commit-rate-gate
+    rule: >-
+      Governance files (the L3 paths) are committed no more often than the L3 rate budget allows; the git
+      pre-commit hook bootstrap installs refuses a commit that goes over it. No replay shows this yet.
+    source: ".githooks/pre-commit, installed by scripts/install-l3-stability.sh"
+    level: gap
+    covers_hooks: [.githooks/pre-commit]
+    ticket: BRO-4159
+    target:
+      level: hook
+      mechanism: "run .githooks/pre-commit in a scratch repository whose L3 mutation rate is over the budget, and in one under it"
+
+  - id: stalled-arc-is-continued
+    rule: An active autonomous arc is not left parked on an empty final turn; the Stop hook blocks that stop so the arc continues.
+    source: "scripts/arc-continuation-hook.sh (BRO-1700), wired on Stop by bootstrap or by the bstack plugin"
+    level: gap
+    covers_hooks: [arc-continuation-hook.sh]
+    ticket: BRO-4159
+    target:
+      level: hook
+      mechanism: "replay a Stop event for a session with an active arc whose final turn is empty (blocked) and one whose final turn did work (allowed); the hook needs a fresh arc file and waits for the transcript, which a static case cannot build yet. Until then bstack's own tests/loop-stall-hooks.test.sh is its only check"

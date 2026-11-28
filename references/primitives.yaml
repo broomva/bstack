@@ -28,7 +28,7 @@ primitives:
     category: safety
     mechanism:
       type: hook
-      spec: "PreToolUse (Bash/Write/Edit) → scripts/control-gate-hook.sh + .control/policy.yaml"
+      spec: "PreToolUse (Bash/Write/Edit/MultiEdit) → scripts/control-gate-hook.sh + .control/policy.yaml"
     invariant: "G1-G4 blocking gates never bypassed"
     failure_mode: "destructive ops the model did not authorize (force-push, rm -rf, secrets committed, hard-reset over live work)"
     introduced_in: 0.1.0

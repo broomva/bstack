@@ -20,7 +20,7 @@
 #   4. .control/policy.yaml has required blocks (ci_watch, ci_heal, auto_merge)
 #   5. .claude/settings.json hooks wire the expected primitive scripts:
 #      - P1: scripts/conversation-bridge-hook.sh (Stop + Notification)
-#      - P2: scripts/control-gate-hook.sh (PreToolUse — Bash/Write/Edit)
+#      - P2: scripts/control-gate-hook.sh (PreToolUse — Bash/Write/Edit/MultiEdit)
 #      - P7: scripts/skill-freshness-hook.sh (SessionStart)
 #      - P17: ~/.agents/skills/role-x/scripts/role-x-intake-hook.sh (UserPromptSubmit)
 #      - P17: ~/.agents/skills/role-x/scripts/role-x-coverage-hook.sh (SessionStart)

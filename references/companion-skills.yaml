@@ -31,6 +31,14 @@ skills:
     introduced_in: 0.2.0
     description: "Cross-model adversarial review gate"
 
+  - name: correct
+    repo: broomva/skills
+    category: safety
+    primitive: P16
+    required: true
+    introduced_in: 0.53.0
+    description: "Corrections become checks. Keeps the rule registry and replays it: bootstrap calls it to prove the hooks bstack installs (references/rules-pack.yaml)"
+
   - name: dogfood
     repo: broomva/skills
     category: lifecycle

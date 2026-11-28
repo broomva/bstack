@@ -10,9 +10,12 @@
 #       audit dir + L3 gates (G0/G1/G2 + rcs-parameters.toml) so the control loop is
 #       actually wired + connected, not just declared. Skip with BSTACK_SKIP_RCS=1
 #       (governance-only bootstrap). Mirrors the wizard path (onboard.sh).
+#   3.7 Rule registry: rules-registry.sh has the `correct` skill write a registry with
+#       bstack's rows (references/rules-pack.yaml) and replay it. Never aborts bootstrap.
 #   4. bstack doctor --quiet to verify the primitive contract + loop closure (§23).
 #
-# Env escapes: BSTACK_SKIP_SKILLS=1 (skip Phase 1), BSTACK_SKIP_RCS=1 (skip Phase 3.5).
+# Env escapes: BSTACK_SKIP_SKILLS=1 (skip Phase 1), BSTACK_SKIP_RCS=1 (skip Phase 3.5),
+# BSTACK_SKIP_RULES=1 (skip Phase 3.7).
 set -e
 
 AGENTS_DIR="${HOME}/.agents/skills"
@@ -324,7 +327,13 @@ for hook in "${WORKSPACE_HOOKS[@]}"; do
         continue
     fi
     if [ -f "$dst" ]; then
-        echo "  [keep] scripts/$hook (existing — preserved)"
+        if cmp -s "$src" "$dst"; then
+            echo "  [keep] scripts/$hook (existing — preserved)"
+        else
+            # Never replaced: it may carry the workspace's own changes. Said, because a fix to
+            # the hook in this version does not reach a workspace that keeps an older copy.
+            echo "  [keep] scripts/$hook (existing — preserved; it differs from this bstack version's copy)"
+        fi
     elif cp "$src" "$dst" 2>/dev/null && chmod +x "$dst" 2>/dev/null; then
         echo "  [deploy] scripts/$hook ← bstack/scripts/$hook"
         deployed_hooks=$((deployed_hooks + 1))
@@ -358,6 +367,51 @@ else
     # caught downstream by doctor §23 + the canary's audit-dir/marker assertions.
     BROOMVA_WORKSPACE="$WORKSPACE_DIR" bash "$RCS_INSTALLER" 2>&1 | sed 's/^/  /' || true
   fi
+fi
+
+# ─── Phase 3.7: rule registry (replay the control gate wired above) ────────
+# Phases 3 and 3.5 install hooks; this phase checks, in this workspace, that the control
+# gate refuses what its rules say. The `correct` skill keeps a rule registry in the
+# governance folder and replays each rule against the hook entry the harness would run.
+# bstack ships the rows for its own hooks (references/rules-pack.yaml), and
+# scripts/rules-registry.sh finds the skill and runs its `init --pack` with them: a
+# workspace with no registry gets one and it is replayed; a workspace that has one gets
+# no file written, is replayed, and is told which of bstack's rows it lacks.
+# The phase reports what the skill returned and judges nothing else. A failure here never
+# aborts the bootstrap. It waits for the skill as bootstrap waits for every tool it calls:
+# there is no time limit, and Ctrl-C stops both.
+# The registry's starter rule comes with a hook that refuses edits on main and master.
+# Skip with BSTACK_SKIP_RULES=1.
+echo ""
+echo "=== bstack rule registry ==="
+if [ "${BSTACK_SKIP_RULES:-0}" = "1" ]; then
+  echo "BSTACK_SKIP_RULES=1 — skipping the rule registry."
+else
+  # The step writes straight to the terminal, as it happens. Its output is not captured to
+  # be shown afterwards: the skill says that the starter hook is installed before the replay
+  # starts, and a bootstrap that is stopped during the replay must already have shown that.
+  # The status is the script's own; there is no pipe to take it from.
+  rules_rc=0
+  BROOMVA_WORKSPACE="$WORKSPACE_DIR" bash "${BOOTSTRAP_SCRIPT_DIR}/rules-registry.sh" || rules_rc=$?
+  case "$rules_rc" in
+    0) echo "  rule registry: replayed, and no row failed. Gap rows and known misses are listed above." ;;
+    3) echo "  rule registry: replayed, and no row failed, but this workspace's registry lacks part of bstack's pack (listed above)." ;;
+    127) echo "  rule registry: exit 127 — see above." ;;
+    *) echo "  rule registry: exit $rules_rc — see above. Run bootstrap again once it is fixed."
+       # bstack does not read or edit the policy file, and this phase prescribes no edit: an
+       # instruction printed here cannot know which case it is in. The one known cause on an
+       # upgrade is written up where it can be exact, and this line says where.
+       echo "  A workspace bootstrapped before bstack 0.53.0: see \"Upgrading a workspace\" in the 0.53.0 entry of"
+       echo "  $SKILL_ROOT/CHANGELOG.md." ;;
+  esac
+  # The note below is about a replay, so it follows only a status a replay ends with.
+  case "$rules_rc" in
+    0|1|3)
+      if [ "$PLUGIN_PREFERRED" = "1" ]; then
+        echo "  note: the bstack plugin is enabled, and the hooks it provides are not in a settings file:"
+        echo "  a replay does not see them (BRO-3811)."
+      fi ;;
+  esac
 fi
 
 # ─── Phase 4: bstack doctor verification ───────────────────────────────────
