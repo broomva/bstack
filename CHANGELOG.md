@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.52.3 — 2026-11-27
+
+### docs(primitives): the P20 round budget points to the cross-review skill (BRO-4180)
+
+- **What was wrong.** `references/primitives.md`, `assets/templates/AGENTS.md.template`
+  and `assets/templates/CLAUDE.md.template` each restated the review round budget
+  ("3 free rounds, 4–7 earned, ≥8 human, stops absorbing"). The cross-review skill
+  changed on 2026-11-19: a refused round is a signal the agent answers with a
+  recorded decision, and never a request to the owner for permission to run more
+  rounds. The five restatements kept the older rule, so every install rendered a
+  primer that disagreed with the skill it names as the implementation.
+- **What changed.** The five places now say there is no fixed number of rounds,
+  that `cross-review round budget` decides whether another may run, and that the
+  skill (SKILL.md, "The round budget is dynamic") is the one description of how.
+  The stratum A row in the two long-form files no longer pins `-m gpt-5.4`; it
+  names the read-only sandbox flag and points to the skill's strata table.
+- **Not changed.** `scripts/cross-review.py` (`bstack cross-review`) still
+  defaults to `gpt-5.4` and carries its own scoring prompt. `scripts/bootstrap.sh`
+  keeps an existing `AGENTS.md` and `CLAUDE.md`, so a workspace rendered from an
+  older template keeps the old sentences until someone edits them.
+
 ## 0.52.2 — 2026-11-23
 
 ### feat(doctor): ratchet scheduled jobs and hooks: a new or changed entry must be acknowledged (BRO-4084)
