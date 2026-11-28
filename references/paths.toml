@@ -86,6 +86,7 @@ audit = { path = "audit" }
 leverage_metrics = { path = "leverage-metrics.jsonl" }
 leverage_state = { path = "leverage-state.json" }
 leverage_ship_state = { path = "leverage-ship-state.json" }
+leverage_fleet_state = { path = "leverage-fleet-state.json" }
 
 # ── machine scope: $BROOMVA_HOME/<path> (BRO-2909 layout, plus this ADR's dirs)
 # `legacy` is an absolute (or ~) path read when the new one does not exist yet.

@@ -5,8 +5,9 @@
 # hooks fire in EVERY Claude Code session, including non-bstack repos. Two hooks
 # WRITE workspace state and would otherwise litter <workspace>/.control/ into an
 # unrelated repo (e.g. a client repo) every session:
-#   - knowledge-wakeup-hook.sh  → runs leverage-ship-sensor.py (writes
-#                                 <ws>/.control/leverage-ship-state.json)
+#   - knowledge-wakeup-hook.sh  → runs leverage-ship-sensor.py and
+#                                 leverage-fleet-sensor.py (write
+#                                 <ws>/.control/leverage-{ship,fleet}-state.json)
 #   - leverage-sensor.py (Stop) → makedirs+writes <ws>/.control/leverage-*.json
 #
 # This wrapper gates those hooks on the workspace being bstack-governed (has a
@@ -32,6 +33,6 @@ WORKSPACE="${BSTACK_WORKSPACE:-${BROOMVA_WORKSPACE:-$(git rev-parse --show-tople
 
 # Not a bstack-governed workspace — no-op (exit 0, no output). The wrapped hooks are
 # SessionStart/Stop only, so "no opinion" is the correct neutral result.
-[ -d "$WORKSPACE/.control" ] || exit 0
+[ -d "$WORKSPACE/.control" ] || [ -d "$WORKSPACE/.broomva" ] || exit 0
 
 exec "$@"

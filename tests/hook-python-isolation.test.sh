@@ -58,6 +58,12 @@ unset BSTACK_WORKSPACE BROOMVA_WORKSPACE CLAUDE_PROJECT_DIR PYTHONPATH PYTHONHOM
 # silently test nothing.
 unset PASEO_AGENT_ID PASEO_AGENT_CWD PASEO_AGENT_PROVIDER CLAUDE_CODE_SESSION_ID
 
+# knowledge-wakeup also spawns the fleet sensor (BRO-3955), which scans every
+# transcript on the host. Point it at empty roots so this suite never reads the
+# machine it runs on and both passes see the same (empty) fleet.
+mkdir -p "$T/fleet-claude" "$T/fleet-codex"
+export BSTACK_CLAUDE_PROJECTS="$T/fleet-claude" BSTACK_CODEX_SESSIONS="$T/fleet-codex"
+
 # `gh` must exist for knowledge-wakeup to spawn the ship sensor; this stub never
 # answers, and the setpoints below name no repos, so nothing is fetched.
 printf '#!/bin/sh\nexit 1\n' > "$T/fakebin/gh"; chmod +x "$T/fakebin/gh"
@@ -240,7 +246,7 @@ drive() {
     run l3_warn "$C_L3" "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$WS/CLAUDE.md\"}}"
 
     # Stop — the leverage sensor (through bstack-hook-guard.sh) computes and stores.
-    rm -f "$WS/.control/leverage-state.json" "$WS/.control/leverage-metrics.jsonl" "$WS/.control/leverage-ship-state.json"
+    rm -f "$WS/.control/leverage-state.json" "$WS/.control/leverage-metrics.jsonl" "$WS/.control/leverage-ship-state.json" "$WS/.control/leverage-fleet-state.json"
     run sensor_stop "$C_SENSOR" '{"session_id":"S-sensor"}'
     if [ -f "$WS/.control/leverage-state.json" ]; then
         note sensor_stop "state: $(hpy -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["sessions_analyzed"], d["worst"] and d["worst"]["key"], d["policy_warnings"])' "$WS/.control/leverage-state.json")"
@@ -250,10 +256,10 @@ drive() {
 
     # SessionStart — knowledge-wakeup renders the cached brief (regraded against the
     # YAML policy) and spawns the ship sensor in the background; wait for it.
-    rm -f "$WS/.control/leverage-ship-state.json"; hpy "$H/state.py" "$WS/.control/leverage-state.json"
+    rm -f "$WS/.control/leverage-ship-state.json" "$WS/.control/leverage-fleet-state.json"; hpy "$H/state.py" "$WS/.control/leverage-state.json"
     run wakeup "$C_WAKEUP" '{"session_id":"S-wake"}'
     local i=0
-    while [ "$i" -lt 150 ] && [ ! -f "$WS/.control/leverage-ship-state.json" ] && [ -z "$(ls -A "$MARK")" ]; do
+    while [ "$i" -lt 150 ] && { [ ! -f "$WS/.control/leverage-ship-state.json" ] || [ ! -f "$WS/.control/leverage-fleet-state.json" ]; } && [ -z "$(ls -A "$MARK")" ]; do
         sleep 0.1; i=$((i + 1))
     done
     sleep 0.2
@@ -261,6 +267,11 @@ drive() {
         note wakeup "ship-state: $(hpy -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["gh_ok"], d["m6s_meta_work_ship_ratio"], "window=%s" % d["window_days"])' "$WS/.control/leverage-ship-state.json")"
     else
         note wakeup "ship-state: none written"
+    fi
+    if [ -f "$WS/.control/leverage-fleet-state.json" ]; then
+        note wakeup "fleet-state: $(hpy -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["raw"]["transcripts_read"], "window=%s" % d["window_days"])' "$WS/.control/leverage-fleet-state.json")"
+    else
+        note wakeup "fleet-state: none written"
     fi
     run autoupdate "$C_UPDATE" '{"session_id":"S-up"}' HOME="$T/home-update"
 
@@ -389,6 +400,7 @@ expect "leverage-sensor (Stop): stored its state"             has sensor_stop st
 expect "knowledge-wakeup: the brief renders the worst gap"    has wakeup stdout "Worst gap [ALERT] tool-error-rate"
 # window=3 comes from the YAML policy (the default is 7): proof the ship sensor read it.
 expect "knowledge-wakeup: the ship sensor ran and read the policy" has wakeup stdout "ship-state: False None window=3"
+expect "knowledge-wakeup: the fleet sensor ran and read the policy" has wakeup stdout "fleet-state: {'claude': 0, 'codex': 0} window=3"
 expect "control-gate: force-push is blocked (exit 2)"         rcis gate_block 2
 expect "control-gate: ls is allowed (exit 0)"                 rcis gate_allow 0
 expect "conversation-bridge: the session stamp was written"   has bridge stdout "session S-bridge"
